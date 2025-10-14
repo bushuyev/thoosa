@@ -111,35 +111,34 @@ where
         Self: Sized + OutId,
         Self::Out: Data + Sync + Send,
     {
+        debug!("Cachable::purge_gpu_cache_area: 0  cache_area={cache_area} device_idx={device_idx} keys={keys:?}");
+
         assert_ne!(device_idx, 0); //don't purge cpu
 
-        debug!(
-            "Cachable::purge_gpu_cache_area: 0  cache_area={cache_area} device_idx={device_idx}"
-        );
-
         let map = Self::cache().await;
+
+        debug!("Cachable::purge_gpu_cache_area: 0  cache_area={cache_area} device_idx={device_idx} got map");
 
         for key in keys {
             // let key_device_mutex = Self::key_in_device_lock(&key, device_idx);
             // let key_guard = key_device_mutex.lock().await;
-            debug!(
-                "Cachable::purge_gpu_cache_area: 1 key={key:?} cache_area={cache_area} device_idx={device_idx}"
-            );
+            debug!("Cachable::purge_gpu_cache_area: 1 key={key:?} cache_area={cache_area} device_idx={device_idx}");
 
             if let Some(value) = map.get(&key) {
-                let data: Arc<DataCacheWrapper<Self::Out>> = value.value().clone().await?;
-                let new_mask = data.remove_cache_area(cache_area);
+                let shared_fut = value.value().clone();
+                if shared_fut.peek().is_some() {//to avoid locking on itself
+                    let data: Arc<DataCacheWrapper<Self::Out>> = shared_fut.await?;
+                    let new_mask = data.remove_cache_area(cache_area);
 
-                debug!("Cachable::purge_gpu_cache_area: 2 key={key:?} new_mask={new_mask} ");
-                if new_mask == 0 {
-                    data.dump_to_cpu(device_idx).await?;
-                    // drop(key_guard);
-                    debug!("Cachable::purge_gpu_cache_area: 3  key={key:?} done");
+                    debug!("Cachable::purge_gpu_cache_area: 2 key={key:?} new_mask={new_mask} ");
+                    if new_mask == 0 {
+                        data.dump_to_cpu(device_idx).await?;
+                        // drop(key_guard);
+                        debug!("Cachable::purge_gpu_cache_area: 3  key={key:?} done");
+                    }
                 }
             } else {
-                debug!(
-                    "Cachable::purge_gpu_cache_area: 4 key={key:?} {cache_area} device_idx={device_idx} not found"
-                ); //warning
+                debug!("Cachable::purge_gpu_cache_area: 4 key={key:?} {cache_area} device_idx={device_idx} not found"); //warning
             }
         }
 

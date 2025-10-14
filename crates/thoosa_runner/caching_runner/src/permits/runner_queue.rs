@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use log::trace;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{MyError, ThoosaError};
 use tokio::sync::{Notify, Semaphore, TryAcquireError, mpsc, oneshot};
@@ -58,11 +59,13 @@ impl Arbiter {
         if needed as usize > self.capacity as usize {
             needed = self.capacity;
         }
+
         let (reply, recv) = oneshot::channel();
         let tx = self
             .tx
             .as_ref()
             .ok_or_else(|| MyError::SomethingElse("arbiter closed".to_string()))?;
+
         tx.send(Req {
             needed,
             reply,
@@ -70,8 +73,8 @@ impl Arbiter {
         })
         .await
         .map_err(|_| MyError::SomethingElse("arbiter closed".to_string()))?;
-        recv.await
-            .map_err(|_| MyError::SomethingElse("arbiter closed".to_string()))?
+
+        recv.await.map_err(|_| MyError::SomethingElse("arbiter closed".to_string()))?
     }
 
     pub async fn shutdown(&mut self) {
@@ -93,6 +96,7 @@ impl Arbiter {
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
             let mut q: VecDeque<Req> = VecDeque::new();
+
             // Track repeated OutOfPermits per out_id to trigger escalation.
             let mut fail_counts: HashMap<Arc<dyn CachableIdTr>, u32> = HashMap::new();
             // When set, only this out_id may receive permits; others get OutOfPermits immediately.
@@ -116,6 +120,7 @@ impl Arbiter {
                 if let Some(sc) = super_id.clone() {
                     // First, reject all non-super requests to trigger drops.
                     let mut i = 0;
+
                     while i < q.len() {
                         if !q[i].out_id.as_ref().eq(sc.as_ref()) {
                             let Req { reply, .. } = q.remove(i).unwrap();
@@ -198,6 +203,7 @@ impl Arbiter {
                 // If there is a supertask pending, try to serve it with full capacity now.
                 if let Some(sc) = super_id.clone() {
                     if let Some(pos) = q.iter().position(|r| r.out_id.as_ref().eq(sc.as_ref())) {
+
                         match Arc::clone(&sem).try_acquire_many_owned(capacity) {
                             Ok(inner) => {
                                 let Req { reply, out_id, .. } = q.remove(pos).unwrap();
@@ -206,7 +212,10 @@ impl Arbiter {
                                 fail_counts.remove(&out_id);
                                 super_id = None;
                             }
-                            Err(_) => { /* not enough yet → wait for next notify */ }
+                            Err(e) => {
+                                /* not enough yet → wait for next notify */
+                                trace!("Arbiter::spawn: e={e:?}");
+                            }
                         }
                     }
                 }
