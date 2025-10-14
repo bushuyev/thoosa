@@ -6,7 +6,7 @@ use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 use async_trait::async_trait;
-use caching_runner::common::{Data, OutId, RunCtx};
+use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage};
 use futures_util::FutureExt;
 use log::{debug, error, info};
@@ -32,7 +32,7 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
-use caching_runner::common::cachable::Cached;
+use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_shared::traits::{Data, SimpleId, WithId};
 use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
@@ -106,7 +106,6 @@ impl<RC, L> FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: TensorLoader  + Cached + OutId + 'static,
-    <L as Stage>::In<'static>: WithId,
     for<'i> <L as Stage>::In<'i>: WithId + Data + Send + Sync + 'static,
     <L as Stage>::Out: Data + Send + Sync + 'static,
 {
@@ -255,9 +254,9 @@ where
 
     async fn run(
         self: Arc<Self>,
-        input: Arc<ResourcesConfigInput<RC>>,
+        input: Arc<DataCacheWrapper<ResourcesConfigInput<RC>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Self::Out, ThoosaError> {
+    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
         let best = 0;
         let mut js: JoinSet<Result<CrossResult, ThoosaError>> = JoinSet::new();
 
@@ -292,9 +291,9 @@ where
 
         info!("failed {} out of {}", failed.load(Ordering::Relaxed), self.run_config_stages.len());
 
-        Ok(FindMotifsSavableResult::new(Arc::new(
+        Ok(Arc::new(DataCacheWrapper::new(FindMotifsSavableResult::new(Arc::new(
             self.run_config_stages[best].run_config.clone(),
-        )))
+        )), 0, 2, 0)))
     }
 }
 

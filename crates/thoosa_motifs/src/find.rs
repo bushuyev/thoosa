@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 use std::{f64, fmt, fs, mem, thread};
 use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_common::utils::*;
-use thoosa_shared::TensorIdSliceIdx;
+use thoosa_shared::{CopyToDevice, TensorIdSliceIdx};
 use thoosa_shared::val::Val;
 use thoosa_shared::{RangeOrValue, ResourceType, ThoosaError, make_combos};
 use thoosa_shared::{avg_hist, parse_key_val};
@@ -81,7 +81,7 @@ use thoosa_shared::parse_resources;
 use thoosa_shared::rayon_future::{RayonFuture, ScopeFutureExt};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::traits::WithId;
+use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::val::Val::UInt;
 use thoosa_shared::panic_to_err;
 use thoosa_store::fs_store::FileMotifTrackerStore;
@@ -979,6 +979,25 @@ pub fn find_motifs_by_euc_dist(
 #[derive(Debug)]
 pub struct FindMotifsSavableResult {
     run_config: Arc<FindMotifsRunConfig>,
+}
+
+#[async_trait]
+impl CopyToDevice for FindMotifsSavableResult {
+    async fn copy_to_device(&self, dst_device: usize) -> Self {
+        unimplemented!()
+    }
+}
+
+impl Data for FindMotifsSavableResult {
+    type Metrics = ();
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
+        0
+    }
 }
 
 impl FindMotifsSavableResult {
