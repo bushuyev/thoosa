@@ -590,7 +590,7 @@ mod tests {
     #[async_trait]
     impl CopyToDevice for DLoaderInput {
         async fn copy_to_device(&self, dst_device: usize) -> Self {
-            todo!()
+           self.clone()
         }
     }
 
@@ -636,9 +636,10 @@ mod tests {
                 .unwrap_or(1.0) as f32;
             let out_id = self.out_id(WithId::id(input.as_ref()));
 
-            let _self_for_reload = Arc::clone(&self);
-            let _ctx_for_reload = Arc::clone(&ctx);
-            // let input_for_reload = Arc::clone(&input);
+            let (device, cache_area) = {
+                let guard = ctx.read();
+                (guard.device_idx, guard.cache_area)
+            };
 
             Ok(Arc::new(DataCacheWrapper::new(DLoadedTensor {
                 id: out_id,
@@ -646,7 +647,7 @@ mod tests {
                     .map(|v| v as f32 * k)
                     .collect::<Vec<f32>>()
                     .into(),
-            }, 0, 2, 0)))
+            }, device, 2, cache_area)))
         }
 
         fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
