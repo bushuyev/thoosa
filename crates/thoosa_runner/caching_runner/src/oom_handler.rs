@@ -46,7 +46,7 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
 pub trait InputContext<'a, R>: Debug + Send + Sync
 where
     R: Stage + 'a,
-    <R as Stage>::In<'a>: Data,
+    <R as Stage>::In<'a>: Data
 {
     fn add_partial_output(&mut self, o: R::Out);
     fn all_done(&self) -> bool;
@@ -281,10 +281,7 @@ where
             let guard = run_context.read();
             (guard.device_idx(), guard.name())
         };
-        debug!(
-            "OOMHandler::run: ctx_name={ctx_name} input.id={:?}",
-            input.id()
-        );
+        debug!("OOMHandler::run: ctx_name={ctx_name} input.id={:?}",input.id());
 
         // Identify this task by its output id for Arbiter fairness.
         let out_key = {
@@ -299,10 +296,7 @@ where
             run_context.write().add_permit(result);
         }
 
-        debug!(
-            "OOMHandler::run: ctx_name={ctx_name}  acquired_permits={:?}",
-            run_context.read().acquired_permits()
-        );
+        debug!("OOMHandler::run: ctx_name={ctx_name}  acquired_permits={:?}",run_context.read().acquired_permits());
 
         let mut i = 0;
 
@@ -383,10 +377,7 @@ where
                                     run_context.write().add_permit(result);
                                 }
 
-                                debug!(
-                                    "OOMHandler::run: ctx_name={ctx_name} 1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",
-                                    run_context.read().acquired_permits()
-                                );
+                                debug!("OOMHandler::run: ctx_name={ctx_name} 1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",run_context.read().acquired_permits());
 
                                 let run_result = if let Some(selector) =
                                     input_select_adjusted.as_ref()
@@ -452,7 +443,7 @@ where
                                                 }
                                             }
                                             e => {
-                                                debug!("OOMHandler::run: ctx_name={ctx_name} other error 1");
+                                                debug!("OOMHandler::run: err ctx_name={ctx_name} other error 1");
                                                 return Err(te);
                                             }
                                         }

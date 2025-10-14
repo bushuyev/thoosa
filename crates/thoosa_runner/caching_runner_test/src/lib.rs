@@ -262,7 +262,7 @@ where
             let ctx_fac_arc = Arc::clone(&ctx_fac_arc);
             let res_cnt_arc = Arc::clone(&res_cnt_arc);
             async move {
-                debug!("task {idx}: device_idx={device_idx} thread id={:?}",std::thread::current().id());
+                debug!("run_mul_task_invocations: task {idx}: device_idx={device_idx} thread id={:?}",std::thread::current().id());
                 thread_ids.write().push(std::thread::current().id());
 
                 let name: &'static str = Box::leak(format!("task_{idx}({res})").into_boxed_str());
@@ -281,8 +281,8 @@ where
 
                         check_arc(res, &guard);
 
-                        debug!("task {idx}: device_idx={device_idx} thread id={:?} done",std::thread::current().id());
-                        debug!("task {idx}: multed=\n{:?}", guard);
+                        debug!("run_mul_task_invocations: task {idx}: device_idx={device_idx} thread id={:?} done",std::thread::current().id());
+                        debug!("run_mul_task_invocations: task {idx}: multed=\n{:?}", guard);
 
                         res_cnt_arc.fetch_add(1, Relaxed);
 
@@ -290,7 +290,9 @@ where
                     })
                     .await?;
 
-                Ok::<_, ThoosaError>(())
+                debug!("run_mul_task_invocations: task {idx}: all done");
+
+                Ok::<(), ThoosaError>(())
             }
         })
         .collect::<JoinSet<_>>()
@@ -329,7 +331,7 @@ mod tests {
     use caching_runner::test_utils::DummyTensor;
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
-    use log::debug;
+    use log::{debug, error};
     use parking_lot::RwLock;
     use std::mem;
     use std::ops::Range;
@@ -392,12 +394,9 @@ mod tests {
         }
 
         fn drop_permits(&mut self, drop_if: DropIf) {
-            debug!("MyRunCtx: {} drop_permits", self.name);
+
             let acquired_permits: NumPermits = self.acquired_permits();
-            debug!(
-                "TorchRunCtx: acquired_permits={acquired_permits} ctx.name={} drop_if={drop_if:?}",
-                self.name
-            );
+            debug!("drop_permits::drop_permits acquired_permits={acquired_permits} ctx.name={} drop_if={drop_if:?}",self.name);
 
             match drop_if {
                 DropIf::Always => {
@@ -457,8 +456,8 @@ mod tests {
                 debug!("purge_gpu_caches: device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}");
 
                 tokio::try_join!(
-                    DummyLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx),
-                    DLoadAndMulTask::purge_gpu_cache_area(mul_output_cached, cache_area, device_idx)
+                    tokio::spawn(DummyLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx)),
+                    tokio::spawn(DLoadAndMulTask::purge_gpu_cache_area(mul_output_cached, cache_area, device_idx))
                 )?;
 
                 Ok(())
@@ -900,7 +899,10 @@ mod tests {
                         ctx,
                         &HashMap::from([("", &HashSet::new())]),
                     )
-                    .await?, device_idx, 2, cache_area)))
+                    .await.map_err(|e|{
+                        error!("DLoadAndMulTask::run: e={e:?}");
+                        e
+                     })?, device_idx, 2, cache_area)))
             }
             .await
         }
@@ -1078,7 +1080,7 @@ mod tests {
             Ok(())
         }
 
-        #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
         async fn test_load_and_mul_oom_compete_for_permits_dummy() -> Result<(), ThoosaError> {
             let _global_ctx = GlobalCtx::init_devices(2);
 

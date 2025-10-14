@@ -275,8 +275,23 @@ impl Metrics for () {} //for stages without output
 impl Metrics for [usize; 1] {}
 
 //TODO  for tests, replace with MonoMetrics
-impl Metrics for i64 {}
-impl Metrics for usize {}
+impl Metrics for i64 {
+    fn cap(&self, other: &mut Self) {
+        if *other > *self {
+
+            *other = self.clone();
+        }
+    }
+}
+impl Metrics for usize {
+    fn cap(&self, other: &mut Self) {
+        if *other > *self {
+
+            *other = self.clone();
+        }
+    }
+
+}
 
 ///For adjusting one of tensor's dimensions
 #[derive(Debug, Clone)]
