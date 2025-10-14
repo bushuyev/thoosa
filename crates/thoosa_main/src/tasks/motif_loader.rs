@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use async_trait::async_trait;
@@ -25,24 +26,29 @@ use thoosa_shared::traits::MonoMetrics;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, MotifSlices};
 use crate::tasks::load_motif_and_clc_dist::{MotifSlicesSelector, ClcMotifInput};
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::{wrap_resource_for_cache, RawTensorLoader, TensorLoader};
+use crate::tasks::tensor_loader::{wrap_resource_for_cache, RawTensorLoader};
 use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
 use rand::thread_rng;
 use caching_runner::common::cachable::DataCacheWrapper;
 use caching_runner::oom_handler::Adjustable;
+use thoosa_shared::resource::Resource;
 
 #[derive(Debug, Cached)]
-pub struct MotifLoader<SRC>
+pub struct MotifLoader<SRC, C>
 where
-    SRC: TensorLoader + 'static
+    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    C: RunCtx + 'static
 {
     store: Arc<RwLock<Box<dyn Store>>>,
-    loader:Arc<SRC>
+    loader:Arc<SRC>,
+    pd:PhantomData<C>
 }
 
-impl <SRC> MotifLoader<SRC>
-    where SRC: TensorLoader + 'static
+impl <SRC, C> MotifLoader<SRC, C>
+    where
+        SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+        C: RunCtx + 'static
 {
     pub fn new(
         store: Arc<RwLock<Box<dyn Store>>>,
@@ -50,13 +56,16 @@ impl <SRC> MotifLoader<SRC>
     ) -> Self {
         Self {
             store,
-            loader
+            loader,
+            pd: Default::default(),
         }
     }
 }
 
-impl <SRC> OutId for MotifLoader<SRC>
-where SRC: TensorLoader + 'static
+impl <SRC, C> OutId for MotifLoader<SRC, C>
+where
+    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    C: RunCtx + 'static
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         input_id.clone()
@@ -140,8 +149,10 @@ impl Input for MotifWithData {}
 impl Output for MotifWithData {}
 
 
-impl <SRC> Stage for MotifLoader <SRC>
-where SRC: TensorLoader + 'static
+impl <SRC, C> Stage for MotifLoader <SRC, C>
+where
+    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    C: RunCtx + 'static
 {
     type In<'a> = DataId;
     type Out = MotifWithData;
@@ -149,8 +160,10 @@ where SRC: TensorLoader + 'static
     type Ctx = RunCtx2;
 }
 #[async_trait]
-impl <SRC> AsyncStage for MotifLoader <SRC>
-    where SRC: TensorLoader + 'static
+impl <SRC, C> AsyncStage for MotifLoader <SRC, C>
+    where
+        SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+        C: RunCtx + 'static
 {
 
     async fn run(
@@ -205,7 +218,7 @@ impl <SRC> AsyncStage for MotifLoader <SRC>
                 wrap_resource_for_cache(resource, num_devices, cache_area);
 
             let raw_tensor = Arc::clone(&self.loader)
-                .load(resource_cache, Arc::clone(&ctx))
+                .run(resource_cache, Arc::clone(&ctx))
                 .await?;
 
             let selector = ChannelsDataVec {
@@ -366,7 +379,7 @@ mod tests {
     use crate::tasks::motif_loader::MotifLoader;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::tensor_loader::mock_tensor_loader::make_wrapper_t;
+    use crate::tasks::tensor_loader::mock_tensor_loader::{make_wrapper_t, MockTensorLoader};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn load_motifs() -> Result<(), ThoosaError> {
@@ -390,7 +403,7 @@ mod tests {
             )
             .build();
 
-        let motif_loader = Arc::new(MotifLoader::new(
+        let motif_loader = Arc::new(MotifLoader::<MockTensorLoader, RunCtx2>::new(
             Arc::new(RwLock::new(store)),
 
             Arc::new(
