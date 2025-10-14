@@ -10,14 +10,13 @@ mod output_builders;
 
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
-use caching_runner::common::{Data, DropIf, PermitsCtx, RunCtx};
+use caching_runner::common::{DropIf, PermitsCtx};
 use caching_runner::permits::{MAX_PERMITS, NumPermits, RunnerPerm};
 // test-only imports live under cfg(test)
 use data::ThoTensor2;
 use log::debug;
 use std::fmt::Debug;
-use std::ops::Deref;
-use tch::{Device, Kind, Tensor};
+use tch::{Kind, Tensor};
 use thoosa_common::dims::Dims;
 use thoosa_shared::traits::Named;
 
@@ -105,8 +104,8 @@ mod tests {
     use crate::output_builders::BuildAs;
     use async_trait::async_trait;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
-    use caching_runner::common::runnable::Stage;
-    use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx, Select};
+    use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use caching_runner::common::{Data, DropIf, OutId, PermitsCtx, RunCtx, Select};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
     use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
@@ -118,10 +117,8 @@ mod tests {
     use caching_runner::common::ambassador_impl_PermitsCtx;
     use crate::TorchPermsCtx;
     use futures_util::future::{BoxFuture, Shared};
-    use futures_util::sink::With;
-    use log::{debug, trace};
+    use log::debug;
     use parking_lot::RwLock;
-    use std::cmp::min;
     use std::collections::{HashMap, HashSet};
     use std::mem;
     use std::sync::Arc;
@@ -130,10 +127,11 @@ mod tests {
     use tch::{Device, IndexOp, Kind, Scalar, Tensor};
     use thoosa_common::applicables::ThoDevice;
     use thoosa_common::cuda_utils::cuda_mem;
-    use thoosa_common::dims::{AnyMetrics, AnySub, Dims};
-    use thoosa_common::utils::{lin_for_size, lin_t};
+    use thoosa_common::dims::Dims;
+    use thoosa_common::utils::lin_for_size;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
+    use thoosa_shared::CopyToDevice;
     use thoosa_shared::{MyError, ThoosaError};
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::{EnvFilter, fmt};
@@ -258,6 +256,39 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl CopyToDevice for LoaderInput {
+        async fn copy_to_device(&self, _dst_device: usize) -> Self {
+            self.clone()
+        }
+    }
+
+    #[async_trait]
+    impl Data for LoaderInput {
+        type Metrics = ();
+
+        fn size(&self) -> Self::Metrics {
+            ()
+        }
+
+        fn device(&self) -> usize {
+            0
+        }
+    }
+
+    fn new_loader_input_cache(
+        value: impl Into<LoaderInput>,
+        device_idx: usize,
+        cache_area: u64,
+    ) -> Arc<DataCacheWrapper<LoaderInput>> {
+        Arc::new(DataCacheWrapper::new(
+            value.into(),
+            device_idx,
+            GlobalCtx::global().device_count(),
+            cache_area,
+        ))
+    }
+
     #[derive(Debug, Eq, PartialEq, Hash, Clone)]
     #[allow(dead_code)]
     struct LoadedTensorId(&'static str);
@@ -282,14 +313,6 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
     type Output = ThoTensor2<LoadedTensor, SimpleId>;
 
     fn subview(&self, selector: std::ops::Range<MonoMetrics<1, 2>>) -> Result<Self::Output, ThoosaError> {
-        use std::cmp::min;
-
-        let size: MonoMetrics<1, 2> = self
-            .size()
-            .try_into()
-            .expect("LoadedTensor::select unable to convert size");
-
-
         let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.start, &selector.end).unwrap();//TODO unwrap
 
         let sub_tensor = self.t_ref().i((ranges[0].clone(), ranges[1].clone()));
@@ -323,41 +346,58 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         ) -> <Self::Out as WithId>::ID {
             SimpleId::from(format!("loaded_{}", input_id.0))
         }
-
-        fn on_cached(
-            &self,
-            input: &impl WithId<ID = <<Self as Stage>::In<'static> as WithId>::ID>,
-            ctx: &Arc<RwLock<Self::Ctx>>,
-        ) {
-            ctx.write()
-                .loaded_tensors_cached
-                .push(self.out_id(input.id()));
-        }
     }
 
-    #[async_trait]
     impl Stage for TestTensorLoader {
         type In<'a> = LoaderInput;
         type Out = ThoTensor2<LoadedTensor, SimpleId>;
         type Ctx = TorchRunCtx;
+    }
 
+    #[async_trait]
+    impl AsyncStage for TestTensorLoader {
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
+            input: Arc<DataCacheWrapper<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError> {
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
             let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
 
-            Ok(ThoTensor2::new(
+            let (device_idx, cache_area) = {
+                let guard = ctx.read();
+                (guard.device_idx(), guard.cache_area())
+            };
+
+            let num_devices = GlobalCtx::global().device_count();
+
+            let tensor = ThoTensor2::new(
                 self.out_id(WithId::id(input.as_ref())),
                 lin_for_size(
                     k,
                     (&self.size).into(),
                     self.kind,
-                    &ThoDevice::from(ctx.read().device_idx),
+                    &ThoDevice::from(device_idx),
                 ),
-                // LoadedTensor
-            ))
+            );
+
+            Ok(Arc::new(DataCacheWrapper::new(
+                tensor,
+                device_idx,
+                num_devices,
+                cache_area,
+            )))
+        }
+
+        fn on_cached<'a>(
+            &self,
+            input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>,
+            ctx: &Arc<RwLock<Self::Ctx>>,
+        ) where
+            Self: 'a,
+        {
+            ctx.write()
+                .loaded_tensors_cached
+                .push(self.out_id(input.id()));
         }
     }
 
@@ -436,16 +476,6 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         ) -> <Self::Out as WithId>::ID {
             SimpleId::from(format!("mult_{}_inp_{}", self.id, input_id))
         }
-
-        fn on_cached(
-            &self,
-            input: &impl WithId<ID = <<Self as Stage>::In<'static> as WithId>::ID>,
-            ctx: &Arc<RwLock<Self::Ctx>>,
-        ) {
-            ctx.write()
-                .multed_tensors_cached
-                .push(self.out_id(input.id()));
-        }
     }
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -490,12 +520,13 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         }
     }
 
-    #[async_trait]
     impl Stage for ClcTask {
         type In<'a> = ThoTensor2<LoadedTensor, SimpleId>;
         type Out = ThoTensor2<ClcTaskOutput, SimpleId>;
         type Ctx = TorchRunCtx;
+    }
 
+    impl SyncStage for ClcTask {
         fn do_run<'a>(
             self: Arc<Self>,
             input: &Self::In<'a>,
@@ -564,6 +595,49 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         }
     }
 
+    #[async_trait]
+    impl AsyncStage for ClcTask {
+        async fn run(
+            self: Arc<Self>,
+            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            ctx: Arc<RwLock<Self::Ctx>>,
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+            let (device_idx, cache_area) = {
+                let guard = ctx.read();
+                (guard.device_idx(), guard.cache_area())
+            };
+            let num_devices = GlobalCtx::global().device_count();
+
+            let stage = Arc::clone(&self);
+            let ctx_for_run = Arc::clone(&ctx);
+
+            let output = input
+                .with_data_ref(device_idx, None, move |tensor| {
+                    Arc::clone(&stage).do_run(tensor, Arc::clone(&ctx_for_run))
+                })
+                .await?;
+
+            Ok(Arc::new(DataCacheWrapper::new(
+                output,
+                device_idx,
+                num_devices,
+                cache_area,
+            )))
+        }
+
+        fn on_cached<'a>(
+            &self,
+            input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>,
+            ctx: &Arc<RwLock<Self::Ctx>>,
+        ) where
+            Self: 'a,
+        {
+            ctx.write()
+                .multed_tensors_cached
+                .push(self.out_id(input.id()));
+        }
+    }
+
     //////////////////////////////
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -579,19 +653,21 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         clc_oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<MonoMetrics<1, 2>>>,
     }
 
-    #[async_trait]
     impl Stage for LoadAndClcTask {
         type In<'a> = LoaderInput;
         type Out = ThoTensor2<ClcTaskOutput, SimpleId>;
         type Ctx = TorchRunCtx;
+    }
 
+    #[async_trait]
+    impl AsyncStage for LoadAndClcTask {
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
+            input: Arc<DataCacheWrapper<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError> {
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
             let loaded = Arc::clone(&self.loader)
-                .run_cached(input, Arc::clone(&ctx))
+                .run_cached(Arc::clone(&input), Arc::clone(&ctx))
                 .await?;
 
             let loaded_id = loaded.id().clone();
@@ -619,12 +695,23 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
                 // (output_id.name(), &set_mul),
             ]);
 
-            async move {
-                self.clc_oom_runner
-                    .run(&self.clc_task, loaded, ctx, &required_ids)
-                    .await
-            }
-            .await
+            let result = self
+                .clc_oom_runner
+                .run(&self.clc_task, loaded, Arc::clone(&ctx), &required_ids)
+                .await?;
+
+            let (device_idx, cache_area) = {
+                let guard = ctx.read();
+                (guard.device_idx(), guard.cache_area())
+            };
+            let num_devices = GlobalCtx::global().device_count();
+
+            Ok(Arc::new(DataCacheWrapper::new(
+                result,
+                device_idx,
+                num_devices,
+                cache_area,
+            )))
         }
     }
 
@@ -715,11 +802,15 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
             "device_1_ctx",
         )));
 
+        let (ctx_device_idx, cache_area) = {
+            let guard = ctx_device_0.read();
+            (guard.device_idx(), guard.cache_area())
+        };
+        let loader_input = new_loader_input_cache("resource_1", ctx_device_idx, cache_area);
+
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(LoaderInput {
-                    id: LoaderInputId("resource_1"),
-                }),
+                Arc::clone(&loader_input),
                 Arc::clone(&ctx_device_0),
             )
             .await?;
@@ -747,9 +838,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
         let _loaded_tensor_0_1 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(LoaderInput {
-                    id: LoaderInputId("resource_1"),
-                }),
+                Arc::clone(&loader_input),
                 Arc::clone(&ctx_device_0),
             )
             .await?;
@@ -1148,9 +1237,13 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         let ctx_device = Arc::new(RwLock::new(TorchRunCtx::new(1, 0, "test")));
 
         for res in (0..10).map(|i| &*format!("resource_{i}").leak()) {
+            let (device_idx, cache_area) = {
+                let guard = ctx_device.read();
+                (guard.device_idx(), guard.cache_area())
+            };
             Arc::clone(&load_and_mut)
                 .run_cached(
-                    Arc::new(<&str as Into<LoaderInput>>::into(res)),
+                    new_loader_input_cache(res, device_idx, cache_area),
                     Arc::clone(&ctx_device),
                 )
                 .await?;
@@ -1283,9 +1376,14 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
         let ctx_device = Arc::new(RwLock::new(TorchRunCtx::new(1, 0, "test")));
 
+        let (device_idx, cache_area) = {
+            let guard = ctx_device.read();
+            (guard.device_idx(), guard.cache_area())
+        };
+
         let multed = Arc::clone(&load_and_mut)
             .run_cached(
-                Arc::new(<&str as Into<LoaderInput>>::into("resource_1")),
+                new_loader_input_cache("resource_1", device_idx, cache_area),
                 Arc::clone(&ctx_device),
             )
             .await?;
