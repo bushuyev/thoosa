@@ -218,6 +218,25 @@ impl From<&u32> for DataId {
     }
 }
 
+#[async_trait]
+impl CopyToDevice for DataId {
+    async fn copy_to_device(&self, _dst_device: usize) -> Self {
+        self.clone()
+    }
+}
+
+impl Data for DataId {
+    type Metrics = ();
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
+        0
+    }
+}
+
 impl From<u32> for DataId {
     fn from(value: u32) -> Self {
         DataId(value)

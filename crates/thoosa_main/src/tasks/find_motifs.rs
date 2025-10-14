@@ -7,6 +7,7 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 use async_trait::async_trait;
 use caching_runner::common::{OutId, RunCtx};
+use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::common::runnable::{AsyncStage, Stage};
 use futures_util::FutureExt;
 use log::{debug, error, info};
@@ -258,29 +259,25 @@ where
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
         let best = 0;
-        let mut js: JoinSet<Result<CrossResult, ThoosaError>> = JoinSet::new();
+        let mut js: JoinSet<Result<Arc<DataCacheWrapper<CrossResult>>, ThoosaError>> = JoinSet::new();
 
         for stage in self.run_config_stages.iter() {
             let ctx_arc = Arc::clone(&ctx);
             let input_arc = Arc::clone(&input);
             let cross_loader_arc = Arc::clone(&stage.cross_loader);
 
-            js.spawn(async {
-                let out = cross_loader_arc.run(input_arc, ctx_arc).await?;
-
-                Ok(out)
-            });
+            js.spawn(async move { cross_loader_arc.run(input_arc, ctx_arc).await });
         }
 
         // let results =js.join_all().await;
 
         let mut failed = AtomicU8::new(0);
 
-        let mut results:Vec<CrossResult> = Vec::new();
+        let mut successes = 0u32;
         while let Some(res) = js.join_next().await {
             match res? {
-                Ok(r) => {
-                    results.push(r);
+                Ok(_) => {
+                    successes += 1;
                 }
                 Err(e) => {
                     failed.fetch_add(1, Ordering::Relaxed);
@@ -289,11 +286,25 @@ where
             }
         }
 
-        info!("failed {} out of {}", failed.load(Ordering::Relaxed), self.run_config_stages.len());
+        info!(
+            "failed {} out of {}",
+            failed.load(Ordering::Relaxed),
+            self.run_config_stages.len()
+        );
 
-        Ok(Arc::new(DataCacheWrapper::new(FindMotifsSavableResult::new(Arc::new(
+        let cache_area = ctx.read().cache_area();
+        let num_devices = GlobalCtx::global().device_count();
+
+        let result = FindMotifsSavableResult::new(Arc::new(
             self.run_config_stages[best].run_config.clone(),
-        )), 0, 2, 0)))
+        ));
+
+        Ok(Arc::new(DataCacheWrapper::new(
+            result,
+            0,
+            num_devices,
+            cache_area,
+        )))
     }
 }
 
@@ -305,6 +316,7 @@ mod tests {
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use caching_runner::common::RunCtx;
+    use caching_runner::common::cachable::DataCacheWrapper;
     use caching_runner::common::runnable::Stage;
     use caching_runner::global_ctx::GlobalCtx;
     use log::debug;
@@ -336,7 +348,7 @@ mod tests {
     use torch_runner::data::ThoTensor2;
     use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
     use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifLoaderStage};
-    use crate::tasks::motif_loader::MotifLoader;
+    use crate::tasks::motif_loader::{wrap_data_id_for_cache, MotifLoader};
 
     #[ctor::ctor]
     fn init() {
@@ -480,6 +492,22 @@ mod tests {
 
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
 
+        let cache_area = ctx.read().cache_area();
+        let resources_input = Arc::new(DataCacheWrapper::new(
+            ResourcesConfigInput::new(
+                SimpleId::from("resources"),
+                Simple::new(ResourceType::List(
+                    vec!["t_0_0", "t_0_1", "t_1_0", "t_1_1"]
+                        .into_iter()
+                        .map(|v| v.to_string())
+                        .collect(),
+                )),
+            ),
+            0,
+            GlobalCtx::global().device_count(),
+            cache_area,
+        ));
+
         let run_ids = run_grid::<Simple, _, _, _, _, _>(
             None,
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(
@@ -491,15 +519,7 @@ mod tests {
             }"#,
             )
             .unwrap(),
-            Arc::new(ResourcesConfigInput::new(
-                SimpleId::from("resources"),
-                Simple::new(ResourceType::List(
-                    vec!["t_0_0", "t_0_1", "t_1_0", "t_1_1"]
-                        .into_iter()
-                        .map(|v| v.to_string())
-                        .collect(),
-                )),
-            )),
+            resources_input,
             &store,
             true,
             |run_configs| {
@@ -528,25 +548,36 @@ mod tests {
 
         let motifs = store.read().list_motifs(run_ids[0])?;
 
-        for motif_id in motifs {
-            let motif_id = Arc::new(DataId::from(motif_id as u32));
+        for motif_id_raw in motifs {
+            let cache_area_loop = ctx.read().cache_area();
+            let num_devices_loop = GlobalCtx::global().device_count();
+            let motif_id_value = DataId::from(&(motif_id_raw as u32));
+            let motif_id = wrap_data_id_for_cache(
+                motif_id_value.clone(),
+                num_devices_loop,
+                cache_area_loop,
+            );
+
             let motif = MotifLoaderStage::run_cached(
                 Arc::clone(&motif_loader_impl),
                 Arc::clone(&motif_id),
                 Arc::clone(&ctx),
             )
+            .await?;
+
+            motif
+                .with_data_ref(1, None, |t| {
+                    debug!("motif_id={motif_id_raw} slices={:?}", t.t());
+
+                    Ok(())
+                })
                 .await?;
 
-            motif.with_data_ref(1, None, |t|{
-                debug!("motif_id={motif_id} slices={:?}", t.t());
-
-                Ok(())
-            }).await?;
-
-            let dist = Arc::clone(&clc_dist).run_cached(Arc::clone(&motif_id), Arc::clone(&ctx)).await?.with_data_ref(0, None, |dist_val| {
-                Ok(dist_val.value())
-            }).await?;
-
+            let _dist = Arc::clone(&clc_dist)
+                .run_cached(Arc::clone(&motif_id), Arc::clone(&ctx))
+                .await?
+                .with_data_ref(0, None, |dist_val| Ok(dist_val.value()))
+                .await?;
         }
 
         // let mut slices = store.read().list_motifs_slices(run_ids[0])?;
