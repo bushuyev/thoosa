@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
+use log::trace;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::CachableIdTr;
 use tokio::sync::{Notify, OwnedSemaphorePermit};
@@ -77,6 +78,7 @@ impl RunnerPerm {
 
 impl Drop for RunnerPerm {
     fn drop(&mut self) {
+        trace!("Drop for RunnerPerm::drop");
         // Releasing permits is done by tokio::OwnedSemaphorePermit’s Drop.
         // We only need to wake the arbiter to re-check the head of queue.
         if let Some(notify) = self.notify.as_ref() {

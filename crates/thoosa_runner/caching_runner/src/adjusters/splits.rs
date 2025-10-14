@@ -101,13 +101,13 @@ where
 impl<'a, R: Stage + Adjustable + 'a> InputContext<'a, R> for SplitsAdjusterContextImpl<'a, R>
 where
     <R as Stage>::In<'a>: Data,
-    <<R as Stage>::In<'a> as Data>::Metrics: AddAssign<&'a <<R as Stage>::In<'a> as Data>::Metrics>,
+    <<R as Stage>::In<'a> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'a> as Data>::Metrics>,
     <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
 {
-    fn add_partial_output(&mut self, o: R::Out) {
-        // self.output_builder.add_partial_output(o); TODO
-        // 
-        // self.done_to += &self.split_len;
+    fn add_partial_output(&mut self, o: R::Out){
+        self.output_builder.add_partial_output(o);
+
+        self.done_to += &self.split_len.clone();
 
         debug!("SplitsAdjusterAcontextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}",self.done_to, self.split_len);
     }
