@@ -7,7 +7,7 @@ use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 use async_trait::async_trait;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use caching_runner::common::{Data, OutId, RunCtx};
+use caching_runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
 use log::{debug, info};
 use parking_lot::RwLock;
@@ -18,11 +18,12 @@ use std::sync::Arc;
 use tch::Tensor;
 use thoosa_common::dims::{AnyMetrics, AnySub, ChannelsData, ChannelsSlicesData, Dims};
 use thoosa_common::runs::Simple;
+use thoosa_motifs::find::FindMotifsSavableResult;
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
-use thoosa_shared::traits::{Named, SimpleId, WithId};
+use thoosa_shared::traits::{Data, Named, SimpleId, WithId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use thoosa_shared::traits::MonoMetrics;
@@ -350,6 +351,27 @@ impl<RC: ResourcesConfig + Debug> ResourcesConfigInput<RC> {
     }
 }
 
+
+
+#[async_trait]
+impl <RC: ResourcesConfig + Debug> CopyToDevice for ResourcesConfigInput<RC> {
+    async fn copy_to_device(&self, dst_device: usize) -> Self {
+        unimplemented!()
+    }
+}
+
+impl <RC: ResourcesConfig + Debug> Data for ResourcesConfigInput<RC> {
+    type Metrics = ();
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
+        0
+    }
+}
+
 impl<ResC: ResourcesConfig> WithId for ResourcesConfigInput<ResC> {
     type ID = SimpleId;
 
@@ -377,6 +399,26 @@ impl Output for CrossResult {}
 impl CrossResult {
     pub fn new(id: SimpleId) -> Self {
         Self { id }
+    }
+}
+
+
+#[async_trait]
+impl CopyToDevice for CrossResult {
+    async fn copy_to_device(&self, dst_device: usize) -> Self {
+        unimplemented!()
+    }
+}
+
+impl Data for CrossResult {
+    type Metrics = ();
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
+        0
     }
 }
 
