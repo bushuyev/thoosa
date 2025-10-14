@@ -9,9 +9,10 @@ use tch::IndexOp;
 use cached_derive::Cached;
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
-use caching_runner::common::{OutId};
-use caching_runner::common::runnable::{AsyncStage, Stage};
-use caching_runner::oom_handler::{Adjustable, Adjuster, Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use caching_runner::common::{OutId, RunCtx};
+use caching_runner::global_ctx::GlobalCtx;
+use caching_runner::oom_handler::{Adjustable, Adjuster, Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::dims::Dims;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::{CopyToDevice, ThoosaError};
@@ -56,7 +57,13 @@ where
 #[derive(Cached)]
 pub struct LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
+        + SyncStage
+        + Adjustable
+        + OutId
+        + Send
+        + Sync
+        + 'static,
     for<'a> CLC::In<'a>: ClcMotifInput,
     CLC::In<'static>: 'static,
 {
@@ -69,7 +76,7 @@ where
 
 #[async_trait]
 impl CopyToDevice for AverageDistanceValue {
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
+    async fn copy_to_device(&self, _dst_device: usize) -> Self {
         self.clone()
     }
 }
@@ -88,7 +95,13 @@ impl Data for AverageDistanceValue {
 
 impl<CLC> Debug for LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
+        + SyncStage
+        + Adjustable
+        + OutId
+        + Send
+        + Sync
+        + 'static,
     for<'a> CLC::In<'a>: ClcMotifInput,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -98,7 +111,13 @@ where
 
 impl<CLC> WithId for LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
+        + SyncStage
+        + Adjustable
+        + OutId
+        + Send
+        + Sync
+        + 'static,
     for<'a> CLC::In<'a>: ClcMotifInput,
 {
     type ID = SimpleId;
@@ -110,7 +129,13 @@ where
 
 impl<CLC> LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
+        + SyncStage
+        + Adjustable
+        + OutId
+        + Send
+        + Sync
+        + 'static,
     for<'a> CLC::In<'a>: ClcMotifInput,
 {
     pub fn new(
@@ -128,7 +153,13 @@ where
 
 impl<CLC> OutId for LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
+        + SyncStage
+        + Adjustable
+        + OutId
+        + Send
+        + Sync
+        + 'static,
     for<'a> CLC::In<'a>: ClcMotifInput,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -140,7 +171,13 @@ where
 
 impl<CLC> Stage for LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
+        + SyncStage
+        + Adjustable
+        + OutId
+        + Send
+        + Sync
+        + 'static,
     for<'a> CLC::In<'a>: ClcMotifInput,
 {
     type In<'a> = DataId;
@@ -152,44 +189,72 @@ where
 #[async_trait]
 impl<CLC> AsyncStage for LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
+        + SyncStage
+        + Adjustable
+        + OutId
+        + Send
+        + Sync
+        + 'static,
     for<'a> CLC::In<'a>: ClcMotifInput,
 {
 
-    async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    async fn run(
+        self: Arc<Self>,
+        input: Arc<DataCacheWrapper<Self::In<'static>>>,
+        ctx: Arc<RwLock<Self::Ctx>>,
+    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
     where
-            for<'a> Self::In<'a>: Send + Sync
+        for<'a> Self::In<'a>: Send + Sync,
     {
         let out_id = self.out_id(input.id());
 
-        let motif = Arc::clone(&self.motif_loader).run_cached(input, Arc::clone(&ctx)).await?;
+        let motif = Arc::clone(&self.motif_loader)
+            .run_cached(Arc::clone(&input), Arc::clone(&ctx))
+            .await?;
 
-        let motif_size = motif.size();
+        let motif_size = motif.size().clone();
 
-        debug!("LoadMotifAndClcDistanceStage::run: out_id={} motif_size={motif_size:?}", out_id);
+        debug!(
+            "LoadMotifAndClcDistanceStage::run: out_id={} motif_size={motif_size:?}",
+            out_id
+        );
+
+        let (device_idx, cache_area) = {
+            let guard = ctx.read();
+            (guard.device_idx(), guard.cache_area())
+        };
+        let num_devices = GlobalCtx::global().device_count();
 
         let dist = OOMHandler::new(
             vec![Adjusters::Input(Box::new(
                 SplitsAdjuster::<<CLC as Stage>::In<'static>, MotifSlicesSelector>::new(
-                    [2, -1].into(),//[(motif_size.dim_0() as f32 * 0.1) as i64 + 2, -1].into(),
+                    [2, -1].into(),
                 ),
             ))],
             None,
         )
-            .run(
-                &self.clc_dist,
-                Arc::clone(&motif),
-                ctx,
-                Contexts::new(
-                    SplitsAdjusterContextImpl::new(motif_size.clone(), (self.output_builder)(out_id.clone()/*it should be dist id*/)),
-                    NoopRunnableContext {},
-                    NoopRunCtxContext {},
+        .run(
+            &self.clc_dist,
+            Arc::clone(&motif),
+            Arc::clone(&ctx),
+            Contexts::new(
+                SplitsAdjusterContextImpl::new(
+                    motif_size.clone(),
+                    (self.output_builder)(out_id.clone()),
                 ),
-            )
-            .await?;
+                NoopRunnableContext {},
+                NoopRunCtxContext {},
+            ),
+        )
+        .await?;
 
-        Ok(dist)
-
+        Ok(Arc::new(DataCacheWrapper::new(
+            dist,
+            device_idx,
+            num_devices,
+            cache_area,
+        )))
     }
 }
 
@@ -270,8 +335,8 @@ pub(crate) trait ClcMotifInput:
 #[cfg(test)]
 mod tests {
     use super::{LoadMotifAndClcDistanceStage, MotifLoaderStage, MotifSlices, RunCtx2};
-    use caching_runner::common::cachable::DataCacheWrapper;
-    use caching_runner::common::runnable::Stage;
+    use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+    use caching_runner::common::RunCtx;
     use caching_runner::global_ctx::GlobalCtx;
     use parking_lot::{RwLock, Mutex};
     use std::sync::{Arc};
@@ -280,7 +345,7 @@ mod tests {
     use thoosa_shared::traits::{DataId, SimpleId, WithId};
     use torch_runner::data::ThoTensor2;
     use crate::tasks::average_euclidean_distance::mock_average_stage;
-    use crate::tasks::motif_loader::{mock_motif_loader, MotifWithData};
+    use crate::tasks::motif_loader::{mock_motif_loader, wrap_data_id_for_cache, MotifWithData};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_load_and_clc_average_euclidean_distance() -> Result<(), ThoosaError> {
@@ -325,14 +390,21 @@ mod tests {
             clc_stage,
         ));
 
-        let input_id = Arc::new(DataId::from(42u32));
+        let cache_area = ctx.read().cache_area();
+        let num_devices = GlobalCtx::global().device_count();
+        let input_id_value = DataId::from(&42u32);
+        let input_id = wrap_data_id_for_cache(input_id_value.clone(), num_devices, cache_area);
         let result = stage
-            .run(Arc::clone(&input_id), Arc::clone(&ctx))
+            .run_cached(Arc::clone(&input_id), Arc::clone(&ctx))
             .await?;
 
-        assert_eq!(result.value(), 20.0);
-        let expected_id = SimpleId::from(format!("{}_avg_ec_dist", input_id));
-        assert_eq!(result.id(), &expected_id);
+        let result_value = result
+            .with_data_ref(0, None, |val| Ok(val.clone()))
+            .await?;
+
+        assert_eq!(result_value.value(), 20.0);
+        let expected_id = SimpleId::from(format!("{}_avg_ec_dist", input_id_value));
+        assert_eq!(result_value.id(), &expected_id);
 
         let recorded = call_log.lock().clone();
         assert!(recorded.iter().any(|&d| d > 3), "expected at least one oversized run, got {recorded:?}");

@@ -171,7 +171,12 @@ where
 impl<T, In> CrossLoaderReceiver<In> for T
 //TODO added for mocks, should be for DistsTracker only
 where
-    T: for<'a> Stage<In<'a> = In, Ctx = RunCtx2> + Send + Sync + Debug + 'static,
+    T: for<'a> Stage<In<'a> = In, Ctx = RunCtx2>
+        + for<'a> SyncStage<In<'a> = In, Ctx = RunCtx2>
+        + Send
+        + Sync
+        + Debug
+        + 'static,
     In: Input + Output + Send + Debug + 'static,
 {
     fn consume(
@@ -354,13 +359,13 @@ impl<RC: ResourcesConfig + Debug> ResourcesConfigInput<RC> {
 
 
 #[async_trait]
-impl <RC: ResourcesConfig + Debug> CopyToDevice for ResourcesConfigInput<RC> {
+impl <RC: ResourcesConfig + Debug + Send + Sync> CopyToDevice for ResourcesConfigInput<RC> {
     async fn copy_to_device(&self, dst_device: usize) -> Self {
         unimplemented!()
     }
 }
 
-impl <RC: ResourcesConfig + Debug> Data for ResourcesConfigInput<RC> {
+impl <RC: ResourcesConfig + Debug + Send + Sync> Data for ResourcesConfigInput<RC> {
     type Metrics = ();
 
     fn size(&self) -> Self::Metrics {
@@ -570,6 +575,7 @@ mod tests {
     use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
+    use caching_runner::common::RunCtx;
     use caching_runner::global_ctx::GlobalCtx;
     use futures_util::FutureExt;
     use log::debug;
@@ -720,14 +726,19 @@ mod tests {
             },
         ));
 
+        let cache_area = ctx.read().cache_area();
+        let input = Arc::new(DataCacheWrapper::new(
+            ResourcesConfigInput::new(
+                "".into(),
+                Simple::new(ResourceType::List(resource_keys)),
+            ),
+            0,
+            GlobalCtx::global().device_count(),
+            cache_area,
+        ));
+
         let _ = cross_loader
-            .run(
-                Arc::new(ResourcesConfigInput::new(
-                    "".into(),
-                    Simple::new(ResourceType::List(resource_keys)),
-                )),
-                ctx,
-            )
+            .run(input, Arc::clone(&ctx))
             .await?;
 
         yield_now().await;
@@ -752,18 +763,9 @@ mod tests {
             (resource_b.id(), make_wrapper("tensor_b", &[3.0, 4.0])),
         ]));
 
-        let loader_map = Arc::clone(&loader_data);
         let loader = Arc::new(
             mock_tensor_loader::new()
-                .with_load_fn(move |resource, _ctx| {
-                    let map = Arc::clone(&loader_map);
-                    async move {
-                        Ok(map
-                            .get(&resource.as_ref().id())
-                            .cloned()
-                            .expect("mock loader data should be present"))
-                    }
-                })
+                .with_data(loader_data.as_ref().clone())
                 .build(),
         );
 
@@ -832,17 +834,22 @@ mod tests {
             },
         ));
 
+        let cache_area = ctx.read().cache_area();
+        let input = Arc::new(DataCacheWrapper::new(
+            ResourcesConfigInput::new(
+                SimpleId::from("resources"),
+                Simple::new(ResourceType::List(vec![
+                    "resource_a".to_string(),
+                    "resource_b".to_string(),
+                ])),
+            ),
+            0,
+            GlobalCtx::global().device_count(),
+            cache_area,
+        ));
+
         let _ = cross_loader
-            .run(
-                Arc::new(ResourcesConfigInput::new(
-                    SimpleId::from("resources"),
-                    Simple::new(ResourceType::List(vec![
-                        "resource_a".to_string(),
-                        "resource_b".to_string(),
-                    ])),
-                )),
-                Arc::clone(&ctx),
-            )
+            .run(input, Arc::clone(&ctx))
             .await?;
 
         yield_now().await;

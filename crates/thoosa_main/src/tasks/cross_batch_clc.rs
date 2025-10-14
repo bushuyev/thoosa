@@ -268,7 +268,7 @@ mod tests {
     use crate::tasks::find_motifs::MeanDistsCtx;
     use crate::tasks::run_ctx_2::RunCtx2;
     use caching_runner::common::MockRunCtx;
-    use caching_runner::common::runnable::Stage;
+    use caching_runner::common::runnable::{Stage, SyncStage};
     use log::debug;
     use parking_lot::RwLock;
     use std::sync::Arc;

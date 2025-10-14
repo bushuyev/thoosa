@@ -4,16 +4,14 @@ use parking_lot::RwLock;
 use cached_derive::Cached;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::OutId;
+use caching_runner::common::RunCtx;
 use caching_runner::common::runnable::{AsyncStage, Stage};
-use thoosa_shared::applicables_runner::Input;
-use thoosa_shared::resource::Resource;
+use caching_runner::global_ctx::GlobalCtx;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::motif_loader::MotifLoader;
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::TensorLoader;
 
 #[derive(Debug, Cached)]
 pub struct BandPassFilter {
@@ -33,21 +31,38 @@ impl  OutId for BandPassFilter {
 
 impl Stage for BandPassFilter {
     type Ctx = RunCtx2;
-    type In<'a> = DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>;
+    type In<'a> = ThoTensor2<ChannelsData2, SimpleId>;
     type Out = ThoTensor2<ChannelsData2, SimpleId>;
 }
+
 #[async_trait]
 impl AsyncStage for BandPassFilter {
+    async fn run(
+        self: Arc<Self>,
+        input: Arc<DataCacheWrapper<Self::In<'static>>>,
+        ctx: Arc<RwLock<Self::Ctx>>,
+    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        let (device_idx, cache_area) = {
+            let guard = ctx.read();
+            (guard.device_idx(), guard.cache_area())
+        };
+        let num_devices = GlobalCtx::global().device_count();
 
-    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
-    where
-            for<'a> Self::In<'a>: Send + Sync
-    {
-        // input.run_inner(|t|{
-        //     Ok(ThoTensor2::new(self.out_id(input.id()), t.shallow_clone()))
-        // })
-        todo!()
+        let filtered = input
+            .with_data_ref(device_idx, None, |tensor| {
+                Ok(ThoTensor2::new(
+                    self.out_id(tensor.id()),
+                    tensor.t_ref().shallow_clone(),
+                ))
+            })
+            .await?;
 
+        Ok(Arc::new(DataCacheWrapper::new(
+            filtered,
+            device_idx,
+            num_devices,
+            cache_area,
+        )))
     }
 }
 
