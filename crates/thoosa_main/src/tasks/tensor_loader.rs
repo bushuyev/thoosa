@@ -124,20 +124,6 @@ impl TensorLoader for RawTensorLoader {
     }
 }
 
-// #[async_trait]
-// impl TensorLoader for StagesSeq<RawTensorLoader, BandPassFilter>
-// where
-// {
-//
-//     async fn load(
-//         self: Arc<Self>,
-//         resource: Arc<Resource>,
-//         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-//     ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError> {
-//         self.run(resource, ctx).await
-//
-//     }
-// }
 
 
 #[cfg(test)]
@@ -152,6 +138,7 @@ pub(crate) mod mock_tensor_loader {
     use tch::{Device, Tensor};
     use tch::Device::Cpu;
     use tokio::runtime::Handle;
+    use tokio::task::block_in_place;
     use caching_runner::common::cachable::DataCacheWrapper;
     use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::resource::Resource;
@@ -185,7 +172,7 @@ pub(crate) mod mock_tensor_loader {
         {
             resource.with_data_ref(0, None, |d|{
                 Ok(Arc::new(DataCacheWrapper::new(
-                    (self.load_fn)(d, &Cpu), 0, 0, 0
+                    (self.load_fn)(d, &Cpu), 0, 2, 0
                 )))
             }).await
         }
@@ -205,7 +192,7 @@ pub(crate) mod mock_tensor_loader {
 
     pub fn make_wrapper_t(id: &'static str, tensor: Tensor) -> Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>> {
         let tho_tensor = ThoTensor2::new(SimpleId::from(id), tensor);
-        Arc::new(DataCacheWrapper::new(tho_tensor, 0, 1, 0))
+        Arc::new(DataCacheWrapper::new(tho_tensor, 0, 2, 0))
     }
 
     impl MockTensorLoaderBuilder {
@@ -226,7 +213,7 @@ pub(crate) mod mock_tensor_loader {
                     .cloned()
                     .expect("mock loader data should be present");
 
-                let tensor_result = Handle::current().block_on(async {
+                let tensor_result = block_in_place(|| Handle::current().block_on(async {
                     wrapper.with_data_ref(0, None, |t| {
                         Ok(ThoTensor2::new(
                             t.id().clone(),
@@ -234,7 +221,7 @@ pub(crate) mod mock_tensor_loader {
                         ))
                     })
                     .await
-                });
+                }));
 
                 tensor_result.expect("mock loader data access failed")
             })
@@ -297,7 +284,7 @@ mod tests {
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
 
         let loaded = loader
-            .run_cached(Arc::new(DataCacheWrapper::new(Resource::new(0, 0, "aaa".to_string(), 20), 0, 0, 0)), ctx)
+            .run_cached(Arc::new(DataCacheWrapper::new(Resource::new(0, 0, "aaa".to_string(), 20), 0, 2, 0)), ctx)
             .await
             .map_err(|e| ThoosaError::new("zzz"))?;
 

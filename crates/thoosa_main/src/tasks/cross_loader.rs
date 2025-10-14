@@ -3,7 +3,7 @@ use crate::tasks::cross_batch_clc::CrossInput;
 use crate::tasks::cross_batch_clc::CrossUnfoldClc;
 use crate::tasks::cross_dims::{ChannelsData2};
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
+use crate::tasks::tensor_loader::{wrap_resource_for_cache, RawTensorLoader, TensorLoader};
 use async_trait::async_trait;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -465,12 +465,15 @@ where
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
         let device_idx = ctx.read().device_idx();
 
-        /*let resources = input
-            .resources_config
-            .to_resources(&self.store)?
-            .into_iter()
-            .map(|r| Arc::new(r))
-            .collect::<Vec<_>>();
+        let resources = input.with_data_ref(0, None, |input|{
+            Ok(input
+                .resources_config
+                .to_resources(&self.store)?
+                .into_iter()
+                .map(|r| Arc::new(r))
+                .collect::<Vec<_>>())
+        }).await?;
+
         debug!(
             "CrossLoader::run  max_batch={max_batch} resources={}",
             resources.len()
@@ -486,7 +489,7 @@ where
             info!("on i_0={i_0} resource_0={resource_0:?}");
 
             let t_0 = Arc::clone(&self.loader)
-                .load(Arc::clone(resource_0), Arc::clone(&ctx))
+                .load(Arc::clone(&wrap_resource_for_cache(resource_0.as_ref().clone(), 2, 0)), Arc::clone(&ctx))
                 .await?;
 
             t_0_batch_len += t_0.size().dim_1();
@@ -505,7 +508,7 @@ where
                 //skipping lower triangle
 
                 let t_1 = Arc::clone(&self.loader)
-                    .load(Arc::clone(resource_1), Arc::clone(&ctx))
+                    .load(Arc::clone(&wrap_resource_for_cache(resource_1.as_ref().clone(), 2, 0)), Arc::clone(&ctx))
                     .await?;
 
                 t_1_batch_len += t_1.size().dim_1();
@@ -558,8 +561,7 @@ where
 
         (self.on_all_done)(&self.receiver).await;
 
-        Ok(CrossResult::new(self.out_id(WithId::id(input.as_ref()))))*/
-        todo!()
+        Ok(Arc::new(DataCacheWrapper::new(CrossResult::new(self.out_id(WithId::id(input.as_ref()))), 0, 2, 0)))
     }
 }
 
@@ -751,6 +753,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cross_loader_with_mocks() -> Result<(), ThoosaError> {
+        GlobalCtx::init_devices(2);
+        
         let resource_a: Resource = (1, 1, "resource_a", 2).into();
         let resource_b: Resource = (2, 1, "resource_b", 2).into();
         let resources = vec![resource_a.clone(), resource_b.clone()];
