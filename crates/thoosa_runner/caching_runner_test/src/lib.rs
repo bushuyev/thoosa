@@ -240,7 +240,7 @@ where
     for<'a> <R as Stage>::In<'a>: Data + WithId+ Send + Sync,
     R::Out: Data + Send + Sync,
     StageInStatic<R>: From<&'static str>,
-    F: Fn(usize, u64, &'static str) -> <R as Stage>::Ctx + Send + Sync + 'static,
+    F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF: Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
     <R as Stage>::Out: Data,
 {
@@ -270,7 +270,7 @@ where
                 let ctx_device = Arc::new(RwLock::new(ctx_fac_arc(device_idx, 0, name)));
                 let multed = load_and_mul
                     .run_cached(
-                        Arc::new(DataCacheWrapper::new(<&str as Into<StageInStatic<R>>>::into(res), 0, 2, 0)),
+                        Arc::new(DataCacheWrapper::new(<&str as Into<StageInStatic<R>>>::into(res), device_idx, 2, 0)),
                         ctx_device.clone(),
                     )
                     .await?;
@@ -366,7 +366,7 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct DummyPermsCtx {
+    struct DummyPermsCtx {//TODO it's same as TorchPermsCtx, replace
         name: &'static str,
         permits: Vec<RunnerPerm>,
     }
@@ -698,9 +698,7 @@ mod tests {
                 }
                 FailUntil::MinPermits(min_permits) => {
                     let acquired_permits = ctx.read().acquired_permits();
-                    debug!(
-                        "MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}"
-                    );
+                    debug!("MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}");
 
                     if acquired_permits < min_permits {
                         return Err(MyError::OutOfMemory.into());
@@ -709,11 +707,7 @@ mod tests {
 
                 FailUntil::DumpedToCpu => {
                     let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx.read().device_idx());
-                    debug!(
-                        "MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}",
-                        ctx.read().name(),
-                        ctx.read().device_idx()
-                    );
+                    debug!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}",ctx.read().name(),ctx.read().device_idx());
 
                     if !is_all_on_cpu {
                         return Err(MyError::OutOfMemory.into());
@@ -721,6 +715,8 @@ mod tests {
                 }
                 FailUntil::Never => {}
             }
+
+            debug!("MulTask::do_run: running ctx.name={:?} device_idx={} ",ctx.read().name(),ctx.read().device_idx());
 
             Ok(DMulTaskOutput {
                 id: self.out_id(Input::id(input)),
@@ -1156,7 +1152,7 @@ mod tests {
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
         async fn test_load_and_mul_oom_till_dump_all_to_cpu_dummy() -> Result<(), ThoosaError> {
-            let _ = *TELEMETRY;
+            // let _ = *TELEMETRY;
 
             let _global_ctx = GlobalCtx::init_devices(2);
 
