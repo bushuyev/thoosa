@@ -72,6 +72,7 @@ impl Resource {
     }
 }
 
+
 impl Named for Resource {}
 
 impl WithId for Resource {

@@ -34,7 +34,7 @@ use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
 use caching_runner::common::cachable::Cached;
 use thoosa_common::cuda_utils::pack_bits_bool;
-use thoosa_shared::traits::{SimpleId, WithId};
+use thoosa_shared::traits::{Data, SimpleId, WithId};
 use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::ChannelsData2;
