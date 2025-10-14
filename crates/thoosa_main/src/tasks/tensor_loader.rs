@@ -3,6 +3,7 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::common::{OutId, RunCtx};
+use caching_runner::global_ctx::GlobalCtx;
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
@@ -47,18 +48,27 @@ impl Stage for RawTensorLoader {
 #[async_trait]
 impl AsyncStage for RawTensorLoader {
 
-    async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
-        let (device, cache_area)= {
-            let guard = ctx.read();
+    async fn run(
+        self: Arc<Self>,
+        input: Arc<DataCacheWrapper<Self::In<'static>>>,
+        ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        let cache_area = ctx.read().cache_area();
 
-            (guard.device_idx(), guard.cache_area())
-        };
-        input.with_data_ref(0, None, |d|{
-            Ok(Arc::new(DataCacheWrapper::new(
-                (self.loader_fn)(d, &self.device), device, 0, cache_area
-            )))
-        }).await
+        let num_devices = GlobalCtx::global().device_count();
+        let target_device = self.device.ordinal();
 
+        input
+            .with_data_ref(0, None, |resource| {
+                let tensor = (self.loader_fn)(resource, &self.device);
+                Ok(Arc::new(DataCacheWrapper::new(
+                    tensor,
+                    target_device,
+                    num_devices,
+                    cache_area,
+                )))
+            })
+            .await
     }
 }
 
@@ -78,6 +88,19 @@ impl RawTensorLoader {
             loader_fn: Box::new(loader_fn),
         }
     }
+}
+
+pub fn wrap_resource_for_cache(
+    resource: Resource,
+    num_devices: usize,
+    cache_area: u64,
+) -> Arc<DataCacheWrapper<Resource>> {
+    Arc::new(DataCacheWrapper::new(
+        resource,
+        0,
+        num_devices,
+        cache_area,
+    ))
 }
 
 #[async_trait]
@@ -187,22 +210,33 @@ pub(crate) mod mock_tensor_loader {
 
     impl MockTensorLoaderBuilder {
 
-        pub fn with_data<H>(mut self, h:H ) -> Self
+        pub fn with_data<H>(mut self, h: H) -> Self
         where
-            H:Into<HashMap<u32, ThoTensor2<ChannelsData2, SimpleId>>> + Send + Sync{
-
-            let map:Arc<HashMap<u32, ThoTensor2<ChannelsData2, SimpleId>>> = Arc::new(h.into());
+            H: Into<HashMap<u32, Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>>> + Send + Sync,
+        {
+            let map: Arc<
+                HashMap<u32, Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>>,
+            > = Arc::new(h.into());
 
             self.with_load_fn(move |resource, _ctx| {
-                    let map = Arc::clone(&map);
+                let map = Arc::clone(&map);
 
-                        map
-                            .get(&resource.id())
-                            .map(|t|{
-                                Handle::current().block_on(t.copy_to_device(0))
-                            })
-                            .expect("mock loader data should be present")
+                let wrapper = map
+                    .get(&resource.id())
+                    .cloned()
+                    .expect("mock loader data should be present");
 
+                let tensor_result = Handle::current().block_on(async {
+                    wrapper.with_data_ref(0, None, |t| {
+                        Ok(ThoTensor2::new(
+                            t.id().clone(),
+                            t.t_ref().shallow_clone(),
+                        ))
+                    })
+                    .await
+                });
+
+                tensor_result.expect("mock loader data access failed")
             })
         }
 

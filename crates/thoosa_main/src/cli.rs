@@ -6,11 +6,10 @@ use crate::data;
 use crate::data::{ParquetLoader, clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::{RawTensorLoader};
+use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::version::VERSION;
 use async_trait::async_trait;
 use caching_runner::common::runnable::Stage;
-use caching_runner::global_ctx::GlobalCtx;
 use clap::{Args, Parser, Subcommand};
 use futures::executor::block_on;
 use futures_util::future::{join_all, try_join_all};
@@ -81,19 +80,23 @@ use thoosa_shared::applicables_runner::{Input, Runner, ToOrdinal};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId, Runnable};
-use thoosa_shared::traits::{DataId, SimpleId};
+use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
+use thoosa_shared::CopyToDevice;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{ResourceType, ThoosaError, cdt, cdt_for_dir};
 use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Runtime;
 use torch_runner::data::ThoTensor2;
 use torch_sys::at_grad_set_enabled;
-use caching_runner::common::cachable::Cached;
+use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+use caching_runner::common::RunCtx;
+use caching_runner::common::runnable::AsyncStage;
+use caching_runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifLoaderStage};
-use crate::tasks::motif_loader::MotifLoader;
+use crate::tasks::motif_loader::{wrap_data_id_for_cache, MotifLoader};
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -345,13 +348,20 @@ where
                 "FindMotifs2: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}"
             );
 
+            let input_wrapper = Arc::new(DataCacheWrapper::new(
+                ResourcesConfigInput::new(
+                    SimpleId::from("resources"),
+                    find_motifs_args.resource_config(),
+                ),
+                0,
+                GlobalCtx::global().device_count(),
+                0,
+            ));
+
             let run_ids = run_grid::<Simple, _, _, _, _, _>(
                 None,
                 find_motifs_run_config_range_or_value,
-                Arc::new(ResourcesConfigInput::new(
-                    SimpleId::from("resources"),
-                    find_motifs_args.resource_config(),
-                )),
+                input_wrapper,
                 &store,
                 true,
                 |run_configs| {
@@ -1712,19 +1722,29 @@ async fn run_plot_motif_slices(
     Ok(())
 }
 
-async fn plot_motif(ws: &&Arc<RwLock<Box<dyn Workspace>>>, ctx: Arc<RwLock<RunCtx2>>, motif_id: usize, motif_loader_impl: &Arc<MotifLoader<RawTensorLoader>>, clc_dist: Arc<LoadMotifAndClcDistanceStage<AverageEuclideanDistanceStage>>) -> Result<(), ThoosaError> {
-    let motif_id = Arc::new(DataId::from(motif_id as u32));
+async fn plot_motif(
+    ws: &&Arc<RwLock<Box<dyn Workspace>>>,
+    ctx: Arc<RwLock<RunCtx2>>,
+    motif_id: usize,
+    motif_loader_impl: &Arc<MotifLoader<RawTensorLoader>>,
+    clc_dist: Arc<LoadMotifAndClcDistanceStage<AverageEuclideanDistanceStage>>,
+) -> Result<(), ThoosaError> {
+    let cache_area = ctx.read().cache_area();
+    let num_devices = GlobalCtx::global().device_count();
+    let motif_id_cache = wrap_data_id_for_cache(DataId(motif_id as u32), num_devices, cache_area);
+
     let motif = MotifLoaderStage::run_cached(
         Arc::clone(&motif_loader_impl),
-        Arc::clone(&motif_id),
+        Arc::clone(&motif_id_cache),
         Arc::clone(&ctx),
     )
+    .await?;
+
+    let dist = clc_dist
+        .run_cached(Arc::clone(&motif_id_cache), Arc::clone(&ctx))
+        .await?
+        .with_data_ref(0, None, |dist_val| Ok(dist_val.value()))
         .await?;
-
-
-    let dist = clc_dist.run_cached(Arc::clone(&motif_id), ctx).await?.with_data_ref(0, None, |dist_val| {
-        Ok(dist_val.value())
-    }).await?;
 
     let r = motif.with_data_ref(0, None, |motif| {
         let run_id = motif.run_id();
@@ -2327,7 +2347,7 @@ pub async fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     // fixed_config: FC,
-    input: Arc<ST::In<'static>>,
+    input: Arc<DataCacheWrapper<ST::In<'static>>>,
     // ctx:Arc<parking_lot::RwLock<ST::Ctx>>,
     // stage: Arc<ST>,
     // ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -2342,13 +2362,14 @@ pub async fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
 where
     ResConf: ResourcesConfig<R = Vec<Resource>> + Debug,
     F: FnOnce(Vec<RC>) -> Arc<ST>,
-    ST: Stage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
+    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
         + thoosa_properties_map::ToHashmap,
     RCRV: GridRunConfigSource,
     // ResConf: ResourcesConfig,
-    for<'c> <ST as Stage>::In<'c>: Send + Sync,
+    for<'c> <ST as Stage>::In<'c>: Data + WithId + CopyToDevice + Send + Sync,
+    <ST as Stage>::Out: Data + WithId + CopyToDevice + Send + Sync,
     CtxF: FnOnce() -> Arc<RwLock<<ST as Stage>::Ctx>>,
 {
     let grid_run_configs = rcrv.grid_run_configs();
@@ -2367,10 +2388,6 @@ where
     };
 
     let stage = f(run_configs);
-
-    let ctx = Arc::new(parking_lot::RwLock::new(
-        RunCtx2::new(0, 0, "aa"),
-    ));
 
     stage.run(input, ctx_f()).await?;
 
