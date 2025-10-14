@@ -40,6 +40,7 @@ use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::filters::band_pass::BandPassFilter;
+use crate::tasks::stages_seq::ABStage;
 // use crate::tasks::stages_seq::StagesSeq;
 
 #[derive(Debug)]
@@ -208,7 +209,7 @@ where
                 FindMotifsStages::new(
                     run_config,
                     Arc::new(CrossLoader::new(
-                        // Arc::new(StagesSeq::new(Arc::clone(&loader), band_filter)),
+                        // Arc::new(ABStage::new("ab".into(), Arc::clone(&loader), band_filter)),
                         Arc::clone(&loader),
                         &store,
                         Arc::new(cross_unfold_clc),
