@@ -18,7 +18,7 @@ use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
-use crate::tasks::filters::band_pass::BandPassFilter;
+use crate::tasks::transforms::freq_filter::FreqFilter;
 // use crate::tasks::stages_seq::StagesSeq;
 
 type LoadFn = dyn Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send;

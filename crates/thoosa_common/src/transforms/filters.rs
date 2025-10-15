@@ -2,7 +2,7 @@ use crate::utils::from;
 use log::debug;
 use serde::Deserialize;
 use tch::kind::FLOAT_CPU;
-use tch::{Device, Kind, Tensor};
+use tch::{Device, IndexOp, Kind, TchError, Tensor};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 
@@ -28,6 +28,42 @@ pub struct BandPassFilterParams {
     #[run_config]
     pub padding: i64,
 }
+
+pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor, TchError> {
+    // Sanity
+    assert!(x.dim() == 2, "expected [C, T]");
+    let t = x.size()[1];
+    assert!(t > 1, "sequence length must be > 1");
+    assert!(fs > 0.0, "fs must be positive");
+
+    // Map Hz -> rfft bin indices.
+    // rfft output length along time dim is n_fft//2 + 1
+    let n = t;
+    let nhalf = n / 2;
+    let (mut lo, mut hi) = (fr0.min(fr1), fr0.max(fr1));
+    // clamp into [0, Nyquist]
+    lo = lo.max(0.0);
+    hi = hi.min(fs * 0.5);
+    if hi <= lo {
+        // nothing to do
+        return Ok(x.shallow_clone());
+    }
+    let k0 = ((lo * n as f64 / fs).floor() as i64).clamp(0, nhalf);
+    let k1 = ((hi * n as f64 / fs).floor() as i64).clamp(k0, nhalf);
+
+    // FFT along dim=1 (time axis), one-sided complex spectrum
+    // (Uses PyTorch’s torch.fft.rfft/irfft through tch’s generated ops.)
+    let spec = x.fft_rfft( n, 1, "forward");
+
+    // Zero the bins in-place for all channels: spec[:, k0..=k1] = 0
+    let mut spec_z = spec.shallow_clone();
+    spec_z.i((.., k0..(k1 + 1))).fill_(0);
+
+    // Inverse FFT back to time domain, preserve original length n along dim=1
+    let y = spec_z.fft_irfft(n, 1, "forward");
+    Ok(y)
+}
+
 
 /// Create a sinc-based band-pass filter
 pub fn band_pass_filter(
