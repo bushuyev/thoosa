@@ -9,5 +9,5 @@ pub mod tensor_loader;
 pub mod motif_loader;
 pub mod average_euclidean_distance;
 pub mod load_motif_and_clc_dist;
-pub mod filters;
+pub mod transforms;
 pub mod stages_seq;

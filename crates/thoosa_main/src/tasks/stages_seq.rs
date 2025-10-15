@@ -128,7 +128,6 @@ where
     B::Out: Data + WithId + Send + Sync + 'static,
 {
     async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
-        println!("running  TestStageB");
 
         let output_a = Arc::clone(&self.stage_a).run_cached(input, Arc::clone(&ctx)).await?;
         let output_b = Arc::clone(&self.stage_b).run_cached(output_a, ctx).await?;

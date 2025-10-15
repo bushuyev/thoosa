@@ -39,11 +39,11 @@ use thoosa_shared::traits::{Data, SimpleId, WithId};
 use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::filters::band_pass::BandPassFilter;
+use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::ABStage;
 // use crate::tasks::stages_seq::StagesSeq;
 
-type FilteredLoaderStage<L> = ABStage<L, BandPassFilter, RunCtx2>;
+type FilteredLoaderStage<L> = ABStage<L, FreqFilter, RunCtx2>;
 
 #[derive(Debug)]
 struct FindMotifsStages<RC, SRC>
@@ -119,7 +119,7 @@ where
         fixed_config: FixedFindMotifsConfig,
         device: ThoDevice, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
     ) -> Self {
-        let band_filter = Arc::new(BandPassFilter::new());
+        let band_filter = Arc::new(FreqFilter::new());
 
         let cross_loaders = run_configs
             .into_iter()

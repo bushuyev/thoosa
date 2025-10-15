@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use std::{fs, process};
+use futures_util::StreamExt;
 use plotters::prelude::BLACK;
 use tch::Device::Cpu;
 use tch::Kind::Float;
@@ -1700,22 +1701,30 @@ async fn run_plot_motif_slices(
 
             let motifs = store.read().list_motifs(run_id)?;
             let motifs_len = motifs.len();
-            let done_cnt = AtomicU32::new(0);
+            let done_cnt = Arc::new(AtomicU32::new(0));
 
-            for motif_id in motifs {
-                debug!("run_plot_motif_slices: motif_id={motif_id}");
-                if let Err(e)  = plot_motif(&ws, Arc::clone(&ctx), motif_id, &motif_loader_impl, Arc::clone(&clc_dist)).await {
-                        error!("motif {motif_id} failed: e={e:?}");
-                };
-                MotifLoader::<RawTensorLoader, RunCtx2>::cache().await.clear();
+            futures::stream::iter(motifs)
+                .map(|motif_id| {
+                    let done_cnt = Arc::clone(&done_cnt);
+                    let clc_dist = Arc::clone(&clc_dist);
+                    let motif_loader_impl = Arc::clone(&motif_loader_impl);
+                    let ctx = Arc::clone(&ctx);
+                    async move {
+                        debug!("run_plot_motif_slices: motif_id={motif_id}");
+                        if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist).await {
+                            error!("motif {motif_id} failed: e={e:?}");
+                        };
+                        MotifLoader::<RawTensorLoader, RunCtx2>::cache().await.clear();
 
-                let done = done_cnt.fetch_add(1, Relaxed);
-                if done % 10 == 0 {
-                    info!("done {done} from  {motifs_len}");
-                }
+                        let done = done_cnt.fetch_add(1, Relaxed);
+                        if done % 32 == 0 {
+                            info!("done {done} from  {motifs_len}");
+                        }
+                    }})
+                .buffer_unordered(10) // <- bound parallelism
+                .collect::<Vec<()>>()
+                .await;
 
-                // ctx.write().
-            };
         }
     }
 
