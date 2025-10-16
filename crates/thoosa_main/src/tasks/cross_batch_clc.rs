@@ -19,7 +19,6 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{SimpleId, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
 use torch_runner::data::ThoTensor2;
-use crate::tasks::cross_loader::CrossClc;
 
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
