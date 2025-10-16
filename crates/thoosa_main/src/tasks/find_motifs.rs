@@ -55,7 +55,9 @@ where
     cross_loader: Arc<CrossLoader<
             RC,
             SRC,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>, DistsTracker,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>,
+            DistsTracker,
+            DistsMask,
         >>
 }
 
@@ -69,7 +71,9 @@ where
         cross_loader: Arc<CrossLoader<
             RC,
             SRC,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>, DistsTracker,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>,
+            DistsTracker,
+            DistsMask,
         >>
     ) -> Self {
         Self {
