@@ -28,44 +28,10 @@ use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use thoosa_shared::traits::MonoMetrics;
 
-/// Small adapter trait that hides the `Stage` GATs so `CrossLoader` can accept
-/// any batched CLC stage while storing it behind an `Arc`.  Without this extra
-/// trait the HRTB requirements on `Stage::In<'_>` make the `CrossLoader` type
-/// ergonomics (and clone of the stage) far more tedious.
-pub trait CrossClc: Send + Sync + std::fmt::Debug {
-    type Out: Input + Output + Send + Sync + Debug + 'static;
-
-    fn run_clc<'s>(
-        self: Arc<Self>,
-        input: &CrossInput<'s, &'s Arc<Resource>>,
-        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<Self::Out, ThoosaError>
-    where
-        Self: 's;
-}
-
-impl<T> CrossClc for T
-where
-    T: for<'s> SyncStage<In<'s> = CrossInput<'s, &'s Arc<Resource>>, Ctx = RunCtx2> + Send + Sync + 'static,
-    T::Out: Input + Output  + Sync + Send + Debug + 'static,
-{
-    type Out = T::Out;
-
-    fn run_clc<'s>(
-        self: Arc<Self>,
-        input: &CrossInput<'s, &'s Arc<Resource>>,
-        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<Self::Out, ThoosaError>
-    where
-        Self: 's,
-    {
-        <Self as SyncStage>::do_run(self, input, ctx)
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_clc {
-    use super::{CrossInput, CrossClc, RunCtx2};
+    use super::RunCtx2;
+    use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
     use parking_lot::RwLock;
     use std::fmt::Debug;
     use std::sync::Arc;
@@ -76,7 +42,7 @@ pub(crate) mod mock_cross_loader_clc {
     type RunBatchFn<Out> = dyn for<'a> Fn(
             &CrossInput<'a, &'a Arc<Resource>>,
             Arc<RwLock<RunCtx2>>,
-        ) -> Result<Out, ThoosaError>
+        ) -> Result<CrossUnfoldClcOutput<Out>, ThoosaError>
         + Send
         + Sync;
 
@@ -97,19 +63,26 @@ pub(crate) mod mock_cross_loader_clc {
         }
     }
 
-    impl<Out> CrossClc for MockCrossLoaderClc<Out>
+    impl<Out> Stage for MockCrossLoaderClc<Out>
     where
-        Out: Input + Output + Sync + Send + Debug + 'static,
+        Out: Input + Output + Send + Debug + 'static,
     {
-        type Out = Out;
+        type Ctx = RunCtx2;
+        type In<'a> = CrossInput<'a, &'a Arc<Resource>>;
+        type Out = CrossUnfoldClcOutput<Out>;
+    }
 
-        fn run_clc<'s>(
+    impl<Out> SyncStage for MockCrossLoaderClc<Out>
+    where
+        Out: Input + Output + Send + Debug + 'static,
+    {
+        fn do_run<'s>(
             self: Arc<Self>,
-            input: &CrossInput<'s, &'s Arc<Resource>>,
-            ctx: Arc<RwLock<RunCtx2>>,
+            input: &Self::In<'s>,
+            ctx: Arc<RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError>
         where
-            Self: 's,
+            Self: Sized,
         {
             let f = Arc::clone(&self.run_batch_fn);
             f(input, ctx)
@@ -132,7 +105,7 @@ pub(crate) mod mock_cross_loader_clc {
             F: for<'a> Fn(
                     &CrossInput<'a, &'a Arc<Resource>>,
                     Arc<RwLock<RunCtx2>>,
-                ) -> Result<Out, ThoosaError>
+                ) -> Result<CrossUnfoldClcOutput<Out>, ThoosaError>
                 + Send
                 + Sync
                 + 'static,
@@ -267,48 +240,66 @@ pub(crate) mod mock_cross_loader_receiver {
 
 // #[derive(Debug, cached_derive::Cached)]
 // #[cache_name = "LoadedTensorId"]
-pub struct CrossLoader<ResC, L, CrossCLC, RSV>
+pub struct CrossLoader<ResC, L, CLC, RSV, R>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
-    CrossCLC: CrossClc + 'static,
-    CrossCLC::Out: Input + Output + Send + Debug + 'static,
-    RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx = RunCtx2> + 'static,
+    R: Debug + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<
+            In<'i> = CrossInput<'i, &'i Arc<Resource>>,
+            Out = CrossUnfoldClcOutput<R>,
+            Ctx = RunCtx2,
+        > + Send
+        + Sync
+        + 'static,
+    RSV: CrossLoaderReceiver<CrossUnfoldClcOutput<R>> + 'static,
 {
     loader: Arc<L>,
     store: Arc<RwLock<Box<dyn Store>>>,
-    batch_clc: Arc<CrossCLC>,
+    batch_clc: Arc<CLC>,
     receiver: Arc<RSV>,
     chunk_size: usize,
     on_all_done: Box<dyn Fn(&Arc<RSV>) -> BoxFuture<'static, ()> + Sync + Send>,
-    pd: PhantomData<ResC>,
+    pd: PhantomData<(ResC, R)>,
 }
 
-impl<ResC, L, CrossCLC, RSV> Debug for CrossLoader<ResC, L, CrossCLC, RSV>
+impl<ResC, L, CLC, RSV, R> Debug for CrossLoader<ResC, L, CLC, RSV, R>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>,
-    CrossCLC: CrossClc + 'static,
-    CrossCLC::Out: Input + Output + Send + Debug + 'static,
-    RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx = RunCtx2>,
+    R: Debug + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<
+            In<'i> = CrossInput<'i, &'i Arc<Resource>>,
+            Out = CrossUnfoldClcOutput<R>,
+            Ctx = RunCtx2,
+        > + Send
+        + Sync
+        + 'static,
+    RSV: CrossLoaderReceiver<CrossUnfoldClcOutput<R>> + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossLoader").finish()
     }
 }
 
-impl<ResC, L, CrossCLC, RSV> CrossLoader<ResC, L, CrossCLC, RSV>
+impl<ResC, L, CLC, RSV, R> CrossLoader<ResC, L, CLC, RSV, R>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
-    CrossCLC: CrossClc + 'static,
-    CrossCLC::Out: Input + Output + Send + Debug + 'static,
-    RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx = RunCtx2> + 'static,
+    R: Debug + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<
+            In<'i> = CrossInput<'i, &'i Arc<Resource>>,
+            Out = CrossUnfoldClcOutput<R>,
+            Ctx = RunCtx2,
+        > + Send
+        + Sync
+        + 'static,
+    RSV: CrossLoaderReceiver<CrossUnfoldClcOutput<R>> + 'static,
 {
     pub fn new<OnAllDone>(
         loader: Arc<L>,
         store: &Arc<RwLock<Box<dyn Store>>>,
-        batch_clc: Arc<CrossCLC>,
+        batch_clc: Arc<CLC>,
         receiver: Arc<RSV>,
         chunk_size: usize,
         on_all_done: OnAllDone,
@@ -328,13 +319,19 @@ where
     }
 }
 
-impl<ResC, L, CrossCLC, RSV> OutId for CrossLoader<ResC, L, CrossCLC, RSV>
+impl<ResC, L, CLC, RSV, R> OutId for CrossLoader<ResC, L, CLC, RSV, R>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
-    CrossCLC: CrossClc + 'static,
-    CrossCLC::Out: Input + Output + Send + Debug + 'static,
-    RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx = RunCtx2> + 'static,
+    R: Debug + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<
+            In<'i> = CrossInput<'i, &'i Arc<Resource>>,
+            Out = CrossUnfoldClcOutput<R>,
+            Ctx = RunCtx2,
+        > + Send
+        + Sync
+        + 'static,
+    RSV: CrossLoaderReceiver<CrossUnfoldClcOutput<R>> + 'static,
 {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("cross_{}", input_id))
@@ -427,13 +424,19 @@ impl Data for CrossResult {
     }
 }
 
-impl<ResC, L, CrossCLC, RSV> Stage for CrossLoader<ResC, L, CrossCLC, RSV>
+impl<ResC, L, CLC, RSV, R> Stage for CrossLoader<ResC, L, CLC, RSV, R>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
-    CrossCLC: CrossClc + 'static,
-    CrossCLC::Out: Input + Output + Send + Debug + 'static,
-    RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx = RunCtx2> + 'static,
+    R: Debug + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<
+            In<'i> = CrossInput<'i, &'i Arc<Resource>>,
+            Out = CrossUnfoldClcOutput<R>,
+            Ctx = RunCtx2,
+        > + Send
+        + Sync
+        + 'static,
+    RSV: CrossLoaderReceiver<CrossUnfoldClcOutput<R>> + 'static,
 {
     type Ctx = RunCtx2;
 
@@ -441,20 +444,24 @@ where
     where
         Self: 'a;
     type Out = CrossResult;
-
 }
 
 #[async_trait]
-impl<ResC, L, CrossCLC, RSV> AsyncStage for CrossLoader<ResC, L, CrossCLC, RSV>
+impl<ResC, L, CLC, RSV, R> AsyncStage for CrossLoader<ResC, L, CLC, RSV, R>
 where
-    for <'a> Self::In<'a>: Data + WithId + Send + Sync,
+    for<'a> Self::In<'a>: Data + WithId + Send + Sync,
     Self::Out: Data + WithId + Send + Sync,
-
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
-    CrossCLC: CrossClc + 'static,
-    CrossCLC::Out: Input + Output + Send + Debug + 'static,
-    RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx = RunCtx2> + 'static,
+    R: Debug + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<
+            In<'i> = CrossInput<'i, &'i Arc<Resource>>,
+            Out = CrossUnfoldClcOutput<R>,
+            Ctx = RunCtx2,
+        > + Send
+        + Sync
+        + 'static,
+    RSV: CrossLoaderReceiver<CrossUnfoldClcOutput<R>> + 'static,
 {
     async fn run(
         self: Arc<Self>,
@@ -534,7 +541,7 @@ where
 
                         debug!("input={input:?}");
 
-                        Arc::clone(&self.batch_clc).run_clc(&input, Arc::clone(&ctx))
+                        Arc::clone(&self.batch_clc).do_run(&input, Arc::clone(&ctx))
 
                     },
                 )
@@ -572,11 +579,12 @@ mod tests {
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use super::*;
     use crate::cli::Commands::FindMotifs;
-    use crate::tasks::cross_batch_clc::{CrossUnfoldClc, UnfoldParams};
+    use crate::tasks::cross_batch_clc::{CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
     use crate::tasks::cross_loader::{CrossLoader, ResourcesConfigInput};
     use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
+    use crate::tasks::slices_iter::SlicesIter;
     use caching_runner::common::RunCtx;
     use caching_runner::global_ctx::GlobalCtx;
     use futures_util::FutureExt;
@@ -796,7 +804,11 @@ mod tests {
                     let output = TestBatchOutput::new(call_index);
                     batch_outputs.lock().unwrap().push(output.clone());
 
-                    Ok(output)
+                    Ok(CrossUnfoldClcOutput::new(
+                        output,
+                        SlicesIter::new(1, vec![]),
+                        SlicesIter::new(1, vec![]),
+                    ))
                 })
                 .finish(),
         );
@@ -805,9 +817,10 @@ mod tests {
         let receiver_observed = Arc::clone(&received_outputs);
 
         let receiver = Arc::new(
-            mock_cross_loader_receiver::build::<TestBatchOutput>()
+            mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<TestBatchOutput>>()
                 .with_receive_fn(move |out, _ctx| {
-                    receiver_observed.lock().unwrap().push(out.clone());
+                    let result = out.clc_result();
+                    receiver_observed.lock().unwrap().push(result);
                     Ok(())
                 })
                 .finish(),
