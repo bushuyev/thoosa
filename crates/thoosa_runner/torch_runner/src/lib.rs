@@ -385,14 +385,14 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
         fn on_cached<'a>(
             &self,
-            input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>,
+            id: &<<Self as Stage>::In<'a> as WithId>::ID,
             ctx: &Arc<RwLock<Self::Ctx>>,
         ) where
             Self: 'a,
         {
             ctx.write()
                 .loaded_tensors_cached
-                .push(self.out_id(input.id()));
+                .push(self.out_id(id));
         }
     }
 
@@ -604,14 +604,14 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
         fn on_cached<'a>(
             &self,
-            input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>,
+            id: &<<Self as Stage>::In<'a> as WithId>::ID,
             ctx: &Arc<RwLock<Self::Ctx>>,
         ) where
             Self: 'a,
         {
             ctx.write()
                 .multed_tensors_cached
-                .push(self.out_id(input.id()));
+                .push(self.out_id(id));
         }
     }
 

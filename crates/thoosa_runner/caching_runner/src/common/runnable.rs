@@ -60,7 +60,7 @@ where
 
 
     //should be in Cached, but it's implemented as derive macro
-    fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+    fn on_cached<'a>(&self, id: &<<Self as Stage>::In<'a> as WithId>::ID, ctx: &Arc<RwLock<Self::Ctx>>)
     where
         Self:'a
     {

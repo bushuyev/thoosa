@@ -60,7 +60,7 @@ where
 
         let cache = Self::cache().await;
 
-        self.on_cached(input.as_ref(), &ctx);
+        self.on_cached(WithId::id(input.as_ref()), &ctx);
 
         GlobalCtx::global().do_age();
 

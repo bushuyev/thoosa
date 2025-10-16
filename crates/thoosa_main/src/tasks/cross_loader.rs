@@ -35,6 +35,7 @@ pub(crate) mod mock_cross_loader_clc {
     use parking_lot::RwLock;
     use std::fmt::Debug;
     use std::sync::Arc;
+    use caching_runner::common::runnable::{Stage, SyncStage};
     use thoosa_shared::ThoosaError;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::resource::Resource;

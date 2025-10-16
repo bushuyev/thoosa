@@ -649,12 +649,12 @@ mod tests {
             }, device, 2, cache_area)))
         }
 
-        fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+        fn on_cached<'a>(&self, id: &<<Self as Stage>::In<'a> as WithId>::ID, ctx: &Arc<RwLock<Self::Ctx>>)
         where
             Self:'a {
             ctx.write()
                 .loaded_tensors_cached
-                .push(self.out_id(input.id()));
+                .push(self.out_id(id));
         }
     }
 
@@ -907,13 +907,13 @@ mod tests {
             .await
         }
 
-        fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+        fn on_cached<'a>(&self, id: &<<Self as Stage>::In<'a> as WithId>::ID, ctx: &Arc<RwLock<Self::Ctx>>)
         where
             Self:'a
         {
             ctx.write()
                 .multed_tensors_cached
-                .push(self.out_id(input.id()));
+                .push(self.out_id(id));
         }
     }
 
