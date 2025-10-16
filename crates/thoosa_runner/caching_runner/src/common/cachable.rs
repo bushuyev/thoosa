@@ -22,12 +22,13 @@ use thoosa_shared::MyError;
 use tokio::sync::{Notify, RwLockReadGuard};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Data, Select};
+use crate::common::stage_input::StageInput;
 
 #[async_trait]
 pub trait Cached: AsyncStage
 where
-    for <'i> Self::In<'i>: Data + WithId + Send + Sync,
-    <Self as Stage>::Out: Data + WithId + Send + Sync + 'static
+        for<'i> Self::In<'i>: WithId + Send + Sync,
+        <Self as Stage>::Out: Data + WithId + Send + Sync + 'static,
 {
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
@@ -39,18 +40,18 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Arc<DataCacheWrapper<Self::In<'static>>>,
+        stage_input: StageInput<Self::In<'static>>,
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
     where
         Self: Sized + OutId,
-        for<'a> <Self as Stage>::In<'a>: Send + Sync,
+        for<'a> <Self as Stage>::In<'a>: WithId + Send + Sync,
         <Self as Stage>::Out: Send + Sync,
         <<Self as Stage>::Out as WithId>::ID: 'static,
         <Self as Stage>::Out: 'static,
-        Self::Out: Data // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
+        Self::Out: Data, // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
     {
-        let key = self.out_id(WithId::id(input.as_ref()));
+        let key = self.out_id(stage_input.id());
         let (cache_area, device_idx) = {
             let guard = ctx.read();
             (guard.cache_area(), guard.device_idx())
@@ -60,7 +61,7 @@ where
 
         let cache = Self::cache().await;
 
-        self.on_cached(input.as_ref(), &ctx);
+        self.on_cached(stage_input.id(), &ctx);
 
         GlobalCtx::global().do_age();
 
@@ -78,17 +79,13 @@ where
                     .await
             }
             Entry::Vacant(slot) => {
+                let fut_input = stage_input.clone();
                 let fut = Arc::clone(&self)
-                    .run(input, ctx)
+                    .run(fut_input, ctx)
                     .map(move |r| {
                         r.map(|v| {
                             // assert_eq!(v.device(), device_idx); - loaded to CPU, copied to GPU when used
-                            // Arc::new(DataCacheWrapper::new(
-                            //     v,
-                            //     device_idx,
-                            //     GlobalCtx::global().device_count(),
-                            //     cache_area,
-                            // ))v
+                            // Arc::new(v)
                             v
                         })
                     })
@@ -109,44 +106,55 @@ where
     ) -> Result<(), ThoosaError>
     where
         Self: Sized + OutId,
+        for <'i> Self::In<'i>: WithId,
         Self::Out: Data + Sync + Send,
     {
-        debug!("Cachable::purge_gpu_cache_area: 0  cache_area={cache_area} device_idx={device_idx} keys={keys:?}");
-
+        let cache_name = Self::get_name();
+        debug!("Cachable::purge_gpu_cache_area: 0  cache_area={cache_area} device_idx={device_idx} cache_name={cache_name}");
         assert_ne!(device_idx, 0); //don't purge cpu
 
-        let map = Self::cache().await;
 
-        debug!("Cachable::purge_gpu_cache_area: 0  cache_area={cache_area} device_idx={device_idx} got map");
+
+        let map = Self::cache().await;
 
         for key in keys {
             // let key_device_mutex = Self::key_in_device_lock(&key, device_idx);
             // let key_guard = key_device_mutex.lock().await;
-            debug!("Cachable::purge_gpu_cache_area: 1 key={key:?} cache_area={cache_area} device_idx={device_idx}");
+            debug!("Cachable::purge_gpu_cache_area: 1 key={key:?} cache_area={cache_area} device_idx={device_idx}  cache_name={cache_name}");
 
             if let Some(value) = map.get(&key) {
-                let shared_fut = value.value().clone();
-                if shared_fut.peek().is_some() {//to avoid locking on itself
-                    let data: Arc<DataCacheWrapper<Self::Out>> = shared_fut.await?;
+                debug!("Cachable::purge_gpu_cache_area: 2.1 key={key:?} cache_name={cache_name}");
+                if value.value().peek().is_some() {
+                    let data: Arc<DataCacheWrapper<Self::Out>> = value.value().clone().await?;
+                    debug!("Cachable::purge_gpu_cache_area: 2.2 key={key:?} cache_name={cache_name}");
+
                     let new_mask = data.remove_cache_area(cache_area);
 
-                    debug!("Cachable::purge_gpu_cache_area: 2 key={key:?} new_mask={new_mask} ");
+                    debug!("Cachable::purge_gpu_cache_area: 2.3 key={key:?} new_mask={new_mask}  cache_name={cache_name}");
+
                     if new_mask == 0 {
                         data.dump_to_cpu(device_idx).await?;
                         // drop(key_guard);
-                        debug!("Cachable::purge_gpu_cache_area: 3  key={key:?} done");
+                        debug!("Cachable::purge_gpu_cache_area: 3  key={key:?} done  cache_name={cache_name}");
                     }
                 }
             } else {
-                debug!("Cachable::purge_gpu_cache_area: 4 key={key:?} {cache_area} device_idx={device_idx} not found"); //warning
+                debug!("Cachable::purge_gpu_cache_area: 4 key={key:?} {cache_area} device_idx={device_idx} not found  cache_name={cache_name}"); //warning
             }
         }
 
-        debug!("Cachable::purge_gpu_cache_area: 5 cache_area={cache_area} device_idx={device_idx}");
+        debug!("Cachable::purge_gpu_cache_area: 5 cache_area={cache_area} device_idx={device_idx}  cache_name={cache_name}");
 
         Ok(())
     }
 
+    // fn get_id() -> <Self::Out as WithId>::ID {
+    //     todo!()
+    // }
+
+    fn get_name()->&'static str {
+        "n/a"
+    }
 }
 
 //when hidden behind a trait, impls for plain Ids and Data cause https://github.com/rust-lang/rust/issues/100013 so opting to enum

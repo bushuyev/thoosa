@@ -91,6 +91,11 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
 
                 map
             }
+
+            fn get_name()->&'static str {
+                #reg_name_tokens
+            }
+
         }
     };
 

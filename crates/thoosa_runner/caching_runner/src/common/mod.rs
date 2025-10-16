@@ -16,8 +16,7 @@ use thoosa_shared::traits::{CachableIdTr, Metrics, Named, WithId};
 
 pub mod cachable;
 pub mod runnable;
-
-
+pub mod stage_input;
 
 #[derive(Debug)]
 pub enum DropIf {
@@ -163,5 +162,4 @@ where
         &self,
         input_id: &<<Self as Stage>::In<'a> as WithId>::ID,
     ) -> <Self::Out as WithId>::ID;
-
 }

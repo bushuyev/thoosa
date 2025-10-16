@@ -171,7 +171,7 @@ impl GlobalCtx {
         //should be ok to read lock - see dump_all_to_cpu
         let maps = self.caches.read().await;
 
-        debug!("GlobalCtx::purge_cpu: maps.len={}", maps.len());
+        debug!("GlobalCtx::purge_cpu: maps.len={} purge_since={purge_since}", maps.len());
 
         for e in maps.iter() {
             e.1.purge_cpu(purge_since).await;

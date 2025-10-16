@@ -25,6 +25,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Data, Named, Select, WithId};
 use tokio::task::JoinSet;
+use caching_runner::common::stage_input::StageInput;
 
 type StageIn<'a, S> = <S as Stage>::In<'a>;
 type StageInStatic<S> = StageIn<'static, S>;
@@ -270,7 +271,7 @@ where
                 let ctx_device = Arc::new(RwLock::new(ctx_fac_arc(device_idx, 0, name)));
                 let multed = load_and_mul
                     .run_cached(
-                        Arc::new(DataCacheWrapper::new(<&str as Into<StageInStatic<R>>>::into(res), device_idx, 2, 0)),
+                        StageInput::from_plain(Arc::new(<&str as Into<StageInStatic<R>>>::into(res))),
                         ctx_device.clone(),
                     )
                     .await?;
@@ -340,6 +341,7 @@ mod tests {
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock};
     use cached_derive::Cached;
+    use caching_runner::common::stage_input::StageInput;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{Data, Named, Select, SimpleId, WithId};
@@ -626,14 +628,14 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: StageInput<Self::In<'static>>,
             ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
         ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
             self.run_count.fetch_add(1, Relaxed);
 
-            let k = caching_runner::test_utils::parse_numeric_part(WithId::id(input.as_ref()).0)
+            let k = caching_runner::test_utils::parse_numeric_part(input.id().0)
                 .unwrap_or(1.0) as f32;
-            let out_id = self.out_id(WithId::id(input.as_ref()));
+            let out_id = self.out_id(input.id());
 
             let (device, cache_area) = {
                 let guard = ctx.read();
@@ -649,12 +651,12 @@ mod tests {
             }, device, 2, cache_area)))
         }
 
-        fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+        fn on_cached<'a>(&self, input: &<<Self as Stage>::In<'static> as WithId>::ID, ctx: &Arc<RwLock<Self::Ctx>>)
         where
-            Self:'a {
+            Self:'a{
             ctx.write()
                 .loaded_tensors_cached
-                .push(self.out_id(input.id()));
+                .push(self.out_id(input));
         }
     }
 
@@ -878,7 +880,7 @@ mod tests {
     impl AsyncStage for DLoadAndMulTask {
 
 
-        async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        async fn run(self: Arc<Self>, input: StageInput<DLoaderInput>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, Arc::clone(&ctx))
                 .await?;
@@ -907,13 +909,13 @@ mod tests {
             .await
         }
 
-        fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+        fn on_cached<'a>(&self, input: &<<Self as Stage>::In<'static> as WithId>::ID, ctx: &Arc<RwLock<Self::Ctx>>)
         where
             Self:'a
         {
             ctx.write()
                 .multed_tensors_cached
-                .push(self.out_id(input.id()));
+                .push(self.out_id(input));
         }
     }
 
@@ -929,9 +931,9 @@ mod tests {
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DataCacheWrapper::new(DLoaderInput {
+                StageInput::from_plain(Arc::new(DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }, 0, 2, 0)),
+                })),
                 Arc::clone(&ctx_device_0),
             )
             .await;
@@ -940,9 +942,9 @@ mod tests {
 
         let loaded_tensor_0_1 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DataCacheWrapper::new(DLoaderInput {
+                StageInput::from_plain(Arc::new(DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }, 0, 2, 0)),
+                })),
                 Arc::clone(&ctx_device_0),
             )
             .await;
@@ -961,9 +963,9 @@ mod tests {
 
         let loaded_tensor_1_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DataCacheWrapper::new(DLoaderInput {
+                StageInput::from_plain(Arc::new(DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }, 0, 2, 0)),
+                })),
                 Arc::clone(&ctx_device_1),
             )
             .await?;
@@ -1012,9 +1014,9 @@ mod tests {
 
         let multed = load_and_mut
             .run_cached(
-                Arc::new(DataCacheWrapper::new(DLoaderInput {
+                StageInput::from_plain(Arc::new(DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }, 0, 2, 0)),
+                })),
                 ctx_device_0,
             )
             .await?;
@@ -1205,7 +1207,7 @@ mod tests {
                 "ctx_0",
             )));
             let resource_0_for_ctx_0 = Arc::clone(&loader)
-                .run_cached(Arc::new(DataCacheWrapper::new(resource_1_arc.clone(), device_idx, 2, cache_area_0)), ctx_0.clone())
+                .run_cached(StageInput::from_plain(Arc::new(resource_1_arc.clone())), ctx_0.clone())
                 .await?;
 
             let cache_area_1 = global_ctx.next_cache_area()?;
@@ -1217,7 +1219,7 @@ mod tests {
                 "ctx_1",
             )));
             let resource_0_for_ctx_1 = Arc::clone(&loader)
-                .run_cached(Arc::new(DataCacheWrapper::new(resource_1_arc.clone(), device_idx, 2, cache_area_1)), ctx_1.clone())
+                .run_cached(StageInput::from_plain(Arc::new(resource_1_arc.clone())), ctx_1.clone())
                 .await?;
 
             debug!(
