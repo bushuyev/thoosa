@@ -26,26 +26,16 @@ pub trait Stage: Debug {
 #[async_trait]
 pub trait AsyncStage:Stage + Debug + Send + Sync + 'static 
 where
-        for <'a> Self::In<'a>: Data + WithId + Send + Sync,
+        for <'a> Self::In<'a>: WithId + Send + Sync,
         Self::Out: Data + WithId + Send + Sync
 {
 
-    //should implement either run for multistep or do_run for single step (can be oom-handled)
-    async fn start(
-        self: Arc<Self>,
-        input: Self::In<'static>,
-        ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
-        let (device_idx, cache_area) = {
-            let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area())
-        };
-        self.run(Arc::new(DataCacheWrapper::new(input, device_idx, GlobalCtx::global().device_count(), cache_area)), ctx).await
-    }
 
 
     //should implement either run for multistep or do_run for single step (can be oom-handled)
-    async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+    async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
+        where I:Input + Send + Sync + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+    {
         unimplemented!()
     }
 

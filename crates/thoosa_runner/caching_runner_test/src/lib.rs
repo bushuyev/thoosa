@@ -237,7 +237,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 ) -> Result<(), ThoosaError>
 where
     R: Cached + OutId + Send + Sync + 'static,
-    for<'a> <R as Stage>::In<'a>: Data + WithId+ Send + Sync,
+    for<'a> <R as Stage>::In<'a>: WithId+ Send + Sync,
     R::Out: Data + Send + Sync,
     StageInStatic<R>: From<&'static str>,
     F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
@@ -270,7 +270,7 @@ where
                 let ctx_device = Arc::new(RwLock::new(ctx_fac_arc(device_idx, 0, name)));
                 let multed = load_and_mul
                     .run_cached(
-                        Arc::new(DataCacheWrapper::new(<&str as Into<StageInStatic<R>>>::into(res), device_idx, 2, 0)),
+                        Arc::new(<&str as Into<StageInStatic<R>>>::into(res)),
                         ctx_device.clone(),
                     )
                     .await?;
@@ -586,7 +586,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+   /* #[async_trait]
     impl CopyToDevice for DLoaderInput {
         async fn copy_to_device(&self, dst_device: usize) -> Self {
            self.clone()
@@ -604,7 +604,7 @@ mod tests {
         fn device(&self) -> usize {
             0
         }
-    }
+    }*/
 
     impl From<&'static str> for DLoaderInput {
         fn from(value: &'static str) -> Self {
@@ -624,11 +624,13 @@ mod tests {
     #[async_trait]
     impl AsyncStage for DummyLoader {
 
-        async fn run(
+        async fn run<I>(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<I>,
             ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
+        where I:Input + Send + Sync + WithId<ID=<Self::In<'static> as WithId>::ID>
+        {
             self.run_count.fetch_add(1, Relaxed);
 
             let k = caching_runner::test_utils::parse_numeric_part(WithId::id(input.as_ref()).0)
@@ -878,7 +880,9 @@ mod tests {
     impl AsyncStage for DLoadAndMulTask {
 
 
-        async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
+        where I:Input + Send + Sync + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+        {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, Arc::clone(&ctx))
                 .await?;
@@ -929,9 +933,9 @@ mod tests {
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DataCacheWrapper::new(DLoaderInput {
+                Arc::new(DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }, 0, 2, 0)),
+                }),
                 Arc::clone(&ctx_device_0),
             )
             .await;
@@ -940,9 +944,9 @@ mod tests {
 
         let loaded_tensor_0_1 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DataCacheWrapper::new(DLoaderInput {
+                Arc::new(DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }, 0, 2, 0)),
+                }),
                 Arc::clone(&ctx_device_0),
             )
             .await;
@@ -961,9 +965,9 @@ mod tests {
 
         let loaded_tensor_1_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DataCacheWrapper::new(DLoaderInput {
+                Arc::new(DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }, 0, 2, 0)),
+                }),
                 Arc::clone(&ctx_device_1),
             )
             .await?;
@@ -1012,9 +1016,9 @@ mod tests {
 
         let multed = load_and_mut
             .run_cached(
-                Arc::new(DataCacheWrapper::new(DLoaderInput {
+                Arc::new(DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }, 0, 2, 0)),
+                }),
                 ctx_device_0,
             )
             .await?;
@@ -1205,7 +1209,7 @@ mod tests {
                 "ctx_0",
             )));
             let resource_0_for_ctx_0 = Arc::clone(&loader)
-                .run_cached(Arc::new(DataCacheWrapper::new(resource_1_arc.clone(), device_idx, 2, cache_area_0)), ctx_0.clone())
+                .run_cached(Arc::new(resource_1_arc.clone()), ctx_0.clone())
                 .await?;
 
             let cache_area_1 = global_ctx.next_cache_area()?;
@@ -1217,7 +1221,7 @@ mod tests {
                 "ctx_1",
             )));
             let resource_0_for_ctx_1 = Arc::clone(&loader)
-                .run_cached(Arc::new(DataCacheWrapper::new(resource_1_arc.clone(), device_idx, 2, cache_area_1)), ctx_1.clone())
+                .run_cached(Arc::new(resource_1_arc.clone()), ctx_1.clone())
                 .await?;
 
             debug!(

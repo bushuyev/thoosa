@@ -331,11 +331,13 @@ mod tests {
 
     #[async_trait]
     impl AsyncStage for ABLoader {
-        async fn run(
+        async fn run<I>(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<I>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
+        where I:Input + Send + Sync + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+        {
             // Features derived from file name only (no label knowledge): even index => +1, odd => -1.
             let idx = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(0.0) as i64;
             let base = if idx % 2 == 0 { 1.0 } else { -1.0 };
@@ -442,11 +444,14 @@ mod tests {
 
     #[async_trait]
     impl AsyncStage for BatchBuilder {
-        async fn run(
+        async fn run<I>(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<I>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
+        where
+            I:Input + Send + Sync + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+        {
             // Look up the files and labels by input id
             let id_key = format!("{}", input.id());
             let files = registry()
@@ -746,11 +751,14 @@ mod tests {
 
     #[async_trait]
     impl AsyncStage for Classifier {
-        async fn run(
+        async fn run<I>(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<I>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
+        where
+            I:Input + Send + Sync + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+        {
             let (device_idx, cache_area) = {
                 let guard = ctx.read();
                 (guard.device_idx(), guard.cache_area())
@@ -863,11 +871,14 @@ mod tests {
 
     #[async_trait]
     impl AsyncStage for JoinAndClassifyTask {
-        async fn run(
+        async fn run<I>(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<I>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
+        where
+            I:Input + Send + Sync + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+        {
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
                 .run_cached(Arc::clone(&input), Arc::clone(&ctx))

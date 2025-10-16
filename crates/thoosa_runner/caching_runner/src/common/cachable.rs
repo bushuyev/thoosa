@@ -26,7 +26,7 @@ use thoosa_shared::traits::{Data, Select};
 #[async_trait]
 pub trait Cached: AsyncStage
 where
-    for <'i> Self::In<'i>: Data + WithId + Send + Sync,
+    for <'i> Self::In<'i>: WithId + Send + Sync,
     <Self as Stage>::Out: Data + WithId + Send + Sync + 'static
 {
     async fn cache() -> &'static DashMap<
@@ -37,12 +37,13 @@ where
         Self: Sized,
         Self::Out: Data + Sync + Send;
 
-    async fn run_cached(
+    async fn run_cached<I>(
         self: Arc<Self>,
-        input: Arc<DataCacheWrapper<Self::In<'static>>>,
+        input: Arc<I>,
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
     where
+        I:Input + Send + Sync + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static,
         Self: Sized + OutId,
         for<'a> <Self as Stage>::In<'a>: Send + Sync,
         <Self as Stage>::Out: Send + Sync,

@@ -351,11 +351,14 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
     #[async_trait]
     impl AsyncStage for TestTensorLoader {
-        async fn run(
+        async fn run<I>(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<I>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
+        where
+            I:Input + Send + Sync + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+        {
             let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
 
             let (device_idx, cache_area) = {
@@ -574,11 +577,14 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
     #[async_trait]
     impl AsyncStage for ClcTask {
-        async fn run(
+        async fn run<I>(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<I>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
+        where
+            I:Input + Send + Sync + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+        {
             let (device_idx, cache_area) = {
                 let guard = ctx.read();
                 (guard.device_idx(), guard.cache_area())
@@ -638,11 +644,14 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
     #[async_trait]
     impl AsyncStage for LoadAndClcTask {
-        async fn run(
+        async fn run<I>(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<I>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
+        where
+            I:Input + Send + Sync + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+        {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(Arc::clone(&input), Arc::clone(&ctx))
                 .await?;
