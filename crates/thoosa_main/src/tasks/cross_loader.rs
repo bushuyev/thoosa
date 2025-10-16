@@ -1,4 +1,4 @@
-use crate::tasks::cross_batch_clc::CrossInput;
+use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
 #[cfg(test)]
 use crate::tasks::cross_batch_clc::CrossUnfoldClc;
 use crate::tasks::cross_dims::{ChannelsData2};
