@@ -2,6 +2,7 @@ use crate::common::{RunCtx};
 use async_trait::async_trait;
 use std::fmt::Debug;
 use std::sync::Arc;
+use futures_util::future::BoxFuture;
 use parking_lot::RwLock;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -22,6 +23,31 @@ pub trait Stage: Debug {
 
 }
 
+
+pub trait StaticStage:Send + Sync + 'static {
+    type Ctx: RunCtx;
+
+    type In: Input + WithId + Data + Send + Sync;
+
+    type Out: Output + Data + Send + Sync;
+
+    fn run_static(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>;
+}
+
+impl<T:AsyncStage> StaticStage for T
+where
+        for<'a> <T as Stage>::In<'a>:Data + WithId  + Send + Sync + 'static,
+        <T as Stage>::Out:  WithId + Data + Send + Sync + 'static,
+
+{
+    type Ctx = <T as Stage>::Ctx;
+    type In = <T as Stage>::In<'static>;
+    type Out = <T as Stage>::Out;
+
+    fn run_static(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In>>, ctx: Arc<RwLock<Self::Ctx>>) -> BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>> {
+        self.run(input, ctx)
+    }
+}
 
 #[async_trait]
 pub trait AsyncStage:Stage + Debug + Send + Sync + 'static 
