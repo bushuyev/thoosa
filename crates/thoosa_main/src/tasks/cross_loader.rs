@@ -31,6 +31,7 @@ use thoosa_shared::traits::MonoMetrics;
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_clc {
     use super::RunCtx2;
+    use caching_runner::common::runnable::{Stage, SyncStage};
     use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
     use parking_lot::RwLock;
     use std::fmt::Debug;
@@ -130,40 +131,10 @@ pub(crate) mod mock_cross_loader_clc {
     }
 }
 
-pub trait CrossLoaderReceiver<In>: Send + Sync + Debug
-where
-    In: Input + Output + Send + Debug + 'static,
-{
-    fn consume(
-        self: Arc<Self>,
-        inp: In,
-        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<(), ThoosaError>;
-}
-
-impl<T, In> CrossLoaderReceiver<In> for T
-//TODO added for mocks, should be for DistsTracker only
-where
-    T: for<'a> Stage<In<'a> = In, Ctx = RunCtx2>
-        + for<'a> SyncStage<In<'a> = In, Ctx = RunCtx2>
-        + Send
-        + Sync
-        + Debug
-        + 'static,
-    In: Input + Output + Send + Debug + 'static,
-{
-    fn consume(
-        self: Arc<Self>,
-        inp: In,
-        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<(), ThoosaError> {
-        <Self as SyncStage>::consume(self, inp, ctx).map(|_| ())
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_receiver {
-    use super::{CrossLoaderReceiver, RunCtx2};
+    use super::RunCtx2;
+    use caching_runner::common::runnable::{Stage, SyncStage};
     use parking_lot::RwLock;
     use std::fmt::Debug;
     use std::sync::Arc;
@@ -189,14 +160,26 @@ pub(crate) mod mock_cross_loader_receiver {
         }
     }
 
-    impl<In> CrossLoaderReceiver<In> for MockCrossLoaderReceiver<In>
+    impl<In> Stage for MockCrossLoaderReceiver<In>
     where
         In: Input + Output + Send + Debug + 'static,
     {
-        fn consume(
+        type Ctx = RunCtx2;
+
+        type In<'a> = In
+        where
+            Self: 'a;
+        type Out = ();
+    }
+
+    impl<In> SyncStage for MockCrossLoaderReceiver<In>
+    where
+        In: Input + Output + Send + Debug + 'static,
+    {
+        fn consume<'s>(
             self: Arc<Self>,
-            out: In,
-            ctx: Arc<RwLock<RunCtx2>>,
+            out: Self::In<'s>,
+            ctx: Arc<RwLock<Self::Ctx>>,
         ) -> Result<(), ThoosaError> {
             let f = Arc::clone(&self.receive_fn);
             f(out, ctx)
@@ -252,7 +235,11 @@ where
         > + Send
         + Sync
         + 'static,
-    RSV: CrossLoaderReceiver<CrossUnfoldClcOutput<R>> + 'static,
+    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = RunCtx2>
+        + Stage<Ctx = RunCtx2, Out = ()>
+        + Send
+        + Sync
+        + 'static,
 {
     loader: Arc<L>,
     store: Arc<RwLock<Box<dyn Store>>>,
@@ -275,7 +262,11 @@ where
         > + Send
         + Sync
         + 'static,
-    RSV: CrossLoaderReceiver<CrossUnfoldClcOutput<R>> + 'static,
+    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = RunCtx2>
+        + Stage<Ctx = RunCtx2, Out = ()>
+        + Send
+        + Sync
+        + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossLoader").finish()
@@ -294,7 +285,11 @@ where
         > + Send
         + Sync
         + 'static,
-    RSV: CrossLoaderReceiver<CrossUnfoldClcOutput<R>> + 'static,
+    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = RunCtx2>
+        + Stage<Ctx = RunCtx2, Out = ()>
+        + Send
+        + Sync
+        + 'static,
 {
     pub fn new<OnAllDone>(
         loader: Arc<L>,
@@ -331,7 +326,11 @@ where
         > + Send
         + Sync
         + 'static,
-    RSV: CrossLoaderReceiver<CrossUnfoldClcOutput<R>> + 'static,
+    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = RunCtx2>
+        + Stage<Ctx = RunCtx2, Out = ()>
+        + Send
+        + Sync
+        + 'static,
 {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("cross_{}", input_id))
@@ -436,7 +435,11 @@ where
         > + Send
         + Sync
         + 'static,
-    RSV: CrossLoaderReceiver<CrossUnfoldClcOutput<R>> + 'static,
+    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = RunCtx2>
+        + Stage<Ctx = RunCtx2, Out = ()>
+        + Send
+        + Sync
+        + 'static,
 {
     type Ctx = RunCtx2;
 
@@ -461,7 +464,11 @@ where
         > + Send
         + Sync
         + 'static,
-    RSV: CrossLoaderReceiver<CrossUnfoldClcOutput<R>> + 'static,
+    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = RunCtx2>
+        + Stage<Ctx = RunCtx2, Out = ()>
+        + Send
+        + Sync
+        + 'static,
 {
     async fn run(
         self: Arc<Self>,
