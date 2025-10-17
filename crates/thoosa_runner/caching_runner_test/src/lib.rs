@@ -6,10 +6,10 @@ use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdj
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::oom_handler::{
-    Adjustable, Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext,
+    Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext,
     OOMHandler,
 };
-use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep};
+use caching_runner::permits::{NumPermits, PermitStep, MAX_PERMITS};
 
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{CachableIdTr, Data, Named, Select, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
 use tokio::task::JoinSet;
 
 type StageIn<'a, S> = <S as Stage>::In<'a>;
@@ -318,7 +318,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::fmt::Debug;
 
-    use super::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
+    use super::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
     use ambassador::Delegate;
     use async_trait::async_trait;
     use caching_runner::adjusters::splits::OutputBuilder;
@@ -326,8 +326,8 @@ mod tests {
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use caching_runner::common::{ambassador_impl_PermitsCtx, DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
-    use caching_runner::oom_handler::Adjustable;
-    use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
+    use thoosa_shared::traits::Adjustable;
+    use caching_runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
     use caching_runner::test_utils::DummyTensor;
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};

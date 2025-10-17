@@ -31,7 +31,7 @@ use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
 use rand::thread_rng;
 use caching_runner::common::cachable::DataCacheWrapper;
-use caching_runner::oom_handler::Adjustable;
+use thoosa_shared::traits::Adjustable;
 use thoosa_shared::resource::Resource;
 
 #[derive(Debug, Cached)]
