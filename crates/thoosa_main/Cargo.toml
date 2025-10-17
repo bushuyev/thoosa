@@ -52,6 +52,7 @@ thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args
 
 thoosa_properties_map = {path = "../thoosa_macros/thoosa_properties_map" }
 thoosa_properties_map_derive = {path = "../thoosa_macros/thoosa_properties_map_derive" }
+thoosa_dummy_data_derive.workspace = true
 
 async-trait.workspace = true
 [dev-dependencies]

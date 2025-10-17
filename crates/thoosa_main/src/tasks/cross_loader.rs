@@ -19,7 +19,6 @@ use tch::Tensor;
 use thoosa_common::dims::{AnyMetrics, AnySub, ChannelsData, ChannelsSlicesData, Dims};
 use thoosa_common::runs::Simple;
 use thoosa_motifs::find::FindMotifsSavableResult;
-use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
@@ -27,6 +26,7 @@ use thoosa_shared::traits::{Data, Named, SimpleId, WithId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use thoosa_shared::traits::MonoMetrics;
+use thoosa_dummy_data_derive::DummyData;
 
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_clc {
@@ -337,13 +337,13 @@ where
     }
 }
 
-#[derive(Debug)]
-pub struct ResourcesConfigInput<RC: ResourcesConfig> {
+#[derive(Debug, DummyData)]
+pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync> {
     id: SimpleId,
     resources_config: RC,
 }
 
-impl<RC: ResourcesConfig + Debug> ResourcesConfigInput<RC> {
+impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
     pub fn new(id: SimpleId, resources: RC) -> Self {
         Self {
             id,
@@ -352,28 +352,7 @@ impl<RC: ResourcesConfig + Debug> ResourcesConfigInput<RC> {
     }
 }
 
-
-
-#[async_trait]
-impl <RC: ResourcesConfig + Debug + Send + Sync> CopyToDevice for ResourcesConfigInput<RC> {
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
-        unimplemented!()
-    }
-}
-
-impl <RC: ResourcesConfig + Debug + Send + Sync> Data for ResourcesConfigInput<RC> {
-    type Metrics = ();
-
-    fn size(&self) -> Self::Metrics {
-        ()
-    }
-
-    fn device(&self) -> usize {
-        0
-    }
-}
-
-impl<ResC: ResourcesConfig> WithId for ResourcesConfigInput<ResC> {
+impl<ResC: ResourcesConfig + Debug + Send + Sync> WithId for ResourcesConfigInput<ResC> {
     type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
@@ -381,9 +360,9 @@ impl<ResC: ResourcesConfig> WithId for ResourcesConfigInput<ResC> {
     }
 }
 
-impl<RC: ResourcesConfig + Debug> Input for ResourcesConfigInput<RC> {}
+impl<RC: ResourcesConfig + Debug + Send + Sync> Input for ResourcesConfigInput<RC> {}
 
-#[derive(Debug)]
+#[derive(Debug, DummyData)]
 pub struct CrossResult {
     id: SimpleId,
 }
@@ -402,27 +381,6 @@ impl CrossResult {
         Self { id }
     }
 }
-
-
-#[async_trait]
-impl CopyToDevice for CrossResult {
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
-        unimplemented!()
-    }
-}
-
-impl Data for CrossResult {
-    type Metrics = ();
-
-    fn size(&self) -> Self::Metrics {
-        ()
-    }
-
-    fn device(&self) -> usize {
-        0
-    }
-}
-
 impl<ResC, L, CLC, RSV, R> Stage for CrossLoader<ResC, L, CLC, RSV, R>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,

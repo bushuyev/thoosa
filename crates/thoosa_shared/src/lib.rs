@@ -2,6 +2,8 @@
 #![feature(async_fn_traits, fn_traits, unboxed_closures)]
 #![feature(tuple_trait)]
 
+extern crate self as thoosa_shared;
+
 use crate::hyperparameter::{FieldName, Hyperparameter};
 use crate::resource::ResourceId;
 use crate::val::{NamedRange, NamedVal, Val};

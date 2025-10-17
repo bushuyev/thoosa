@@ -33,3 +33,4 @@ async-trait.workspace = true
 time="0.3.41"
 ambassador.workspace = true
 uuid.workspace = true
+thoosa_dummy_data_derive.workspace = true
