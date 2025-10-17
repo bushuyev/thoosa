@@ -164,7 +164,7 @@ where
         fixed_config: FixedFindMotifsConfig,
         device: ThoDevice, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
     ) -> Self {
-        let band_filter = Arc::new(FreqFilter::new());
+        // let band_filter = Arc::new(FreqFilter::new());
 
         let cross_loaders = run_configs
             .into_iter()
@@ -251,11 +251,13 @@ where
 
                 let configurable_loader: Arc<ABOrNot<L>> = match run_config.filter.as_ref() {
                     None => Arc::new(ABOrNot::Raw(Arc::clone(&loader))),
-                    Some(_) => Arc::new(ABOrNot::Filtered(Arc::new(ABStage::new(
-                        SimpleId::from("ab"),
-                        Arc::clone(&loader),
-                        Arc::clone(&band_filter),
-                    )))),
+                    Some(filter_config) => {
+                        Arc::new(ABOrNot::Filtered(Arc::new(ABStage::new(
+                            SimpleId::from("ab"),
+                            Arc::clone(&loader),
+                            Arc::new(FreqFilter::new(filter_config)),
+                        ))))
+                    },
                 };
 
                 FindMotifsStages::new(
