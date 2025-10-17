@@ -5,12 +5,14 @@ use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
+use std::sync::Arc;
 use log::debug;
 use uuid::uuid;
 use crate::applicables_runner::{CachableId, Input};
 use crate::{CopyToDevice, ThoosaError};
 use uuid::Uuid;
 use async_trait::async_trait;
+use parking_lot::RwLock;
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
@@ -500,3 +502,9 @@ pub trait Select<S> {
 
     fn subview(&self, selector: S) -> Result<Self::Output, ThoosaError>;
 }
+
+pub trait Adjustable: Send + Sync {}
+
+impl<A> Adjustable for Arc<RwLock<A>> where A: Adjustable {}
+
+impl<T: Send + Sync> Adjustable for std::ops::Range<T> {}

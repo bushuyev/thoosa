@@ -1,5 +1,5 @@
 use crate::common::runnable::Stage;
-use crate::oom_handler::{Adjustable, Adjuster, InputContext};
+use crate::oom_handler::{Adjuster, InputContext};
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
 use log::debug;
@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, DivAssign};
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{Data, Metrics, MonoMetrics};
+use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics};
 
 #[derive(Debug)]
 pub struct SplitsAdjuster<A, RA>

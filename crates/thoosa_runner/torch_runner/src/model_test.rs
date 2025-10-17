@@ -8,7 +8,7 @@ mod tests {
 
     use parking_lot::RwLock;
     use tch::IndexOp;
-    use tch::{Device, Kind, Tensor, nn, nn::OptimizerConfig};
+    use tch::{nn, nn::OptimizerConfig, Device, Kind, Tensor};
 
     use crate::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
@@ -20,19 +20,19 @@ mod tests {
     use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::{
-        Adjustable, Adjusters, Contexts, NoopRunnableContext, OOMHandler,
+        Adjusters, Contexts, NoopRunnableContext, OOMHandler,
     };
-    use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
+    use caching_runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
     use futures_util::future::BoxFuture;
     use caching_runner::test_utils::parse_numeric_part;
 
     use crate::data::ThoTensor2;
-    use thoosa_shared::traits::{Data, MonoMetrics, Select};
+    use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select};
     use crate::tests::TorchRunCtx;
     use dashmap::DashMap as DMap;
     use log::debug;
     use rand::seq::SliceRandom;
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::{rngs::StdRng, SeedableRng};
     use std::sync::OnceLock;
     use thoosa_common::applicables::ThoDevice;
     use thoosa_common::dims::Dims;

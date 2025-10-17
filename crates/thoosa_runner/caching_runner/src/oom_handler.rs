@@ -19,14 +19,9 @@ use std::process::Output;
 use std::sync::Arc;
 use thoosa_shared::panic_to_err_async;
 use thoosa_shared::CopyToDevice;
-use thoosa_shared::traits::{CachableIdTr, Data, Named, Select, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
 use thoosa_shared::{MyError, ThoosaError};
 use tracing::instrument;
-
-pub trait Adjustable: Send + Sync {}
-
-impl<A> Adjustable for Arc<RwLock<A>> where A: Adjustable {}
-impl<T: Send + Sync> Adjustable for std::ops::Range<T> {}
 
 #[async_trait]
 pub trait Adjuster<AC>: Debug + Send + Sync {
@@ -622,7 +617,7 @@ pub(crate) mod mock_runnable {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use thoosa_shared::traits::WithId;
-    use crate::common::runnable::{Stage, AsyncStage, SyncStage};
+    use crate::common::runnable::{AsyncStage, Stage, SyncStage};
 
     mock! {
         #[derive(Clone, Debug)]
@@ -685,7 +680,6 @@ pub(crate) mod mock_runnable {
 pub(crate) mod mock_input_adjuster {
     use super::test_types::TestInput;
     use super::*;
-    use crate::test_utils::MockDataWithId;
     use mockall::mock;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -796,20 +790,21 @@ pub(crate) mod mock_context_adjuster {
 #[cfg(test)]
 mod tests {
     use super::mock_context_adjuster::build as mock_context_adjuster;
-    use super::mock_input_adjuster::{MockInputAdjuster, build as mock_input_adjuster};
+    use super::mock_input_adjuster::{build as mock_input_adjuster, MockInputAdjuster};
     use super::mock_runnable::build as mock_runnable;
     use super::mock_task_adjuster::build as mock_task_adjuster;
     use super::test_types::{TestInput, TestOutput};
-    use super::{Adjustable, Adjusters, Contexts, OOMHandler};
+    use super::{Adjusters, Contexts, OOMHandler};
     use crate::common::cachable::DataCacheWrapper;
     // use crate::common::runnable::Runnable;
     use crate::common::{DropIf, MockRunCtx};
     use crate::global_ctx;
-    use crate::global_ctx::{MockGlobalCtx, mock_global_ctx};
+    use crate::global_ctx::{mock_global_ctx, MockGlobalCtx};
     use parking_lot::RwLock;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use thoosa_shared::{MyError, ThoosaError};
+    use thoosa_shared::traits::Adjustable;
 
     impl Adjustable for MockRunCtx {}
 

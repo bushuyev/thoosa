@@ -7,7 +7,7 @@ use caching_runner::common::OutId;
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use caching_runner::oom_handler::Adjustable;
+use thoosa_shared::traits::Adjustable;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::traits::{DataId, SimpleId, WithId};
@@ -118,7 +118,7 @@ pub mod mock_average_stage {
     use parking_lot::{Mutex, RwLock};
     use caching_runner::common::OutId;
     use caching_runner::common::runnable::{Stage, SyncStage};
-    use caching_runner::oom_handler::Adjustable;
+    use thoosa_shared::traits::Adjustable;
     use thoosa_shared::{MyError, ThoosaError};
     use thoosa_shared::traits::{DataId, SimpleId, WithId};
     use torch_runner::data::ThoTensor2;
