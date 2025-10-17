@@ -42,18 +42,17 @@ use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::ABStage;
 
-type FilteredLoaderStage<L> = ABStage<L, FreqFilter, RunCtx2>;
 
 #[derive(Debug)]
-enum ConfigurableLoaderStage<L>
+enum ABOrNot<L>
 where
     L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + 'static,
 {
     Raw(Arc<L>),
-    Filtered(Arc<FilteredLoaderStage<L>>),
+    Filtered(Arc<ABStage<L, FreqFilter, RunCtx2>>),
 }
 
-impl<L> Stage for ConfigurableLoaderStage<L>
+impl<L> Stage for ABOrNot<L>
 where
     L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + 'static,
 {
@@ -65,17 +64,9 @@ where
 }
 
 #[async_trait]
-impl<L> AsyncStage for ConfigurableLoaderStage<L>
+impl<L> AsyncStage for ABOrNot<L>
 where
-    L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>
-        + Send
-        + Sync
-        + Cached
-        + 'static,
-    FilteredLoaderStage<L>: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>
-        + Send
-        + Sync
-        + 'static,
+    L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + OutId + Send + Sync + Cached + 'static,
     for<'i> <L as Stage>::In<'i>: Data + WithId + Send + Sync,
     <L as Stage>::Out: Data + WithId + Send + Sync,
 {
@@ -85,10 +76,10 @@ where
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
         match &*self {
-            ConfigurableLoaderStage::Raw(loader) => {
+            ABOrNot::Raw(loader) => {
                 Arc::clone(loader).run(input, ctx).await
             }
-            ConfigurableLoaderStage::Filtered(stage) => {
+            ABOrNot::Filtered(stage) => {
                 Arc::clone(stage).run(input, ctx).await
             }
         }
@@ -156,7 +147,7 @@ where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
 {
-    run_config_stages: Vec<FindMotifsStages<RC, ConfigurableLoaderStage<L>>>,
+    run_config_stages: Vec<FindMotifsStages<RC, ABOrNot<L>>>,
     pd: PhantomData<(RC, L)>,
 }
 
@@ -258,9 +249,9 @@ where
                     None,
                 ));
 
-                let configurable_loader: Arc<ConfigurableLoaderStage<L>> = match run_config.filter.as_ref() {
-                    None => Arc::new(ConfigurableLoaderStage::Raw(Arc::clone(&loader))),
-                    Some(_) => Arc::new(ConfigurableLoaderStage::Filtered(Arc::new(ABStage::new(
+                let configurable_loader: Arc<ABOrNot<L>> = match run_config.filter.as_ref() {
+                    None => Arc::new(ABOrNot::Raw(Arc::clone(&loader))),
+                    Some(_) => Arc::new(ABOrNot::Filtered(Arc::new(ABStage::new(
                         SimpleId::from("ab"),
                         Arc::clone(&loader),
                         Arc::clone(&band_filter),
@@ -298,7 +289,7 @@ impl<RC, L> Stage for FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
-    ConfigurableLoaderStage<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    ABOrNot<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
 {
     type Ctx = RunCtx2;
     type In<'a> = ResourcesConfigInput<RC>
@@ -313,7 +304,7 @@ impl<RC, L> AsyncStage for FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
-    ConfigurableLoaderStage<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> +  'static,
+    ABOrNot<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> +  'static,
 {
 
     async fn run(
