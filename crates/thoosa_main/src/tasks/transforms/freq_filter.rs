@@ -1,27 +1,63 @@
 use std::sync::Arc;
 use async_trait::async_trait;
+use log::debug;
 use parking_lot::RwLock;
 use tch::{IndexOp, TchError, Tensor};
+use tch::Device::Cuda;
 use cached_derive::Cached;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::OutId;
 use caching_runner::common::RunCtx;
 use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::global_ctx::GlobalCtx;
-use thoosa_common::transforms::filters::notch_band_rfft;
+use thoosa_common::dims::{AnyMetrics, Dims};
+use thoosa_common::find_motifs_run_config::InputFilter;
+use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 
+#[derive(Debug, Clone)]
+struct BandPassDims;
+
+impl Dims for BandPassDims {
+    type Metrics = AnyMetrics;//TODO
+}
+
 #[derive(Debug, Cached)]
 pub struct FreqFilter {
+    // filters:Vec<> TODO
+    band_pass_tensor: Option<ThoTensor2<BandPassDims, SimpleId>>
 }
 
 impl FreqFilter {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(filter_config: &InputFilter) -> Self {
+        let band_pass_tensor = match filter_config {
+            InputFilter::Conv1(_) => {
+                None//TODO
+            }
+            InputFilter::BandPassFilter(band_pass_config) => {
+                let high_hz = band_pass_config.low_hz + band_pass_config.band_hz;
+                let kernel = band_pass_filter(
+                    band_pass_config.low_hz,
+                    high_hz,
+                    band_pass_config.kernel_size,
+                    200., //TODO take from ws
+                    1e-6
+                ).repeat([20, 1, 1]).to_device(Cuda(0));
+
+                Some(ThoTensor2::new(
+                    format!("{}-{}", band_pass_config.low_hz, high_hz).into(),
+                    kernel
+                ))
+
+            }
+        };
+        Self {
+            band_pass_tensor
+        }
     }
 }
 
@@ -39,11 +75,13 @@ impl Stage for FreqFilter {
 
 #[async_trait]
 impl AsyncStage for FreqFilter {
+
     async fn run(
         self: Arc<Self>,
         input: Arc<DataCacheWrapper<Self::In<'static>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+
         let (device_idx, cache_area) = {
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area())
@@ -53,32 +91,79 @@ impl AsyncStage for FreqFilter {
         let filtered = input
             .with_data_ref(device_idx, None, |tensor| {
 
-                notch_band_rfft(tensor.t_ref(), 200., 58., 62.)
-                    .map(|t|ThoTensor2::new(self.out_id(tensor.id()), t))
-                    .map_err(|e|e.into())
+                let t = notch_band_rfft(tensor.t_ref(), 200., 58., 62.)?;//TODO params
+
+                if let Some(band_filter) = self.band_pass_tensor.as_ref() {
+
+                    let t =  band_filter.run_inner(|band_filter_inner| {
+                        let input = t.unsqueeze(0);
+
+
+                        let output = input.conv1d(band_filter_inner, None::<Tensor>, 1, 0, 1, 20).view((20, -1));//TODO channels from WS
+
+                        debug!("FreqFilter::run: band_filter.size={:?} input.size={:?} output.size={:?}", band_filter_inner.size(), input.size(), output.size());
+                        Ok(output)
+                    })?;
+
+                    Ok(ThoTensor2::new(self.out_id(tensor.id()), t))
+
+                } else {
+                    Ok(ThoTensor2::new(self.out_id(tensor.id()), t))
+                }
+
+
+
 
             })
             .await?;
 
-        Ok(Arc::new(DataCacheWrapper::new(
-            filtered,
-            device_idx,
-            num_devices,
-            cache_area,
-        )))
+
+
+        Ok(Arc::new(DataCacheWrapper::new(filtered, device_idx, num_devices, cache_area)))
     }
 }
 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use parking_lot::RwLock;
+    use tch::kind::FLOAT_CPU;
+    use tch::Tensor;
+    use caching_runner::common::cachable::DataCacheWrapper;
+    use caching_runner::common::runnable::AsyncStage;
+    use caching_runner::global_ctx::GlobalCtx;
+    use thoosa_common::find_motifs_run_config::InputFilter;
+    use thoosa_common::transforms::filters::BandPassFilterParams;
+    use thoosa_shared::ThoosaError;
+    use torch_runner::data::ThoTensor2;
+    use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::transforms::freq_filter::FreqFilter;
 
-    #[test]
-    fn test_0(){
+    #[tokio::test]
+    async fn test_0() ->Result<(),ThoosaError> {
+        GlobalCtx::init_devices(2);
+        let filter_config = InputFilter::BandPassFilter(BandPassFilterParams{
+            low_hz: 0.0,
+            band_hz: 100.0,
+            kernel_size: 100,
+            stride: 1,
+            padding: 0,
+        });
 
-        let bf = FreqFilter::new();
+        let bf = FreqFilter::new(&filter_config);
 
+        let ctx = Arc::new(RwLock::new(RunCtx2::new(1, 1, "test")));
+
+        let r = Arc::new(bf).run(
+            Arc::new(DataCacheWrapper::new(ThoTensor2::new("test".into(), Tensor::rand(&[20, 100], FLOAT_CPU)), 1,2, 0)),
+            ctx.clone()
+        ).await?;
+
+        println!("r={r:?}");
+
+
+        Ok(())
     }
 
 }
