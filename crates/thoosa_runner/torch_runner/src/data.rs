@@ -30,6 +30,7 @@ pub struct ThoTensor2<D: Dims, Id: Named + Clone> {
 
 impl <D:Dims, Id:Named + Clone + Send> Adjustable for ThoTensor2<D, Id> {}
 
+
 impl<D: Dims, Id: Named + Clone> Data for ThoTensor2<D, Id> {
     type Metrics = D::Metrics;
 

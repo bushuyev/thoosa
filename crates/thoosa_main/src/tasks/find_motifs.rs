@@ -328,7 +328,7 @@ mod tests {
     use crate::tasks::tensor_loader::RawTensorLoader;
     use caching_runner::common::RunCtx;
     use caching_runner::common::cachable::DataCacheWrapper;
-    use caching_runner::common::runnable::Stage;
+    use caching_runner::common::runnable::{AsyncStage, Stage};
     use caching_runner::global_ctx::GlobalCtx;
     use log::debug;
     use parking_lot::RwLock;
@@ -358,7 +358,7 @@ mod tests {
     use thoosa_store::SqlStore;
     use torch_runner::data::ThoTensor2;
     use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
-    use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifLoaderStage};
+    use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage};
     use crate::tasks::motif_loader::{wrap_data_id_for_cache, MotifLoader};
 
     #[ctor::ctor]
@@ -547,13 +547,13 @@ mod tests {
         )
         .await?;
 
-        let motif_loader_impl = Arc::new(MotifLoader::new(
+        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader, RunCtx2>::new(
             Arc::clone(&store),
             Arc::clone(&loader)
         ));
 
         let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
-            Arc::clone(&motif_loader_impl) as Arc<dyn MotifLoaderStage<Output= <AverageEuclideanDistanceStage as Stage>::In<'static>>>,
+            Arc::clone(&motif_loader_impl),
             Arc::new(AverageEuclideanDistanceStage::new())
         ));
 
@@ -569,8 +569,7 @@ mod tests {
                 cache_area_loop,
             );
 
-            let motif = MotifLoaderStage::run_cached(
-                Arc::clone(&motif_loader_impl),
+            let motif = Arc::clone(&motif_loader_impl).run(
                 Arc::clone(&motif_id),
                 Arc::clone(&ctx),
             )
@@ -578,7 +577,7 @@ mod tests {
 
             motif
                 .with_data_ref(1, None, |t| {
-                    debug!("motif_id={motif_id_raw} slices={:?}", t.t());
+                    debug!("motif_id={motif_id_raw} slices={:?}", t.data());
 
                     Ok(())
                 })
