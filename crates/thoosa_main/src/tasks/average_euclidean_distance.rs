@@ -14,6 +14,7 @@ use thoosa_shared::traits::{DataId, SimpleId, WithId};
 use thoosa_shared::ThoosaError;
 use torch_runner::data::ThoTensor2;
 use crate::tasks::motif_loader::MotifWithData;
+use thoosa_dummy_data_derive::DummyData;
 
 pub struct AverageEuclideanDistanceStage {
     id:SimpleId,
@@ -45,7 +46,7 @@ impl AverageEuclideanDistanceStage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, DummyData)]
 pub struct AverageDistanceValue {
     id: SimpleId,
     value: f32,
