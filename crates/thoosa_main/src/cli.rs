@@ -96,7 +96,7 @@ use caching_runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
-use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifLoaderStage};
+use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage};
 use crate::tasks::motif_loader::{wrap_data_id_for_cache, MotifLoader};
 
 #[derive(Parser, Clone, Debug)]
@@ -1684,7 +1684,7 @@ async fn run_plot_motif_slices(
         Arc::clone(loader)
     ));
     let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
-        Arc::clone(&motif_loader_impl) as Arc<dyn MotifLoaderStage<Output = <AverageEuclideanDistanceStage as Stage>::In<'static>>>,
+        Arc::clone(&motif_loader_impl), // as Arc<dyn MotifLoaderStage<Output = <AverageEuclideanDistanceStage as Stage>::In<'static>>>,
         Arc::new(AverageEuclideanDistanceStage::new()),
     ));
 
@@ -1732,18 +1732,17 @@ async fn run_plot_motif_slices(
 }
 
 async fn plot_motif(
-    ws: &&Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ctx: Arc<RwLock<RunCtx2>>,
     motif_id: usize,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader, RunCtx2>>,
-    clc_dist: Arc<LoadMotifAndClcDistanceStage<AverageEuclideanDistanceStage>>,
+    clc_dist: Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader, RunCtx2>, AverageEuclideanDistanceStage>>,
 ) -> Result<(), ThoosaError> {
     let cache_area = ctx.read().cache_area();
     let num_devices = GlobalCtx::global().device_count();
     let motif_id_cache = wrap_data_id_for_cache(DataId(motif_id as u32), num_devices, cache_area);
 
-    let motif = MotifLoaderStage::run_cached(
-        Arc::clone(&motif_loader_impl),
+    let motif = Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_cache),
         Arc::clone(&ctx),
     )
@@ -1756,11 +1755,11 @@ async fn plot_motif(
         .await?;
 
     let r = motif.with_data_ref(0, None, |motif| {
-        let run_id = motif.run_id();
-        let channel = motif.channel();
+        let run_id = motif.extra().run_id;
+        let channel = motif.extra().channel;
 
-        trace!("motif.t={} dist={dist}", motif.t().t_ref());
-        let all_slices = motif.t().t_ref().unbind(0);
+        trace!("motif.t={} dist={dist}", motif.data().t_ref());
+        let all_slices = motif.data().t_ref().unbind(0);
         let slices_len = all_slices.len();
         let mut color_iter = DistinctColorIter::new();
         plot_series(
