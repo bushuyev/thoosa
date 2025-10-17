@@ -4713,6 +4713,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "thoosa_dummy_data_derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
 name = "thoosa_hbac"
 version = "0.1.0"
 dependencies = [
@@ -4789,6 +4798,7 @@ dependencies = [
  "simplelog",
  "tch",
  "thoosa_common",
+ "thoosa_dummy_data_derive",
  "thoosa_motifs",
  "thoosa_properties_map",
  "thoosa_properties_map_derive",
@@ -4916,6 +4926,7 @@ dependencies = [
  "regex",
  "serde",
  "simplelog",
+ "thoosa_dummy_data_derive",
  "time",
  "uuid",
 ]
