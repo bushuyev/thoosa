@@ -16,7 +16,7 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
 use torch_sys::IntList;
-use caching_runner::oom_handler::Adjustable;
+use thoosa_shared::traits::Adjustable;
 
 pub struct ThoTensor2<D: Dims, Id: Named + Clone> {
     id: Id,

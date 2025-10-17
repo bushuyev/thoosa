@@ -102,7 +102,7 @@ mod tests {
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
-    use caching_runner::oom_handler::Adjustable;
+    use thoosa_shared::traits::Adjustable;
     use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
     use caching_runner::test_utils::parse_numeric_part;
     use caching_runner_test::FailUntil::MinPermits;

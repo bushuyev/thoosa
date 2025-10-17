@@ -12,12 +12,12 @@ use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
-use caching_runner::oom_handler::{Adjustable, Adjuster, Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use caching_runner::oom_handler::{Adjuster, Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::dims::Dims;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::resource::Resource;
-use thoosa_shared::traits::{Data, DataId, Select, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, Data, DataId, Select, SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
 use thoosa_shared::traits::MonoMetrics;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
@@ -314,12 +314,12 @@ pub(crate) trait ClcMotifInput:
 
 #[cfg(test)]
 mod tests {
-    use super::{LoadMotifAndClcDistanceStage, MotifLoaderStage, MotifSlices, RunCtx2};
+    use super::{LoadMotifAndClcDistanceStage, MotifLoaderStage, RunCtx2};
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::RunCtx;
     use caching_runner::global_ctx::GlobalCtx;
-    use parking_lot::{RwLock, Mutex};
-    use std::sync::{Arc};
+    use parking_lot::{Mutex, RwLock};
+    use std::sync::Arc;
     use tch::Tensor;
     use thoosa_shared::ThoosaError;
     use thoosa_shared::traits::{DataId, SimpleId, WithId};

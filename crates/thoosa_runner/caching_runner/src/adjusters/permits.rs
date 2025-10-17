@@ -2,8 +2,8 @@ use crate::adjusters::dump_to_cpu::*;
 // use crate::adjusters::splits::*;
 use crate::common::DropIf;
 use crate::common::RunCtx;
-use crate::oom_handler::{Adjustable, Adjuster, RunCtxContext};
-use ambassador::{Delegate, delegatable_trait};
+use crate::oom_handler::{Adjuster, RunCtxContext};
+use ambassador::{delegatable_trait, Delegate};
 use async_trait::async_trait;
 use log::debug;
 use parking_lot::RwLock;
@@ -16,7 +16,7 @@ use thoosa_shared::{MyError, ThoosaError};
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
 use crate::permits::{NumPermits, RunnerPerm};
-use thoosa_shared::traits::CachableIdTr;
+use thoosa_shared::traits::{Adjustable, CachableIdTr};
 
 pub struct PermitsAdjuster<F, Fut, C>
 where

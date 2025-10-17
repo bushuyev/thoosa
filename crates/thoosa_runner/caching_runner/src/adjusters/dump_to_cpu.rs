@@ -1,6 +1,6 @@
 use crate::common::RunCtx;
 use crate::global_ctx::GlobalCtx;
-use crate::oom_handler::{Adjustable, Adjuster, RunCtxContext};
+use crate::oom_handler::{Adjuster, RunCtxContext};
 use crate::permits::MAX_PERMITS;
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
@@ -11,7 +11,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::CachableIdTr;
+use thoosa_shared::traits::{Adjustable, CachableIdTr};
 
 #[derive(Debug)]
 pub struct DumpToCpu<A>

@@ -1,7 +1,7 @@
 use ambassador::Delegate;
 use async_trait::async_trait;
 use caching_runner::common::{ambassador_impl_PermitsCtx, DropIf, PermitsCtx, RunCtx};
-use caching_runner::oom_handler::Adjustable;
+use thoosa_shared::traits::Adjustable;
 use caching_runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::traits::{Named, SimpleId};
 use torch_runner::TorchPermsCtx;
