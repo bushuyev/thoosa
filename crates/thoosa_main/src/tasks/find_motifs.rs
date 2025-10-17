@@ -41,9 +41,59 @@ use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::ABStage;
-// use crate::tasks::stages_seq::StagesSeq;
 
 type FilteredLoaderStage<L> = ABStage<L, FreqFilter, RunCtx2>;
+
+#[derive(Debug)]
+enum ConfigurableLoaderStage<L>
+where
+    L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + 'static,
+{
+    Raw(Arc<L>),
+    Filtered(Arc<FilteredLoaderStage<L>>),
+}
+
+impl<L> Stage for ConfigurableLoaderStage<L>
+where
+    L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + 'static,
+{
+    type Ctx = RunCtx2;
+    type In<'a> = <L as Stage>::In<'a>
+    where
+        Self: 'a;
+    type Out = <L as Stage>::Out;
+}
+
+#[async_trait]
+impl<L> AsyncStage for ConfigurableLoaderStage<L>
+where
+    L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>
+        + Send
+        + Sync
+        + Cached
+        + 'static,
+    FilteredLoaderStage<L>: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>
+        + Send
+        + Sync
+        + 'static,
+    for<'i> <L as Stage>::In<'i>: Data + WithId + Send + Sync,
+    <L as Stage>::Out: Data + WithId + Send + Sync,
+{
+    async fn run(
+        self: Arc<Self>,
+        input: Arc<DataCacheWrapper<Self::In<'static>>>,
+        ctx: Arc<RwLock<Self::Ctx>>,
+    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        match &*self {
+            ConfigurableLoaderStage::Raw(loader) => {
+                Arc::clone(loader).run(input, ctx).await
+            }
+            ConfigurableLoaderStage::Filtered(stage) => {
+                Arc::clone(stage).run(input, ctx).await
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 struct FindMotifsStages<RC, SRC>
@@ -106,7 +156,7 @@ where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
 {
-    run_config_stages: Vec<FindMotifsStages<RC, FilteredLoaderStage<L>>>,
+    run_config_stages: Vec<FindMotifsStages<RC, ConfigurableLoaderStage<L>>>,
     pd: PhantomData<(RC, L)>,
 }
 
@@ -208,17 +258,19 @@ where
                     None,
                 ));
 
-                // let x  = Arc::new(StagesSeq::new(Arc::clone(&loader), band_filter));
+                let configurable_loader: Arc<ConfigurableLoaderStage<L>> = match run_config.filter.as_ref() {
+                    None => Arc::new(ConfigurableLoaderStage::Raw(Arc::clone(&loader))),
+                    Some(_) => Arc::new(ConfigurableLoaderStage::Filtered(Arc::new(ABStage::new(
+                        SimpleId::from("ab"),
+                        Arc::clone(&loader),
+                        Arc::clone(&band_filter),
+                    )))),
+                };
 
                 FindMotifsStages::new(
                     run_config,
                     Arc::new(CrossLoader::new(
-                        Arc::new(ABStage::new(
-                            SimpleId::from("ab"),
-                            Arc::clone(&loader),
-                            Arc::clone(&band_filter),
-                        )),
-                        // Arc::clone(&loader),
+                        configurable_loader,
                         &store,
                         Arc::new(cross_unfold_clc),
                         receiver,
@@ -246,7 +298,7 @@ impl<RC, L> Stage for FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
-    FilteredLoaderStage<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    ConfigurableLoaderStage<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
 {
     type Ctx = RunCtx2;
     type In<'a> = ResourcesConfigInput<RC>
@@ -261,7 +313,7 @@ impl<RC, L> AsyncStage for FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
-    FilteredLoaderStage<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> +  'static,
+    ConfigurableLoaderStage<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> +  'static,
 {
 
     async fn run(
