@@ -73,26 +73,6 @@ where
     output_builder:
         Box<dyn Fn(<Self as WithId>::ID) -> Box<dyn OutputBuilder<O = AverageDistanceValue>> + Send + Sync>,
 }
-
-#[async_trait]
-impl CopyToDevice for AverageDistanceValue {
-    async fn copy_to_device(&self, _dst_device: usize) -> Self {
-        self.clone()
-    }
-}
-
-impl Data for AverageDistanceValue {
-    type Metrics = ();
-
-    fn size(&self) -> Self::Metrics {
-        ()
-    }
-
-    fn device(&self) -> usize {
-        0
-    }
-}
-
 impl<CLC> Debug for LoadMotifAndClcDistanceStage<CLC>
 where
     CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
