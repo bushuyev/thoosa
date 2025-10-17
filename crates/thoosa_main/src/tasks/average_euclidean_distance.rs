@@ -10,10 +10,11 @@ use std::sync::Arc;
 use thoosa_shared::traits::Adjustable;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::applicables_runner::Output;
+use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{DataId, SimpleId, WithId};
 use thoosa_shared::ThoosaError;
 use torch_runner::data::ThoTensor2;
-use crate::tasks::motif_loader::MotifWithData;
+use crate::tasks::motif_loader::{MotifMeta};
 use thoosa_dummy_data_derive::DummyData;
 
 pub struct AverageEuclideanDistanceStage {
@@ -83,14 +84,14 @@ impl OutId for AverageEuclideanDistanceStage {
 
 impl Stage for AverageEuclideanDistanceStage {
     type Ctx = RunCtx2;
-    type In<'a> = MotifWithData;
+    type In<'a> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>;
     type Out = AverageDistanceValue;
 }
 impl SyncStage for AverageEuclideanDistanceStage {
 
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
 
-        input.t().run_inner(|t|{
+        input.data().run_inner(|t|{
             Ok(AverageDistanceValue::new("todo".into(), average_euclidean_distance(t)?))
         })
 
@@ -120,12 +121,13 @@ pub mod mock_average_stage {
     use caching_runner::common::runnable::{Stage, SyncStage};
     use thoosa_shared::traits::Adjustable;
     use thoosa_shared::{MyError, ThoosaError};
+    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::traits::{DataId, SimpleId, WithId};
     use torch_runner::data::ThoTensor2;
     use thoosa_shared::traits::MonoMetrics;
     use crate::tasks::average_euclidean_distance::AverageDistanceValue;
     use crate::tasks::cross_dims::MotifSlices;
-    use crate::tasks::motif_loader::MotifWithData;
+    use crate::tasks::motif_loader::{MotifMeta};
     use crate::tasks::run_ctx_2::RunCtx2;
 
     #[derive(Debug)]
@@ -165,7 +167,7 @@ pub mod mock_average_stage {
 
     impl Stage for MockAverageStage {
         type Ctx = RunCtx2;
-        type In<'a> = MotifWithData;
+        type In<'a> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>;
         type Out = AverageDistanceValue;
     }
     impl SyncStage for MockAverageStage {
@@ -177,7 +179,7 @@ pub mod mock_average_stage {
         ) -> Result<Self::Out, ThoosaError> {
             let _ = ctx;
             let call_idx = self.counter.fetch_add(1, Ordering::SeqCst);
-            let metrics: MonoMetrics<0, 2> = input.t()
+            let metrics: MonoMetrics<0, 2> = input.data()
                 .size()
                 .try_into()
                 .expect("MockAverageStage expects motif metrics");
