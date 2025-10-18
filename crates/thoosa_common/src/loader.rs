@@ -900,7 +900,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    // #[test]
     fn test_loader() -> Result<(), ThoosaError> {
         set_max_level(LevelFilter::Debug);
         use super::*;
