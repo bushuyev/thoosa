@@ -12,7 +12,7 @@ use tokio::runtime::Handle;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Data, SimpleId, WithId};
-use crate::common::cachable::{Cached, DataCacheWrapper};
+use crate::common::cachable::{Cached, DevicesWrap};
 use crate::common::{OutId};
 use crate::common::runnable::Stage;
 use crate::global_ctx::GlobalCtx;
@@ -26,7 +26,7 @@ pub struct TmpCached<D:Data + WithId  + Output+ Debug + Send + Sync + 'static> {
     cache_area:u64,
     map: Box<DashMap<
         <D as WithId>::ID,
-        Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>,
+        Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>>,
     >>
 
 }
@@ -37,7 +37,7 @@ impl<D: Data + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
         self.map.insert(
             value.id().clone(),
             async move {
-                Ok(Arc::new(DataCacheWrapper::new(value, 0, GlobalCtx::global().device_count(), cache_area)))
+                Ok(Arc::new(DevicesWrap::wrap(value, cache_area)))
             }.boxed().shared()
         );
 
@@ -64,12 +64,12 @@ impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
 
         let name = format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16)).leak();
 
-        let map: Box<DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>>> = Box::new(Default::default());
+        let map: Box<DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>>>> = Box::new(Default::default());
 
-        let ptr_ref: *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>> = std::ptr::from_ref(&*map);
+        let ptr_ref: *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>>> = std::ptr::from_ref(&*map);
 
-        let map_ref: &'static DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>, > = unsafe {
-            &*(ptr_ref as *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>> >)
+        let map_ref: &'static DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>>, > = unsafe {
+            &*(ptr_ref as *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>> >)
         };
 
         GlobalCtx::global().register_cache((name, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;

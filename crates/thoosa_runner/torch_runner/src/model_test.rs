@@ -15,7 +15,7 @@ mod tests {
     use caching_runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
     use ambassador::Delegate;
     use caching_runner::common::ambassador_impl_PermitsCtx;
-    use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+    use caching_runner::common::cachable::{Cached, DevicesWrap};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
@@ -174,11 +174,9 @@ mod tests {
         value: impl Into<FileInput>,
         device_idx: usize,
         cache_area: u64,
-    ) -> Arc<DataCacheWrapper<FileInput>> {
-        Arc::new(DataCacheWrapper::new(
+    ) -> Arc<DevicesWrap<FileInput>> {
+        Arc::new(DevicesWrap::wrap(
             value.into(),
-            device_idx,
-            GlobalCtx::global().device_count(),
             cache_area,
         ))
     }
@@ -333,9 +331,9 @@ mod tests {
     impl AsyncStage for ABLoader {
         async fn run(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
             // Features derived from file name only (no label knowledge): even index => +1, odd => -1.
             let idx = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(0.0) as i64;
             let base = if idx % 2 == 0 { 1.0 } else { -1.0 };
@@ -348,10 +346,8 @@ mod tests {
             };
             let num_devices = GlobalCtx::global().device_count();
 
-            Ok(Arc::new(DataCacheWrapper::new(
+            Ok(Arc::new(DevicesWrap::wrap(
                 ThoTensor2::new(id, x),
-                device_idx,
-                num_devices,
                 cache_area,
             )))
         }
@@ -444,9 +440,9 @@ mod tests {
     impl AsyncStage for BatchBuilder {
         async fn run(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
             // Look up the files and labels by input id
             let id_key = format!("{}", input.id());
             let files = registry()
@@ -490,7 +486,7 @@ mod tests {
 
             // Load features for all files in the list via cached loader
             let mut label_vec: Vec<f64> = Vec::with_capacity(self.batch_size);
-            let mut feats: Vec<Arc<DataCacheWrapper<ThoTensor2<ABData, SimpleId>>>> =
+            let mut feats: Vec<Arc<DevicesWrap<ThoTensor2<ABData, SimpleId>>>> =
                 Vec::with_capacity(self.batch_size);
 
             let (loader_device_idx, loader_cache_area) = {
@@ -518,7 +514,7 @@ mod tests {
 
             // Materialize all features to the target device and build a single stacked batch
             // let feat_refs: Vec<&DataCacheWrapper<ThoTensor2<ABData, SimpleId>>> = feats.iter().map(|a| &**a).collect();
-            let output = DataCacheWrapper::with_data_array(&feats, device_idx, None, |data| {
+            let output = DevicesWrap::with_data_array(&feats, device_idx, None, |data| {
                 // data: &[&ThoTensor<ABData>] aligned with label_vec
                 let ax_id = SimpleId::from(format!("ax_{}", input.id()));
                 let first = data
@@ -557,10 +553,8 @@ mod tests {
             })
             .await?;
 
-            Ok(Arc::new(DataCacheWrapper::new(
+            Ok(Arc::new(DevicesWrap::wrap(
                 output,
-                device_idx,
-                num_devices,
                 cache_area,
             )))
         }
@@ -748,9 +742,9 @@ mod tests {
     impl AsyncStage for Classifier {
         async fn run(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
             let (device_idx, cache_area) = {
                 let guard = ctx.read();
                 (guard.device_idx(), guard.cache_area())
@@ -766,10 +760,8 @@ mod tests {
                 })
                 .await?;
 
-            Ok(Arc::new(DataCacheWrapper::new(
+            Ok(Arc::new(DevicesWrap::wrap(
                 output,
-                device_idx,
-                num_devices,
                 cache_area,
             )))
         }
@@ -821,11 +813,9 @@ mod tests {
         input: FileListInput,
         device_idx: usize,
         cache_area: u64,
-    ) -> Arc<DataCacheWrapper<FileListInput>> {
-        Arc::new(DataCacheWrapper::new(
+    ) -> Arc<DevicesWrap<FileListInput>> {
+        Arc::new(DevicesWrap::wrap(
             input,
-            device_idx,
-            GlobalCtx::global().device_count(),
             cache_area,
         ))
     }
@@ -865,9 +855,9 @@ mod tests {
     impl AsyncStage for JoinAndClassifyTask {
         async fn run(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
                 .run_cached(Arc::clone(&input), Arc::clone(&ctx))
@@ -928,10 +918,8 @@ mod tests {
             };
             let num_devices = GlobalCtx::global().device_count();
 
-            Ok(Arc::new(DataCacheWrapper::new(
+            Ok(Arc::new(DevicesWrap::wrap(
                 result,
-                final_device_idx,
-                num_devices,
                 cache_area,
             )))
         }

@@ -33,7 +33,7 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
-use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_shared::traits::{Data, SimpleId, WithId};
 use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
@@ -271,11 +271,11 @@ where
 
     async fn run(
         self: Arc<Self>,
-        input: Arc<DataCacheWrapper<ResourcesConfigInput<RC>>>,
+        input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
         let best = 0;
-        let mut js: JoinSet<Result<Arc<DataCacheWrapper<CrossResult>>, ThoosaError>> = JoinSet::new();
+        let mut js: JoinSet<Result<Arc<DevicesWrap<CrossResult>>, ThoosaError>> = JoinSet::new();
 
         for stage in self.run_config_stages.iter() {
             let ctx_arc = Arc::clone(&ctx);
@@ -311,7 +311,7 @@ where
             self.run_config_stages[best].run_config.clone(),
         ));
 
-        Ok(Arc::new(DataCacheWrapper::wrap_cpu(result)))
+        Ok(Arc::new(DevicesWrap::wrap_cpu(result)))
     }
 }
 
@@ -323,7 +323,7 @@ mod tests {
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use caching_runner::common::RunCtx;
-    use caching_runner::common::cachable::DataCacheWrapper;
+    use caching_runner::common::cachable::DevicesWrap;
     use caching_runner::common::runnable::{AsyncStage, Stage};
     use caching_runner::global_ctx::GlobalCtx;
     use log::debug;
@@ -500,7 +500,7 @@ mod tests {
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
 
         let cache_area = ctx.read().cache_area();
-        let resources_input = Arc::new(DataCacheWrapper::new(
+        let resources_input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(
                 SimpleId::from("resources"),
                 Simple::new(ResourceType::List(
@@ -510,8 +510,6 @@ mod tests {
                         .collect(),
                 )),
             ),
-            0,
-            GlobalCtx::global().device_count(),
             cache_area,
         ));
 

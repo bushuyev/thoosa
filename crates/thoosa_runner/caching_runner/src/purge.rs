@@ -1,4 +1,4 @@
-use crate::common::cachable::DataCacheWrapper;
+use crate::common::cachable::DevicesWrap;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::StreamExt;
@@ -30,7 +30,7 @@ pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
 
 #[async_trait]
 impl<K, O> FuturesRunnerMapPurger
-    for DashMap<K, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<O>>, ThoosaError>>>>
+    for DashMap<K, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoosaError>>>>
 where
     K: CachableIdTr + Clone + Send + Sync + 'static + Eq + Hash,
     O: Data + CopyToDevice + Output + Send + Sync + 'static,
@@ -59,7 +59,7 @@ where
 
         let items: Vec<(
             K,
-            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<O>>, ThoosaError>>>,
+            Shared<BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoosaError>>>,
         )> = self
             .iter()
             .filter(|entry| {
@@ -168,7 +168,7 @@ mod tests {
 
         let map: DashMap<
             DummyCachableId,
-            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<DummyOutput>>, ThoosaError>>>,
+            Shared<BoxFuture<'static, Result<Arc<DevicesWrap<DummyOutput>>, ThoosaError>>>,
         > = DashMap::new();
 
         let futures_active = Arc::new(AtomicUsize::new(0));
@@ -187,7 +187,7 @@ mod tests {
                 purge_active: purge_active.clone(),
                 max_purge: max_purge.clone(),
             };
-            let wrapper = Arc::new(DataCacheWrapper::new(out, 1, 2, 0));
+            let wrapper = Arc::new(DevicesWrap::wrap(out, 0));
             let active_c = futures_active.clone();
             let max_c = max_futures.clone();
             let processed_c = processed.clone();

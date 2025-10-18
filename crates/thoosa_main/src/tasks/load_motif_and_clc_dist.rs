@@ -5,7 +5,7 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use cached_derive::Cached;
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
-use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
@@ -102,7 +102,7 @@ where
     for<'i> ML: AsyncStage<In<'i> = DataId, Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx = RunCtx2> + Cached + OutId + 'static,
     for<'i> CLC: SyncStage<In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Out = AverageDistanceValue, Ctx = RunCtx2> + Adjustable + OutId + Sync + Send + 'static,
 {
-    async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
@@ -129,7 +129,7 @@ where
             )
             .await?;
 
-        Ok(Arc::new(DataCacheWrapper::wrap_cpu(dist)))
+        Ok(Arc::new(DevicesWrap::wrap_cpu(dist)))
     }
 }
 
@@ -192,7 +192,7 @@ impl OutputBuilder for DistOutputBuilder {
 #[cfg(test)]
 mod tests {
     use super::{LoadMotifAndClcDistanceStage, RunCtx2};
-    use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+    use caching_runner::common::cachable::{Cached, DevicesWrap};
     use crate::tasks::average_euclidean_distance::mock_average_stage;
     use crate::tasks::motif_loader::{MotifMeta, mock_motif_loader, wrap_data_id_for_cache};
     use caching_runner::common::RunCtx;
@@ -213,7 +213,7 @@ mod tests {
 
         let motif_tensor = ThoTensor2::new(DataId::from(999u32), Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3)));
 
-        let motif_wrapper = Arc::new(DataCacheWrapper::new(DataWithExtra::new(motif_tensor, MotifMeta { channel: 0, run_id: 1 }), 0, GlobalCtx::global().device_count(), 0));
+        let motif_wrapper = Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_tensor, MotifMeta { channel: 0, run_id: 1 }), 0));
 
         let motif_loader = mock_motif_loader::build().with_result(Arc::clone(&motif_wrapper)).finish();
 

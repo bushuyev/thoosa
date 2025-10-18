@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
 use parking_lot::RwLock;
-use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_shared::applicables_runner::*;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Data, SimpleId, WithId};
@@ -126,7 +126,7 @@ where
     for <'i> B::In<'i>: Data + WithId,
     B::Out: Data + WithId + Send + Sync + 'static,
 {
-    async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
 
         let output_a = Arc::clone(&self.stage_a).run_cached(input, Arc::clone(&ctx)).await?;
         let output_b = Arc::clone(&self.stage_b).run_cached(output_a, ctx).await?;
@@ -215,9 +215,9 @@ where
 {
     async fn run(
         self: Arc<Self>,
-        input: Arc<DataCacheWrapper<Self::In<'static>>>,
+        input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
         match &*self {
             StageChainOption::Single(stage) => Arc::clone(stage).run(input, ctx).await,
             StageChainOption::Chained(stage) => Arc::clone(stage).run(input, ctx).await,

@@ -5,7 +5,7 @@ use crate::tasks::cross_dims::{ChannelsData2};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader};
 use async_trait::async_trait;
-use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
@@ -370,9 +370,9 @@ where
 {
     async fn run(
         self: Arc<Self>,
-        input: Arc<DataCacheWrapper<Self::In<'static>>>,
+        input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
         // let chunk_size = self.chunk_size;
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
         let device_idx = ctx.read().device_idx();
@@ -401,7 +401,7 @@ where
             info!("on i_0={i_0} resource_0={resource_0:?}");
 
             let t_0 = Arc::clone(&self.loader)
-                .run(Arc::new(DataCacheWrapper::wrap_cpu(resource_0.as_ref().clone())), Arc::clone(&ctx))
+                .run(Arc::new(DevicesWrap::wrap_cpu(resource_0.as_ref().clone())), Arc::clone(&ctx))
                 .await?;
 
             t_0_batch_len += t_0.size().dim_1();
@@ -420,7 +420,7 @@ where
                 //skipping lower triangle
 
                 let t_1 = Arc::clone(&self.loader)
-                    .run(Arc::new(DataCacheWrapper::wrap_cpu(resource_1.as_ref().clone())), Arc::clone(&ctx))
+                    .run(Arc::new(DevicesWrap::wrap_cpu(resource_1.as_ref().clone())), Arc::clone(&ctx))
                     .await?;
 
                 t_1_batch_len += t_1.size().dim_1();
@@ -432,7 +432,7 @@ where
                     continue;
                 }
 
-                let cross_clc_output = DataCacheWrapper::with_data_array(
+                let cross_clc_output = DevicesWrap::with_data_array(
                     [t_0_batch.clone(), t_1_batch].concat().as_slice(), //t_0_batch and t_1_batch are DataCacheWrappers
                     device_idx,
                     None,
@@ -473,7 +473,7 @@ where
 
         (self.on_all_done)(&self.receiver).await;
 
-        Ok(Arc::new(DataCacheWrapper::wrap_cpu(CrossResult::new(self.out_id(WithId::id(input.as_ref()))))))
+        Ok(Arc::new(DevicesWrap::wrap_cpu(CrossResult::new(self.out_id(WithId::id(input.as_ref()))))))
     }
 }
 
@@ -642,13 +642,11 @@ mod tests {
         ));
 
         let cache_area = ctx.read().cache_area();
-        let input = Arc::new(DataCacheWrapper::new(
+        let input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(
                 "".into(),
                 Simple::new(ResourceType::List(resource_keys)),
             ),
-            0,
-            GlobalCtx::global().device_count(),
             cache_area,
         ));
 
@@ -674,7 +672,7 @@ mod tests {
 
 
         let loader_data: Arc<
-            HashMap<u32, Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>>,
+            HashMap<u32, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>,
         > = Arc::new(HashMap::from([
             (resource_a.id(), make_wrapper("tensor_a", &[1.0, 2.0])),
             (resource_b.id(), make_wrapper("tensor_b", &[3.0, 4.0])),
@@ -757,7 +755,7 @@ mod tests {
         ));
 
         let cache_area = ctx.read().cache_area();
-        let input = Arc::new(DataCacheWrapper::new(
+        let input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(
                 SimpleId::from("resources"),
                 Simple::new(ResourceType::List(vec![
@@ -765,8 +763,6 @@ mod tests {
                     "resource_b".to_string(),
                 ])),
             ),
-            0,
-            GlobalCtx::global().device_count(),
             cache_area,
         ));
 

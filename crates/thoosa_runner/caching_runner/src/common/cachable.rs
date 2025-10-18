@@ -31,7 +31,7 @@ where
 {
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
-        Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>>,
+        Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>,
     >
     where
         Self: Sized,
@@ -39,9 +39,9 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Arc<DataCacheWrapper<Self::In<'static>>>,
+        input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>
     where
         Self: Sized + OutId,
         for<'a> <Self as Stage>::In<'a>: Send + Sync,
@@ -127,7 +127,7 @@ where
             if let Some(value) = map.get(&key) {
                 let shared_fut = value.value().clone();
                 if shared_fut.peek().is_some() {//to avoid locking on itself
-                    let data: Arc<DataCacheWrapper<Self::Out>> = shared_fut.await?;
+                    let data: Arc<DevicesWrap<Self::Out>> = shared_fut.await?;
                     let new_mask = data.remove_cache_area(cache_area);
 
                     debug!("Cachable::purge_gpu_cache_area: 2 key={key:?} new_mask={new_mask} ");
@@ -151,7 +151,7 @@ where
 
 //when hidden behind a trait, impls for plain Ids and Data cause https://github.com/rust-lang/rust/issues/100013 so opting to enum
 #[derive(Debug)]
-pub struct DataCacheWrapper<O>//TODO rename to DeviceDataWrapper
+pub struct DevicesWrap<O>//TODO rename to DeviceDataWrapper
 where
     O: WithId + Data + CopyToDevice + Send + Sync,
 {
@@ -167,7 +167,7 @@ where
 }
 
 
-impl <O> Input for DataCacheWrapper<O>
+impl <O> Input for DevicesWrap<O>
 where
     O: WithId + Data + CopyToDevice + Send + Sync,
 
@@ -175,14 +175,14 @@ where
 
 }
 
-impl <O> Output for DataCacheWrapper<O>
+impl <O> Output for DevicesWrap<O>
 where
     O: WithId + Data + CopyToDevice + Send + Sync,
 {
 
 }
 
-impl <O> WithId for DataCacheWrapper<O>
+impl <O> WithId for DevicesWrap<O>
 where
     O: WithId + Data + CopyToDevice + Send + Sync,
 
@@ -258,8 +258,8 @@ where
 {
 }
 
-impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
-    pub fn new(o: O, _device_ordinal: usize, num_devices: usize, cache_area: u64) -> Self {
+impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
+    pub fn wrap(o: O, cache_area: u64) -> Self {
         let id = o.id().clone();
         let size = o.size();
         let device_ordinal = o.device();
@@ -305,7 +305,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
         }
     }
 
-    pub async fn with_data_array<W: AsRef<DataCacheWrapper<O>> + Debug, R>(
+    pub async fn with_data_array<W: AsRef<DevicesWrap<O>> + Debug, R>(
         other: &[W],
         to_device_idx: usize,
         _trace_ctx: Option<&'static str>,
@@ -728,7 +728,7 @@ mod tests {
             )) as &'static global_ctx::MockGlobalCtx
         });
 
-        let tested = super::DataCacheWrapper::new(MockDataWithId::whatever(), 1, 2, 0);
+        let tested = super::DevicesWrap::wrap(MockDataWithId::whatever(), 0);
 
         let ca = tested.add_cache_area(u64::from_str_radix(
             "0000000000000000000000000000000000000000000000000000000000000001",
@@ -783,7 +783,7 @@ mod tests {
                 mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
-        let tested = super::DataCacheWrapper::new(MockDataWithId::whatever(), 1, 2, 0);
+        let tested = super::DevicesWrap::wrap(MockDataWithId::whatever(), 0);
 
         tested
             .with_data_ref(0, None, |t| {
@@ -803,7 +803,7 @@ mod tests {
                 mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
-        let tested = super::DataCacheWrapper::new(MockDataWithId::for_device(1), 1, 2, 0);
+        let tested = super::DevicesWrap::wrap(MockDataWithId::for_device(1), 0);
 
         //TODO Selectoer ref
         tested
@@ -824,7 +824,7 @@ mod tests {
         });
 
         let data = MockDataWithId::whatever();
-        let tested = super::DataCacheWrapper::new(data, 0, 2, 0);
+        let tested = super::DevicesWrap::wrap(data, 0);
         assert!(tested.cached_data[1].read().await.is_none());
 
         tested

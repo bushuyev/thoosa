@@ -89,7 +89,7 @@ use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Runtime;
 use torch_runner::data::ThoTensor2;
 use torch_sys::at_grad_set_enabled;
-use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::RunCtx;
 use caching_runner::common::runnable::AsyncStage;
 use caching_runner::global_ctx::GlobalCtx;
@@ -345,7 +345,7 @@ where
 
             debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}");
 
-            let input_wrapper = Arc::new(DataCacheWrapper::wrap_cpu(
+            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
                 ResourcesConfigInput::new(
                     SimpleId::from("resources"),
                     find_motifs_args.resource_config(),
@@ -2348,7 +2348,7 @@ pub async fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     // fixed_config: FC,
-    input: Arc<DataCacheWrapper<ST::In<'static>>>,
+    input: Arc<DevicesWrap<ST::In<'static>>>,
     // ctx:Arc<parking_lot::RwLock<ST::Ctx>>,
     // stage: Arc<ST>,
     // ws: &Arc<RwLock<Box<dyn Workspace>>>,
