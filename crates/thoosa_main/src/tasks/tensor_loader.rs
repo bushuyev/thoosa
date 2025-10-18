@@ -117,12 +117,13 @@ pub(crate) mod mock_tensor_loader {
     use tch::Device::Cpu;
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
+    use cached_derive::Cached;
     use caching_runner::common::cachable::DataCacheWrapper;
-    use caching_runner::common::MockRunCtx;
+    use caching_runner::common::{MockRunCtx, OutId};
     use caching_runner::common::runnable::{AsyncStage, Stage};
     use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::SimpleId;
+    use thoosa_shared::traits::{SimpleId, WithId};
     use torch_runner::data::ThoTensor2;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::{mock_tensor_loader, LoadFn};
@@ -130,9 +131,15 @@ pub(crate) mod mock_tensor_loader {
 
 
 
-    #[derive(Clone)]
+    #[derive(Clone, Cached)]
     pub struct MockTensorLoader {
         load_fn: Arc<LoadFn>,
+    }
+
+    impl OutId for MockTensorLoader {
+        fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+            SimpleId("mock")
+        }
     }
 
     impl std::fmt::Debug for MockTensorLoader {

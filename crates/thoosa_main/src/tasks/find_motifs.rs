@@ -4,7 +4,7 @@ use crate::tasks::cross_loader::{
 };
 use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::{RawTensorLoader};
+use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
@@ -40,121 +40,38 @@ use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::transforms::freq_filter::FreqFilter;
-use crate::tasks::stages_seq::ABStage;
+use crate::tasks::stages_seq::{ABStage, StageChainOption};
 
-type FilteredLoaderStage<L> = ABStage<L, FreqFilter, RunCtx2>;
-type LoaderStageChoice<L> = StageChainOption<L, FilteredLoaderStage<L>>;
-
-
-enum StageChainOption<Base, Chain>
-where
-    Base: AsyncStage + Send + Sync + Debug + 'static,
-    Chain: for<'i> AsyncStage<
-            In<'i>=<Base as Stage>::In<'i>,
-            Out=<Base as Stage>::Out,
-            Ctx=<Base as Stage>::Ctx,
-        > + Send + Sync + Debug + 'static,
-    for<'i> <Base as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <Base as Stage>::Out: Data + WithId + Send + Sync,
-{
-    Single(Arc<Base>),
-    Chained(Arc<Chain>),
-}
-
-impl<Base, Chain> Debug for StageChainOption<Base, Chain>
-where
-    Base: AsyncStage + Send + Sync + Debug + 'static,
-    Chain: for<'i> AsyncStage<
-            In<'i>=<Base as Stage>::In<'i>,
-            Out=<Base as Stage>::Out,
-            Ctx=<Base as Stage>::Ctx,
-        > + Send + Sync + Debug + 'static,
-    for<'i> <Base as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <Base as Stage>::Out: Data + WithId + Send + Sync,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StageChainOption::Single(stage) => f
-                .debug_tuple("StageChainOption::Single")
-                .field(stage)
-                .finish(),
-            StageChainOption::Chained(stage) => f
-                .debug_tuple("StageChainOption::Chained")
-                .field(stage)
-                .finish(),
-        }
-    }
-}
-
-impl<Base, Chain> Stage for StageChainOption<Base, Chain>
-where
-    Base: AsyncStage + Send + Sync + Debug + 'static,
-    Chain: for<'i> AsyncStage<
-            In<'i>=<Base as Stage>::In<'i>,
-            Out=<Base as Stage>::Out,
-            Ctx=<Base as Stage>::Ctx,
-        > + Send + Sync + Debug + 'static,
-    for<'i> <Base as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <Base as Stage>::Out: Data + WithId + Send + Sync,
-{
-    type Ctx = <Base as Stage>::Ctx;
-    type In<'a> = <Base as Stage>::In<'a>
-    where
-        Self: 'a;
-    type Out = <Base as Stage>::Out;
-}
-
-#[async_trait]
-impl<Base, Chain> AsyncStage for StageChainOption<Base, Chain>
-where
-    Base: AsyncStage + Send + Sync + Debug + 'static,
-    Chain: for<'i> AsyncStage<
-            In<'i>=<Base as Stage>::In<'i>,
-            Out=<Base as Stage>::Out,
-            Ctx=<Base as Stage>::Ctx,
-        > + Send + Sync + Debug + 'static,
-    for<'i> <Base as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <Base as Stage>::Out: Data + WithId + Send + Sync,
-{
-    async fn run(
-        self: Arc<Self>,
-        input: Arc<DataCacheWrapper<Self::In<'static>>>,
-        ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
-        match &*self {
-            StageChainOption::Single(stage) => Arc::clone(stage).run(input, ctx).await,
-            StageChainOption::Chained(stage) => Arc::clone(stage).run(input, ctx).await,
-        }
-    }
-}
+pub type FilteredLoaderStage<L> = ABStage<L, FreqFilter, RunCtx2>;
+pub type LoaderStageChoice<L> = StageChainOption<L, FilteredLoaderStage<L>>;
 
 
 #[derive(Debug)]
-struct FindMotifsStages<RC, SRC>
+struct FindMotifsStages<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
 {
     run_config: FindMotifsRunConfig,
     cross_loader: Arc<CrossLoader<
             RC,
-            SRC,
+        L,
             CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>,
             DistsTracker,
             DistsMask,
         >>
 }
 
-impl<RC, SRC> FindMotifsStages<RC, SRC>
+impl<RC, L> FindMotifsStages<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
 {
     pub fn new(
         run_config: FindMotifsRunConfig,
         cross_loader: Arc<CrossLoader<
             RC,
-            SRC,
+            L,
             CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>,
             DistsTracker,
             DistsMask,
@@ -446,7 +363,7 @@ mod tests {
     use thoosa_store::SqlStore;
     use torch_runner::data::ThoTensor2;
     use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
-    use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage};
+    use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
     use crate::tasks::motif_loader::{wrap_data_id_for_cache, MotifLoader};
 
     #[ctor::ctor]

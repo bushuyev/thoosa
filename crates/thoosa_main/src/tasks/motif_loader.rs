@@ -30,30 +30,33 @@ use crate::tasks::tensor_loader::{wrap_resource_for_cache, RawTensorLoader};
 use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
 use rand::thread_rng;
-use caching_runner::common::cachable::DataCacheWrapper;
+use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use thoosa_shared::traits::Adjustable;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
+use crate::tasks::find_motifs::{FilteredLoaderStage, LoaderStageChoice};
+use crate::tasks::stages_seq::{ABStage, StageChainOption};
+use crate::tasks::transforms::freq_filter::FreqFilter;
 
 #[derive(Debug, Cached)]
-pub struct MotifLoader<SRC, C>
+pub struct MotifLoader<L, C>
 where
-    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + 'static,
     C: RunCtx + 'static
 {
     store: Arc<RwLock<Box<dyn Store>>>,
-    loader:Arc<SRC>,
+    loader:Arc<L>,
     pd:PhantomData<C>
 }
 
-impl <SRC, C> MotifLoader<SRC, C>
+impl <L, C> MotifLoader<L, C>
     where
-        SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+        L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + 'static,
         C: RunCtx + 'static
 {
     pub fn new(
         store: Arc<RwLock<Box<dyn Store>>>,
-        loader:Arc<SRC>
+        loader:Arc<L>
     ) -> Self {
         Self {
             store,
@@ -63,9 +66,9 @@ impl <SRC, C> MotifLoader<SRC, C>
     }
 }
 
-impl <SRC, C> OutId for MotifLoader<SRC, C>
+impl <L, C> OutId for MotifLoader<L, C>
 where
-    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + 'static,
     C: RunCtx + 'static
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -79,9 +82,9 @@ pub struct MotifMeta {
     pub run_id: RunId
 }
 
-impl <SRC, C> Stage for MotifLoader <SRC, C>
+impl <L, C> Stage for MotifLoader <L, C>
 where
-    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + 'static,
     C: RunCtx + 'static
 {
     type In<'a> = DataId;
@@ -90,9 +93,9 @@ where
     type Ctx = RunCtx2;
 }
 #[async_trait]
-impl <SRC, C> AsyncStage for MotifLoader <SRC, C>
+impl <L, C> AsyncStage for MotifLoader <L, C>
     where
-        SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+        L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + 'static,
         C: RunCtx + 'static
 {
 
@@ -109,14 +112,14 @@ impl <SRC, C> AsyncStage for MotifLoader <SRC, C>
             .await?;
 
         let motif_id_value = motif_id.clone().0;
-        let (channel, run_id, slices, resources_map) =
+        let (channel, find_motifs_run_id, slices, resources_map) =
             self.store
                 .read()
                 .list_motif_slices(motif_id_value, None, None)?;
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(
-            run_id,
-            &self.store.read().list_run_config_values(run_id)?,
+            find_motifs_run_id,
+            &self.store.read().list_run_config_values(find_motifs_run_id)?,
         )?;
 
         let resource_ids_slices = slices
@@ -135,9 +138,26 @@ impl <SRC, C> AsyncStage for MotifLoader <SRC, C>
         };
         let num_devices = GlobalCtx::global().device_count();
 
-        debug!("MotifLoader::run: window={window:?} device_idx={device_idx}");
+        debug!("MotifLoader::run: find_motifs_run_id={find_motifs_run_id} window={window:?} device_idx={device_idx}");
 
         let tmp_cache:TmpCached<ThoTensor2<ChannelsData2, SimpleId>> = TmpCached::new("motifs", cache_area).await;
+
+        let configurable_loader: Arc<LoaderStageChoice<L>> = match find_motifs_run_config.filter.as_ref() {
+            None => {
+                debug!("MotifLoader::run: find_motifs_run_id={find_motifs_run_id} no filter");
+                Arc::new(StageChainOption::<L, FilteredLoaderStage<L>>::Single(Arc::clone(&self.loader)))
+            },
+            Some(filter_config) => {
+                debug!("MotifLoader::run: find_motifs_run_id={find_motifs_run_id} filter_config={filter_config:?}");
+
+                Arc::new(StageChainOption::<L, FilteredLoaderStage<L>>::Chained(Arc::new(ABStage::new(
+                    SimpleId::from("ab"),
+                    Arc::clone(&self.loader),
+                    Arc::new(FreqFilter::new(filter_config)),
+                ))))
+            },
+        };
+
 
         for (resource_id, slices) in resource_ids_slices {
             let resource = resources_map
@@ -176,21 +196,13 @@ impl <SRC, C> AsyncStage for MotifLoader <SRC, C>
             .map(|tt| tt.t())
             .collect();
 
-        // let output = MotifWithData::new(
-        //     ThoTensor2::new(
-        //         motif_id,
-        //         Tensor::cat(tensors.as_slice(), 0),
-        //     ),
-        //     channel,
-        //     run_id,
-        // );
 
         let output = DataWithExtra::new(
             ThoTensor2::new(
                 motif_id,
                 Tensor::cat(tensors.as_slice(), 0),
             ),
-            MotifMeta{channel, run_id}
+            MotifMeta{channel, run_id: find_motifs_run_id }
         );
 
         Ok(Arc::new(DataCacheWrapper::new(
