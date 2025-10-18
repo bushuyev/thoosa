@@ -162,7 +162,7 @@ mod tests {
     async fn tasks_are_throttled_and_complete() -> Result<(), ThoosaError> {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
-            Box::leak(Box::new(mock_global_ctx::build().with_age(0).finish()))
+            Box::leak(Box::new(mock_global_ctx::build_default()))
                 as &'static MockGlobalCtx
         });
 

@@ -3,7 +3,7 @@ use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
 use crate::tasks::cross_batch_clc::CrossUnfoldClc;
 use crate::tasks::cross_dims::{ChannelsData2};
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::{wrap_resource_for_cache, RawTensorLoader};
+use crate::tasks::tensor_loader::{RawTensorLoader};
 use async_trait::async_trait;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -401,7 +401,7 @@ where
             info!("on i_0={i_0} resource_0={resource_0:?}");
 
             let t_0 = Arc::clone(&self.loader)
-                .run(Arc::clone(&wrap_resource_for_cache(resource_0.as_ref().clone(), 2, 0)), Arc::clone(&ctx))
+                .run(Arc::new(DataCacheWrapper::wrap_cpu(resource_0.as_ref().clone())), Arc::clone(&ctx))
                 .await?;
 
             t_0_batch_len += t_0.size().dim_1();
@@ -420,7 +420,7 @@ where
                 //skipping lower triangle
 
                 let t_1 = Arc::clone(&self.loader)
-                    .run(Arc::clone(&wrap_resource_for_cache(resource_1.as_ref().clone(), 2, 0)), Arc::clone(&ctx))
+                    .run(Arc::new(DataCacheWrapper::wrap_cpu(resource_1.as_ref().clone())), Arc::clone(&ctx))
                     .await?;
 
                 t_1_batch_len += t_1.size().dim_1();
@@ -473,7 +473,7 @@ where
 
         (self.on_all_done)(&self.receiver).await;
 
-        Ok(Arc::new(DataCacheWrapper::new(CrossResult::new(self.out_id(WithId::id(input.as_ref()))), 0, 2, 0)))
+        Ok(Arc::new(DataCacheWrapper::wrap_cpu(CrossResult::new(self.out_id(WithId::id(input.as_ref()))))))
     }
 }
 

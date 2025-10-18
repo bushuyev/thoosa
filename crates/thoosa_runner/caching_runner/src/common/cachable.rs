@@ -194,17 +194,6 @@ where
     }
 }
 
-// impl <O> WithId for Arc<DataCacheWrapper<O>>
-// where
-//     O: WithId + Data + CopyToDevice + Send + Sync,
-//
-// {
-//     type ID = O::ID;
-//
-//     fn id(&self) -> &Self::ID {
-//         &self.id
-//     }
-// }
 
 struct TracingWrapper<O, D>
 where
@@ -274,7 +263,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
         let id = o.id().clone();
         let size = o.size();
         let device_ordinal = o.device();
-
+        let num_devices: usize = GlobalCtx::global().device_count();
         let mut o_op = Some(o);
 
         let device_futures: Box<[tokio::sync::RwLock<Option<O>>]> = (0..num_devices)
@@ -299,6 +288,18 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
             inflights,
             cache_area: AtomicU64::new(cache_area),
             size,
+            on_cpu_since: Default::default(),
+            pd: PhantomData,
+        }
+    }
+
+    pub fn wrap_cpu(o: O) -> Self {//TODO replace with union
+        Self {
+            id: o.id().clone(),
+            cached_data: Box::new([tokio::sync::RwLock::new(Some(o))]),
+            inflights: Box::new([]),
+            cache_area: AtomicU64::new(0),
+            size: Default::default(),
             on_cpu_since: Default::default(),
             pd: PhantomData,
         }
@@ -720,6 +721,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_area() -> Result<(), ThoosaError> {
+        let ctx = MockGlobalCtx::global_context();
+        ctx.expect().returning(|| {
+            Box::leak(Box::new(
+                mock_global_ctx::build_default(),
+            )) as &'static global_ctx::MockGlobalCtx
+        });
+
         let tested = super::DataCacheWrapper::new(MockDataWithId::whatever(), 1, 2, 0);
 
         let ca = tested.add_cache_area(u64::from_str_radix(
@@ -769,6 +777,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_data() -> Result<(), ThoosaError> {
+        let ctx = MockGlobalCtx::global_context();
+        ctx.expect().returning(|| {
+            Box::leak(Box::new(
+                mock_global_ctx::build_default(),
+            )) as &'static global_ctx::MockGlobalCtx
+        });
         let tested = super::DataCacheWrapper::new(MockDataWithId::whatever(), 1, 2, 0);
 
         tested
@@ -777,12 +791,18 @@ mod tests {
                 Ok(())
             })
             .await?;
-
+        //TODO test
         Ok(())
     }
 
     #[tokio::test]
     async fn test_with_selected_data() -> Result<(), ThoosaError> {
+        let ctx = MockGlobalCtx::global_context();
+        ctx.expect().returning(|| {
+            Box::leak(Box::new(
+                mock_global_ctx::build_default(),
+            )) as &'static global_ctx::MockGlobalCtx
+        });
         let tested = super::DataCacheWrapper::new(MockDataWithId::for_device(1), 1, 2, 0);
 
         //TODO Selectoer ref
@@ -790,6 +810,7 @@ mod tests {
             .with_selected_data_ref(1, ([0usize; 1]..[1usize; 1]), None, |_sub| Ok(()))
             .await?;
 
+        //TODO test
         Ok(())
     }
 
@@ -798,11 +819,7 @@ mod tests {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
+                mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
 

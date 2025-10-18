@@ -302,11 +302,7 @@ where
             }
         }
 
-        info!(
-            "failed {} out of {}",
-            failed.load(Ordering::Relaxed),
-            self.run_config_stages.len()
-        );
+        info!("failed {} out of {}",failed.load(Ordering::Relaxed),self.run_config_stages.len());
 
         let cache_area = ctx.read().cache_area();
         let num_devices = GlobalCtx::global().device_count();
@@ -315,12 +311,7 @@ where
             self.run_config_stages[best].run_config.clone(),
         ));
 
-        Ok(Arc::new(DataCacheWrapper::new(
-            result,
-            0,
-            num_devices,
-            cache_area,
-        )))
+        Ok(Arc::new(DataCacheWrapper::wrap_cpu(result)))
     }
 }
 

@@ -336,27 +336,20 @@ where
         }
 
         Some(FindMotifs(find_motifs_args)) => {
-            debug!(
-                "FindMotifs2: find_motifs_args={:?} devices={:?}",
-                find_motifs_args, devices
+            debug!("FindMotifs: find_motifs_args={:?} devices={:?}",find_motifs_args, devices
             );
 
             let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue =
                 serde_json5::from_str(&find_motifs_args.run_config_cnt)
                     .expect("FindMotifsRunConfig2");
 
-            debug!(
-                "FindMotifs2: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}"
-            );
+            debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}");
 
-            let input_wrapper = Arc::new(DataCacheWrapper::new(
+            let input_wrapper = Arc::new(DataCacheWrapper::wrap_cpu(
                 ResourcesConfigInput::new(
                     SimpleId::from("resources"),
                     find_motifs_args.resource_config(),
-                ),
-                0,
-                GlobalCtx::global().device_count(),
-                0,
+                )
             ));
 
             let run_ids = run_grid::<Simple, _, _, _, _, _>(

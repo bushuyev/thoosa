@@ -26,7 +26,7 @@ use thoosa_shared::traits::MonoMetrics;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, MotifSlices};
 use crate::tasks::load_motif_and_clc_dist::{MotifSlicesSelector};
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::{wrap_resource_for_cache, RawTensorLoader};
+use crate::tasks::tensor_loader::{RawTensorLoader};
 use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
 use rand::thread_rng;
@@ -164,8 +164,7 @@ impl <L, C> AsyncStage for MotifLoader <L, C>
                 .get(&resource_id)
                 .cloned()
                 .expect(&format!("no resource with id={resource_id}"));
-            let resource_cache =
-                wrap_resource_for_cache(resource, num_devices, cache_area);
+            let resource_cache = Arc::new(DataCacheWrapper::wrap_cpu(resource));
 
             let raw_tensor = Arc::clone(&self.loader)
                 .run(resource_cache, Arc::clone(&ctx))
@@ -410,5 +409,5 @@ pub fn wrap_data_id_for_cache(
     num_devices: usize,
     cache_area: u64,
 ) -> Arc<DataCacheWrapper<DataId>> {
-    Arc::new(DataCacheWrapper::new(data_id, 0, num_devices, cache_area))
+    Arc::new(DataCacheWrapper::wrap_cpu(data_id))
 }

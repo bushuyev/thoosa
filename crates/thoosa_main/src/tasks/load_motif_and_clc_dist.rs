@@ -129,7 +129,7 @@ where
             )
             .await?;
 
-        Ok(Arc::new(DataCacheWrapper::new(dist, device_idx, num_devices, cache_area)))
+        Ok(Arc::new(DataCacheWrapper::wrap_cpu(dist)))
     }
 }
 

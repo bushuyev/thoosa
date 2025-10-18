@@ -102,12 +102,20 @@ mod tests {
     use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::traits::{Data, SimpleId, WithId};
+    use crate::global_ctx;
     // use crate::common::Data;
-    use crate::global_ctx::GlobalCtx;
+    use crate::global_ctx::{mock_global_ctx, GlobalCtx, MockGlobalCtx};
     use crate::tmp_cache::TmpCached;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tmp_cache() -> Result<(), ThoosaError> {
+
+        let ctx = MockGlobalCtx::global_context();
+        ctx.expect().returning(|| {
+            Box::leak(Box::new(
+                mock_global_ctx::build_default(),
+            )) as &'static global_ctx::MockGlobalCtx
+        });
 
         GlobalCtx::init_devices(2);
 

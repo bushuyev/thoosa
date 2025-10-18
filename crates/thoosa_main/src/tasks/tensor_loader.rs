@@ -90,18 +90,6 @@ impl RawTensorLoader {
     }
 }
 
-pub fn wrap_resource_for_cache(
-    resource: Resource,
-    num_devices: usize,
-    cache_area: u64,
-) -> Arc<DataCacheWrapper<Resource>> {
-    Arc::new(DataCacheWrapper::new(
-        resource,
-        0,
-        num_devices,
-        cache_area,
-    ))
-}
 
 
 #[cfg(test)]
@@ -129,8 +117,7 @@ pub(crate) mod mock_tensor_loader {
     use crate::tasks::tensor_loader::{mock_tensor_loader, LoadFn};
 
 
-
-
+    //TODO use mockall
     #[derive(Clone, Cached)]
     pub struct MockTensorLoader {
         load_fn: Arc<LoadFn>,
@@ -158,8 +145,6 @@ pub(crate) mod mock_tensor_loader {
 
     #[async_trait]
     impl AsyncStage for MockTensorLoader {
-
-
 
         async fn run(self: Arc<Self>, resource: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
             resource.with_data_ref(0, None, |d|{

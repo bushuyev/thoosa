@@ -813,11 +813,7 @@ mod tests {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
+                mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
 
@@ -895,11 +891,7 @@ mod tests {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
+                mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
 
@@ -942,11 +934,7 @@ mod tests {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
+                mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
 
@@ -989,11 +977,7 @@ mod tests {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
+                mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
 
@@ -1038,11 +1022,7 @@ mod tests {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
+                mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
 
