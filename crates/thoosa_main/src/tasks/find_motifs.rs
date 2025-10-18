@@ -42,33 +42,79 @@ use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::ABStage;
 
+type FilteredLoaderStage<L> = ABStage<L, FreqFilter, RunCtx2>;
+type LoaderStageChoice<L> = StageChainOption<L, FilteredLoaderStage<L>>;
 
-#[derive(Debug)]
-enum ABOrNot<L>
+
+enum StageChainOption<Base, Chain>
 where
-    L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + 'static,
+    Base: AsyncStage + Send + Sync + Debug + 'static,
+    Chain: for<'i> AsyncStage<
+            In<'i>=<Base as Stage>::In<'i>,
+            Out=<Base as Stage>::Out,
+            Ctx=<Base as Stage>::Ctx,
+        > + Send + Sync + Debug + 'static,
+    for<'i> <Base as Stage>::In<'i>: Data + WithId + Send + Sync,
+    <Base as Stage>::Out: Data + WithId + Send + Sync,
 {
-    Raw(Arc<L>),
-    Filtered(Arc<ABStage<L, FreqFilter, RunCtx2>>),
+    Single(Arc<Base>),
+    Chained(Arc<Chain>),
 }
 
-impl<L> Stage for ABOrNot<L>
+impl<Base, Chain> Debug for StageChainOption<Base, Chain>
 where
-    L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + 'static,
+    Base: AsyncStage + Send + Sync + Debug + 'static,
+    Chain: for<'i> AsyncStage<
+            In<'i>=<Base as Stage>::In<'i>,
+            Out=<Base as Stage>::Out,
+            Ctx=<Base as Stage>::Ctx,
+        > + Send + Sync + Debug + 'static,
+    for<'i> <Base as Stage>::In<'i>: Data + WithId + Send + Sync,
+    <Base as Stage>::Out: Data + WithId + Send + Sync,
 {
-    type Ctx = RunCtx2;
-    type In<'a> = <L as Stage>::In<'a>
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StageChainOption::Single(stage) => f
+                .debug_tuple("StageChainOption::Single")
+                .field(stage)
+                .finish(),
+            StageChainOption::Chained(stage) => f
+                .debug_tuple("StageChainOption::Chained")
+                .field(stage)
+                .finish(),
+        }
+    }
+}
+
+impl<Base, Chain> Stage for StageChainOption<Base, Chain>
+where
+    Base: AsyncStage + Send + Sync + Debug + 'static,
+    Chain: for<'i> AsyncStage<
+            In<'i>=<Base as Stage>::In<'i>,
+            Out=<Base as Stage>::Out,
+            Ctx=<Base as Stage>::Ctx,
+        > + Send + Sync + Debug + 'static,
+    for<'i> <Base as Stage>::In<'i>: Data + WithId + Send + Sync,
+    <Base as Stage>::Out: Data + WithId + Send + Sync,
+{
+    type Ctx = <Base as Stage>::Ctx;
+    type In<'a> = <Base as Stage>::In<'a>
     where
         Self: 'a;
-    type Out = <L as Stage>::Out;
+    type Out = <Base as Stage>::Out;
 }
 
 #[async_trait]
-impl<L> AsyncStage for ABOrNot<L>
+impl<Base, Chain> AsyncStage for StageChainOption<Base, Chain>
 where
-    L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + OutId + Send + Sync + Cached + 'static,
-    for<'i> <L as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <L as Stage>::Out: Data + WithId + Send + Sync,
+    Base: AsyncStage + Send + Sync + Debug + 'static,
+    Chain: for<'i> AsyncStage<
+            In<'i>=<Base as Stage>::In<'i>,
+            Out=<Base as Stage>::Out,
+            Ctx=<Base as Stage>::Ctx,
+        > + Send + Sync + Debug + 'static,
+    for<'i> <Base as Stage>::In<'i>: Data + WithId + Send + Sync,
+    <Base as Stage>::Out: Data + WithId + Send + Sync,
 {
     async fn run(
         self: Arc<Self>,
@@ -76,15 +122,12 @@ where
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
         match &*self {
-            ABOrNot::Raw(loader) => {
-                Arc::clone(loader).run(input, ctx).await
-            }
-            ABOrNot::Filtered(stage) => {
-                Arc::clone(stage).run(input, ctx).await
-            }
+            StageChainOption::Single(stage) => Arc::clone(stage).run(input, ctx).await,
+            StageChainOption::Chained(stage) => Arc::clone(stage).run(input, ctx).await,
         }
     }
 }
+
 
 #[derive(Debug)]
 struct FindMotifsStages<RC, SRC>
@@ -147,7 +190,7 @@ where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
 {
-    run_config_stages: Vec<FindMotifsStages<RC, ABOrNot<L>>>,
+    run_config_stages: Vec<FindMotifsStages<RC, LoaderStageChoice<L>>>,
     pd: PhantomData<(RC, L)>,
 }
 
@@ -249,10 +292,10 @@ where
                     None,
                 ));
 
-                let configurable_loader: Arc<ABOrNot<L>> = match run_config.filter.as_ref() {
-                    None => Arc::new(ABOrNot::Raw(Arc::clone(&loader))),
+                let configurable_loader: Arc<LoaderStageChoice<L>> = match run_config.filter.as_ref() {
+                    None => Arc::new(StageChainOption::<L, FilteredLoaderStage<L>>::Single(Arc::clone(&loader))),
                     Some(filter_config) => {
-                        Arc::new(ABOrNot::Filtered(Arc::new(ABStage::new(
+                        Arc::new(StageChainOption::<L, FilteredLoaderStage<L>>::Chained(Arc::new(ABStage::new(
                             SimpleId::from("ab"),
                             Arc::clone(&loader),
                             Arc::new(FreqFilter::new(filter_config)),
@@ -291,7 +334,7 @@ impl<RC, L> Stage for FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
-    ABOrNot<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    LoaderStageChoice<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
 {
     type Ctx = RunCtx2;
     type In<'a> = ResourcesConfigInput<RC>
@@ -306,7 +349,7 @@ impl<RC, L> AsyncStage for FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
-    ABOrNot<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> +  'static,
+    LoaderStageChoice<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> +  'static,
 {
 
     async fn run(
