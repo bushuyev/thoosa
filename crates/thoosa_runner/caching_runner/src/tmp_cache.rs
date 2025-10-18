@@ -99,6 +99,7 @@ mod tests {
     use std::collections::HashMap;
     use std::pin::Pin;
     use futures_util::FutureExt;
+    use thoosa_dummy_data_derive::DummyData;
     use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::traits::{Data, SimpleId, WithId};
@@ -119,58 +120,33 @@ mod tests {
 
         GlobalCtx::init_devices(2);
 
-        #[derive(Debug, Clone)]
-        struct DummyData {
+        #[derive(Debug, Clone, DummyData)]
+        struct TestData {
             id:SimpleId,
             device:usize
         }
 
-        impl CopyToDevice for DummyData {
-            fn copy_to_device<'life0, 'async_trait>(&'life0 self, dst_device: usize) -> Pin<Box<dyn Future<Output=Self> + Send + 'async_trait>>
-            where
-                'life0: 'async_trait,
-                Self: 'async_trait
-            {
-                async move {
-                    DummyData {
-                        id: self.id.clone(),
-                        device: dst_device,
-                    }
-                }.shared().boxed()
-            }
-        }
 
-        impl Data for DummyData {
-            type Metrics = usize;
-
-            fn size(&self) -> Self::Metrics {
-                0
-            }
-
-            fn device(&self) -> usize {
-                0
-            }
-        }
-        impl WithId for DummyData {
+        impl WithId for TestData {
             type ID = SimpleId;
 
             fn id(&self) -> &Self::ID {
                 &self.id
             }
         }
-        impl Output for DummyData {}
+        impl Output for TestData {}
 
-        impl DummyData {
+        impl TestData {
             pub fn new(id: SimpleId, device:usize) -> Self {
                 Self { id, device}
             }
         }
 
 
-        let tmp_cache:TmpCached<DummyData> = TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await;
+        let tmp_cache:TmpCached<TestData> = TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await;
 
 
-        tmp_cache.insert(DummyData::new("foo".into(), 1));
+        tmp_cache.insert(TestData::new("foo".into(), 1));
 
 
         GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await?;

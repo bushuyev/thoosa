@@ -98,6 +98,7 @@ use thoosa_shared::colors_iter::DistinctColorIter;
 use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage};
 use crate::tasks::motif_loader::{wrap_data_id_for_cache, MotifLoader};
+use crate::tasks::select_motifs::SelectMotifsStage;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -336,8 +337,7 @@ where
         }
 
         Some(FindMotifs(find_motifs_args)) => {
-            debug!("FindMotifs: find_motifs_args={:?} devices={:?}",find_motifs_args, devices
-            );
+            debug!("FindMotifs: find_motifs_args={:?} devices={:?}",find_motifs_args, devices);
 
             let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue =
                 serde_json5::from_str(&find_motifs_args.run_config_cnt)
@@ -352,7 +352,7 @@ where
                 )
             ));
 
-            let run_ids = run_grid::<Simple, _, _, _, _, _>(
+            let run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
                 None,
                 find_motifs_run_config_range_or_value,
                 input_wrapper,
@@ -369,22 +369,42 @@ where
                     ))
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
-            )
-            .await?;
+            ).await?;
 
             info!("FindMotifs done, run_ids={run_ids:?}");
 
         }
 
         Some(SelectMotifs(select_motifs_args)) => {
-            // debug!(
-            //     "SelectMotifs2: select_motifs_args.run_config_cnt={:?}",
-            //     select_motifs_args.run_config_cnt
-            // );
-            //
-            // let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue =
-            //     serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
-            //
+            debug!("SelectMotifs2: select_motifs_args.run_config_cnt={:?}",select_motifs_args.run_config_cnt);
+
+            let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue =
+                serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
+
+            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
+                ResourcesConfigInput::new(
+                    SimpleId::from("resources"),
+                    select_motifs_args.resource_config(),
+                )
+            ));
+
+            let run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
+                None,
+                select_motifs_run_config_range_or_value,
+                input_wrapper,
+                &store,
+                true,
+                |run_configs| {
+                    Arc::new(SelectMotifsStage::<RawTensorLoader, RunCtx2>::new(
+                        &ws,
+                        &store,
+                        loader_2,
+                        run_configs,
+                    ))
+                },
+                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
+            ).await?;
+
             // let run_ids = run_all_grid_step(
             //     Some(select_motifs_args.find_motifs_run_ids.clone()),
             //     select_motifs_run_config_range_or_value,
@@ -399,7 +419,7 @@ where
             //     false,
             // )?;
             //
-            // info!("SelectMotifs done, run_ids={run_ids:?}");
+            info!("SelectMotifs done, run_ids={run_ids:?}");
         }
 
         Some(TrainMotifsNets(train_motif_nets_args)) => {
@@ -2344,7 +2364,7 @@ where
     }
 }
 
-pub async fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
+pub async fn run_grid</*ResConf, */RCRV, F, RC, ST, CtxF>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     // fixed_config: FC,
@@ -2361,7 +2381,7 @@ pub async fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
     ctx_f: CtxF,
 ) -> Result<Vec<RunId>, ThoosaError>
 where
-    ResConf: ResourcesConfig<R = Vec<Resource>> + Debug,
+    // ResConf: ResourcesConfig<R = Vec<Resource>> + Debug,
     F: FnOnce(Vec<RC>) -> Arc<ST>,
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig

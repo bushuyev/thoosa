@@ -11,4 +11,4 @@ pub mod average_euclidean_distance;
 pub mod load_motif_and_clc_dist;
 pub mod transforms;
 pub mod stages_seq;
-mod select_motifs_for_label;
+pub mod select_motifs;

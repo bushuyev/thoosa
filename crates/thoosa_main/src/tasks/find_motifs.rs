@@ -513,7 +513,7 @@ mod tests {
             cache_area,
         ));
 
-        let run_ids = run_grid::<Simple, _, _, _, _, _>(
+        let run_ids = run_grid::<_, _, _, _, _>(
             None,
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(
                 &r#"{
