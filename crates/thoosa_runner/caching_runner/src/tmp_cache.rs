@@ -108,6 +108,29 @@ mod tests {
     use crate::global_ctx::{mock_global_ctx, GlobalCtx, MockGlobalCtx};
     use crate::tmp_cache::TmpCached;
 
+    #[tokio::test]
+    async fn dummy_data_clone_impl_uses_clone() -> Result<(), ThoosaError> {
+        #[derive(Debug, Clone, DummyData)]
+        #[dummy_data(clone)]
+        struct Foo(SimpleId);
+
+        impl WithId for Foo {
+            type ID = SimpleId;
+
+            fn id(&self) -> &Self::ID {
+                &self.0
+            }
+        }
+
+        impl Output for Foo {}
+
+        let foo = Foo(SimpleId::from("foo"));
+        let cloned = foo.copy_to_device(0).await;
+
+        assert_eq!(foo.0, cloned.0);
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tmp_cache() -> Result<(), ThoosaError> {
 
@@ -121,6 +144,7 @@ mod tests {
         GlobalCtx::init_devices(2);
 
         #[derive(Debug, Clone, DummyData)]
+        #[dummy_data(clone)]
         struct TestData {
             id:SimpleId,
             device:usize

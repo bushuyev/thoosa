@@ -977,7 +977,8 @@ pub fn find_motifs_by_euc_dist(
     ))
 }
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, Clone, DummyData)]
+#[dummy_data(clone)]
 pub struct FindMotifsSavableResult {
     run_config: Arc<FindMotifsRunConfig>,
 }
@@ -2552,7 +2553,8 @@ pub fn select_motifs_for_label(
      }).collect::<Vec<_>>()))
 }
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, Clone, DummyData)]
+#[dummy_data(clone)]
 pub struct SelectMotifsSavableResult {
     find_motif_run_cfg_id: RunId,
     run_config: SelectMotifsRunConfig,

@@ -298,6 +298,7 @@ where
 }
 
 #[derive(Debug, DummyData)]
+#[dummy_data(no_clone)]
 pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync> {
     id: SimpleId,
     resources_config: RC,
@@ -322,7 +323,8 @@ impl<ResC: ResourcesConfig + Debug + Send + Sync> WithId for ResourcesConfigInpu
 
 impl<RC: ResourcesConfig + Debug + Send + Sync> Input for ResourcesConfigInput<RC> {}
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, Clone, DummyData)]
+#[dummy_data(clone)]
 pub struct CrossResult {
     id: SimpleId,
 }

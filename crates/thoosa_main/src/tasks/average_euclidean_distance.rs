@@ -48,6 +48,7 @@ impl AverageEuclideanDistanceStage {
 }
 
 #[derive(Debug, Clone, DummyData)]
+#[dummy_data(clone)]
 pub struct AverageDistanceValue {
     id: SimpleId,
     value: f32,
