@@ -3,11 +3,13 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use caching_runner::common::cachable::DevicesWrap;
 use caching_runner::common::runnable::{Stage, SyncStage};
+use caching_runner::common::RunCtx;
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use std::fmt::{Debug, Formatter};
 use std::iter::Repeat;
 use std::mem;
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
@@ -109,12 +111,19 @@ impl DistsMask {
 
 }
 
-pub struct DistsTracker {
+pub struct DistsTracker<C>
+where
+    C: RunCtx + 'static,
+{
     channel_trackers: Vec<Mutex<SimpleMotifTracker<'static>>>,
     store: Arc<RwLock<Box<dyn Store>>>,
+    _ctx: PhantomData<C>,
 }
 
-impl Debug for DistsTracker {
+impl<C> Debug for DistsTracker<C>
+where
+    C: RunCtx + 'static,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DistsTracker")
             .field("channel_trackers", &self.channel_trackers)
@@ -122,7 +131,10 @@ impl Debug for DistsTracker {
     }
 }
 
-impl DistsTracker {
+impl<C> DistsTracker<C>
+where
+    C: RunCtx + 'static,
+{
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
@@ -163,6 +175,7 @@ impl DistsTracker {
         Self {
             channel_trackers,
             store: Arc::clone(store),
+            _ctx: PhantomData,
         }
     }
 
@@ -184,15 +197,21 @@ impl DistsTracker {
     }
 }
 
-impl Stage for DistsTracker {
-    type Ctx = RunCtx2;
+impl<C> Stage for DistsTracker<C>
+where
+    C: RunCtx + 'static,
+{
+    type Ctx = C;
 
     type In<'a> = CrossUnfoldClcOutput<DistsMask>;
     type Out = ();
 
 }
 
-impl SyncStage for DistsTracker {
+impl<C> SyncStage for DistsTracker<C>
+where
+    C: RunCtx + 'static,
+{
 
     fn consume<'a>(
         self: Arc<Self>,
