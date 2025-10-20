@@ -3,9 +3,10 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use caching_runner::adjusters::splits::OutputBuilder;
 use caching_runner::common::runnable::{Stage, SyncStage};
-use caching_runner::common::OutId;
+use caching_runner::common::{OutId, RunCtx};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_shared::traits::Adjustable;
 use thoosa_motifs::distance::average_euclidean_distance;
@@ -17,21 +18,34 @@ use torch_runner::data::ThoTensor2;
 use crate::tasks::motif_loader::{MotifMeta};
 use thoosa_dummy_data_derive::DummyData;
 
-pub struct AverageEuclideanDistanceStage {
+pub struct AverageEuclideanDistanceStage<C>
+where
+    C: RunCtx + 'static,
+{
     id:SimpleId,
+    _ctx: PhantomData<C>,
 }
 
-impl Debug for AverageEuclideanDistanceStage {
+impl<C> Debug for AverageEuclideanDistanceStage<C>
+where
+    C: RunCtx + 'static,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AverageEuclideanDistance").finish()
     }
 }
 
-impl Adjustable for AverageEuclideanDistanceStage {
+impl<C> Adjustable for AverageEuclideanDistanceStage<C>
+where
+    C: RunCtx + 'static,
+{
 
 }
 
-impl WithId for AverageEuclideanDistanceStage {
+impl<C> WithId for AverageEuclideanDistanceStage<C>
+where
+    C: RunCtx + 'static,
+{
     type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
@@ -39,10 +53,14 @@ impl WithId for AverageEuclideanDistanceStage {
     }
 }
 
-impl AverageEuclideanDistanceStage {
+impl<C> AverageEuclideanDistanceStage<C>
+where
+    C: RunCtx + 'static,
+{
     pub fn new() -> Self {
         Self {
             id: SimpleId("AverageEuclideanDistanceStage"),
+            _ctx: PhantomData,
         }
     }
 }
@@ -76,19 +94,28 @@ impl WithId for AverageDistanceValue {
 }
 impl Output for AverageDistanceValue {}
 
-impl OutId for AverageEuclideanDistanceStage {
+impl<C> OutId for AverageEuclideanDistanceStage<C>
+where
+    C: RunCtx + 'static,
+{
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("{}_avg_ec_dist", input_id))
     }
 }
 
 
-impl Stage for AverageEuclideanDistanceStage {
-    type Ctx = RunCtx2;
+impl<C> Stage for AverageEuclideanDistanceStage<C>
+where
+    C: RunCtx + 'static,
+{
+    type Ctx = C;
     type In<'a> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>;
     type Out = AverageDistanceValue;
 }
-impl SyncStage for AverageEuclideanDistanceStage {
+impl<C> SyncStage for AverageEuclideanDistanceStage<C>
+where
+    C: RunCtx + 'static,
+{
 
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
 
@@ -113,12 +140,13 @@ mod tests {
 #[cfg(test)]
 pub mod mock_average_stage {
     use std::collections::VecDeque;
+    use std::marker::PhantomData;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use async_trait::async_trait;
     use log::debug;
     use parking_lot::{Mutex, RwLock};
-    use caching_runner::common::OutId;
+    use caching_runner::common::{OutId, RunCtx};
     use caching_runner::common::runnable::{Stage, SyncStage};
     use thoosa_shared::traits::Adjustable;
     use thoosa_shared::{MyError, ThoosaError};
@@ -131,25 +159,35 @@ pub mod mock_average_stage {
     use crate::tasks::motif_loader::{MotifMeta};
     use crate::tasks::run_ctx_2::RunCtx2;
 
-    #[derive(Debug)]
-    pub struct MockAverageStage {
+   #[derive(Debug)]
+   pub struct MockAverageStage<C>
+   where
+        C: RunCtx + 'static,
+    {
         id: SimpleId,
         outputs: Mutex<VecDeque<f32>>,
         fail_first: bool,
         fail_while_dim0_gt: Option<i64>,
         call_log: Arc<Mutex<Vec<i64>>>,
         counter: AtomicUsize,
+        _ctx: PhantomData<C>,
     }
 
-    impl MockAverageStage {
+   impl<C> MockAverageStage<C>
+   where
+        C: RunCtx + 'static,
+    {
         fn next_value(&self) -> Option<f32> {
             self.outputs.lock().pop_front()
         }
     }
 
-    impl Adjustable for MockAverageStage {}
+    impl<C> Adjustable for MockAverageStage<C> where C: RunCtx + 'static {}
 
-    impl WithId for MockAverageStage {
+   impl<C> WithId for MockAverageStage<C>
+   where
+        C: RunCtx + 'static,
+    {
         type ID = SimpleId;
 
         fn id(&self) -> &Self::ID {
@@ -157,7 +195,10 @@ pub mod mock_average_stage {
         }
     }
 
-    impl OutId for MockAverageStage {
+   impl<C> OutId for MockAverageStage<C>
+   where
+        C: RunCtx + 'static,
+    {
         fn out_id(
             &self,
             input_id: &<<Self as Stage>::In<'static> as WithId>::ID,
@@ -166,12 +207,18 @@ pub mod mock_average_stage {
         }
     }
 
-    impl Stage for MockAverageStage {
-        type Ctx = RunCtx2;
+   impl<C> Stage for MockAverageStage<C>
+   where
+        C: RunCtx + 'static,
+    {
+        type Ctx = C;
         type In<'a> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>;
         type Out = AverageDistanceValue;
     }
-    impl SyncStage for MockAverageStage {
+   impl<C> SyncStage for MockAverageStage<C>
+   where
+        C: RunCtx + 'static,
+    {
 
         fn do_run<'a>(
             self: Arc<Self>,
@@ -211,14 +258,21 @@ pub mod mock_average_stage {
         }
     }
 
-    pub struct MockAverageStageBuilder {
+   pub struct MockAverageStageBuilder<C>
+   where
+        C: RunCtx + 'static,
+    {
         outputs: Vec<f32>,
         fail_first: bool,
         fail_while_dim0_gt: Option<i64>,
         call_log: Option<Arc<Mutex<Vec<i64>>>>,
+        _ctx: PhantomData<C>,
     }
 
-    impl MockAverageStageBuilder {
+   impl<C> MockAverageStageBuilder<C>
+   where
+        C: RunCtx + 'static,
+    {
         pub fn with_outputs<I>(mut self, outputs: I) -> Self
         where
             I: Into<Vec<f32>>,
@@ -242,7 +296,7 @@ pub mod mock_average_stage {
             self
         }
 
-        pub fn finish(self) -> Arc<MockAverageStage> {
+        pub fn finish(self) -> Arc<MockAverageStage<C>> {
             let mut deque = VecDeque::new();
             deque.extend(self.outputs);
             let outputs = Mutex::new(deque);
@@ -257,16 +311,21 @@ pub mod mock_average_stage {
                 fail_while_dim0_gt: self.fail_while_dim0_gt,
                 call_log,
                 counter: AtomicUsize::new(0),
+                _ctx: PhantomData,
             })
         }
     }
 
-    pub fn builder() -> MockAverageStageBuilder {
+   pub fn builder<C>() -> MockAverageStageBuilder<C>
+   where
+        C: RunCtx + 'static,
+    {
         MockAverageStageBuilder {
             outputs: Vec::new(),
             fail_first: false,
             fail_while_dim0_gt: None,
             call_log: None,
+            _ctx: PhantomData,
         }
     }
 }

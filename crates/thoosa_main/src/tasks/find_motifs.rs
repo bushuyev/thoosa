@@ -42,39 +42,43 @@ use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 
-pub type FilteredLoaderStage<L> = ABStage<L, FreqFilter, RunCtx2>;
-pub type LoaderStageChoice<L> = StageChainOption<L, FilteredLoaderStage<L>>;
+pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
+pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
 
 
 #[derive(Debug)]
-struct FindMotifsStages<RC, L>
+struct FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + 'static,
+    C: RunCtx + 'static,
 {
     run_config: FindMotifsRunConfig,
     cross_loader: Arc<CrossLoader<
             RC,
         L,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>,
-            DistsTracker,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
+            DistsTracker<C>,
             DistsMask,
+            C,
         >>
 }
 
-impl<RC, L> FindMotifsStages<RC, L>
+impl<RC, L, C> FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + 'static,
+    C: RunCtx + 'static,
 {
     pub fn new(
         run_config: FindMotifsRunConfig,
         cross_loader: Arc<CrossLoader<
             RC,
             L,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>,
-            DistsTracker,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
+            DistsTracker<C>,
             DistsMask,
+            C,
         >>
     ) -> Self {
         Self {
@@ -102,19 +106,21 @@ impl MeanDistsCtx {
 }
 
 #[derive(Debug)]
-pub struct FindMotifsStage<RC, L>
+pub struct FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    C: RunCtx + 'static,
 {
-    run_config_stages: Vec<FindMotifsStages<RC, LoaderStageChoice<L>>>,
-    pd: PhantomData<(RC, L)>,
+    run_config_stages: Vec<FindMotifsStages<RC, LoaderStageChoice<L, C>, C>>,
+    pd: PhantomData<(RC, L, C)>,
 }
 
-impl<RC, L> FindMotifsStage<RC, L>
+impl<RC, L, C> FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>  + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
+    C: RunCtx + 'static,
 {
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -136,6 +142,7 @@ where
                 let cross_unfold_clc: CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync >,
                     DistsMask,
                     MeanDistsCtx,
+                    C,
                 > = CrossUnfoldClc::new(
                     Box::new(move |t_0, t_1, input, means_ctx| {
                         let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
@@ -201,7 +208,7 @@ where
                     UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
                 );
 
-                let receiver = Arc::new(DistsTracker::new(
+                let receiver = Arc::new(DistsTracker::<C>::new(
                     ws,
                     store,
                     &run_config,
@@ -209,13 +216,13 @@ where
                     None,//TODO
                 ));
 
-                let configurable_loader: Arc<LoaderStageChoice<L>> = match run_config.filter.as_ref() {
-                    None => Arc::new(StageChainOption::<L, FilteredLoaderStage<L>>::Single(Arc::clone(&loader))),
+                let configurable_loader: Arc<LoaderStageChoice<L, C>> = match run_config.filter.as_ref() {
+                    None => Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Single(Arc::clone(&loader))),
                     Some(filter_config) => {
-                        Arc::new(StageChainOption::<L, FilteredLoaderStage<L>>::Chained(Arc::new(ABStage::new(
+                        Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
                             SimpleId::from("ab"),
                             Arc::clone(&loader),
-                            Arc::new(FreqFilter::new(filter_config)),
+                            Arc::new(FreqFilter::<C>::new(filter_config)),
                         ))))
                     },
                 };
@@ -247,13 +254,14 @@ where
     }
 }
 
-impl<RC, L> Stage for FindMotifsStage<RC, L>
+impl<RC, L, C> Stage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + 'static,
+    C: RunCtx + 'static,
 {
-    type Ctx = RunCtx2;
+    type Ctx = C;
     type In<'a> = ResourcesConfigInput<RC>
     where
         Self: 'a;
@@ -262,11 +270,12 @@ where
 
 
 #[async_trait]
-impl<RC, L> AsyncStage for FindMotifsStage<RC, L>
+impl<RC, L, C> AsyncStage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> +  'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> +  'static,
+    C: RunCtx + 'static,
 {
 
     async fn run(
@@ -487,7 +496,7 @@ mod tests {
 
         debug!("test_motifs: resources_0_0={resources_0_0:?}");
 
-        let loader = Arc::new(RawTensorLoader::new(
+        let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
                 ThoTensor2::new(
                     Input::id(key).clone(),
@@ -541,14 +550,14 @@ mod tests {
         )
         .await?;
 
-        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader, RunCtx2>::new(
+        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtx2>, RunCtx2>::new(
             Arc::clone(&store),
             Arc::clone(&loader)
         ));
 
         let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
             Arc::clone(&motif_loader_impl),
-            Arc::new(AverageEuclideanDistanceStage::new())
+            Arc::new(AverageEuclideanDistanceStage::<RunCtx2>::new())
         ));
 
         let motifs = store.read().list_motifs(run_ids[0])?;
