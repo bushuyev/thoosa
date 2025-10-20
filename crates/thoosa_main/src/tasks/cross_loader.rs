@@ -340,6 +340,7 @@ where
     }
 }
 
+//TODO move to lib
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync> {
@@ -353,6 +354,14 @@ impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
             id,
             resources_config: resources, //: resources.to_resources().into_iter().map(|r| Arc::new(r)).collect(),
         }
+    }
+
+    pub fn id(&self) -> &SimpleId {
+        &self.id
+    }
+
+    pub fn resources_config(&self) -> &RC {
+        &self.resources_config
     }
 }
 

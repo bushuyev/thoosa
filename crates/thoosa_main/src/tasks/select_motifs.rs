@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use async_trait::async_trait;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, error, info};
 use parking_lot::RwLock;
 use caching_runner::common::cachable::{Cached, DevicesWrap};
@@ -14,7 +14,7 @@ use thoosa_common::runs::Labeled;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::resource::Resource;
+use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{DataId, SimpleId};
@@ -37,7 +37,8 @@ where
 
     store: Arc<RwLock<Box<dyn Store>>>,
     loader:Arc<L>,
-    pd:PhantomData<(ML,C)>,
+    motif_loader:Arc<ML>,
+    pd:PhantomData<C>,
     run_configs:Vec<SelectMotifsRunConfig>,
     find_motifs_run_ids:Vec<RunId>,
 }
@@ -53,13 +54,14 @@ where
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
         loader:Arc<L>,
-        motif_loader:Arc<MotifLoader<L, C>>,
+        motif_loader:Arc<ML>,
         run_configs:Vec<SelectMotifsRunConfig>,
         find_motifs_run_ids:Vec<RunId>,
     ) -> Self {
         Self {
             store: Arc::clone(store),
             loader,
+            motif_loader,
             pd: Default::default(),
             run_configs,
             find_motifs_run_ids
@@ -76,7 +78,7 @@ where
     C: RunCtx + 'static
 
 {
-    type Ctx = RunCtx2;
+    type Ctx = C;
     type In<'a> = ResourcesConfigInput<Labeled>;
     type Out = SelectMotifsSavableResult;
 }
@@ -89,34 +91,37 @@ where
     C: RunCtx + 'static
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+        let resources = input.with_data_ref(0, None, |input|{
+            Ok(input
+                .resources_config()
+                .to_resources(&self.store)?
+                .into_iter()
+                .map(|r| Arc::new(r))
+                .collect::<Vec<_>>())
+        }).await?;
+
+
         for find_motifs_run_id in &self.find_motifs_run_ids {
+
             for run_config in self.run_configs.iter() {
                 let motifs = self.store.read().list_motifs(*find_motifs_run_id)?;
                 let motifs_len = motifs.len();
                 let done_cnt = Arc::new(AtomicU32::new(0));
 
                 futures::stream::iter(motifs)
-                    .map(|motif_id| {
+                    .map(Ok::<usize, ThoosaError>)
+                    .try_for_each_concurrent(10, |motif_id| {
                         let done_cnt = Arc::clone(&done_cnt);
-                        // let clc_dist = Arc::clone(&clc_dist);
-                        // let motif_loader_impl = Arc::clone(&motif_loader_impl);
-                        // let ctx = Arc::clone(&ctx);
+                        let motif_loader_impl = Arc::clone(&self.motif_loader);
+                        let ctx = Arc::clone(&ctx);
                         async move {
-                        //     debug!("run_plot_motif_slices: motif_id={motif_id}");
-                        //     if let Err(e) = crate::cli::plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist).await {
-                        //         error!("motif {motif_id} failed: e={e:?}");
-                        //     };
-                        //     MotifLoader::<RawTensorLoader, RunCtx2>::cache().await.clear();
-                        //
-                        //     let done = done_cnt.fetch_add(1, Relaxed);
-                        //     if done % 32 == 0 {
-                        //         info!("done {done} from  {motifs_len}");
-                        //     }
+                            let motif = motif_loader_impl.run_cached(Arc::new(DevicesWrap::wrap_cpu((motif_id as u32).into())), ctx).await?;
+                            debug!("SelectMotifsStage::run: find_motifs_run_id={find_motifs_run_id} run_config.id={:?} motif={motif:?}", run_config.id);
+
+                            Ok(())
                         }
                     })
-                    .buffer_unordered(10) // <- bound parallelism
-                    .collect::<Vec<()>>()
-                    .await;
+                    .await?;
             }
         }
 
@@ -133,26 +138,36 @@ mod tests {
     use tch::Tensor;
     use caching_runner::common::cachable::DevicesWrap;
     use caching_runner::common::MockRunCtx;
+    use caching_runner::common::runnable::AsyncStage;
     use caching_runner::global_ctx;
     use caching_runner::global_ctx::{GlobalCtx};
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_common::find_motifs_run_config::{ByLabelVarianceConfig, FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig};
+    use thoosa_common::runs::Labeled;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::TensorIdSliceIdx;
+    use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::run_configs::RunId;
     use thoosa_shared::traits::{DataId, SimpleId};
     use thoosa_store::MockStoreBuilder;
     use torch_runner::data::ThoTensor2;
     use crate::tasks::cross_dims::ChannelsData2;
+    use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::motif_loader::{mock_motif_loader, MotifMeta};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::select_motifs::SelectMotifsStage;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::tensor_loader::mock_tensor_loader::make_wrapper;
 
+    #[ctor::ctor]
+    fn test_init() {
+        thoosa_shared::test_utils::init_test_logging();
+    }
+
+
     #[tokio::test]
-    async fn test_two_labels(){
+    async fn test_two_labels() -> Result<(), ThoosaError>{
        GlobalCtx::init_devices(2);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 1000)));
@@ -161,9 +176,14 @@ mod tests {
         let resource_a: Resource = (1, 1, "resource_a", 1000).into();
         let resource_b: Resource = (2, 1, "resource_b", 1000).into();
 
+        let find_motifs_run_id = 1;
+        let select_motifs_run_id = 1;
+
         let mut store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
-
+            .with_list_motifs([
+                (find_motifs_run_id as RunId, Ok(vec![1usize]))
+            ])
             .build()));
 
         let loader_data: Arc<HashMap<u32, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>> = Arc::new(HashMap::from([
@@ -185,8 +205,21 @@ mod tests {
         let motif_loader = mock_motif_loader::build().with_result(Arc::clone(&motif_wrapper)).finish();
 
 
-        let select_motifs_stage:SelectMotifsStage<_, MockRunCtx> = SelectMotifsStage::new(&ws, &store, loader, motif_loader,vec![], vec![]);
+        let select_motifs_stage:Arc<SelectMotifsStage<_, _,MockRunCtx>> = Arc::new(SelectMotifsStage::new(
+            &ws,
+            &store,
+            loader,
+            motif_loader,
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig{ _dummy: 0 }))],
+            vec![find_motifs_run_id]
+        ));
 
+
+        let result = select_motifs_stage.run(
+            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Labeled::new("group".into())))), Arc::new(RwLock::new(MockRunCtx::new()))
+        ).await?;
+
+        Ok(())
     }
 
 }

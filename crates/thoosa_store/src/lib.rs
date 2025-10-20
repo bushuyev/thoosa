@@ -3190,17 +3190,24 @@ impl MockStoreBuilder {
             store: MockStore::new()
         }
     }
+
+    pub fn with_list_motifs<R:Into<HashMap<RunId, Result<Vec<usize>, ThoosaError>>>>(mut self, results: R) -> Self {
+        let map = results.into();
+        self.store.expect_list_motifs().returning(
+            move |run_id|{
+                map.get(&run_id).cloned().expect(&format!("mock is not configured to return motifs for run id {run_id}"))
+            }
+        );
+
+        self
+    }
+
     pub fn with_list_motif_slices(
-        mut self,  motif_id: u32, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>,
-        r:Result<
-            (
-                i64,
-                RunId,
-                Vec<TensorIdSliceIdx>,
-                HashMap<ResourceId, Resource>,
-            ),
-            ThoosaError,
-        >) -> Self{
+        mut self,
+        motif_id: u32,
+        limit: Option<u32>,
+        all_but_in_run_id: Option<(RunId, u32)>, r:Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError>
+    ) -> Self {
 
         self.store.expect_list_motif_slices().returning(
             move |p_motif_id, limit, all_but_in_run_id| {
