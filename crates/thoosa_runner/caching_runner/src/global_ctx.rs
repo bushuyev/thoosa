@@ -198,7 +198,7 @@ impl GlobalCtx {
 
 #[cfg(test)]
 pub(crate) mod mock_global_ctx {
-    use crate::global_ctx::MockGlobalCtx;
+    use crate::global_ctx::{mock_global_ctx, MockGlobalCtx};
 
     pub struct MockGlobalCtxBuilder {
         mock: MockGlobalCtx,
@@ -212,6 +212,12 @@ pub(crate) mod mock_global_ctx {
 
         pub fn with_age(mut self, out: u64) -> Self {
             self.mock.expect_cache_age().return_const(out);
+
+            self
+        }
+
+        pub fn with_device_count(mut self, out: usize) -> Self {
+            self.mock.expect_device_count().return_const(out);
 
             self
         }
@@ -232,4 +238,14 @@ pub(crate) mod mock_global_ctx {
             mock: super::MockGlobalCtx::default(),
         }
     }
+
+    pub fn build_default() -> MockGlobalCtx {
+        mock_global_ctx::build()
+            .with_age(0)
+            .with_dump_all_to_cpu()
+            .with_reset_all_on_cpu()
+            .with_device_count(2)
+            .finish()
+    }
+
 }

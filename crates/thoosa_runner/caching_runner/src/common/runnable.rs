@@ -7,7 +7,7 @@ use parking_lot::RwLock;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Data, WithId};
-use crate::common::cachable::DataCacheWrapper;
+use crate::common::cachable::DevicesWrap;
 use crate::global_ctx::GlobalCtx;
 
 //some operation on data - pattern search, dnn train, whatever what takes input and produces output
@@ -31,7 +31,7 @@ pub trait StaticStage:Send + Sync + 'static {
 
     type Out: Output + Data + Send + Sync;
 
-    fn run_static(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>;
+    fn run_static(self: Arc<Self>, input: Arc<DevicesWrap<Self::In>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>;
 }
 
 impl<T:AsyncStage> StaticStage for T
@@ -44,7 +44,7 @@ where
     type In = <T as Stage>::In<'static>;
     type Out = <T as Stage>::Out;
 
-    fn run_static(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In>>, ctx: Arc<RwLock<Self::Ctx>>) -> BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>> {
+    fn run_static(self: Arc<Self>, input: Arc<DevicesWrap<Self::In>>, ctx: Arc<RwLock<Self::Ctx>>) -> BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> {
         self.run(input, ctx)
     }
 }
@@ -59,7 +59,7 @@ where
     //should implement either run for multistep or do_run for single step (can be oom-handled)
     //the DataCacheWrapper is in input and output so that data could be dumped to CPU at any time (if other stages wins 100 GPU)
     //it means 'plain' inputs like resource ID should have dummy Data impl, TODO look for the better way (enum based solution appear to be essentially same dummy wrapper)
-    async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
         unimplemented!()
     }
 

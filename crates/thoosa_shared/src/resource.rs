@@ -35,6 +35,7 @@ pub trait ResourceStore {
 }
 
 #[derive(Debug, Clone, DummyData)]
+#[dummy_data(clone)]
 pub struct Resource {
     id: ResourceId,
     import_id: u32,

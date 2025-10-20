@@ -12,7 +12,7 @@ use tokio::runtime::Handle;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Data, SimpleId, WithId};
-use crate::common::cachable::{Cached, DataCacheWrapper};
+use crate::common::cachable::{Cached, DevicesWrap};
 use crate::common::{OutId};
 use crate::common::runnable::Stage;
 use crate::global_ctx::GlobalCtx;
@@ -26,7 +26,7 @@ pub struct TmpCached<D:Data + WithId  + Output+ Debug + Send + Sync + 'static> {
     cache_area:u64,
     map: Box<DashMap<
         <D as WithId>::ID,
-        Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>,
+        Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>>,
     >>
 
 }
@@ -37,7 +37,7 @@ impl<D: Data + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
         self.map.insert(
             value.id().clone(),
             async move {
-                Ok(Arc::new(DataCacheWrapper::new(value, 0, GlobalCtx::global().device_count(), cache_area)))
+                Ok(Arc::new(DevicesWrap::wrap(value, cache_area)))
             }.boxed().shared()
         );
 
@@ -64,12 +64,12 @@ impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
 
         let name = format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16)).leak();
 
-        let map: Box<DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>>> = Box::new(Default::default());
+        let map: Box<DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>>>> = Box::new(Default::default());
 
-        let ptr_ref: *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>> = std::ptr::from_ref(&*map);
+        let ptr_ref: *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>>> = std::ptr::from_ref(&*map);
 
-        let map_ref: &'static DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>, > = unsafe {
-            &*(ptr_ref as *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>> >)
+        let map_ref: &'static DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>>, > = unsafe {
+            &*(ptr_ref as *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>> >)
         };
 
         GlobalCtx::global().register_cache((name, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
@@ -99,70 +99,78 @@ mod tests {
     use std::collections::HashMap;
     use std::pin::Pin;
     use futures_util::FutureExt;
+    use thoosa_dummy_data_derive::DummyData;
     use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::traits::{Data, SimpleId, WithId};
+    use crate::global_ctx;
     // use crate::common::Data;
-    use crate::global_ctx::GlobalCtx;
+    use crate::global_ctx::{mock_global_ctx, GlobalCtx, MockGlobalCtx};
     use crate::tmp_cache::TmpCached;
+
+    #[tokio::test]
+    async fn dummy_data_clone_impl_uses_clone() -> Result<(), ThoosaError> {
+        #[derive(Debug, Clone, DummyData)]
+        #[dummy_data(clone)]
+        struct Foo(SimpleId);
+
+        impl WithId for Foo {
+            type ID = SimpleId;
+
+            fn id(&self) -> &Self::ID {
+                &self.0
+            }
+        }
+
+        impl Output for Foo {}
+
+        let foo = Foo(SimpleId::from("foo"));
+        let cloned = foo.copy_to_device(0).await;
+
+        assert_eq!(foo.0, cloned.0);
+        Ok(())
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tmp_cache() -> Result<(), ThoosaError> {
 
+        let ctx = MockGlobalCtx::global_context();
+        ctx.expect().returning(|| {
+            Box::leak(Box::new(
+                mock_global_ctx::build_default(),
+            )) as &'static global_ctx::MockGlobalCtx
+        });
+
         GlobalCtx::init_devices(2);
 
-        #[derive(Debug, Clone)]
-        struct DummyData {
+        #[derive(Debug, Clone, DummyData)]
+        #[dummy_data(clone)]
+        struct TestData {
             id:SimpleId,
             device:usize
         }
 
-        impl CopyToDevice for DummyData {
-            fn copy_to_device<'life0, 'async_trait>(&'life0 self, dst_device: usize) -> Pin<Box<dyn Future<Output=Self> + Send + 'async_trait>>
-            where
-                'life0: 'async_trait,
-                Self: 'async_trait
-            {
-                async move {
-                    DummyData {
-                        id: self.id.clone(),
-                        device: dst_device,
-                    }
-                }.shared().boxed()
-            }
-        }
 
-        impl Data for DummyData {
-            type Metrics = usize;
-
-            fn size(&self) -> Self::Metrics {
-                0
-            }
-
-            fn device(&self) -> usize {
-                0
-            }
-        }
-        impl WithId for DummyData {
+        impl WithId for TestData {
             type ID = SimpleId;
 
             fn id(&self) -> &Self::ID {
                 &self.id
             }
         }
-        impl Output for DummyData {}
+        impl Output for TestData {}
 
-        impl DummyData {
+        impl TestData {
             pub fn new(id: SimpleId, device:usize) -> Self {
                 Self { id, device}
             }
         }
 
 
-        let tmp_cache:TmpCached<DummyData> = TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await;
+        let tmp_cache:TmpCached<TestData> = TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await;
 
 
-        tmp_cache.insert(DummyData::new("foo".into(), 1));
+        tmp_cache.insert(TestData::new("foo".into(), 1));
 
 
         GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await?;

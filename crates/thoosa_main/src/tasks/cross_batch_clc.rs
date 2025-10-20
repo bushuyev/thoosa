@@ -3,7 +3,7 @@ use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::slices_iter::SlicesIter;
 use async_trait::async_trait;
-use caching_runner::common::cachable::DataCacheWrapper;
+use caching_runner::common::cachable::DevicesWrap;
 use caching_runner::common::runnable::{Stage, SyncStage};
 use log::{debug, trace};
 use parking_lot::RwLock;

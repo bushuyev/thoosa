@@ -41,7 +41,7 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
             <<Self as caching_runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID,
             futures_util::future::Shared<
                 futures_util::future::BoxFuture<'static, Result<
-                    std::sync::Arc<caching_runner::common::cachable::DataCacheWrapper<
+                    std::sync::Arc<caching_runner::common::cachable::DevicesWrap<
                         <Self as caching_runner::common::runnable::Stage>::Out
                     >>,
                     thoosa_shared::ThoosaError
