@@ -41,7 +41,7 @@ use crate::tasks::transforms::freq_filter::FreqFilter;
 #[derive(Debug, Cached)]
 pub struct MotifLoader<L, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + 'static
 {
     store: Arc<RwLock<Box<dyn Store>>>,
@@ -51,7 +51,7 @@ where
 
 impl <L, C> MotifLoader<L, C>
     where
-        L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + 'static,
+        L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
         C: RunCtx + 'static
 {
     pub fn new(
@@ -68,7 +68,7 @@ impl <L, C> MotifLoader<L, C>
 
 impl <L, C> OutId for MotifLoader<L, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + 'static
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -84,7 +84,7 @@ pub struct MotifMeta {
 
 impl <L, C> Stage for MotifLoader <L, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + 'static
 {
     type In<'a> = DataId;
@@ -95,7 +95,7 @@ where
 #[async_trait]
 impl <L, C> AsyncStage for MotifLoader <L, C>
     where
-        L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + 'static,
+        L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
         C: RunCtx + 'static
 {
 
@@ -231,13 +231,7 @@ pub mod mock_motif_loader {
     use crate::tasks::motif_loader::{MotifMeta};
     use crate::tasks::run_ctx_2::RunCtx2;
 
-    type RunCachedFuture = Pin<
-        Box<
-            dyn Future<
-                Output = Result<Arc<DevicesWrap<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>>>, ThoosaError>,
-            > + Send,
-        >,
-    >;
+    type RunCachedFuture = Pin<Box<dyn Future<Output=Result<Arc<DevicesWrap<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>>>, ThoosaError>> + Send>>;
 
     type RunCachedFn = dyn Fn(
             Arc<DevicesWrap<DataId>>,
@@ -289,10 +283,7 @@ pub mod mock_motif_loader {
         pub fn with_run_cached_fn<F, Fut>(mut self, f: F) -> Self
         where
             F: Fn(Arc<DevicesWrap<DataId>>, Arc<RwLock<RunCtx2>>) -> Fut + Send + Sync + 'static,
-            Fut: Future<
-                Output = Result<Arc<DevicesWrap<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>>>, ThoosaError>,
-            > + Send
-            + 'static,
+            Fut: Future<Output = Result<Arc<DevicesWrap<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>>>, ThoosaError>, > + Send + 'static,
         {
             self.run_cached_fn = Some(Arc::new(move |input, ctx| Box::pin(f(input, ctx))));
             self
@@ -329,7 +320,7 @@ mod tests {
     use log::{set_max_level, trace};
     use parking_lot::RwLock;
     use caching_runner::common::RunCtx;
-    use caching_runner::common::cachable::Cached;
+    use caching_runner::common::cachable::{Cached, DevicesWrap};
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::utils::lin_t;
@@ -382,7 +373,7 @@ mod tests {
 
         let num_devices = GlobalCtx::global().device_count();
         let cache_area = ctx.read().cache_area();
-        let input_id = super::wrap_data_id_for_cache(DataId::from(&10u32), num_devices, cache_area);
+        let input_id = Arc::new(DevicesWrap::wrap_cpu(DataId::from(&10u32)));
 
         let motif = motif_loader
             .run_cached(Arc::clone(&input_id), Arc::clone(&ctx))
@@ -400,12 +391,4 @@ mod tests {
 
         Ok(())
     }
-
-}
-pub fn wrap_data_id_for_cache(
-    data_id: DataId,
-    num_devices: usize,
-    cache_area: u64,
-) -> Arc<DevicesWrap<DataId>> {
-    Arc::new(DevicesWrap::wrap_cpu(data_id))
 }

@@ -194,7 +194,7 @@ mod tests {
     use super::{LoadMotifAndClcDistanceStage, RunCtx2};
     use caching_runner::common::cachable::{Cached, DevicesWrap};
     use crate::tasks::average_euclidean_distance::mock_average_stage;
-    use crate::tasks::motif_loader::{MotifMeta, mock_motif_loader, wrap_data_id_for_cache};
+    use crate::tasks::motif_loader::{MotifMeta, mock_motif_loader};
     use caching_runner::common::RunCtx;
     use caching_runner::global_ctx::GlobalCtx;
     use parking_lot::{Mutex, RwLock};
@@ -229,7 +229,7 @@ mod tests {
         let cache_area = ctx.read().cache_area();
         let num_devices = GlobalCtx::global().device_count();
         let input_id_value = DataId::from(&42u32);
-        let input_id = wrap_data_id_for_cache(input_id_value.clone(), num_devices, cache_area);
+        let input_id = Arc::new(DevicesWrap::wrap_cpu(input_id_value.clone()));
         let result = stage.run_cached(Arc::clone(&input_id), Arc::clone(&ctx)).await?;
 
         let result_value = result.with_data_ref(0, None, |val| Ok(val.clone())).await?;

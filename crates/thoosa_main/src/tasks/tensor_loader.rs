@@ -157,7 +157,8 @@ pub(crate) mod mock_tensor_loader {
         load_fn: Option<Arc<LoadFn>>,
     }
 
-    pub fn make_wrapper(
+    #[cfg(test)]
+    pub fn make_wrapper(//TODO move to test mod
         id: &'static str,
         data: &[f32],
     ) -> Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>> {
@@ -165,7 +166,8 @@ pub(crate) mod mock_tensor_loader {
         make_wrapper_t(id, Tensor::from_slice(data).view((1, data.len() as i64)))
     }
 
-    pub fn make_wrapper_t(id: &'static str, tensor: Tensor) -> Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>> {
+    #[cfg(test)]
+    pub fn make_wrapper_t(id: &'static str, tensor: Tensor) -> Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>> {//TODO move to test mod
         let tho_tensor = ThoTensor2::new(SimpleId::from(id), tensor);
         Arc::new(DevicesWrap::wrap(tho_tensor, 0))
     }
@@ -176,12 +178,10 @@ pub(crate) mod mock_tensor_loader {
         where
             H: Into<HashMap<u32, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>> + Send + Sync,
         {
-            let map: Arc<
-                HashMap<u32, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>,
-            > = Arc::new(h.into());
+            let data_map: Arc<HashMap<u32, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>, > = Arc::new(h.into());
 
             self.with_load_fn(move |resource, _ctx| {
-                let map = Arc::clone(&map);
+                let map = Arc::clone(&data_map);
 
                 let wrapper = map
                     .get(&resource.id())
