@@ -97,7 +97,8 @@ use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage};
-use crate::tasks::motif_loader::{wrap_data_id_for_cache, MotifLoader};
+use crate::tasks::motif_loader::{MotifLoader};
+use crate::tasks::select_motifs::SelectMotifsStage;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -375,7 +376,41 @@ where
         }
 
         Some(SelectMotifs(select_motifs_args)) => {
+            debug!("SelectMotifs2: select_motifs_args.run_config_cnt={:?}",select_motifs_args.run_config_cnt);
 
+            let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue =
+                serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
+
+            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
+                ResourcesConfigInput::new(
+                    SimpleId::from("resources"),
+                    select_motifs_args.resource_config(),
+                )
+            ));
+            let motif_loader = Arc::new(MotifLoader::new(
+                Arc::clone(&store),
+                Arc::clone(&loader_2)
+            ));
+
+            let run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
+                None,
+                select_motifs_run_config_range_or_value,
+                input_wrapper,
+                &store,
+                true,
+                |run_configs| {
+
+                    Arc::new(SelectMotifsStage::<RawTensorLoader, MotifLoader<RawTensorLoader, RunCtx2>, RunCtx2>::new(
+                        &ws,
+                        &store,
+                        loader_2,
+                        motif_loader,
+                        run_configs,
+                        select_motifs_args.find_motifs_run_ids.clone()
+                    ))
+                },
+                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
+            ).await?;
 
             // let run_ids = run_all_grid_step(
             //     Some(select_motifs_args.find_motifs_run_ids.clone()),
@@ -391,7 +426,7 @@ where
             //     false,
             // )?;
             //
-            // info!("SelectMotifs done, run_ids={run_ids:?}");
+            info!("SelectMotifs done, run_ids={run_ids:?}");
         }
 
         Some(TrainMotifsNets(train_motif_nets_args)) => {
@@ -1725,7 +1760,7 @@ async fn plot_motif(
 ) -> Result<(), ThoosaError> {
     let cache_area = ctx.read().cache_area();
     let num_devices = GlobalCtx::global().device_count();
-    let motif_id_cache = wrap_data_id_for_cache(DataId(motif_id as u32), num_devices, cache_area);
+    let motif_id_cache = Arc::new(DevicesWrap::wrap_cpu(DataId(motif_id as u32)));
 
     let motif = Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_cache),
