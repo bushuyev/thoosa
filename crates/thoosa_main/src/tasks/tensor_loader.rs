@@ -9,7 +9,7 @@ use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 use tch::Device;
-use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::dims::Dims;
 use thoosa_shared::CopyToDevice;
@@ -50,9 +50,9 @@ impl AsyncStage for RawTensorLoader {
 
     async fn run(
         self: Arc<Self>,
-        input: Arc<DataCacheWrapper<Self::In<'static>>>,
+        input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
         let cache_area = ctx.read().cache_area();
 
         let num_devices = GlobalCtx::global().device_count();
@@ -61,10 +61,8 @@ impl AsyncStage for RawTensorLoader {
         input
             .with_data_ref(0, None, |resource| {
                 let tensor = (self.loader_fn)(resource, &self.device);
-                Ok(Arc::new(DataCacheWrapper::new(
+                Ok(Arc::new(DevicesWrap::wrap(
                     tensor,
-                    target_device,
-                    num_devices,
                     cache_area,
                 )))
             })
@@ -90,18 +88,6 @@ impl RawTensorLoader {
     }
 }
 
-pub fn wrap_resource_for_cache(
-    resource: Resource,
-    num_devices: usize,
-    cache_area: u64,
-) -> Arc<DataCacheWrapper<Resource>> {
-    Arc::new(DataCacheWrapper::new(
-        resource,
-        0,
-        num_devices,
-        cache_area,
-    ))
-}
 
 
 #[cfg(test)]
@@ -117,22 +103,28 @@ pub(crate) mod mock_tensor_loader {
     use tch::Device::Cpu;
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
-    use caching_runner::common::cachable::DataCacheWrapper;
-    use caching_runner::common::MockRunCtx;
+    use cached_derive::Cached;
+    use caching_runner::common::cachable::DevicesWrap;
+    use caching_runner::common::{MockRunCtx, OutId};
     use caching_runner::common::runnable::{AsyncStage, Stage};
     use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::SimpleId;
+    use thoosa_shared::traits::{SimpleId, WithId};
     use torch_runner::data::ThoTensor2;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::{mock_tensor_loader, LoadFn};
 
 
-
-
-    #[derive(Clone)]
+    //TODO use mockall
+    #[derive(Clone, Cached)]
     pub struct MockTensorLoader {
         load_fn: Arc<LoadFn>,
+    }
+
+    impl OutId for MockTensorLoader {
+        fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+            SimpleId("mock")
+        }
     }
 
     impl std::fmt::Debug for MockTensorLoader {
@@ -152,12 +144,10 @@ pub(crate) mod mock_tensor_loader {
     #[async_trait]
     impl AsyncStage for MockTensorLoader {
 
-
-
-        async fn run(self: Arc<Self>, resource: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        async fn run(self: Arc<Self>, resource: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
             resource.with_data_ref(0, None, |d|{
-                Ok(Arc::new(DataCacheWrapper::new(
-                    (self.load_fn)(d, &Cpu), 0, 2, 0
+                Ok(Arc::new(DevicesWrap::wrap(
+                    (self.load_fn)(d, &Cpu), 0
                 )))
             }).await
         }
@@ -170,24 +160,24 @@ pub(crate) mod mock_tensor_loader {
     pub fn make_wrapper(
         id: &'static str,
         data: &[f32],
-    ) -> Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>> {
+    ) -> Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>> {
 
         make_wrapper_t(id, Tensor::from_slice(data).view((1, data.len() as i64)))
     }
 
-    pub fn make_wrapper_t(id: &'static str, tensor: Tensor) -> Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>> {
+    pub fn make_wrapper_t(id: &'static str, tensor: Tensor) -> Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>> {
         let tho_tensor = ThoTensor2::new(SimpleId::from(id), tensor);
-        Arc::new(DataCacheWrapper::new(tho_tensor, 0, 2, 0))
+        Arc::new(DevicesWrap::wrap(tho_tensor, 0))
     }
 
     impl MockTensorLoaderBuilder {
 
         pub fn with_data<H>(mut self, h: H) -> Self
         where
-            H: Into<HashMap<u32, Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>>> + Send + Sync,
+            H: Into<HashMap<u32, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>> + Send + Sync,
         {
             let map: Arc<
-                HashMap<u32, Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>>,
+                HashMap<u32, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>,
             > = Arc::new(h.into());
 
             self.with_load_fn(move |resource, _ctx| {
@@ -237,7 +227,7 @@ pub(crate) mod mock_tensor_loader {
 mod tests {
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
-    use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+    use caching_runner::common::cachable::{Cached, DevicesWrap};
     use caching_runner::global_ctx::GlobalCtx;
     use rand::Rng;
     use std::sync::Arc;
@@ -269,7 +259,7 @@ mod tests {
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
 
         let loaded = loader
-            .run_cached(Arc::new(DataCacheWrapper::new(Resource::new(0, 0, "aaa".to_string(), 20), 0, 2, 0)), ctx)
+            .run_cached(Arc::new(DevicesWrap::wrap(Resource::new(0, 0, "aaa".to_string(), 20), 0)), ctx)
             .await
             .map_err(|e| ThoosaError::new("zzz"))?;
 

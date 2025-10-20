@@ -5,7 +5,7 @@ use parking_lot::RwLock;
 use tch::{IndexOp, TchError, Tensor};
 use tch::Device::Cuda;
 use cached_derive::Cached;
-use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::OutId;
 use caching_runner::common::RunCtx;
 use caching_runner::common::runnable::{AsyncStage, Stage};
@@ -78,9 +78,9 @@ impl AsyncStage for FreqFilter {
 
     async fn run(
         self: Arc<Self>,
-        input: Arc<DataCacheWrapper<Self::In<'static>>>,
+        input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
 
         let (device_idx, cache_area) = {
             let guard = ctx.read();
@@ -119,7 +119,7 @@ impl AsyncStage for FreqFilter {
 
 
 
-        Ok(Arc::new(DataCacheWrapper::new(filtered, device_idx, num_devices, cache_area)))
+        Ok(Arc::new(DevicesWrap::wrap(filtered, cache_area)))
     }
 }
 
@@ -130,7 +130,7 @@ mod tests {
     use parking_lot::RwLock;
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
-    use caching_runner::common::cachable::DataCacheWrapper;
+    use caching_runner::common::cachable::DevicesWrap;
     use caching_runner::common::runnable::AsyncStage;
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::InputFilter;
@@ -156,7 +156,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(RunCtx2::new(1, 1, "test")));
 
         let r = Arc::new(bf).run(
-            Arc::new(DataCacheWrapper::new(ThoTensor2::new("test".into(), Tensor::rand(&[20, 100], FLOAT_CPU)), 1,2, 0)),
+            Arc::new(DevicesWrap::wrap(ThoTensor2::new("test".into(), Tensor::rand(&[20, 100], FLOAT_CPU)), 0)),
             ctx.clone()
         ).await?;
 

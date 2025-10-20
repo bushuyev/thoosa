@@ -98,7 +98,7 @@ mod tests {
     use thoosa_shared::traits::{Data, MonoMetrics, Select};
     use crate::output_builders::BuildAs;
     use async_trait::async_trait;
-    use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+    use caching_runner::common::cachable::{Cached, DevicesWrap};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
@@ -275,11 +275,9 @@ mod tests {
         value: impl Into<LoaderInput>,
         device_idx: usize,
         cache_area: u64,
-    ) -> Arc<DataCacheWrapper<LoaderInput>> {
-        Arc::new(DataCacheWrapper::new(
+    ) -> Arc<DevicesWrap<LoaderInput>> {
+        Arc::new(DevicesWrap::wrap(
             value.into(),
-            device_idx,
-            GlobalCtx::global().device_count(),
             cache_area,
         ))
     }
@@ -353,9 +351,9 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
     impl AsyncStage for TestTensorLoader {
         async fn run(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
             let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
 
             let (device_idx, cache_area) = {
@@ -375,10 +373,8 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
                 ),
             );
 
-            Ok(Arc::new(DataCacheWrapper::new(
+            Ok(Arc::new(DevicesWrap::wrap(
                 tensor,
-                device_idx,
-                num_devices,
                 cache_area,
             )))
         }
@@ -576,9 +572,9 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
     impl AsyncStage for ClcTask {
         async fn run(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
             let (device_idx, cache_area) = {
                 let guard = ctx.read();
                 (guard.device_idx(), guard.cache_area())
@@ -594,10 +590,8 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
                 })
                 .await?;
 
-            Ok(Arc::new(DataCacheWrapper::new(
+            Ok(Arc::new(DevicesWrap::wrap(
                 output,
-                device_idx,
-                num_devices,
                 cache_area,
             )))
         }
@@ -640,9 +634,9 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
     impl AsyncStage for LoadAndClcTask {
         async fn run(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(Arc::clone(&input), Arc::clone(&ctx))
                 .await?;
@@ -683,10 +677,8 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
             };
             let num_devices = GlobalCtx::global().device_count();
 
-            Ok(Arc::new(DataCacheWrapper::new(
+            Ok(Arc::new(DevicesWrap::wrap(
                 result,
-                device_idx,
-                num_devices,
                 cache_area,
             )))
         }
@@ -696,7 +688,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
     impl Cached for LoadAndClcTask {
         async fn cache() -> &'static DashMap<
             <<Self as Stage>::Out as WithId>::ID,
-            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>>,
+            Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>,
         >
         where
             Self: Sized,

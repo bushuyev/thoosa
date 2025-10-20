@@ -1,7 +1,7 @@
 use crate::tasks::cross_batch_clc::CrossUnfoldClcOutput;
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
-use caching_runner::common::cachable::DataCacheWrapper;
+use caching_runner::common::cachable::DevicesWrap;
 use caching_runner::common::runnable::{Stage, SyncStage};
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};

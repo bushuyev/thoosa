@@ -72,9 +72,6 @@ impl FindMotifsRunConfig {
     }
 }
 
-// impl Input for FindMotifsRunConfig {
-//
-// }
 
 //TODO rename to apply DSP Filter
 #[derive(Debug)]
@@ -572,13 +569,12 @@ pub struct MaxDistance {
 
 #[cfg(test)]
 mod tests {
-    use crate::find_motifs_run_config::{
-        DistanceRunningMeanK, DistanceRunningMeanKRangeOrValue, FindMotifsRunConfigRangeOrValue,
-        InputFilterRangeOrValue, SlicesFilterRangeOrValue,
-    };
+    use crate::find_motifs_run_config::{DistanceRunningMeanK, DistanceRunningMeanKRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue, SlicesFilterRangeOrValue};
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use log::debug;
     use tch::Tensor;
+    use thoosa_properties_map::ToHashmap;
+    use thoosa_run_config_args::GridRunConfigSource;
 
     #[ctor::ctor]
     fn test_init() {
@@ -594,19 +590,31 @@ mod tests {
             min_tracker_step: None,
             filter: Some(InputFilterRangeOrValue::BandPassFilter(
                 BandPassFilterParamsRangeOrValue {
-                    low_hz: (10. ..100.).into(),
-                    band_hz: (300. ..400.).into(),
-                    kernel_size: (12000i64).into(),
-                    stride: (1i64).into(),
-                    padding: (1i64).into(),
+                    low_hz: 10f64.into(),
+                    band_hz: 300f64.into(),
+                    kernel_size: 12000i64.into(),
+                    stride: 1i64.into(),
+                    padding: 1i64.into(),
                 },
             )),
             slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(
                 DistanceRunningMeanKRangeOrValue { mean: 0.5.into() },
             ),
         };
-        debug!("{:#}", serde_json5::to_string(&rc).unwrap());
-        //TODO test
+        // debug!("{:#}", serde_json5::to_string(&rc).unwrap());
+        let grid = rc.grid_run_configs();
+        // debug!("grid: {grid:?}");
+
+        let run_configs:Vec<FindMotifsRunConfig> = grid.to_run_configs();
+
+        let map = run_configs[0].to_properties_iter(None);
+
+        debug!("run_configs {run_configs:?}");
+
+        for v in map {
+            println!("{:?}", v);
+        }
+
     }
 }
 
