@@ -28,234 +28,6 @@ use torch_runner::data::ThoTensor2;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_dummy_data_derive::DummyData;
 
-#[cfg(test)]
-pub(crate) mod mock_cross_loader_clc {
-    use super::RunCtx2;
-    use caching_runner::common::runnable::{Stage, SyncStage};
-    use caching_runner::common::RunCtx;
-    use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
-    use parking_lot::RwLock;
-    use std::fmt::Debug;
-    use std::marker::PhantomData;
-    use std::sync::Arc;
-    use thoosa_shared::ThoosaError;
-    use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::resource::Resource;
-
-    type RunBatchFn<Out, C> = dyn for<'a> Fn(
-            &CrossInput<'a, &'a Arc<Resource>>,
-            Arc<RwLock<C>>,
-        ) -> Result<CrossUnfoldClcOutput<Out>, ThoosaError>
-        + Send
-        + Sync
-        + 'static;
-
-    #[derive(Clone)]
-    pub struct MockCrossLoaderClc<Out, C>
-    where
-        Out: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        run_batch_fn: Arc<RunBatchFn<Out, C>>,
-        _ctx: PhantomData<C>,
-    }
-
-    impl<Out, C> std::fmt::Debug for MockCrossLoaderClc<Out, C>
-    where
-        Out: Input + Output + Send + Debug + 'static,
-        C: RunCtx,
-    {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("MockCrossLoaderClc").finish()
-        }
-    }
-
-    impl<Out, C> Stage for MockCrossLoaderClc<Out, C>
-    where
-        Out: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        type Ctx = C;
-        type In<'a> = CrossInput<'a, &'a Arc<Resource>>;
-        type Out = CrossUnfoldClcOutput<Out>;
-    }
-
-    impl<Out, C> SyncStage for MockCrossLoaderClc<Out, C>
-    where
-        Out: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        fn do_run<'s>(
-            self: Arc<Self>,
-            input: &Self::In<'s>,
-            ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError>
-        where
-            Self: Sized,
-        {
-            let f = Arc::clone(&self.run_batch_fn);
-            f(input, ctx)
-        }
-    }
-
-    pub struct MockCrossLoaderClcBuilder<Out, C>
-    where
-        Out: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        run_batch_fn: Option<Arc<RunBatchFn<Out, C>>>,
-        _ctx: PhantomData<C>,
-    }
-
-    impl<Out, C> MockCrossLoaderClcBuilder<Out, C>
-    where
-        Out: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        pub fn with_run_batch_fn<F>(mut self, f: F) -> Self
-        where
-            F: for<'a> Fn(
-                    &CrossInput<'a, &'a Arc<Resource>>,
-                    Arc<RwLock<C>>,
-                ) -> Result<CrossUnfoldClcOutput<Out>, ThoosaError>
-                + Send
-                + Sync
-                + 'static,
-        {
-            self.run_batch_fn = Some(Arc::new(f));
-            self
-        }
-
-        pub fn finish(self) -> MockCrossLoaderClc<Out, C> {
-            let run_batch_fn = self
-                .run_batch_fn
-                .expect("MockCrossLoaderClcBuilder requires run_batch_fn to be set");
-            MockCrossLoaderClc {
-                run_batch_fn,
-                _ctx: PhantomData,
-            }
-        }
-    }
-
-    pub fn build<Out, C>() -> MockCrossLoaderClcBuilder<Out, C>
-    where
-        Out: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        MockCrossLoaderClcBuilder {
-            run_batch_fn: None,
-            _ctx: PhantomData,
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) mod mock_cross_loader_receiver {
-    use super::RunCtx2;
-    use caching_runner::common::runnable::{Stage, SyncStage};
-    use caching_runner::common::RunCtx;
-    use parking_lot::RwLock;
-    use std::fmt::Debug;
-    use std::marker::PhantomData;
-    use std::sync::Arc;
-    use thoosa_shared::ThoosaError;
-    use thoosa_shared::applicables_runner::{Input, Output};
-
-    type ReceiveFn<In, C> = dyn Fn(In, Arc<RwLock<C>>) -> Result<(), ThoosaError> + Send + Sync + 'static;
-
-    #[derive(Clone)]
-    pub struct MockCrossLoaderReceiver<In, C>
-    where
-        In: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        receive_fn: Arc<ReceiveFn<In, C>>,
-        _ctx: PhantomData<C>,
-    }
-
-    impl<In, C> std::fmt::Debug for MockCrossLoaderReceiver<In, C>
-    where
-        In: Input + Output + Send + Debug + 'static,
-        C: RunCtx,
-    {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("MockCrossLoaderReceiver").finish()
-        }
-    }
-
-    impl<In, C> Stage for MockCrossLoaderReceiver<In, C>
-    where
-        In: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        type Ctx = C;
-
-        type In<'a> = In
-        where
-            Self: 'a;
-        type Out = ();
-    }
-
-    impl<In, C> SyncStage for MockCrossLoaderReceiver<In, C>
-    where
-        In: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        fn consume<'s>(
-            self: Arc<Self>,
-            out: Self::In<'s>,
-            ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<(), ThoosaError> {
-            let f = Arc::clone(&self.receive_fn);
-            f(out, ctx)
-        }
-    }
-
-    pub struct MockCrossLoaderReceiverBuilder<In, C>
-    where
-        In: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        receive_fn: Option<Arc<ReceiveFn<In, C>>>,
-        _ctx: PhantomData<C>,
-    }
-
-    impl<In, C> MockCrossLoaderReceiverBuilder<In, C>
-    where
-        In: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        pub fn with_receive_fn<F>(mut self, f: F) -> Self
-        where
-            F: Fn(In, Arc<RwLock<C>>) -> Result<(), ThoosaError> + Send + Sync + 'static,
-        {
-            self.receive_fn = Some(Arc::new(f));
-            self
-        }
-
-        pub fn finish(self) -> MockCrossLoaderReceiver<In, C> {
-            let receive_fn = self
-                .receive_fn
-                .expect("MockCrossLoaderReceiverBuilder requires receive_fn to be set");
-            MockCrossLoaderReceiver {
-                receive_fn,
-                _ctx: PhantomData,
-            }
-        }
-    }
-
-    pub fn build<In, C>() -> MockCrossLoaderReceiverBuilder<In, C>
-    where
-        In: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        MockCrossLoaderReceiverBuilder {
-            receive_fn: None,
-            _ctx: PhantomData,
-        }
-    }
-}
-
 // #[derive(Debug, cached_derive::Cached)]
 // #[cache_name = "LoadedTensorId"]
 pub struct CrossLoader<ResC, L, CLC, RSV, R, C>
@@ -535,6 +307,236 @@ where
     }
 }
 
+
+#[cfg(test)]
+pub(crate) mod mock_cross_loader_clc {
+    use super::RunCtx2;
+    use caching_runner::common::runnable::{Stage, SyncStage};
+    use caching_runner::common::RunCtx;
+    use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
+    use parking_lot::RwLock;
+    use std::fmt::Debug;
+    use std::marker::PhantomData;
+    use std::sync::Arc;
+    use thoosa_shared::ThoosaError;
+    use thoosa_shared::applicables_runner::{Input, Output};
+    use thoosa_shared::resource::Resource;
+
+    type RunBatchFn<Out, C> = dyn for<'a> Fn(
+        &CrossInput<'a, &'a Arc<Resource>>,
+        Arc<RwLock<C>>,
+    ) -> Result<CrossUnfoldClcOutput<Out>, ThoosaError>
+    + Send
+    + Sync
+    + 'static;
+
+    #[derive(Clone)]
+    pub struct MockCrossLoaderClc<Out, C>
+    where
+        Out: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        run_batch_fn: Arc<RunBatchFn<Out, C>>,
+        _ctx: PhantomData<C>,
+    }
+
+    impl<Out, C> std::fmt::Debug for MockCrossLoaderClc<Out, C>
+    where
+        Out: Input + Output + Send + Debug + 'static,
+        C: RunCtx,
+    {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("MockCrossLoaderClc").finish()
+        }
+    }
+
+    impl<Out, C> Stage for MockCrossLoaderClc<Out, C>
+    where
+        Out: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        type Ctx = C;
+        type In<'a> = CrossInput<'a, &'a Arc<Resource>>;
+        type Out = CrossUnfoldClcOutput<Out>;
+    }
+
+    impl<Out, C> SyncStage for MockCrossLoaderClc<Out, C>
+    where
+        Out: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        fn do_run<'s>(
+            self: Arc<Self>,
+            input: &Self::In<'s>,
+            ctx: Arc<RwLock<Self::Ctx>>,
+        ) -> Result<Self::Out, ThoosaError>
+        where
+            Self: Sized,
+        {
+            let f = Arc::clone(&self.run_batch_fn);
+            f(input, ctx)
+        }
+    }
+
+    pub struct MockCrossLoaderClcBuilder<Out, C>
+    where
+        Out: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        run_batch_fn: Option<Arc<RunBatchFn<Out, C>>>,
+        _ctx: PhantomData<C>,
+    }
+
+    impl<Out, C> MockCrossLoaderClcBuilder<Out, C>
+    where
+        Out: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        pub fn with_run_batch_fn<F>(mut self, f: F) -> Self
+        where
+            F: for<'a> Fn(
+                &CrossInput<'a, &'a Arc<Resource>>,
+                Arc<RwLock<C>>,
+            ) -> Result<CrossUnfoldClcOutput<Out>, ThoosaError>
+            + Send
+            + Sync
+            + 'static,
+        {
+            self.run_batch_fn = Some(Arc::new(f));
+            self
+        }
+
+        pub fn finish(self) -> MockCrossLoaderClc<Out, C> {
+            let run_batch_fn = self
+                .run_batch_fn
+                .expect("MockCrossLoaderClcBuilder requires run_batch_fn to be set");
+            MockCrossLoaderClc {
+                run_batch_fn,
+                _ctx: PhantomData,
+            }
+        }
+    }
+
+    pub fn build<Out, C>() -> MockCrossLoaderClcBuilder<Out, C>
+    where
+        Out: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        MockCrossLoaderClcBuilder {
+            run_batch_fn: None,
+            _ctx: PhantomData,
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod mock_cross_loader_receiver {
+    use super::RunCtx2;
+    use caching_runner::common::runnable::{Stage, SyncStage};
+    use caching_runner::common::RunCtx;
+    use parking_lot::RwLock;
+    use std::fmt::Debug;
+    use std::marker::PhantomData;
+    use std::sync::Arc;
+    use thoosa_shared::ThoosaError;
+    use thoosa_shared::applicables_runner::{Input, Output};
+
+    type ReceiveFn<In, C> = dyn Fn(In, Arc<RwLock<C>>) -> Result<(), ThoosaError> + Send + Sync + 'static;
+
+    #[derive(Clone)]
+    pub struct MockCrossLoaderReceiver<In, C>
+    where
+        In: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        receive_fn: Arc<ReceiveFn<In, C>>,
+        _ctx: PhantomData<C>,
+    }
+
+    impl<In, C> std::fmt::Debug for MockCrossLoaderReceiver<In, C>
+    where
+        In: Input + Output + Send + Debug + 'static,
+        C: RunCtx,
+    {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("MockCrossLoaderReceiver").finish()
+        }
+    }
+
+    impl<In, C> Stage for MockCrossLoaderReceiver<In, C>
+    where
+        In: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        type Ctx = C;
+
+        type In<'a> = In
+        where
+            Self: 'a;
+        type Out = ();
+    }
+
+    impl<In, C> SyncStage for MockCrossLoaderReceiver<In, C>
+    where
+        In: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        fn consume<'s>(
+            self: Arc<Self>,
+            out: Self::In<'s>,
+            ctx: Arc<RwLock<Self::Ctx>>,
+        ) -> Result<(), ThoosaError> {
+            let f = Arc::clone(&self.receive_fn);
+            f(out, ctx)
+        }
+    }
+
+    pub struct MockCrossLoaderReceiverBuilder<In, C>
+    where
+        In: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        receive_fn: Option<Arc<ReceiveFn<In, C>>>,
+        _ctx: PhantomData<C>,
+    }
+
+    impl<In, C> MockCrossLoaderReceiverBuilder<In, C>
+    where
+        In: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        pub fn with_receive_fn<F>(mut self, f: F) -> Self
+        where
+            F: Fn(In, Arc<RwLock<C>>) -> Result<(), ThoosaError> + Send + Sync + 'static,
+        {
+            self.receive_fn = Some(Arc::new(f));
+            self
+        }
+
+        pub fn finish(self) -> MockCrossLoaderReceiver<In, C> {
+            let receive_fn = self
+                .receive_fn
+                .expect("MockCrossLoaderReceiverBuilder requires receive_fn to be set");
+            MockCrossLoaderReceiver {
+                receive_fn,
+                _ctx: PhantomData,
+            }
+        }
+    }
+
+    pub fn build<In, C>() -> MockCrossLoaderReceiverBuilder<In, C>
+    where
+        In: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        MockCrossLoaderReceiverBuilder {
+            receive_fn: None,
+            _ctx: PhantomData,
+        }
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::mock_cross_loader_clc;
@@ -717,8 +719,6 @@ mod tests {
 
         Ok(())
     }
-
-
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cross_loader_with_mocks() -> Result<(), ThoosaError> {
