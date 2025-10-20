@@ -50,7 +50,8 @@ select motif_id, count(*) as cnt from slices group by motif_id having cnt > 1000
 delete from slices where motif_id in (select motif_id from slices group by motif_id having count(*) > 10000);
 delete from motifs where not exists (select id from slices s where s.motif_id=motifs.id);
 
+select run_id, label_id, sl.motif_id, count(*) from slices sl left join labeled_resources lr on lr.resource_id=sl.resource_id  where sl.motif_id is not null group by run_id, lr.label_id, sl.motif_id order by sl.motif_id, label_id;
 
-273 801 600
 
-86 576 400
+
+what is a suitable measure to estimate specificity of a trait for a subset of items in classified datatset? For example, for time series classification task I've got set of  motifs each of which can be found x[0..L] times for each label l ∈ 0..L where L number of labels., how can I find out which motifs are good to be choosen as label specific and which are not?
