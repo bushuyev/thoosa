@@ -95,7 +95,7 @@ use caching_runner::common::runnable::AsyncStage;
 use caching_runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
-use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
+use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage};
 use crate::tasks::motif_loader::{MotifLoader};
 use crate::tasks::select_motifs::SelectMotifsStage;
@@ -281,7 +281,7 @@ where
     // )));
     GlobalCtx::init_devices(2);
 
-    let loader_2 = Arc::new(RawTensorLoader::new(
+    let loader_2 = Arc::new(RawTensorLoader::<RunCtx2>::new(
         move |key, _| {
             ThoTensor2::new(
                 Input::id(key).clone(),
@@ -1693,19 +1693,19 @@ where
 async fn run_plot_motif_slices(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
-    loader: &Arc<RawTensorLoader>,
+    loader: &Arc<RawTensorLoader<RunCtx2>>,
     plot_motif_slices_params: &PlotMotifSlicesArgs,
     device: &Device,
 ) -> Result<(), ThoosaError> {
     let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa")));
 
-    let motif_loader_impl = Arc::new(MotifLoader::new(
+    let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtx2>, RunCtx2>::new(
         Arc::clone(store),
         Arc::clone(loader)
     ));
     let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
         Arc::clone(&motif_loader_impl), // as Arc<dyn MotifLoaderStage<Output = <AverageEuclideanDistanceStage as Stage>::In<'static>>>,
-        Arc::new(AverageEuclideanDistanceStage::new()),
+        Arc::new(AverageEuclideanDistanceStage::<RunCtx2>::new()),
     ));
 
     match plot_motif_slices_params.motifs_by() {
@@ -1734,7 +1734,7 @@ async fn run_plot_motif_slices(
                         if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist).await {
                             error!("motif {motif_id} failed: e={e:?}");
                         };
-                        MotifLoader::<RawTensorLoader, RunCtx2>::cache().await.clear();
+                        MotifLoader::<RawTensorLoader<RunCtx2>, RunCtx2>::cache().await.clear();
 
                         let done = done_cnt.fetch_add(1, Relaxed);
                         if done % 32 == 0 {
@@ -1755,8 +1755,8 @@ async fn plot_motif(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ctx: Arc<RwLock<RunCtx2>>,
     motif_id: usize,
-    motif_loader_impl: &Arc<MotifLoader<RawTensorLoader, RunCtx2>>,
-    clc_dist: Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader, RunCtx2>, AverageEuclideanDistanceStage>>,
+    motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<RunCtx2>, RunCtx2>>,
+    clc_dist: Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<RunCtx2>, RunCtx2>, AverageEuclideanDistanceStage<RunCtx2>, RunCtx2>>,
 ) -> Result<(), ThoosaError> {
     let cache_area = ctx.read().cache_area();
     let num_devices = GlobalCtx::global().device_count();
@@ -1771,7 +1771,7 @@ async fn plot_motif(
     let dist = clc_dist
         .run_cached(Arc::clone(&motif_id_cache), Arc::clone(&ctx))
         .await?
-        .with_data_ref(0, None, |dist_val| Ok(dist_val.value()))
+        .with_data_ref(0, None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
         .await?;
 
     let r = motif.with_data_ref(0, None, |motif| {

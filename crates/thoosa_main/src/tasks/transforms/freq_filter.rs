@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
 use log::debug;
@@ -27,12 +28,19 @@ impl Dims for BandPassDims {
 }
 
 #[derive(Debug, Cached)]
-pub struct FreqFilter {
+pub struct FreqFilter<C>
+where
+    C: RunCtx + 'static,
+{
     // filters:Vec<> TODO
-    band_pass_tensor: Option<ThoTensor2<BandPassDims, SimpleId>>
+    band_pass_tensor: Option<ThoTensor2<BandPassDims, SimpleId>>,
+    _ctx: PhantomData<C>,
 }
 
-impl FreqFilter {
+impl<C> FreqFilter<C>
+where
+    C: RunCtx + 'static,
+{
     pub fn new(filter_config: &InputFilter) -> Self {
         let band_pass_tensor = match filter_config {
             InputFilter::Conv1(_) => {
@@ -56,25 +64,35 @@ impl FreqFilter {
             }
         };
         Self {
-            band_pass_tensor
+            band_pass_tensor,
+            _ctx: PhantomData,
         }
     }
 }
 
-impl  OutId for FreqFilter {
+impl<C> OutId for FreqFilter<C>
+where
+    C: RunCtx + 'static,
+{
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("filtered_{}_inp", input_id))
     }
 }
 
-impl Stage for FreqFilter {
-    type Ctx = RunCtx2;
+impl<C> Stage for FreqFilter<C>
+where
+    C: RunCtx + 'static,
+{
+    type Ctx = C;
     type In<'a> = ThoTensor2<ChannelsData2, SimpleId>;
     type Out = ThoTensor2<ChannelsData2, SimpleId>;
 }
 
 #[async_trait]
-impl AsyncStage for FreqFilter {
+impl<C> AsyncStage for FreqFilter<C>
+where
+    C: RunCtx + 'static,
+{
 
     async fn run(
         self: Arc<Self>,
