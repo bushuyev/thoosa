@@ -173,7 +173,6 @@ where
             },
         };
 
-
         for (resource_id, slices) in resource_ids_slices {
             let resource = resources_map
                 .get(&resource_id)
@@ -181,7 +180,7 @@ where
                 .expect(&format!("no resource with id={resource_id}"));
             let resource_cache = Arc::new(DevicesWrap::wrap_cpu(resource));
 
-            let raw_tensor = Arc::clone(&self.loader)
+            let raw_tensor = Arc::clone(&configurable_loader)
                 .run(resource_cache, Arc::clone(&ctx))
                 .await?;
 

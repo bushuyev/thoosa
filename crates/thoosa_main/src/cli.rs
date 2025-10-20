@@ -400,7 +400,7 @@ where
                 true,
                 |run_configs| {
 
-                    Arc::new(SelectMotifsStage::<RawTensorLoader, MotifLoader<RawTensorLoader, RunCtx2>, RunCtx2>::new(
+                    Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtx2>, MotifLoader<RawTensorLoader<RunCtx2>, RunCtx2>, RunCtx2>::new(
                         &ws,
                         &store,
                         loader_2,
