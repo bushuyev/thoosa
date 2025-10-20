@@ -5,6 +5,7 @@ use crate::tasks::slices_iter::SlicesIter;
 use async_trait::async_trait;
 use caching_runner::common::cachable::DevicesWrap;
 use caching_runner::common::runnable::{Stage, SyncStage};
+use caching_runner::common::RunCtx;
 use log::{debug, trace};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
@@ -68,18 +69,21 @@ impl UnfoldParams {
     }
 }
 
-pub struct CrossUnfoldClc<F, R, CUC>
+pub struct CrossUnfoldClc<F, R, CUC, C>
 where
     F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError>,
+    C: RunCtx + 'static,
 {
     batch_clc_fn: F,
     cross_batch_ctx: CUC,
     unfold_params: UnfoldParams,
+    _ctx: PhantomData<C>,
 }
 
-impl<F, R, CUC> Debug for CrossUnfoldClc<F, R, CUC>
+impl<F, R, CUC, C> Debug for CrossUnfoldClc<F, R, CUC, C>
 where
     F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError>,
+    C: RunCtx + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossBatchClc").finish()
@@ -87,15 +91,17 @@ where
 }
 
 
-impl<F, R, CUC> CrossUnfoldClc<F, R, CUC>
+impl<F, R, CUC, C> CrossUnfoldClc<F, R, CUC, C>
 where
     F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError>,
+    C: RunCtx + 'static,
 {
     pub fn new(batch_clc: F, cross_batch_ctx: CUC, unfold_params: UnfoldParams) -> Self {
         Self {
             batch_clc_fn: batch_clc,
             cross_batch_ctx,
             unfold_params,
+            _ctx: PhantomData,
         }
     }
 }
@@ -147,23 +153,25 @@ impl<R: Debug> Input for CrossUnfoldClcOutput<R> {}
 impl<R: Debug> Output for CrossUnfoldClcOutput<R> {}
 
 
-impl<F, R, CUC> Stage for CrossUnfoldClc<F, R, CUC>
+impl<F, R, CUC, C> Stage for CrossUnfoldClc<F, R, CUC, C>
 where
     F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError>,
-    R:Debug
+    R: Debug,
+    C: RunCtx + 'static,
 {
     type In<'a> = CrossInput<'a, &'a Arc<Resource>> where F: 'a, R:'a, CUC:'a;
 
     type Out = CrossUnfoldClcOutput<R>;
-    type Ctx = RunCtx2;
+    type Ctx = C;
 }
 
 
-impl<F, R, CUC> SyncStage for CrossUnfoldClc<F, R, CUC>//CUC Cross Unfold Context
+impl<F, R, CUC, C> SyncStage for CrossUnfoldClc<F, R, CUC, C>//CUC Cross Unfold Context
 where
     for<'a> F: Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError> + 'a,
     R: Debug + Output + Input + Send + 'static,
     for<'a> CUC: 'a,
+    C: RunCtx + 'static,
 {
 
 

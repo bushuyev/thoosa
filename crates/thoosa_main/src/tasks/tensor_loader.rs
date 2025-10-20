@@ -6,6 +6,7 @@ use caching_runner::common::{OutId, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use tch::Device;
@@ -25,12 +26,19 @@ type LoadFn = dyn Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> 
 
 #[derive(cached_derive::Cached)]
 #[cache_name = "LoadedTensorId"]
-pub struct RawTensorLoader {
+pub struct RawTensorLoader<C>
+where
+    C: RunCtx + 'static,
+{
     device: ThoDevice,
     loader_fn: Box<LoadFn>,
+    _ctx: PhantomData<C>,
 }
 
-impl Debug for RawTensorLoader {
+impl<C> Debug for RawTensorLoader<C>
+where
+    C: RunCtx + 'static,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TensorLoader")
             .field("device", &self.device)
@@ -39,14 +47,20 @@ impl Debug for RawTensorLoader {
 }
 
 
-impl Stage for RawTensorLoader {
+impl<C> Stage for RawTensorLoader<C>
+where
+    C: RunCtx + 'static,
+{
     type In<'a> = Resource;
     type Out = ThoTensor2<ChannelsData2, SimpleId>;
-    type Ctx = RunCtx2;
+    type Ctx = C;
 }
 
 #[async_trait]
-impl AsyncStage for RawTensorLoader {
+impl<C> AsyncStage for RawTensorLoader<C>
+where
+    C: RunCtx + 'static,
+{
 
     async fn run(
         self: Arc<Self>,
@@ -70,13 +84,19 @@ impl AsyncStage for RawTensorLoader {
     }
 }
 
-impl OutId for RawTensorLoader {
+impl<C> OutId for RawTensorLoader<C>
+where
+    C: RunCtx + 'static,
+{
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("loaded_{}", input_id.id()))
     }
 }
 
-impl RawTensorLoader {
+impl<C> RawTensorLoader<C>
+where
+    C: RunCtx + 'static,
+{
     pub fn new<F>(loader_fn: F, device: ThoDevice) -> Self
     where
         F: Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send + 'static,
@@ -84,6 +104,7 @@ impl RawTensorLoader {
         Self {
             device,
             loader_fn: Box::new(loader_fn),
+            _ctx: PhantomData,
         }
     }
 }
@@ -97,6 +118,7 @@ pub(crate) mod mock_tensor_loader {
     use async_trait::async_trait;
     use parking_lot::RwLock;
     use std::future::Future;
+    use std::marker::PhantomData;
     use std::pin::Pin;
     use std::sync::Arc;
     use tch::{Device, Tensor};
@@ -105,7 +127,7 @@ pub(crate) mod mock_tensor_loader {
     use tokio::task::block_in_place;
     use cached_derive::Cached;
     use caching_runner::common::cachable::DevicesWrap;
-    use caching_runner::common::{MockRunCtx, OutId};
+    use caching_runner::common::{MockRunCtx, OutId, RunCtx};
     use caching_runner::common::runnable::{AsyncStage, Stage};
     use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::resource::Resource;
@@ -117,23 +139,36 @@ pub(crate) mod mock_tensor_loader {
 
     //TODO use mockall
     #[derive(Clone, Cached)]
-    pub struct MockTensorLoader {
+    pub struct MockTensorLoader<C>
+    where
+        C: RunCtx + 'static,
+    {
         load_fn: Arc<LoadFn>,
+        _ctx: PhantomData<C>,
     }
 
-    impl OutId for MockTensorLoader {
+    impl<C> OutId for MockTensorLoader<C>
+    where
+        C: RunCtx + 'static,
+    {
         fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
             SimpleId("mock")
         }
     }
 
-    impl std::fmt::Debug for MockTensorLoader {
+    impl<C> std::fmt::Debug for MockTensorLoader<C>
+    where
+        C: RunCtx + 'static,
+    {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("MockCrossLoaderTensorSource").finish()
         }
     }
-    impl Stage for MockTensorLoader {
-        type Ctx = RunCtx2;
+    impl<C> Stage for MockTensorLoader<C>
+    where
+        C: RunCtx + 'static,
+    {
+        type Ctx = C;
         type In<'a>
         where
             Self: 'a
@@ -142,7 +177,10 @@ pub(crate) mod mock_tensor_loader {
     }
 
     #[async_trait]
-    impl AsyncStage for MockTensorLoader {
+    impl<C> AsyncStage for MockTensorLoader<C>
+    where
+        C: RunCtx + 'static,
+    {
 
         async fn run(self: Arc<Self>, resource: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
             resource.with_data_ref(0, None, |d|{
@@ -153,8 +191,12 @@ pub(crate) mod mock_tensor_loader {
         }
     }
 
-    pub struct MockTensorLoaderBuilder {
+    pub struct MockTensorLoaderBuilder<C>
+    where
+        C: RunCtx + 'static,
+    {
         load_fn: Option<Arc<LoadFn>>,
+        _ctx: PhantomData<C>,
     }
 
     #[cfg(test)]
@@ -172,7 +214,10 @@ pub(crate) mod mock_tensor_loader {
         Arc::new(DevicesWrap::wrap(tho_tensor, 0))
     }
 
-    impl MockTensorLoaderBuilder {
+    impl<C> MockTensorLoaderBuilder<C>
+    where
+        C: RunCtx + 'static,
+    {
 
         pub fn with_data<H>(mut self, h: H) -> Self
         where
@@ -210,16 +255,25 @@ pub(crate) mod mock_tensor_loader {
             self
         }
 
-        pub fn build(self) -> MockTensorLoader {
+        pub fn build(self) -> MockTensorLoader<C> {
             let load_fn = self
                 .load_fn
                 .expect("MockCrossLoaderTensorSourceBuilder requires load_fn to be set");
-            MockTensorLoader { load_fn }
+            MockTensorLoader {
+                load_fn,
+                _ctx: PhantomData,
+            }
         }
     }
 
-    pub fn new() -> MockTensorLoaderBuilder {
-        MockTensorLoaderBuilder { load_fn: None }
+    pub fn new<C>() -> MockTensorLoaderBuilder<C>
+    where
+        C: RunCtx + 'static,
+    {
+        MockTensorLoaderBuilder {
+            load_fn: None,
+            _ctx: PhantomData,
+        }
     }
 }
 
@@ -246,7 +300,7 @@ mod tests {
         rand::rng().fill(&mut data[..]);
         let data_0 = data.clone();
 
-        let loader = Arc::new(RawTensorLoader::new(
+        let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
                 ThoTensor2::new(
                     Input::id(key).clone(),
