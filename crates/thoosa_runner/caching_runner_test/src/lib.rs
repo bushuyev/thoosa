@@ -11,7 +11,7 @@ use caching_runner::oom_handler::{
 };
 use caching_runner::permits::{NumPermits, PermitStep, MAX_PERMITS};
 
-use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use log::debug;
 use parking_lot::RwLock;
@@ -83,7 +83,7 @@ where
     pub async fn run(
         &self,
         runnable: &Arc<R>,
-        input: Arc<DataCacheWrapper<StageInStatic<R>>>,
+        input: Arc<DevicesWrap<StageInStatic<R>>>,
         ctx: Arc<RwLock<<R as Stage>::Ctx>>,
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
     ) -> Result<<R as Stage>::Out, ThoosaError>
@@ -270,7 +270,7 @@ where
                 let ctx_device = Arc::new(RwLock::new(ctx_fac_arc(device_idx, 0, name)));
                 let multed = load_and_mul
                     .run_cached(
-                        Arc::new(DataCacheWrapper::new(<&str as Into<StageInStatic<R>>>::into(res), device_idx, 2, 0)),
+                        Arc::new(DevicesWrap::wrap(<&str as Into<StageInStatic<R>>>::into(res), 0)),
                         ctx_device.clone(),
                     )
                     .await?;
@@ -322,7 +322,7 @@ mod tests {
     use ambassador::Delegate;
     use async_trait::async_trait;
     use caching_runner::adjusters::splits::OutputBuilder;
-    use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+    use caching_runner::common::cachable::{Cached, DevicesWrap};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use caching_runner::common::{ambassador_impl_PermitsCtx, DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
@@ -626,9 +626,9 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
             self.run_count.fetch_add(1, Relaxed);
 
             let k = caching_runner::test_utils::parse_numeric_part(WithId::id(input.as_ref()).0)
@@ -640,13 +640,13 @@ mod tests {
                 (guard.device_idx, guard.cache_area)
             };
 
-            Ok(Arc::new(DataCacheWrapper::new(DLoadedTensor {
-                id: out_id,
-                data: (0..self.len)
-                    .map(|v| v as f32 * k)
-                    .collect::<Vec<f32>>()
-                    .into(),
-            }, device, 2, cache_area)))
+            Ok(Arc::new(DevicesWrap::wrap(DLoadedTensor {
+                            id: out_id,
+                            data: (0..self.len)
+                                .map(|v| v as f32 * k)
+                                .collect::<Vec<f32>>()
+                                .into(),
+                        }, cache_area)))
         }
 
         fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
@@ -878,7 +878,7 @@ mod tests {
     impl AsyncStage for DLoadAndMulTask {
 
 
-        async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, Arc::clone(&ctx))
                 .await?;
@@ -892,17 +892,17 @@ mod tests {
 
             async move {
 
-                Ok(Arc::new(DataCacheWrapper::new(self.mul_oom_runner
-                    .run(
-                        &self.mul,
-                        loaded,
-                        ctx,
-                        &HashMap::from([("", &HashSet::new())]),
-                    )
-                    .await.map_err(|e|{
-                        error!("DLoadAndMulTask::run: e={e:?}");
-                        e
-                     })?, device_idx, 2, cache_area)))
+                Ok(Arc::new(DevicesWrap::wrap(self.mul_oom_runner
+                                    .run(
+                                        &self.mul,
+                                        loaded,
+                                        ctx,
+                                        &HashMap::from([("", &HashSet::new())]),
+                                    )
+                                    .await.map_err(|e|{
+                                        error!("DLoadAndMulTask::run: e={e:?}");
+                                        e
+                                     })?, cache_area)))
             }
             .await
         }
@@ -929,9 +929,9 @@ mod tests {
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DataCacheWrapper::new(DLoaderInput {
-                    id: DLoaderInputId("resource_1"),
-                }, 0, 2, 0)),
+                Arc::new(DevicesWrap::wrap(DLoaderInput {
+                                    id: DLoaderInputId("resource_1"),
+                                }, 0)),
                 Arc::clone(&ctx_device_0),
             )
             .await;
@@ -940,9 +940,9 @@ mod tests {
 
         let loaded_tensor_0_1 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DataCacheWrapper::new(DLoaderInput {
-                    id: DLoaderInputId("resource_1"),
-                }, 0, 2, 0)),
+                Arc::new(DevicesWrap::wrap(DLoaderInput {
+                                    id: DLoaderInputId("resource_1"),
+                                }, 0)),
                 Arc::clone(&ctx_device_0),
             )
             .await;
@@ -961,9 +961,9 @@ mod tests {
 
         let loaded_tensor_1_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DataCacheWrapper::new(DLoaderInput {
-                    id: DLoaderInputId("resource_1"),
-                }, 0, 2, 0)),
+                Arc::new(DevicesWrap::wrap(DLoaderInput {
+                                    id: DLoaderInputId("resource_1"),
+                                }, 0)),
                 Arc::clone(&ctx_device_1),
             )
             .await?;
@@ -1012,9 +1012,9 @@ mod tests {
 
         let multed = load_and_mut
             .run_cached(
-                Arc::new(DataCacheWrapper::new(DLoaderInput {
-                    id: DLoaderInputId("resource_1"),
-                }, 0, 2, 0)),
+                Arc::new(DevicesWrap::wrap(DLoaderInput {
+                                    id: DLoaderInputId("resource_1"),
+                                }, 0)),
                 ctx_device_0,
             )
             .await?;
@@ -1205,7 +1205,7 @@ mod tests {
                 "ctx_0",
             )));
             let resource_0_for_ctx_0 = Arc::clone(&loader)
-                .run_cached(Arc::new(DataCacheWrapper::new(resource_1_arc.clone(), device_idx, 2, cache_area_0)), ctx_0.clone())
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_0)), ctx_0.clone())
                 .await?;
 
             let cache_area_1 = global_ctx.next_cache_area()?;
@@ -1217,7 +1217,7 @@ mod tests {
                 "ctx_1",
             )));
             let resource_0_for_ctx_1 = Arc::clone(&loader)
-                .run_cached(Arc::new(DataCacheWrapper::new(resource_1_arc.clone(), device_idx, 2, cache_area_1)), ctx_1.clone())
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_1)), ctx_1.clone())
                 .await?;
 
             debug!(

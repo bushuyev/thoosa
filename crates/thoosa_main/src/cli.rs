@@ -89,7 +89,7 @@ use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Runtime;
 use torch_runner::data::ThoTensor2;
 use torch_sys::at_grad_set_enabled;
-use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::RunCtx;
 use caching_runner::common::runnable::AsyncStage;
 use caching_runner::global_ctx::GlobalCtx;
@@ -336,30 +336,22 @@ where
         }
 
         Some(FindMotifs(find_motifs_args)) => {
-            debug!(
-                "FindMotifs2: find_motifs_args={:?} devices={:?}",
-                find_motifs_args, devices
-            );
+            debug!("FindMotifs: find_motifs_args={:?} devices={:?}",find_motifs_args, devices);
 
             let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue =
                 serde_json5::from_str(&find_motifs_args.run_config_cnt)
                     .expect("FindMotifsRunConfig2");
 
-            debug!(
-                "FindMotifs2: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}"
-            );
+            debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}");
 
-            let input_wrapper = Arc::new(DataCacheWrapper::new(
+            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
                 ResourcesConfigInput::new(
                     SimpleId::from("resources"),
                     find_motifs_args.resource_config(),
-                ),
-                0,
-                GlobalCtx::global().device_count(),
-                0,
+                )
             ));
 
-            let run_ids = run_grid::<Simple, _, _, _, _, _>(
+            let run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
                 None,
                 find_motifs_run_config_range_or_value,
                 input_wrapper,
@@ -376,22 +368,15 @@ where
                     ))
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
-            )
-            .await?;
+            ).await?;
 
             info!("FindMotifs done, run_ids={run_ids:?}");
 
         }
 
         Some(SelectMotifs(select_motifs_args)) => {
-            // debug!(
-            //     "SelectMotifs2: select_motifs_args.run_config_cnt={:?}",
-            //     select_motifs_args.run_config_cnt
-            // );
-            //
-            // let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue =
-            //     serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
-            //
+
+
             // let run_ids = run_all_grid_step(
             //     Some(select_motifs_args.find_motifs_run_ids.clone()),
             //     select_motifs_run_config_range_or_value,
@@ -2351,11 +2336,11 @@ where
     }
 }
 
-pub async fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
+pub async fn run_grid</*ResConf, */RCRV, F, RC, ST, CtxF>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     // fixed_config: FC,
-    input: Arc<DataCacheWrapper<ST::In<'static>>>,
+    input: Arc<DevicesWrap<ST::In<'static>>>,
     // ctx:Arc<parking_lot::RwLock<ST::Ctx>>,
     // stage: Arc<ST>,
     // ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -2368,7 +2353,7 @@ pub async fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
     ctx_f: CtxF,
 ) -> Result<Vec<RunId>, ThoosaError>
 where
-    ResConf: ResourcesConfig<R = Vec<Resource>> + Debug,
+    // ResConf: ResourcesConfig<R = Vec<Resource>> + Debug,
     F: FnOnce(Vec<RC>) -> Arc<ST>,
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig

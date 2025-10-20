@@ -1,5 +1,5 @@
 use crate::common::{PermitsCtx, RunCtx};
-use crate::common::cachable::DataCacheWrapper;
+use crate::common::cachable::DevicesWrap;
 use crate::common::runnable::{Stage, SyncStage};
 use crate::common::{DropIf, OutId};
 #[double]
@@ -265,7 +265,7 @@ where
     pub async fn run(
         &self,
         task: &Arc<R>,
-        input: Arc<DataCacheWrapper<<R as Stage>::In<'a>>>,
+        input: Arc<DevicesWrap<<R as Stage>::In<'a>>>,
         run_context: Arc<RwLock<R::Ctx>>,
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
@@ -795,7 +795,7 @@ mod tests {
     use super::mock_task_adjuster::build as mock_task_adjuster;
     use super::test_types::{TestInput, TestOutput};
     use super::{Adjusters, Contexts, OOMHandler};
-    use crate::common::cachable::DataCacheWrapper;
+    use crate::common::cachable::DevicesWrap;
     // use crate::common::runnable::Runnable;
     use crate::common::{DropIf, MockRunCtx};
     use crate::global_ctx;
@@ -813,11 +813,7 @@ mod tests {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
+                mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
 
@@ -865,7 +861,7 @@ mod tests {
         let out = oom_handler
             .run(
                 &Arc::new(init_task),
-                Arc::new(DataCacheWrapper::new(TestInput::new(100), 1, 2, 0)),
+                Arc::new(DevicesWrap::wrap(TestInput::new(100), 0)),
                 Arc::new(RwLock::new(ctx_mock)),
                 Contexts::new(
                     super::mock_input_context::build()
@@ -895,11 +891,7 @@ mod tests {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
+                mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
 
@@ -917,7 +909,7 @@ mod tests {
         let out = oom_handler
             .run(
                 &Arc::new(init_task),
-                Arc::new(DataCacheWrapper::new(TestInput::new(1), 1, 2, 0)),
+                Arc::new(DevicesWrap::wrap(TestInput::new(1), 0)),
                 Arc::new(RwLock::new(ctx_mock)),
                 Contexts::new(
                     super::mock_input_context::build()
@@ -942,11 +934,7 @@ mod tests {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
+                mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
 
@@ -965,7 +953,7 @@ mod tests {
         let out = oom_handler
             .run(
                 &Arc::new(task),
-                Arc::new(DataCacheWrapper::new(TestInput::new(1), 1, 2, 0)),
+                Arc::new(DevicesWrap::wrap(TestInput::new(1), 0)),
                 Arc::new(RwLock::new(ctx_mock)),
                 Contexts::new(
                     super::mock_input_context::build()
@@ -989,11 +977,7 @@ mod tests {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
+                mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
 
@@ -1014,7 +998,7 @@ mod tests {
         let out = oom_handler
             .run(
                 &Arc::new(task),
-                Arc::new(DataCacheWrapper::new(TestInput::new(1), 1, 2, 0)),
+                Arc::new(DevicesWrap::wrap(TestInput::new(1), 0)),
                 Arc::new(RwLock::new(ctx_mock)),
                 Contexts::new(
                     super::mock_input_context::build()
@@ -1038,11 +1022,7 @@ mod tests {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
+                mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
         });
 
@@ -1059,7 +1039,7 @@ mod tests {
         let (task_adj2, task_adj_calls2) = mock_task_adjuster([final_task2]);
 
         let init_task1_arc = Arc::new(init_task1);
-        let input_arc = Arc::new(DataCacheWrapper::new(TestInput::new(1), 1, 2, 0));
+        let input_arc = Arc::new(DevicesWrap::wrap(TestInput::new(1), 0));
 
         let ctx_mock = Arc::new(RwLock::new(
             crate::common::mock_run_ctx::build()

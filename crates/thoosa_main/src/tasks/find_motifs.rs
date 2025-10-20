@@ -4,7 +4,7 @@ use crate::tasks::cross_loader::{
 };
 use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::{RawTensorLoader};
+use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
@@ -33,128 +33,45 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
-use caching_runner::common::cachable::{Cached, DataCacheWrapper};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_shared::traits::{Data, SimpleId, WithId};
 use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::transforms::freq_filter::FreqFilter;
-use crate::tasks::stages_seq::ABStage;
+use crate::tasks::stages_seq::{ABStage, StageChainOption};
 
-type FilteredLoaderStage<L> = ABStage<L, FreqFilter, RunCtx2>;
-type LoaderStageChoice<L> = StageChainOption<L, FilteredLoaderStage<L>>;
-
-
-enum StageChainOption<Base, Chain>
-where
-    Base: AsyncStage + Send + Sync + Debug + 'static,
-    Chain: for<'i> AsyncStage<
-            In<'i>=<Base as Stage>::In<'i>,
-            Out=<Base as Stage>::Out,
-            Ctx=<Base as Stage>::Ctx,
-        > + Send + Sync + Debug + 'static,
-    for<'i> <Base as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <Base as Stage>::Out: Data + WithId + Send + Sync,
-{
-    Single(Arc<Base>),
-    Chained(Arc<Chain>),
-}
-
-impl<Base, Chain> Debug for StageChainOption<Base, Chain>
-where
-    Base: AsyncStage + Send + Sync + Debug + 'static,
-    Chain: for<'i> AsyncStage<
-            In<'i>=<Base as Stage>::In<'i>,
-            Out=<Base as Stage>::Out,
-            Ctx=<Base as Stage>::Ctx,
-        > + Send + Sync + Debug + 'static,
-    for<'i> <Base as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <Base as Stage>::Out: Data + WithId + Send + Sync,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StageChainOption::Single(stage) => f
-                .debug_tuple("StageChainOption::Single")
-                .field(stage)
-                .finish(),
-            StageChainOption::Chained(stage) => f
-                .debug_tuple("StageChainOption::Chained")
-                .field(stage)
-                .finish(),
-        }
-    }
-}
-
-impl<Base, Chain> Stage for StageChainOption<Base, Chain>
-where
-    Base: AsyncStage + Send + Sync + Debug + 'static,
-    Chain: for<'i> AsyncStage<
-            In<'i>=<Base as Stage>::In<'i>,
-            Out=<Base as Stage>::Out,
-            Ctx=<Base as Stage>::Ctx,
-        > + Send + Sync + Debug + 'static,
-    for<'i> <Base as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <Base as Stage>::Out: Data + WithId + Send + Sync,
-{
-    type Ctx = <Base as Stage>::Ctx;
-    type In<'a> = <Base as Stage>::In<'a>
-    where
-        Self: 'a;
-    type Out = <Base as Stage>::Out;
-}
-
-#[async_trait]
-impl<Base, Chain> AsyncStage for StageChainOption<Base, Chain>
-where
-    Base: AsyncStage + Send + Sync + Debug + 'static,
-    Chain: for<'i> AsyncStage<
-            In<'i>=<Base as Stage>::In<'i>,
-            Out=<Base as Stage>::Out,
-            Ctx=<Base as Stage>::Ctx,
-        > + Send + Sync + Debug + 'static,
-    for<'i> <Base as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <Base as Stage>::Out: Data + WithId + Send + Sync,
-{
-    async fn run(
-        self: Arc<Self>,
-        input: Arc<DataCacheWrapper<Self::In<'static>>>,
-        ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
-        match &*self {
-            StageChainOption::Single(stage) => Arc::clone(stage).run(input, ctx).await,
-            StageChainOption::Chained(stage) => Arc::clone(stage).run(input, ctx).await,
-        }
-    }
-}
+pub type FilteredLoaderStage<L> = ABStage<L, FreqFilter, RunCtx2>;
+pub type LoaderStageChoice<L> = StageChainOption<L, FilteredLoaderStage<L>>;
 
 
 #[derive(Debug)]
-struct FindMotifsStages<RC, SRC>
+struct FindMotifsStages<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
 {
     run_config: FindMotifsRunConfig,
     cross_loader: Arc<CrossLoader<
             RC,
-            SRC,
+        L,
             CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>,
             DistsTracker,
             DistsMask,
         >>
 }
 
-impl<RC, SRC> FindMotifsStages<RC, SRC>
+impl<RC, L> FindMotifsStages<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
 {
     pub fn new(
         run_config: FindMotifsRunConfig,
         cross_loader: Arc<CrossLoader<
             RC,
-            SRC,
+            L,
             CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>,
             DistsTracker,
             DistsMask,
@@ -289,7 +206,7 @@ where
                     store,
                     &run_config,
                     &fixed_config,
-                    None,
+                    None,//TODO
                 ));
 
                 let configurable_loader: Arc<LoaderStageChoice<L>> = match run_config.filter.as_ref() {
@@ -311,8 +228,8 @@ where
                         Arc::new(cross_unfold_clc),
                         receiver,
                         fixed_config.max_chunk_size as usize,
-                        |dists_tracker| {
-                            let dists_tracker = Arc::clone(dists_tracker);
+                        |receiver| {
+                            let dists_tracker = Arc::clone(receiver);
                             async move {
                                 dists_tracker.build_groups().await;
                             }
@@ -354,11 +271,11 @@ where
 
     async fn run(
         self: Arc<Self>,
-        input: Arc<DataCacheWrapper<ResourcesConfigInput<RC>>>,
+        input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
         let best = 0;
-        let mut js: JoinSet<Result<Arc<DataCacheWrapper<CrossResult>>, ThoosaError>> = JoinSet::new();
+        let mut js: JoinSet<Result<Arc<DevicesWrap<CrossResult>>, ThoosaError>> = JoinSet::new();
 
         for stage in self.run_config_stages.iter() {
             let ctx_arc = Arc::clone(&ctx);
@@ -385,11 +302,7 @@ where
             }
         }
 
-        info!(
-            "failed {} out of {}",
-            failed.load(Ordering::Relaxed),
-            self.run_config_stages.len()
-        );
+        info!("failed {} out of {}",failed.load(Ordering::Relaxed),self.run_config_stages.len());
 
         let cache_area = ctx.read().cache_area();
         let num_devices = GlobalCtx::global().device_count();
@@ -398,12 +311,7 @@ where
             self.run_config_stages[best].run_config.clone(),
         ));
 
-        Ok(Arc::new(DataCacheWrapper::new(
-            result,
-            0,
-            num_devices,
-            cache_area,
-        )))
+        Ok(Arc::new(DevicesWrap::wrap_cpu(result)))
     }
 }
 
@@ -415,7 +323,7 @@ mod tests {
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use caching_runner::common::RunCtx;
-    use caching_runner::common::cachable::DataCacheWrapper;
+    use caching_runner::common::cachable::DevicesWrap;
     use caching_runner::common::runnable::{AsyncStage, Stage};
     use caching_runner::global_ctx::GlobalCtx;
     use log::debug;
@@ -446,7 +354,7 @@ mod tests {
     use thoosa_store::SqlStore;
     use torch_runner::data::ThoTensor2;
     use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
-    use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage};
+    use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
     use crate::tasks::motif_loader::{wrap_data_id_for_cache, MotifLoader};
 
     #[ctor::ctor]
@@ -592,7 +500,7 @@ mod tests {
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
 
         let cache_area = ctx.read().cache_area();
-        let resources_input = Arc::new(DataCacheWrapper::new(
+        let resources_input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(
                 SimpleId::from("resources"),
                 Simple::new(ResourceType::List(
@@ -602,12 +510,10 @@ mod tests {
                         .collect(),
                 )),
             ),
-            0,
-            GlobalCtx::global().device_count(),
             cache_area,
         ));
 
-        let run_ids = run_grid::<Simple, _, _, _, _, _>(
+        let run_ids = run_grid::<_, _, _, _, _>(
             None,
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(
                 &r#"{
