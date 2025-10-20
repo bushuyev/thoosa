@@ -216,16 +216,8 @@ where
                     None,//TODO
                 ));
 
-                let configurable_loader: Arc<LoaderStageChoice<L, C>> = match run_config.filter.as_ref() {
-                    None => Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Single(Arc::clone(&loader))),
-                    Some(filter_config) => {
-                        Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
-                            SimpleId::from("ab"),
-                            Arc::clone(&loader),
-                            Arc::new(FreqFilter::<C>::new(filter_config)),
-                        ))))
-                    },
-                };
+               
+                let configurable_loader = config_to_stage(&loader, &run_config);
 
                 FindMotifsStages::new(
                     run_config,
@@ -323,6 +315,31 @@ where
         Ok(Arc::new(DevicesWrap::wrap_cpu(result)))
     }
 }
+
+
+pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig) -> Arc<LoaderStageChoice<L, C>>
+where
+    C: 'static + RunCtx,
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C>
+{
+    let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.filter.as_ref() {
+        None => {
+            debug!("MotifLoader::run: find_motifs_run_id={:?} no filter", find_motifs_run_config.id);
+            Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Single(Arc::clone(loader)))
+        },
+        Some(filter_config) => {
+            debug!("MotifLoader::run: find_motifs_run_id={:?} filter_config={filter_config:?}", find_motifs_run_config.id);
+
+            Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
+                SimpleId::from("ab"),
+                Arc::clone(loader),
+                Arc::new(FreqFilter::<C>::new(filter_config)),
+            ))))
+        },
+    };
+    configurable_loader
+}
+
 
 #[cfg(test)]
 mod tests {
