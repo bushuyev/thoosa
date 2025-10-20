@@ -223,13 +223,14 @@ pub(crate) mod mock_cross_loader_receiver {
 
 // #[derive(Debug, cached_derive::Cached)]
 // #[cache_name = "LoadedTensorId"]
-pub struct CrossLoader<ResC, L, CLC, RSV, R>
+pub struct CrossLoader<ResC, L, CLC, RSV, R, C>
 where
+    C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx = RunCtx2> + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + 'static,
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx = RunCtx2, > + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = RunCtx2> + Stage<Ctx = RunCtx2, Out = ()> + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
+    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
 {
     loader: Arc<L>,
     store: Arc<RwLock<Box<dyn Store>>>,
@@ -240,26 +241,28 @@ where
     pd: PhantomData<(ResC, R)>,
 }
 
-impl<ResC, L, CLC, RSV, R> Debug for CrossLoader<ResC, L, CLC, RSV, R>
+impl<ResC, L, CLC, RSV, R, C> Debug for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
+    C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx = RunCtx2>,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C>,
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx = RunCtx2, > + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = RunCtx2> + Stage<Ctx = RunCtx2, Out = ()> + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
+    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossLoader").finish()
     }
 }
 
-impl<ResC, L, CLC, RSV, R> CrossLoader<ResC, L, CLC, RSV, R>
+impl<ResC, L, CLC, RSV, R, C> CrossLoader<ResC, L, CLC, RSV, R, C>
 where
+    C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx = RunCtx2> + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + 'static,
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx = RunCtx2, > + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = RunCtx2> + Stage<Ctx = RunCtx2, Out = ()> + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
+    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
 {
     pub fn new<OnAllDone>(
         loader: Arc<L>,
@@ -284,12 +287,13 @@ where
     }
 }
 
-impl<ResC, L, CLC, RSV, R> OutId for CrossLoader<ResC, L, CLC, RSV, R>
+impl<ResC, L, CLC, RSV, R, C> OutId for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
+    C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx = RunCtx2> + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx = RunCtx2, > + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = RunCtx2> + Stage<Ctx = RunCtx2, Out = ()> + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
+    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: Debug + Send + Sync + 'static,
 {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -343,15 +347,16 @@ impl CrossResult {
         Self { id }
     }
 }
-impl<ResC, L, CLC, RSV, R> Stage for CrossLoader<ResC, L, CLC, RSV, R>
+impl<ResC, L, CLC, RSV, R, C> Stage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
+    C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx = RunCtx2> + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx = RunCtx2, > + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = RunCtx2> + Stage<Ctx = RunCtx2, Out = ()> + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
+    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: Debug + Send + Sync + 'static,
 {
-    type Ctx = RunCtx2;
+    type Ctx=C;
 
     type In<'a> = ResourcesConfigInput<ResC>
     where
@@ -360,14 +365,15 @@ where
 }
 
 #[async_trait]
-impl<ResC, L, CLC, RSV, R> AsyncStage for CrossLoader<ResC, L, CLC, RSV, R>
+impl<ResC, L, CLC, RSV, R, C> AsyncStage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
+    C:RunCtx+'static,
     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
     Self::Out: Data + WithId + Send + Sync,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx = RunCtx2> + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx = RunCtx2, > + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = RunCtx2> + Stage<Ctx = RunCtx2, Out = ()> + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
+    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: Debug + Send + Sync + 'static,
 {
     async fn run(
