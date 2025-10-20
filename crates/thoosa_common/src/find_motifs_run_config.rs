@@ -630,6 +630,12 @@ pub struct SelectMotifsRunConfig {
 }
 
 impl SelectMotifsRunConfig {
+
+    // #[cfg(test)]
+    pub fn new_(id: Option<RunId>, motif_selector: MotifSelector) -> Self {
+        Self { id, motif_selector }
+    }
+
     pub fn new() -> Self {
         Self {
             id: None,
@@ -641,8 +647,9 @@ impl SelectMotifsRunConfig {
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
 pub struct ByLabelVarianceConfig {
     #[in_map]
-    _dummy: u32, //TODO fix ThoosaRunConfig to let empty configs
+    pub _dummy: u32, //TODO fix ThoosaRunConfig to let empty configs
 }
+
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub enum MotifSelector {
