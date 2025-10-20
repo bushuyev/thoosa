@@ -297,19 +297,39 @@ mod tests {
                 debug!("t_0=\n{t_0}");
                 debug!("t_1=\n{t_1}");
 
+                let tensor_00 = Tensor::from_slice(&[
+                    0.00, 0.01,  0.01,0.02,     1.00, 1.01,  1.01, 1.02,  1.02,1.03,     /* 2.00, 2.01,*/
+                    0.10, 0.11,  0.11,0.12,     1.10, 1.11,  1.11, 1.12,  1.12,1.13,     /* 2.10, 2.11,*/
+                    0.20, 0.21,  0.21,0.22,     1.20, 1.21,  1.21, 1.22,  1.22,1.23,     /* 2.20, 2.21,*/
+                ]).view((3,5,2));
+
+                assert!(t_0.allclose(&tensor_00, 0.1, 0.1, false));
+
                 Ok(DistsMask::new(
                     Tensor::rand(&[0], FLOAT_CPU),
                     Some(Tensor::rand(&[0], FLOAT_CPU)),
                 ))
             },
             MeanDistsCtx::new(3, Cuda(0)),
-            UnfoldParams::new(1, 1, 1),
+            UnfoldParams::new(1, 2, 1),
         ));
 
-        let tensor_00 = ThoTensor2::new("1".into(), Tensor::rand(&[3, 10], FLOAT_CPU));
-        let tensor_01 = ThoTensor2::new("1".into(), Tensor::rand(&[3, 13], FLOAT_CPU));
+        let tensor_00 = ThoTensor2::new("1".into(), Tensor::from_slice(&[
+            0.00, 0.01, 0.02,
+            0.10, 0.11, 0.12,
+            0.20, 0.21, 0.22,
+        ]).view((3,3)));
+        let tensor_01 = ThoTensor2::new("1".into(), Tensor::from_slice(&[
+            1.00, 1.01, 1.02, 1.03,
+            1.10, 1.11, 1.12, 1.13,
+            1.20, 1.21, 1.22, 1.23,
+        ]).view((3,4)));
 
-        let tensor_1 = ThoTensor2::new("2".into(), Tensor::rand(&[3, 20], FLOAT_CPU));
+        let tensor_1 = ThoTensor2::new("2".into(), Tensor::from_slice(&[
+            2.00, 2.01,
+            2.10, 2.11,
+            2.20, 2.21,
+        ]).view((3,2)));
 
         let tensors = [&tensor_00, &tensor_01, &tensor_1];
 
