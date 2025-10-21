@@ -11,7 +11,7 @@ use crate::common::cachable::DevicesWrap;
 use crate::global_ctx::GlobalCtx;
 
 //some operation on data - pattern search, dnn train, whatever what takes input and produces output
-#[async_trait]
+
 pub trait Stage: Debug {
     type Ctx: RunCtx;
 

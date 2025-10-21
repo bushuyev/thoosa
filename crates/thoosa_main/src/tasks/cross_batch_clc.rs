@@ -305,6 +305,13 @@ mod tests {
 
                 assert!(t_0.allclose(&tensor_00, 0.1, 0.1, false));
 
+                let tensor_01 = Tensor::from_slice(&[
+                    2.00, 2.01,
+                    2.10, 2.11,
+                    2.20, 2.21,
+                ]).view((3,1,2));
+                assert!(t_1.allclose(&tensor_01, 0.1, 0.1, false));
+
                 Ok(DistsMask::new(
                     Tensor::rand(&[0], FLOAT_CPU),
                     Some(Tensor::rand(&[0], FLOAT_CPU)),
