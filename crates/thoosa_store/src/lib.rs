@@ -2855,23 +2855,23 @@ mod store_tests {
 
         // assert_eq!(4, map.len());
         let motif_slices_1111 = motif_slices_map
-            .get(&Resource::new(resource_ids[0], 1, "".into(), 0))
+            .get(&Resource::new(resource_ids[0], 1, "", 0))
             .unwrap();
         assert_eq!(2, motif_slices_1111.len()); //100, 200
 
         let motif_slices_2222 = motif_slices_map
-            .get(&Resource::new(resource_ids[1], 1, "".into(), 0))
+            .get(&Resource::new(resource_ids[1], 1, "", 0))
             .unwrap();
         assert_eq!(1, motif_slices_2222.len());
 
         let motif_slices_444 = motif_slices_map
-            .get(&Resource::new(resource_ids[3], 1, "".into(), 0))
+            .get(&Resource::new(resource_ids[3], 1, "", 0))
             .unwrap();
         assert_eq!(2, motif_slices_444.len()); //100, 200
         assert_eq!(
             2,
             motif_slices_map
-                .get(&Resource::new(resource_ids[5], 1, "".into(), 0))
+                .get(&Resource::new(resource_ids[5], 1, "", 0))
                 .unwrap()
                 .len()
         ); //200,300

@@ -4,6 +4,8 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
+use dashmap::DashMap;
+use futures_util::future::{BoxFuture, Shared};
 use parking_lot::RwLock;
 use cached_derive::Cached;
 use caching_runner::common::cachable::{Cached, DevicesWrap};
@@ -133,13 +135,14 @@ where
 
 }
 
+#[derive(cached_derive::Cached)]//TODO delegate to B's cache
 pub enum StageChainOption<A, B>
 where
     A: AsyncStage + Send + Sync + Debug + 'static,
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> AsyncStage<
+    B: for<'i> Cached<
         In<'i>=<A as Stage>::In<'i>,
         Out=<A as Stage>::Out,
         Ctx=<A as Stage>::Ctx,
@@ -155,7 +158,7 @@ where
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> AsyncStage<
+    B: for<'i> Cached<
         In<'i>=<A as Stage>::In<'i>,
         Out=<A as Stage>::Out,
         Ctx=<A as Stage>::Ctx,
@@ -181,7 +184,7 @@ where
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> AsyncStage<
+    B: for<'i> Cached<
         In<'i>=<A as Stage>::In<'i>,
         Out=<A as Stage>::Out,
         Ctx=<A as Stage>::Ctx,
@@ -201,7 +204,7 @@ where
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> AsyncStage<
+    B: for<'i> Cached<
         In<'i>=<A as Stage>::In<'i>,
         Out=<A as Stage>::Out,
         Ctx=<A as Stage>::Ctx,
@@ -218,3 +221,40 @@ where
         }
     }
 }
+
+// #[async_trait]
+// impl<A, B> Cached for StageChainOption<A, B>
+// where
+//     A: AsyncStage + Send + Sync + Debug + 'static,
+//     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
+//     <A as Stage>::Out: Data + WithId + Send + Sync,
+//
+//     B: for<'i> Cached<
+//         In<'i>=<A as Stage>::In<'i>,
+//         Out=<A as Stage>::Out,
+//         Ctx=<A as Stage>::Ctx,
+//     > + Send + Sync + Debug + 'static,
+// {
+//     async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>>
+//     where
+//         Self: Sized,
+//         Self::Out: Data + Sync + Send
+//     {
+//         unimplemented!()
+//     }
+//
+//     async fn run_cached(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>
+//     where
+//         Self: Sized + OutId,
+//         for<'a> <Self as Stage>::In<'a>: Send + Sync,
+//         <Self as Stage>::Out: Send + Sync,
+//         <<Self as Stage>::Out as WithId>::ID: 'static,
+//         <Self as Stage>::Out: 'static,
+//         Self::Out: Data
+//     {
+//         match &*self {
+//             StageChainOption::Single(stage) => Arc::clone(stage).run_cached(input, ctx).await,
+//             StageChainOption::Chained(stage) => Arc::clone(stage).run_cached(input, ctx).await,
+//         }
+//     }
+// }
