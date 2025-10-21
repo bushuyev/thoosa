@@ -301,9 +301,9 @@ impl OutputBuilder for DistOutputBuilder {
 mod tests {
     use super::{LoadMotifAndClcDistanceStage, RunCtx2};
     use caching_runner::common::cachable::{Cached, DevicesWrap};
-    use crate::tasks::average_euclidean_distance::mock_average_stage;
-    use crate::tasks::motif_loader::{MotifMeta, mock_motif_loader};
-    use caching_runner::common::RunCtx;
+    use crate::tasks::average_euclidean_distance::{mock_average_stage_2, AverageDistanceValue};
+    use crate::tasks::motif_loader::{MotifMeta, mock_motif_loader_2};
+    use caching_runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
     use parking_lot::{Mutex, RwLock};
     use std::sync::Arc;
@@ -313,24 +313,26 @@ mod tests {
     use thoosa_shared::traits::{DataId, SimpleId, WithId};
     use torch_runner::data::ThoTensor2;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_and_clc_average_euclidean_distance() -> Result<(), ThoosaError> {
         GlobalCtx::init_devices(2);
 
-        let ctx = Arc::new(RwLock::new(RunCtx2::new(0, 0, "test")));
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default()));
 
-        let motif_tensor = ThoTensor2::new(DataId::from(999u32), Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3)));
 
-        let motif_wrapper = Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_tensor, MotifMeta { channel: 0, run_id: 1 }), 0));
-
-        let motif_loader = mock_motif_loader::build::<RunCtx2>().with_result(Arc::clone(&motif_wrapper)).finish();
+        let motif_loader = Arc::new(mock_motif_loader_2::build().with_run_cached([
+            (42u32, (MotifMeta { channel: 0, run_id: 1 }, Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3))))
+        ]).finish());
 
         let call_log = Arc::new(Mutex::new(Vec::new()));
 
-        let clc_stage = mock_average_stage::builder::<RunCtx2>().fail_while_dim0_gt(3).with_outputs(vec![10.0, 30.0]).with_call_log(Arc::clone(&call_log)).finish();
+        let clc_stage = Arc::new(mock_average_stage_2::builder().fail_while_dim0_gt(3).with_do_run(vec![
+            AverageDistanceValue::new("0".into(), 10.0),
+            AverageDistanceValue::new("1".into(), 30.0)
+        ]).with_call_log(Arc::clone(&call_log)).finish());
 
         let stage = Arc::new(LoadMotifAndClcDistanceStage::new(
-            motif_loader, // as Arc<dyn MotifLoaderStage<Output = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>>>,
+            motif_loader,
             clc_stage,
         ));
 

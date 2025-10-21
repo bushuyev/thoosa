@@ -221,7 +221,7 @@ pub mod mock_motif_loader_2 {
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
-    use crate::tasks::motif_loader::MotifMeta;
+    use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
     use crate::tasks::tensor_loader::mock_tensor_loader_2::MockTensorLoaderBuilder;
 
     mock! {
@@ -283,146 +283,15 @@ pub mod mock_motif_loader_2 {
             self
         }
 
-        pub fn build()->MockMotifLoaderBuilder {
-            MockMotifLoaderBuilder {
-                mock: Default::default(),
-            }
-        }
-    }
-}
 
-
-#[cfg(test)]
-pub mod mock_motif_loader {
-    use std::fmt;
-    use std::marker::PhantomData;
-    use std::pin::Pin;
-    use std::sync::Arc;
-    use async_trait::async_trait;
-    use parking_lot::RwLock;
-    use cached_derive::Cached;
-    use caching_runner::common::cachable::DevicesWrap;
-    use caching_runner::common::{OutId, RunCtx};
-    use caching_runner::common::runnable::{AsyncStage, Stage};
-    use thoosa_shared::data_with_extra::DataWithExtra;
-    use thoosa_shared::ThoosaError;
-    use thoosa_shared::traits::{DataId, SimpleId, WithId};
-    use torch_runner::data::ThoTensor2;
-    use crate::tasks::cross_dims::MotifSlices;
-    // use crate::tasks::load_motif_and_clc_dist::MotifLoaderStage;
-    use crate::tasks::motif_loader::{MotifMeta};
-    use crate::tasks::run_ctx_2::RunCtx2;
-
-    type RunCachedFuture = Pin<Box<dyn Future<Output=Result<Arc<DevicesWrap<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>>>, ThoosaError>> + Send>>;
-
-    type RunCachedFn<C> = dyn Fn(
-            Arc<DevicesWrap<DataId>>,
-            Arc<RwLock<C>>,
-        ) -> RunCachedFuture
-        + Send
-        + Sync
-        + 'static;
-
-    #[derive(Clone, Cached)]
-    pub struct MockMotifLoader<C>
-    where
-        C: RunCtx + 'static,
-    {//TODO replace with mockallmock
-        run_cached_fn: Arc<RunCachedFn<C>>,
-        _ctx: PhantomData<C>,
-    }
-
-    impl<C> fmt::Debug for MockMotifLoader<C>
-    where
-        C: RunCtx,
-    {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.debug_struct("MockMotifLoader").finish()
-        }
-    }
-
-    impl<C> Stage for MockMotifLoader<C>
-    where
-        C: RunCtx + 'static,
-    {
-        type Ctx = C;
-        type In<'a> where Self: 'a =DataId;
-        type Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>;
-    }
-
-    impl<C> OutId for MockMotifLoader<C>
-    where
-        C: RunCtx + 'static,
-    {
-        fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-            DataId(0)
-        }
-    }
-
-    #[async_trait]
-    impl<C> AsyncStage for MockMotifLoader<C>
-    where
-        C: RunCtx + 'static,
-    {
-
-        async fn run(
-            self: Arc<Self>,
-            input: Arc<DevicesWrap<DataId>>,
-            ctx: Arc<RwLock<C>>,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
-            (self.run_cached_fn)(input, ctx).await
-        }
-    }
-
-    pub struct MockMotifLoaderBuilder<C>
-    where
-        C: RunCtx + 'static,
-    {
-        run_cached_fn: Option<Arc<RunCachedFn<C>>>,
-        _ctx: PhantomData<C>,
-    }
-
-    impl<C> MockMotifLoaderBuilder<C>
-    where
-        C: RunCtx + 'static,
-    {
-        pub fn with_run_cached_fn<F, Fut>(mut self, f: F) -> Self
-        where
-            F: Fn(Arc<DevicesWrap<DataId>>, Arc<RwLock<C>>) -> Fut + Send + Sync + 'static,
-            Fut: Future<Output = Result<Arc<DevicesWrap<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>>>, ThoosaError>, > + Send + 'static,
-        {
-            self.run_cached_fn = Some(Arc::new(move |input, ctx| Box::pin(f(input, ctx))));
-            self
+        pub fn finish(self) -> MockMotifLoader {
+            self.mock
         }
 
-        pub fn with_result(
-            self,
-            data: Arc<DevicesWrap<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>>>,
-        ) -> Self {
-            self.with_run_cached_fn(move |_input, _ctx| {
-                let data = Arc::clone(&data);
-                async move { Ok(data) }
-            })
-        }
-
-        pub fn finish(self) -> Arc<MockMotifLoader<C>> {
-            let run_cached_fn = self
-                .run_cached_fn
-                .expect("MockMotifLoaderBuilder requires run_cached_fn to be set");
-            Arc::new(MockMotifLoader {
-                run_cached_fn,
-                _ctx: PhantomData,
-            })
-        }
     }
-
-    pub fn build<C>() -> MockMotifLoaderBuilder<C>
-    where
-        C: RunCtx + 'static,
-    {
+    pub fn build()->MockMotifLoaderBuilder {
         MockMotifLoaderBuilder {
-            run_cached_fn: None,
-            _ctx: PhantomData,
+            mock: Default::default(),
         }
     }
 }
@@ -447,8 +316,7 @@ mod tests {
     use thoosa_store::MockStoreBuilder;
     use crate::tasks::motif_loader::MotifLoader;
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::{mock_tensor_loader, mock_tensor_loader_2};
-    use crate::tasks::tensor_loader::mock_tensor_loader::{make_wrapper_t, DummyTensorLoader};
+    use crate::tasks::tensor_loader::{mock_tensor_loader_2};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn load_motifs() -> Result<(), ThoosaError> {
@@ -457,14 +325,16 @@ mod tests {
 
         let run_id = 1;
 
+        let resource_a = Resource::new(1, 1, "tensor_a", 1000);
+        let resource_b = Resource::new(2, 1, "tensor_b", 1000);
         let mut store = MockStoreBuilder::new()
             .with_list_motif_slices(10u32, None, None, Ok((0i64, run_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
                 TensorIdSliceIdx(2, 100)
             ], HashMap::from([
-                (1, Resource::new(1, 1, "aaa", 1000)),
-                (2, Resource::new(2, 1, "bbb", 1000))
+                (1, resource_a.clone()),
+                (2, resource_b.clone())
             ]))))
             .with_list_run_config_values(
                 run_id,
@@ -475,20 +345,11 @@ mod tests {
         let motif_loader = Arc::new(MotifLoader::new(
             Arc::new(RwLock::new(store)),
 
-            // Arc::new(
-            //     mock_tensor_loader::build::<RunCtx2>()
-            //     .with_data([
-            //         (1, make_wrapper_t("tensor_a", lin_t(1000).view((1,-1)))),
-            //         (2, make_wrapper_t("tensor_b", lin_t(1000).view((1,-1)))),
-            //     ])
-            //     .finish()
-            // )
-
             Arc::new(
                 mock_tensor_loader_2::build()
                     .with_run_cached([
-                        (Resource::new(0, 0, "tensor_a", 1000), lin_t(1000).view((1,-1))),
-                        (Resource::new(0, 0, "tensor_b", 1000), lin_t(1000).view((1,-1)))
+                        (resource_a, lin_t(1000).view((1,-1))),
+                        (resource_b, lin_t(1000).view((1,-1)))
                     ])
                     .finish(),
             )
