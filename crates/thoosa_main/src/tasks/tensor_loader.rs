@@ -170,7 +170,7 @@ pub(crate) mod mock_tensor_loader_2 {
 
     impl MockTensorLoaderBuilder {
 
-        pub fn with_data<H>(mut self, h: H) -> Self
+        pub fn with_run_cached<H>(mut self, h: H) -> Self
         where
             H: IntoIterator<Item=(Resource, Tensor)> ,
         {

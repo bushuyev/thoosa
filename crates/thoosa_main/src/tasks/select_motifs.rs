@@ -187,11 +187,11 @@ mod tests {
                 .with_list_group_labeled_resources_sets()
             .build()));
 
-       
+
 
         let loader = Arc::new(
             mock_tensor_loader_2::build()
-                .with_data([
+                .with_run_cached([
                     (resource_a.clone(), Tensor::from_slice(&[1.0, 2.0]).view((1,2))),
                     (resource_b.clone(), Tensor::from_slice(&[3.0, 4.0]).view((1,2))),
                 ])
