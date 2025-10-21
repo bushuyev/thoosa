@@ -541,7 +541,7 @@ pub(crate) mod mock_cross_loader_receiver {
 mod tests {
     use super::mock_cross_loader_clc;
     use super::mock_cross_loader_receiver;
-    use crate::tasks::tensor_loader::mock_tensor_loader;
+    use crate::tasks::tensor_loader::{mock_tensor_loader, mock_tensor_loader_2};
     use super::*;
     use crate::cli::Commands::FindMotifs;
     use crate::tasks::cross_batch_clc::{CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
@@ -550,7 +550,7 @@ mod tests {
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use crate::tasks::slices_iter::SlicesIter;
-    use caching_runner::common::RunCtx;
+    use caching_runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
     use futures_util::FutureExt;
     use log::debug;
@@ -721,7 +721,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_cross_loader_with_mocks() -> Result<(), ThoosaError> {
+    async fn test_cross_loader() -> Result<(), ThoosaError> {
         GlobalCtx::init_devices(2);
 
         let resource_a: Resource = (1, 1, "resource_a", 2).into();
@@ -737,8 +737,11 @@ mod tests {
         ]));
 
         let loader = Arc::new(
-            mock_tensor_loader::build::<RunCtx2>()
-                .with_data(loader_data.as_ref().clone())
+            mock_tensor_loader_2::build()
+                .with_run_cached([
+                    (resource_a.clone(), Tensor::from_slice(&[1.0, 2.0]).view((1,2))),
+                    (resource_b.clone(), Tensor::from_slice(&[3.0, 4.0]).view((1,2))),
+                ])
                 .finish(),
         );
 
@@ -751,7 +754,7 @@ mod tests {
         let batch_counter = Arc::clone(&counter);
 
         let batch_clc = Arc::new(
-            mock_cross_loader_clc::build::<TestBatchOutput, RunCtx2>()
+            mock_cross_loader_clc::build::<TestBatchOutput, MockRunCtx>()
                 .with_run_batch_fn(move |input, _ctx| {
                     let observation = Observation {
                         tensor_ids: input.tensors().iter().map(|t| t.id().0).collect(),
@@ -778,7 +781,7 @@ mod tests {
         let receiver_observed = Arc::clone(&received_outputs);
 
         let receiver = Arc::new(
-            mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<TestBatchOutput>, RunCtx2>()
+            mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<TestBatchOutput>, MockRunCtx>()
                 .with_receive_fn(move |out, _ctx| {
                     let result = out.clc_result();
                     receiver_observed.lock().unwrap().push(result);
@@ -787,7 +790,7 @@ mod tests {
                 .finish(),
         );
 
-        let ctx = Arc::new(RwLock::new(RunCtx2::new(0, 0, "mock")));
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default()));
 
         let mut mocked_store = Arc::new(RwLock::new(
             MockStoreBuilder::new()

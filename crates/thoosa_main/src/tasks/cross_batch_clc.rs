@@ -53,7 +53,7 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
 impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Input for CrossInput<'a, R> {}
 
 #[derive(Debug)]
-pub(crate) struct UnfoldParams {
+pub(crate) struct UnfoldParams { //TODO use in FindMotifsRunConfig
     dimension: i64,
     size: i64,
     step: i64,
@@ -340,11 +340,11 @@ mod tests {
 
         let tensors = [&tensor_00, &tensor_01, &tensor_1];
 
-        let resource_00 = Arc::new(Resource::new(0, 0, "file_00".to_string(), 10));
-        let resource_01 = Arc::new(Resource::new(1, 0, "file_01".to_string(), 10));
+        let resource_00 = Arc::new(Resource::new(0, 0, "file_00", 10));
+        let resource_01 = Arc::new(Resource::new(1, 0, "file_01", 10));
         let chunk_0_resources = vec![&resource_00, &resource_01];
 
-        let resource_1 = Arc::new(Resource::new(2, 0, "file_1".to_string(), 10));
+        let resource_1 = Arc::new(Resource::new(2, 0, "file_1", 10));
         let chunk_1_resources = vec![&resource_1];
 
         let input = CrossInput::new(
