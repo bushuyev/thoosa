@@ -61,14 +61,15 @@ where
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
     B::Out: Data + WithId + Send + Sync + 'static,
-
-
-    <<B as Stage>::Out as WithId>::ID: From<String>,
-    for <'i> <<A as Stage>::In<'i> as WithId>::ID: std::fmt::Display
+    //
+    //
+    // <<B as Stage>::Out as WithId>::ID: From<String>,
+    // for <'i> <<A as Stage>::In<'i> as WithId>::ID: std::fmt::Display
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID
     {
-        format!("me_{}_input_{}", self.id, input_id).into()
+        // format!("me_{}_input_{}", self.id, input_id).into()
+        self.stage_b.out_id(&self.stage_a.out_id(input_id))
     }
 }
 
@@ -212,15 +213,12 @@ where
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx >  + Send + Sync + Debug + 'static,
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         match &*self {
             StageChainOption::Single(stage) =>  stage.out_id(input_id),
-            StageChainOption::Chained(stage) => {
-                unimplemented!()
-                // stage.out_id(input_id)
-            },
+            StageChainOption::Chained(stage) => stage.out_id(input_id),
         }
     }
 }

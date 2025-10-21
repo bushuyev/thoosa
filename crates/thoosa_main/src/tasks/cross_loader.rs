@@ -836,35 +836,35 @@ mod tests {
 
         let observed = observations.lock().unwrap().clone();
 
-        let expected_observations = vec![
+        let expected = vec![
             Observation {
-                tensor_ids: vec!["tensor_a", "tensor_a"],
+                tensor_ids: vec!["resource_a", "resource_a"],
                 batch_0_ids: vec![resources[0].id()],
                 batch_1_ids: vec![resources[0].id()],
             },
             Observation {
-                tensor_ids: vec!["tensor_a", "tensor_b"],
+                tensor_ids: vec!["resource_a", "resource_b"],
                 batch_0_ids: vec![resources[0].id()],
                 batch_1_ids: vec![resources[1].id()],
             },
             Observation {
-                tensor_ids: vec!["tensor_b", "tensor_a"],
+                tensor_ids: vec!["resource_b", "resource_a"],
                 batch_0_ids: vec![resources[1].id()],
                 batch_1_ids: vec![resources[0].id()],
             },
             Observation {
-                tensor_ids: vec!["tensor_b", "tensor_b"],
+                tensor_ids: vec!["resource_b", "resource_b"],
                 batch_0_ids: vec![resources[1].id()],
                 batch_1_ids: vec![resources[1].id()],
             },
         ];
 
-        assert_eq!(observed, expected_observations);
+        assert_eq!(observed, expected);
 
-        let produced = produced_outputs.lock().unwrap().clone();
-        let received = received_outputs.lock().unwrap().clone();
+        let produced = produced_outputs.lock()?.clone();
+        let received = received_outputs.lock()?.clone();
 
-        let expected_outputs: Vec<TestBatchOutput> = (0..expected_observations.len())
+        let expected_outputs: Vec<TestBatchOutput> = (0..expected.len())
             .map(TestBatchOutput::new)
             .collect();
 
