@@ -159,7 +159,7 @@ where
     R: Debug,
     C: RunCtx + 'static,
 {
-    type In<'a> = CrossInput<'a, &'a Arc<Resource>> where F: 'a, R:'a, CUC:'a;
+    type In<'a> = CrossInput<'a, &'a Arc<Resource>>;
 
     type Out = CrossUnfoldClcOutput<R>;
     type Ctx = C;
