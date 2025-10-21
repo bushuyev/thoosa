@@ -352,7 +352,7 @@ mod tests {
     use crate::tasks::motif_loader::MotifLoader;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::tensor_loader::mock_tensor_loader::{make_wrapper_t, MockTensorLoader};
+    use crate::tasks::tensor_loader::mock_tensor_loader::{make_wrapper_t, DummyTensorLoader};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn load_motifs() -> Result<(), ThoosaError> {
@@ -376,16 +376,16 @@ mod tests {
             )
             .build();
 
-        let motif_loader = Arc::new(MotifLoader::<MockTensorLoader<RunCtx2>, RunCtx2>::new(
+        let motif_loader = Arc::new(MotifLoader::<DummyTensorLoader<RunCtx2>, RunCtx2>::new(
             Arc::new(RwLock::new(store)),
 
             Arc::new(
-                mock_tensor_loader::new::<RunCtx2>()
+                mock_tensor_loader::build::<RunCtx2>()
                 .with_data([
                     (1, make_wrapper_t("tensor_a", lin_t(1000).view((1,-1)))),
                     (2, make_wrapper_t("tensor_b", lin_t(1000).view((1,-1)))),
                 ])
-                .build()
+                .finish()
             )
         ));
 

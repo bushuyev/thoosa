@@ -157,7 +157,7 @@ mod tests {
     use crate::tasks::motif_loader::{mock_motif_loader, MotifMeta};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::select_motifs::SelectMotifsStage;
-    use crate::tasks::tensor_loader::mock_tensor_loader;
+    use crate::tasks::tensor_loader::{mock_tensor_loader, mock_tensor_loader_2};
     use crate::tasks::tensor_loader::mock_tensor_loader::make_wrapper;
 
     #[ctor::ctor]
@@ -184,17 +184,18 @@ mod tests {
             .with_list_motifs([
                 (find_motifs_run_id as RunId, Ok(vec![1usize]))
             ])
+                .with_list_group_labeled_resources_sets()
             .build()));
 
-        let loader_data: Arc<HashMap<u32, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>> = Arc::new(HashMap::from([
-            (resource_a.id(), make_wrapper(format!("{}_1", resource_a.file_stem()).leak(), &[1.0, 2.0])),
-            (resource_b.id(), make_wrapper(format!("{}_1", resource_b.file_stem()).leak(), &[3.0, 4.0])),
-        ]));
+
 
         let loader = Arc::new(
-            mock_tensor_loader::new()
-                .with_data(loader_data.as_ref().clone())
-                .build(),
+            mock_tensor_loader_2::build()
+                .with_run_cached([
+                    (resource_a.clone(), Tensor::from_slice(&[1.0, 2.0]).view((1,2))),
+                    (resource_b.clone(), Tensor::from_slice(&[3.0, 4.0]).view((1,2))),
+                ])
+                .finish(),
         );
 
         let motif_tensor = ThoTensor2::new(DataId::from(999u32), Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3)));
