@@ -109,6 +109,103 @@ where
     }
 }
 
+#[cfg(test)]
+pub(crate) mod mock_tensor_loader_2 {
+    use std::collections::HashMap;
+    use async_trait::async_trait;
+    use futures_util::future::{BoxFuture, Shared};
+    use mockall::mock;
+    use std::sync::Arc;
+    use caching_runner::common::cachable::{Cached, DevicesWrap};
+    use caching_runner::common::{MockRunCtx, OutId};
+    use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use thoosa_shared::{CopyToDevice, ThoosaError};
+    use thoosa_shared::resource::Resource;
+    use thoosa_shared::traits::{Named, SimpleId};
+    use thoosa_shared::traits::WithId;
+    use torch_runner::data::ThoTensor2;
+    use dashmap::DashMap;
+    use parking_lot::RwLock;
+    use tch::kind::FLOAT_CPU;
+    use tch::Tensor;
+    use tokio::runtime::Handle;
+    use tokio::task::block_in_place;
+    use caching_runner::global_ctx::GlobalCtx;
+    use crate::tasks::cross_dims::ChannelsData2;
+
+    mock! {
+        #[derive(Debug)]
+        pub TensorLoader {}
+
+        impl Stage for TensorLoader {
+            type Ctx = MockRunCtx;
+
+            type In<'a>  = Resource;
+
+            type Out = ThoTensor2<ChannelsData2, SimpleId>;
+        }
+
+        impl OutId for TensorLoader {
+            fn out_id<'a>(&self,input_id: &<<Self as Stage>::In<'a> as WithId>::ID,) -> <<MockTensorLoader as Stage>::Out as WithId>::ID;
+        }
+
+        #[async_trait]
+        impl AsyncStage for TensorLoader {}
+
+        #[async_trait]
+        impl Cached for TensorLoader {
+
+            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError>>>>;
+            async fn run_cached(
+                    self: Arc<Self>,
+                    input: Arc<DevicesWrap<<MockTensorLoader as Stage>::In<'static>>>,
+                    ctx: Arc<RwLock<<MockTensorLoader as Stage>::Ctx>>,
+                ) -> Result<Arc<DevicesWrap<<MockTensorLoader as Stage>::Out>>, ThoosaError>;
+        }
+    }
+
+    pub struct  MockTensorLoaderBuilder {
+        mock:MockTensorLoader
+    }
+
+    impl MockTensorLoaderBuilder {
+
+        pub fn with_data<H>(mut self, h: H) -> Self
+        where
+            H: IntoIterator<Item=(Resource, Tensor)> ,
+        {
+            let data_map: Arc<HashMap<Resource, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
+                let id = format!("{}", k.file_stem());
+                (k, Arc::new(DevicesWrap::wrap(ThoTensor2::new(id.into(), v), 0)))
+            }).collect());
+
+            self.mock.expect_run_cached().returning(move |input, ctx|{
+                Ok(Arc::clone(data_map
+                    .get(&input.id())
+                    .expect("mock loader data should be present")))
+            });
+
+            self
+        }
+
+        pub fn finish(self) -> MockTensorLoader{
+            self.mock
+        }
+    }
+
+    pub fn build()->MockTensorLoaderBuilder {
+        MockTensorLoaderBuilder {
+            mock: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_0(){
+        GlobalCtx::init_devices(2);
+        let mut mock = MockTensorLoader::new();
+        mock.expect_run_cached().return_const(Ok(Arc::new(DevicesWrap::wrap(ThoTensor2::<ChannelsData2, SimpleId>::new("".into(), Tensor::rand(&[3, 10], FLOAT_CPU)), 0))));
+    }
+}
 
 
 #[cfg(test)]
@@ -121,17 +218,20 @@ pub(crate) mod mock_tensor_loader {
     use std::marker::PhantomData;
     use std::pin::Pin;
     use std::sync::Arc;
+    use dashmap::DashMap;
+    use futures_util::future::{BoxFuture, Shared};
+    use mockall::mock;
     use tch::{Device, Tensor};
     use tch::Device::Cpu;
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
     use cached_derive::Cached;
-    use caching_runner::common::cachable::DevicesWrap;
+    use caching_runner::common::cachable::{Cached, DevicesWrap};
     use caching_runner::common::{MockRunCtx, OutId, RunCtx};
     use caching_runner::common::runnable::{AsyncStage, Stage};
     use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::{SimpleId, WithId};
+    use thoosa_shared::traits::{Data, SimpleId, WithId};
     use torch_runner::data::ThoTensor2;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::{mock_tensor_loader, LoadFn};
@@ -139,7 +239,7 @@ pub(crate) mod mock_tensor_loader {
 
     //TODO use mockall
     #[derive(Clone, Cached)]
-    pub struct MockTensorLoader<C>
+    pub struct DummyTensorLoader<C>
     where
         C: RunCtx + 'static,
     {
@@ -147,7 +247,7 @@ pub(crate) mod mock_tensor_loader {
         _ctx: PhantomData<C>,
     }
 
-    impl<C> OutId for MockTensorLoader<C>
+    impl<C> OutId for DummyTensorLoader<C>
     where
         C: RunCtx + 'static,
     {
@@ -156,7 +256,7 @@ pub(crate) mod mock_tensor_loader {
         }
     }
 
-    impl<C> std::fmt::Debug for MockTensorLoader<C>
+    impl<C> std::fmt::Debug for DummyTensorLoader<C>
     where
         C: RunCtx + 'static,
     {
@@ -164,7 +264,7 @@ pub(crate) mod mock_tensor_loader {
             f.debug_struct("MockCrossLoaderTensorSource").finish()
         }
     }
-    impl<C> Stage for MockTensorLoader<C>
+    impl<C> Stage for DummyTensorLoader<C>
     where
         C: RunCtx + 'static,
     {
@@ -177,7 +277,7 @@ pub(crate) mod mock_tensor_loader {
     }
 
     #[async_trait]
-    impl<C> AsyncStage for MockTensorLoader<C>
+    impl<C> AsyncStage for DummyTensorLoader<C>
     where
         C: RunCtx + 'static,
     {
@@ -191,12 +291,17 @@ pub(crate) mod mock_tensor_loader {
         }
     }
 
+
+
+
     pub struct MockTensorLoaderBuilder<C>
     where
         C: RunCtx + 'static,
     {
         load_fn: Option<Arc<LoadFn>>,
         _ctx: PhantomData<C>,
+
+        // mock:MockTensorLoader
     }
 
     #[cfg(test)]
@@ -224,6 +329,8 @@ pub(crate) mod mock_tensor_loader {
             H: Into<HashMap<u32, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>> + Send + Sync,
         {
             let data_map: Arc<HashMap<u32, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>, > = Arc::new(h.into());
+
+            // self.mock.ex
 
             self.with_load_fn(move |resource, _ctx| {
                 let map = Arc::clone(&data_map);
@@ -255,24 +362,26 @@ pub(crate) mod mock_tensor_loader {
             self
         }
 
-        pub fn build(self) -> MockTensorLoader<C> {
+        pub fn finish(self) -> DummyTensorLoader<C> {
+
             let load_fn = self
                 .load_fn
                 .expect("MockCrossLoaderTensorSourceBuilder requires load_fn to be set");
-            MockTensorLoader {
+            DummyTensorLoader {
                 load_fn,
                 _ctx: PhantomData,
             }
         }
     }
 
-    pub fn new<C>() -> MockTensorLoaderBuilder<C>
+    pub fn build<C>() -> MockTensorLoaderBuilder<C>
     where
         C: RunCtx + 'static,
     {
         MockTensorLoaderBuilder {
             load_fn: None,
             _ctx: PhantomData,
+            // mock: MockTensorLoader::new(),
         }
     }
 }

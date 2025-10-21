@@ -3256,6 +3256,14 @@ impl MockStoreBuilder {
         self
     }
 
+    pub fn with_list_group_labeled_resources_sets(mut self) -> Self {
+
+        self.store.expect_list_group_labeled_resources_sets()
+            .returning(move |group| {
+                Ok(vec![])
+            });
+        self
+    }
 
     pub fn build(self)->Box<dyn Store> {
         Box::new(self.store)

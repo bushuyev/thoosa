@@ -737,9 +737,9 @@ mod tests {
         ]));
 
         let loader = Arc::new(
-            mock_tensor_loader::new::<RunCtx2>()
+            mock_tensor_loader::build::<RunCtx2>()
                 .with_data(loader_data.as_ref().clone())
-                .build(),
+                .finish(),
         );
 
         let observations = Arc::new(Mutex::new(Vec::<Observation>::new()));
