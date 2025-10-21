@@ -1,4 +1,5 @@
 use crate::tasks::cross_dims::MotifSlices;
+use crate::tasks::motif_loader::MotifMeta;
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use caching_runner::adjusters::splits::OutputBuilder;
@@ -8,21 +9,20 @@ use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use thoosa_shared::traits::Adjustable;
+use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::average_euclidean_distance;
+use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::data_with_extra::DataWithExtra;
+use thoosa_shared::traits::Adjustable;
 use thoosa_shared::traits::{DataId, SimpleId, WithId};
-use thoosa_shared::ThoosaError;
 use torch_runner::data::ThoTensor2;
-use crate::tasks::motif_loader::{MotifMeta};
-use thoosa_dummy_data_derive::DummyData;
 
 pub struct AverageEuclideanDistanceStage<C>
 where
     C: RunCtx + 'static,
 {
-    id:SimpleId,
+    id: SimpleId,
     _ctx: PhantomData<C>,
 }
 
@@ -35,12 +35,7 @@ where
     }
 }
 
-impl<C> Adjustable for AverageEuclideanDistanceStage<C>
-where
-    C: RunCtx + 'static,
-{
-
-}
+impl<C> Adjustable for AverageEuclideanDistanceStage<C> where C: RunCtx + 'static {}
 
 impl<C> WithId for AverageEuclideanDistanceStage<C>
 where
@@ -74,10 +69,7 @@ pub struct AverageDistanceValue {
 
 impl AverageDistanceValue {
     pub fn new(id: SimpleId, value: f32) -> Self {
-        Self {
-            id,
-            value
-        }
+        Self { id, value }
     }
 
     pub fn value(&self) -> f32 {
@@ -103,7 +95,6 @@ where
     }
 }
 
-
 impl<C> Stage for AverageEuclideanDistanceStage<C>
 where
     C: RunCtx + 'static,
@@ -116,166 +107,90 @@ impl<C> SyncStage for AverageEuclideanDistanceStage<C>
 where
     C: RunCtx + 'static,
 {
-
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
-
-        input.data().run_inner(|t|{
-            Ok(AverageDistanceValue::new("todo".into(), average_euclidean_distance(t)?))
-        })
-
+        input.data().run_inner(|t| Ok(AverageDistanceValue::new("todo".into(), average_euclidean_distance(t)?)))
     }
 }
-
 
 #[cfg(test)]
 mod tests {
 
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn test_average_euclidean_distance(){
+    async fn test_average_euclidean_distance() {
         //TODO
     }
-
 }
 #[cfg(test)]
-pub mod mock_average_stage {
-    use std::collections::VecDeque;
-    use std::marker::PhantomData;
+pub mod mock_average_stage_2 {
+    use crate::tasks::average_euclidean_distance::AverageDistanceValue;
+    use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
+    use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
+    use crate::tasks::tensor_loader::mock_tensor_loader_2::MockTensorLoaderBuilder;
+    use async_trait::async_trait;
+    use caching_runner::common::cachable::{Cached, DevicesWrap};
+    use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use caching_runner::common::{MockRunCtx, OutId};
+    use caching_runner::global_ctx::GlobalCtx;
+    use dashmap::DashMap;
+    use futures_util::future::{BoxFuture, Shared};
+    use log::debug;
+    use mockall::mock;
+    use parking_lot::{Mutex, RwLock};
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use async_trait::async_trait;
-    use log::debug;
-    use parking_lot::{Mutex, RwLock};
-    use caching_runner::common::{OutId, RunCtx};
-    use caching_runner::common::runnable::{Stage, SyncStage};
-    use thoosa_shared::traits::Adjustable;
-    use thoosa_shared::{MyError, ThoosaError};
+    use tch::Tensor;
+    use tch::kind::FLOAT_CPU;
     use thoosa_shared::data_with_extra::DataWithExtra;
-    use thoosa_shared::traits::{DataId, SimpleId, WithId};
+    use thoosa_shared::resource::Resource;
+    use thoosa_shared::traits::{Adjustable, WithId};
+    use thoosa_shared::traits::{DataId, MonoMetrics, Named, SimpleId};
+    use thoosa_shared::{CopyToDevice, MyError, ThoosaError};
+    use tokio::runtime::Handle;
+    use tokio::task::block_in_place;
     use torch_runner::data::ThoTensor2;
-    use thoosa_shared::traits::MonoMetrics;
-    use crate::tasks::average_euclidean_distance::AverageDistanceValue;
-    use crate::tasks::cross_dims::MotifSlices;
-    use crate::tasks::motif_loader::{MotifMeta};
-    use crate::tasks::run_ctx_2::RunCtx2;
 
-   #[derive(Debug)]
-   pub struct MockAverageStage<C>
-   where
-        C: RunCtx + 'static,
-    {
-        id: SimpleId,
-        outputs: Mutex<VecDeque<f32>>,
-        fail_first: bool,
-        fail_while_dim0_gt: Option<i64>,
-        call_log: Arc<Mutex<Vec<i64>>>,
-        counter: AtomicUsize,
-        _ctx: PhantomData<C>,
-    }
+    mock! {
+        #[derive(Debug)]
+        pub AverageEuclideanDistanceStage {}
 
-   impl<C> MockAverageStage<C>
-   where
-        C: RunCtx + 'static,
-    {
-        fn next_value(&self) -> Option<f32> {
-            self.outputs.lock().pop_front()
+        impl Stage for AverageEuclideanDistanceStage {
+            type Ctx = MockRunCtx;
+            type In<'a> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>;
+            type Out = AverageDistanceValue;
         }
-    }
 
-    impl<C> Adjustable for MockAverageStage<C> where C: RunCtx + 'static {}
-
-   impl<C> WithId for MockAverageStage<C>
-   where
-        C: RunCtx + 'static,
-    {
-        type ID = SimpleId;
-
-        fn id(&self) -> &Self::ID {
-            &self.id
+        impl OutId for AverageEuclideanDistanceStage {
+            fn out_id<'a>(&self,input_id: &<<Self as Stage>::In<'a> as WithId>::ID,) -> <<MockAverageEuclideanDistanceStage as Stage>::Out as WithId>::ID;
         }
-    }
 
-   impl<C> OutId for MockAverageStage<C>
-   where
-        C: RunCtx + 'static,
-    {
-        fn out_id(
-            &self,
-            input_id: &<<Self as Stage>::In<'static> as WithId>::ID,
-        ) -> <Self::Out as WithId>::ID {
-            SimpleId::from(format!("{}_avg_ec_dist", input_id))
+
+        impl SyncStage for AverageEuclideanDistanceStage {
+            fn do_run<'f>(self: Arc<Self>, _input: &<Self as Stage>::In<'f>, _ctx: Arc<parking_lot::RwLock<<Self as Stage>::Ctx>>) -> Result<<Self as Stage>::Out, ThoosaError>;
         }
-    }
 
-   impl<C> Stage for MockAverageStage<C>
-   where
-        C: RunCtx + 'static,
-    {
-        type Ctx = C;
-        type In<'a> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>;
-        type Out = AverageDistanceValue;
-    }
-   impl<C> SyncStage for MockAverageStage<C>
-   where
-        C: RunCtx + 'static,
-    {
 
-        fn do_run<'a>(
-            self: Arc<Self>,
-            input: &Self::In<'a>,
-            ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError> {
-            let _ = ctx;
-            let call_idx = self.counter.fetch_add(1, Ordering::SeqCst);
-            let metrics: MonoMetrics<0, 2> = input.data()
-                .size()
-                .try_into()
-                .expect("MockAverageStage expects motif metrics");
+        impl Adjustable for AverageEuclideanDistanceStage {
 
-            debug!("MockAverageStage::do_run: metrics={metrics:?}");
-
-            let dim_0 = metrics.dim_0();
-            self.call_log.lock().push(dim_0);
-
-            if self.fail_first && call_idx == 0 {
-                return Err(MyError::OutOfMemory.into());
-            }
-
-            if let Some(threshold) = self.fail_while_dim0_gt {
-                if dim_0 > threshold {
-                    return Err(MyError::OutOfMemory.into());
-                }
-            }
-
-            let value = self
-                .next_value()
-                .expect("mock outputs exhausted");
-
-            Ok(AverageDistanceValue::new(
-                SimpleId::from(format!("partial_{call_idx}")),
-                value,
-            ))
         }
+
+
     }
 
-   pub struct MockAverageStageBuilder<C>
-   where
-        C: RunCtx + 'static,
-    {
-        outputs: Vec<f32>,
+    pub struct MockAverageEuclideanDistanceStageBuilder {
+        outputs: Vec<AverageDistanceValue>,
         fail_first: bool,
         fail_while_dim0_gt: Option<i64>,
         call_log: Option<Arc<Mutex<Vec<i64>>>>,
-        _ctx: PhantomData<C>,
+        counter: AtomicUsize,
+
+        mock: MockAverageEuclideanDistanceStage,
     }
 
-   impl<C> MockAverageStageBuilder<C>
-   where
-        C: RunCtx + 'static,
-    {
-        pub fn with_outputs<I>(mut self, outputs: I) -> Self
+    impl MockAverageEuclideanDistanceStageBuilder {
+        pub fn with_do_run<I>(mut self, outputs: I) -> Self
         where
-            I: Into<Vec<f32>>,
+            I: Into<Vec<AverageDistanceValue>>,
         {
             self.outputs = outputs.into();
             self
@@ -296,36 +211,47 @@ pub mod mock_average_stage {
             self
         }
 
-        pub fn finish(self) -> Arc<MockAverageStage<C>> {
-            let mut deque = VecDeque::new();
-            deque.extend(self.outputs);
-            let outputs = Mutex::new(deque);
-            let call_log = self
-                .call_log
-                .unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
+        pub fn finish(mut self) -> MockAverageEuclideanDistanceStage {
+            self.mock.expect_do_run().returning(move |input, _ctx| {
+                let call_idx = self.counter.fetch_add(1, Ordering::SeqCst);
+                let metrics: MonoMetrics<0, 2> = input.data().size().try_into().expect("MockAverageStage expects motif metrics");
 
-            Arc::new(MockAverageStage {
-                id: SimpleId("MockAverageStage"),
-                outputs,
-                fail_first: self.fail_first,
-                fail_while_dim0_gt: self.fail_while_dim0_gt,
-                call_log,
-                counter: AtomicUsize::new(0),
-                _ctx: PhantomData,
-            })
+                debug!("MockAverageStage::do_run: metrics={metrics:?}");
+
+                let dim_0 = metrics.dim_0();
+                if let Some(call_log) = self.call_log.as_ref() {
+                    call_log.lock().push(dim_0);
+                }
+
+                if self.fail_first && call_idx == 0 {
+                    return Err(MyError::OutOfMemory.into());
+                }
+
+                if let Some(threshold) = self.fail_while_dim0_gt {
+                    if dim_0 > threshold {
+                        return Err(MyError::OutOfMemory.into());
+                    }
+                }
+
+                let value = self.outputs.pop().expect("mock outputs exhausted");
+
+                Ok(value)
+            });
+
+            self.mock.expect_out_id().return_const(SimpleId("whatever"));
+
+            self.mock
         }
     }
 
-   pub fn builder<C>() -> MockAverageStageBuilder<C>
-   where
-        C: RunCtx + 'static,
-    {
-        MockAverageStageBuilder {
+    pub fn builder() -> MockAverageEuclideanDistanceStageBuilder {
+        MockAverageEuclideanDistanceStageBuilder {
             outputs: Vec::new(),
             fail_first: false,
             fail_while_dim0_gt: None,
             call_log: None,
-            _ctx: PhantomData,
+            counter: Default::default(),
+            mock: MockAverageEuclideanDistanceStage::new(),
         }
     }
 }

@@ -154,11 +154,10 @@ mod tests {
     use torch_runner::data::ThoTensor2;
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
-    use crate::tasks::motif_loader::{mock_motif_loader, MotifMeta};
+    use crate::tasks::motif_loader::{mock_motif_loader_2, MotifMeta};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::select_motifs::SelectMotifsStage;
-    use crate::tasks::tensor_loader::{mock_tensor_loader, mock_tensor_loader_2};
-    use crate::tasks::tensor_loader::mock_tensor_loader::make_wrapper;
+    use crate::tasks::tensor_loader::{ mock_tensor_loader_2};
 
     #[ctor::ctor]
     fn test_init() {
@@ -166,7 +165,7 @@ mod tests {
     }
 
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_two_labels() -> Result<(), ThoosaError>{
        GlobalCtx::init_devices(2);
 
@@ -197,12 +196,10 @@ mod tests {
                 .finish(),
         );
 
-        let motif_tensor = ThoTensor2::new(DataId::from(999u32), Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3)));
 
-        let motif_wrapper = Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_tensor, MotifMeta { channel: 0, run_id: 1 }), 0));
-
-
-        let motif_loader = mock_motif_loader::build().with_result(Arc::clone(&motif_wrapper)).finish();
+        let motif_loader = Arc::new(mock_motif_loader_2::build().with_run_cached([
+            (select_motifs_run_id, (MotifMeta { channel: 0, run_id: 1 }, Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3))))
+        ]).finish());
 
 
         let select_motifs_stage:Arc<SelectMotifsStage<_, _,MockRunCtx>> = Arc::new(SelectMotifsStage::new(
@@ -216,7 +213,7 @@ mod tests {
 
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Labeled::new("group".into())))), Arc::new(RwLock::new(mock_run_ctx::build().with_device_idx(0).with_cache_area(0).finish()))
+            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Labeled::new("group".into())))), Arc::new(RwLock::new(mock_run_ctx::default()))
         ).await?;
 
         Ok(())

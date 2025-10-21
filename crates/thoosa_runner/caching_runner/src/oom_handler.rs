@@ -806,7 +806,6 @@ mod tests {
     use thoosa_shared::{MyError, ThoosaError};
     use thoosa_shared::traits::Adjustable;
 
-    impl Adjustable for MockRunCtx {}
 
     #[tokio::test]
     async fn test_input_task_context_once() {

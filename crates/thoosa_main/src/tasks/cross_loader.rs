@@ -541,7 +541,7 @@ pub(crate) mod mock_cross_loader_receiver {
 mod tests {
     use super::mock_cross_loader_clc;
     use super::mock_cross_loader_receiver;
-    use crate::tasks::tensor_loader::{mock_tensor_loader, mock_tensor_loader_2};
+    use crate::tasks::tensor_loader::{mock_tensor_loader_2};
     use super::*;
     use crate::cli::Commands::FindMotifs;
     use crate::tasks::cross_batch_clc::{CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
@@ -574,7 +574,6 @@ mod tests {
     use tokio::task::yield_now;
     use tokio::time::sleep;
     use torch_runner::data::ThoTensor2;
-    use crate::tasks::tensor_loader::mock_tensor_loader::make_wrapper;
 
     #[ctor::ctor]
     fn init() {
@@ -729,12 +728,6 @@ mod tests {
         let resources = vec![resource_a.clone(), resource_b.clone()];
 
 
-        let loader_data: Arc<
-            HashMap<u32, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>,
-        > = Arc::new(HashMap::from([
-            (resource_a.id(), make_wrapper("tensor_a", &[1.0, 2.0])),
-            (resource_b.id(), make_wrapper("tensor_b", &[3.0, 4.0])),
-        ]));
 
         let loader = Arc::new(
             mock_tensor_loader_2::build()
