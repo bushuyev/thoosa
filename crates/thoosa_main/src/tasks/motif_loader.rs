@@ -198,6 +198,101 @@ where
 
 
 #[cfg(test)]
+pub mod mock_motif_loader_2 {
+    use std::collections::HashMap;
+    use async_trait::async_trait;
+    use futures_util::future::{BoxFuture, Shared};
+    use mockall::mock;
+    use std::sync::Arc;
+    use caching_runner::common::cachable::{Cached, DevicesWrap};
+    use caching_runner::common::{MockRunCtx, OutId};
+    use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use thoosa_shared::{CopyToDevice, ThoosaError};
+    use thoosa_shared::resource::Resource;
+    use thoosa_shared::traits::{DataId, Named, SimpleId};
+    use thoosa_shared::traits::WithId;
+    use torch_runner::data::ThoTensor2;
+    use dashmap::DashMap;
+    use parking_lot::RwLock;
+    use tch::kind::FLOAT_CPU;
+    use tch::Tensor;
+    use tokio::runtime::Handle;
+    use tokio::task::block_in_place;
+    use caching_runner::global_ctx::GlobalCtx;
+    use thoosa_shared::data_with_extra::DataWithExtra;
+    use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
+    use crate::tasks::motif_loader::MotifMeta;
+    use crate::tasks::tensor_loader::mock_tensor_loader_2::MockTensorLoaderBuilder;
+
+    mock! {
+        #[derive(Debug)]
+        pub MotifLoader {}
+
+
+        impl Stage for MotifLoader {
+            type Ctx = MockRunCtx;
+
+            type In<'a> = DataId;
+            type Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>;
+        }
+
+        impl OutId for MotifLoader {
+            fn out_id<'a>(&self,input_id: &<<Self as Stage>::In<'a> as WithId>::ID,) -> <<MockMotifLoader as Stage>::Out as WithId>::ID;
+        }
+
+        #[async_trait]
+        impl AsyncStage for MotifLoader {}
+
+        #[async_trait]
+        impl Cached for MotifLoader {
+
+            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>>>, ThoosaError>>>>;
+            async fn run_cached(
+                self: Arc<Self>,
+                input: Arc<DevicesWrap<<MockMotifLoader as Stage>::In<'static>>>,
+                ctx: Arc<RwLock<<MockMotifLoader as Stage>::Ctx>>,
+            ) -> Result<Arc<DevicesWrap<<MockMotifLoader as Stage>::Out>>, ThoosaError>;
+        }
+    }
+
+    pub struct MockMotifLoaderBuilder {
+        mock:MockMotifLoader
+    }
+
+    impl MockMotifLoaderBuilder {
+        pub fn with_run_cached<H>(mut self, h: H) -> Self
+        where
+            H: IntoIterator<Item=(u32, (MotifMeta, Tensor))>,
+        {
+            let data_map: Arc<HashMap<DataId, Arc<DevicesWrap<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
+                (k.into(), Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor2::new(k.into(), v.1), v.0), 0)))
+            }).collect());
+
+            self.mock.expect_run_cached().returning(move |input, ctx| {
+                block_in_place(|| {
+                    Handle::current().block_on(async {
+                        input.with_data_ref(0, None, |v| {
+                            Ok(Arc::clone(data_map
+                                .get(v)
+                                .expect("mock loader data should be present")))
+                        }).await
+                    })
+                })
+            });
+
+            self
+        }
+
+        pub fn build()->MockMotifLoaderBuilder {
+            MockMotifLoaderBuilder {
+                mock: Default::default(),
+            }
+        }
+    }
+}
+
+
+#[cfg(test)]
 pub mod mock_motif_loader {
     use std::fmt;
     use std::marker::PhantomData;

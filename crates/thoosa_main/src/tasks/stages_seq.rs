@@ -138,15 +138,11 @@ where
 #[derive(cached_derive::Cached)]//TODO delegate to B's cache
 pub enum StageChainOption<A, B>
 where
-    A: AsyncStage + Send + Sync + Debug + 'static,
+    A: Cached + OutId + Send + Sync + Debug + 'static,
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> Cached<
-        In<'i>=<A as Stage>::In<'i>,
-        Out=<A as Stage>::Out,
-        Ctx=<A as Stage>::Ctx,
-    > + Send + Sync + Debug + 'static,
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx >  + Send + Sync + Debug + 'static,
 {
     Single(Arc<A>),
     Chained(Arc<B>),
@@ -154,15 +150,11 @@ where
 
 impl<A, B> Debug for StageChainOption<A, B>
 where
-    A: AsyncStage + Send + Sync + Debug + 'static,
+    A: Cached + OutId + Send + Sync + Debug + 'static,
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> Cached<
-        In<'i>=<A as Stage>::In<'i>,
-        Out=<A as Stage>::Out,
-        Ctx=<A as Stage>::Ctx,
-    > + Send + Sync + Debug + 'static,
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx >  + Send + Sync + Debug + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -180,15 +172,11 @@ where
 
 impl<A, B> Stage for StageChainOption<A, B>
 where
-    A: AsyncStage + Send + Sync + Debug + 'static,
+    A: Cached + OutId + Send + Sync + Debug + 'static,
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> Cached<
-        In<'i>=<A as Stage>::In<'i>,
-        Out=<A as Stage>::Out,
-        Ctx=<A as Stage>::Ctx,
-    > + Send + Sync + Debug + 'static,
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx >  + Send + Sync + Debug + 'static,
 {
     type Ctx = <A as Stage>::Ctx;
     type In<'a> = <A as Stage>::In<'a>
@@ -200,15 +188,11 @@ where
 #[async_trait]
 impl<A, B> AsyncStage for StageChainOption<A, B>
 where
-    A: AsyncStage + Send + Sync + Debug + 'static,
+    A: Cached + OutId + Send + Sync + Debug + 'static,
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> Cached<
-        In<'i>=<A as Stage>::In<'i>,
-        Out=<A as Stage>::Out,
-        Ctx=<A as Stage>::Ctx,
-    > + Send + Sync + Debug + 'static,
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx >  + Send + Sync + Debug + 'static,
 {
     async fn run(
         self: Arc<Self>,
@@ -221,6 +205,26 @@ where
         }
     }
 }
+
+impl<A, B> OutId for StageChainOption<A, B>
+where
+    A: Cached + OutId + Send + Sync + Debug + 'static,
+    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
+    <A as Stage>::Out: Data + WithId + Send + Sync,
+
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx >  + Send + Sync + Debug + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        match &*self {
+            StageChainOption::Single(stage) =>  stage.out_id(input_id),
+            StageChainOption::Chained(stage) => {
+                unimplemented!()
+                // stage.out_id(input_id)
+            },
+        }
+    }
+}
+
 
 // #[async_trait]
 // impl<A, B> Cached for StageChainOption<A, B>

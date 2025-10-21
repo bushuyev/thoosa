@@ -50,7 +50,7 @@ pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>
 struct FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + 'static,
+    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C>  + OutId + 'static,
     C: RunCtx + 'static,
 {
     run_config: FindMotifsRunConfig,
@@ -67,7 +67,7 @@ where
 impl<RC, L, C> FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + 'static,
+    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C>  + OutId + 'static,
     C: RunCtx + 'static,
 {
     pub fn new(
