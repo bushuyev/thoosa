@@ -231,7 +231,7 @@ where
             info!("on i_0={i_0} resource_0={resource_0:?}");
 
             let t_0 = Arc::clone(&self.loader)
-                .run(Arc::new(DevicesWrap::wrap_cpu(resource_0.as_ref().clone())), Arc::clone(&ctx))
+                .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_0.as_ref().clone())), Arc::clone(&ctx))
                 .await?;
 
             t_0_batch_len += t_0.size().dim_1();
@@ -250,7 +250,7 @@ where
                 //skipping lower triangle
 
                 let t_1 = Arc::clone(&self.loader)
-                    .run(Arc::new(DevicesWrap::wrap_cpu(resource_1.as_ref().clone())), Arc::clone(&ctx))
+                    .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_1.as_ref().clone())), Arc::clone(&ctx))
                     .await?;
 
                 t_1_batch_len += t_1.size().dim_1();
