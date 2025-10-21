@@ -5,6 +5,7 @@ use log::trace;
 use mockall::automock;
 use parking_lot::RwLock;
 use std::cmp::Ordering;
+use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
@@ -45,13 +46,13 @@ pub struct Resource {
 }
 
 impl Resource {
-    pub fn new(id: u32, import_id: u32, file_stem: String, length: u32) -> Self {
+    pub fn new<I:Into<String>+Display>(id: u32, import_id: u32, file_stem: I, length: u32) -> Self {
         trace!("Resource::new: id={id} import_id={import_id} file_stem={file_stem}");
         let applied_id = format!("{}_{}", id, import_id).into();
         Self {
             id,
             import_id,
-            file_stem,
+            file_stem:file_stem.into(),
             length,
             applied_id,
         }

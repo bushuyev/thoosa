@@ -47,9 +47,9 @@ pub trait RunCtx: PermitsCtx {
     fn cache_area(&self) -> u64;
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) mod mock_run_ctx {
-    use super::{DropIf, PermitsCtx, RunCtx};
+#[cfg_attr(test, allow(dead_code))]
+pub mod mock_run_ctx {
+    use super::{mock_run_ctx, DropIf, PermitsCtx, RunCtx};
     use crate::permits::{NumPermits, RunnerPerm};
     use futures_util::future::BoxFuture;
     use mockall::mock;
@@ -91,6 +91,12 @@ pub(crate) mod mock_run_ctx {
             self
         }
 
+        pub fn with_cache_area(mut self, out: u64) -> Self {
+            self.mock.expect_cache_area().return_const(out);
+            self
+        }
+
+
         pub fn with_acquired_permits(mut self, out: NumPermits) -> Self {
             self.mock.expect_acquired_permits().return_const(out);
             self
@@ -113,6 +119,10 @@ pub(crate) mod mock_run_ctx {
         let mut mock = super::MockRunCtx::new();
         mock.expect_name().return_const("MockRunCtx");
         MockRunCtxBuilder { mock }
+    }
+
+    pub fn default() -> MockRunCtx {
+        mock_run_ctx::build().with_device_idx(0).with_cache_area(0).finish()
     }
 }
 

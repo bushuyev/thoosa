@@ -818,7 +818,7 @@ mod motifs_tests {
         let mut slices_map: HashMap<Resource, Vec<MotifSlice>> = HashMap::new();
 
         slices_map.insert(
-            Resource::new(1, 1, "111".into(), 0),
+            Resource::new(1, 1, "111", 0),
             vec![
                 MotifSlice::new(10, 100, 0),
                 MotifSlice::new(11, 301, 1),
@@ -828,7 +828,7 @@ mod motifs_tests {
         );
 
         slices_map.insert(
-            Resource::new(2, 2, "222".into(), 0),
+            Resource::new(2, 2, "222", 0),
             vec![
                 MotifSlice::new(10, 200, 0),
                 MotifSlice::new(11, 401, 1),
@@ -929,7 +929,7 @@ mod motifs_tests {
         let mut slices_map: HashMap<Resource, Vec<MotifSlice>> = HashMap::new();
 
         slices_map.insert(
-            Resource::new(1, 1, "111".into(), 0),
+            Resource::new(1, 1, "111", 0),
             vec![
                 MotifSlice::new(10, 100, 0),
                 MotifSlice::new(11, 301, 1),
@@ -939,7 +939,7 @@ mod motifs_tests {
         );
 
         slices_map.insert(
-            Resource::new(2, 2, "222".into(), 0),
+            Resource::new(2, 2, "222", 0),
             vec![
                 MotifSlice::new(10, 200, 0),
                 MotifSlice::new(11, 401, 1),
@@ -1094,7 +1094,7 @@ mod motifs_tests {
             &FindMotifsRunConfig::new(None, 1, 2, None, None)
                 .to_applicable(&mock_ws_simp(None, 1, 1000, 100), Cpu),
             vec![TensorIdSliceIdx(1, 2)],
-            HashMap::from([(1, Resource::new(1, 1, "aaa".to_string(), 100))]),
+            HashMap::from([(1, Resource::new(1, 1, "aaa", 100))]),
             &executor_rc,
         );
 
@@ -1131,7 +1131,7 @@ mod motifs_tests {
             &FindMotifsRunConfig::new(None, 1, 5000, None, None)
                 .to_applicable(&mock_ws_simp(None, 1, 1000, 100), Cpu),
             vec![TensorIdSliceIdx(123, 2)],
-            HashMap::from([(123, Resource::new(123, 1, "aaa".to_string(), 100))]),
+            HashMap::from([(123, Resource::new(123, 1, "aaa", 100))]),
             &executor_rc,
         );
 
