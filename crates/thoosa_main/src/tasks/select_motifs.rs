@@ -137,7 +137,7 @@ mod tests {
     use parking_lot::RwLock;
     use tch::Tensor;
     use caching_runner::common::cachable::DevicesWrap;
-    use caching_runner::common::MockRunCtx;
+    use caching_runner::common::{mock_run_ctx, MockRunCtx};
     use caching_runner::common::runnable::AsyncStage;
     use caching_runner::global_ctx;
     use caching_runner::global_ctx::{GlobalCtx};
@@ -188,7 +188,6 @@ mod tests {
             .build()));
 
 
-
         let loader = Arc::new(
             mock_tensor_loader_2::build()
                 .with_run_cached([
@@ -217,7 +216,7 @@ mod tests {
 
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Labeled::new("group".into())))), Arc::new(RwLock::new(MockRunCtx::new()))
+            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Labeled::new("group".into())))), Arc::new(RwLock::new(mock_run_ctx::build().with_device_idx(0).with_cache_area(0).finish()))
         ).await?;
 
         Ok(())

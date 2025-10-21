@@ -339,7 +339,8 @@ mod tests {
     use log::LevelFilter::Trace;
     use log::{set_max_level, trace};
     use parking_lot::RwLock;
-    use caching_runner::common::RunCtx;
+    use tch::Tensor;
+    use caching_runner::common::{mock_run_ctx, RunCtx};
     use caching_runner::common::cachable::{Cached, DevicesWrap};
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
@@ -351,7 +352,7 @@ mod tests {
     use thoosa_store::MockStoreBuilder;
     use crate::tasks::motif_loader::MotifLoader;
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::mock_tensor_loader;
+    use crate::tasks::tensor_loader::{mock_tensor_loader, mock_tensor_loader_2};
     use crate::tasks::tensor_loader::mock_tensor_loader::{make_wrapper_t, DummyTensorLoader};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -367,8 +368,8 @@ mod tests {
                 TensorIdSliceIdx(1, 200),
                 TensorIdSliceIdx(2, 100)
             ], HashMap::from([
-                (1, Resource::new(1, 1, "aaa".into(), 1000)),
-                (2, Resource::new(2, 1, "bbb".into(), 1000))
+                (1, Resource::new(1, 1, "aaa", 1000)),
+                (2, Resource::new(2, 1, "bbb", 1000))
             ]))))
             .with_list_run_config_values(
                 run_id,
@@ -376,20 +377,29 @@ mod tests {
             )
             .build();
 
-        let motif_loader = Arc::new(MotifLoader::<DummyTensorLoader<RunCtx2>, RunCtx2>::new(
+        let motif_loader = Arc::new(MotifLoader::new(
             Arc::new(RwLock::new(store)),
 
+            // Arc::new(
+            //     mock_tensor_loader::build::<RunCtx2>()
+            //     .with_data([
+            //         (1, make_wrapper_t("tensor_a", lin_t(1000).view((1,-1)))),
+            //         (2, make_wrapper_t("tensor_b", lin_t(1000).view((1,-1)))),
+            //     ])
+            //     .finish()
+            // )
+
             Arc::new(
-                mock_tensor_loader::build::<RunCtx2>()
-                .with_data([
-                    (1, make_wrapper_t("tensor_a", lin_t(1000).view((1,-1)))),
-                    (2, make_wrapper_t("tensor_b", lin_t(1000).view((1,-1)))),
-                ])
-                .finish()
+                mock_tensor_loader_2::build()
+                    .with_run_cached([
+                        (Resource::new(0, 0, "tensor_a", 1000), lin_t(1000).view((1,-1))),
+                        (Resource::new(0, 0, "tensor_b", 1000), lin_t(1000).view((1,-1)))
+                    ])
+                    .finish(),
             )
         ));
 
-        let ctx = Arc::new(RwLock::new(RunCtx2::new(0, 0, "test")));
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default()));
 
         let num_devices = GlobalCtx::global().device_count();
         let cache_area = ctx.read().cache_area();

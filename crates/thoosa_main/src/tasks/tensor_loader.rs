@@ -199,12 +199,6 @@ pub(crate) mod mock_tensor_loader_2 {
         }
     }
 
-    #[tokio::test]
-    async fn test_0(){
-        GlobalCtx::init_devices(2);
-        let mut mock = MockTensorLoader::new();
-        mock.expect_run_cached().return_const(Ok(Arc::new(DevicesWrap::wrap(ThoTensor2::<ChannelsData2, SimpleId>::new("".into(), Tensor::rand(&[3, 10], FLOAT_CPU)), 0))));
-    }
 }
 
 
@@ -422,7 +416,7 @@ mod tests {
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
 
         let loaded = loader
-            .run_cached(Arc::new(DevicesWrap::wrap(Resource::new(0, 0, "aaa".to_string(), 20), 0)), ctx)
+            .run_cached(Arc::new(DevicesWrap::wrap(Resource::new(0, 0, "aaa", 20), 0)), ctx)
             .await
             .map_err(|e| ThoosaError::new("zzz"))?;
 
