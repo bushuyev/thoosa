@@ -15,9 +15,7 @@ use crate::global_ctx::GlobalCtx;
 pub trait Stage: Debug {
     type Ctx: RunCtx;
 
-    type In<'a>: Input
-    where
-        Self: 'a;
+    type In<'a>: Input;
 
     type Out: Output;
 
