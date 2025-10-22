@@ -78,7 +78,8 @@ where
 #[derive(Debug, Clone)]
 pub struct MotifMeta {
     pub channel:i64,
-    pub run_id: RunId
+    pub run_id: RunId,
+    pub window:u32
 }
 
 impl<L, C> Stage for MotifLoader<L, C>
@@ -151,7 +152,7 @@ where
             let resource_cache = Arc::new(DevicesWrap::wrap_cpu(resource));
 
             let raw_tensor = Arc::clone(&configurable_loader)
-                .run(resource_cache, Arc::clone(&ctx))
+                .run_cached(resource_cache, Arc::clone(&ctx))
                 .await?;
 
             let selector = ChannelsDataVec {
@@ -179,13 +180,12 @@ where
             .map(|tt| tt.t())
             .collect();
 
-
         let output = DataWithExtra::new(
             ThoTensor2::new(
                 motif_id,
                 Tensor::cat(tensors.as_slice(), 0),
             ),
-            MotifMeta{channel, run_id: find_motifs_run_id }
+            MotifMeta{channel, run_id: find_motifs_run_id, window },
         );
 
         Ok(Arc::new(DevicesWrap::wrap(
@@ -222,7 +222,7 @@ pub mod mock_motif_loader_2 {
     use thoosa_shared::data_with_extra::DataWithExtra;
     use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
     use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
-    use crate::tasks::tensor_loader::mock_tensor_loader_2::MockTensorLoaderBuilder;
+    use crate::tasks::tensor_loader::mock_tensor_loader::MockTensorLoaderBuilder;
 
     mock! {
         #[derive(Debug)]
@@ -274,7 +274,7 @@ pub mod mock_motif_loader_2 {
                         input.with_data_ref(0, None, |v| {
                             Ok(Arc::clone(data_map
                                 .get(v)
-                                .expect("mock loader data should be present")))
+                                .expect(&format!("no mock data for {input:? } in MockMotifLoader"))))
                         }).await
                     })
                 })
@@ -316,7 +316,7 @@ mod tests {
     use thoosa_store::MockStoreBuilder;
     use crate::tasks::motif_loader::MotifLoader;
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::{mock_tensor_loader_2};
+    use crate::tasks::tensor_loader::{mock_tensor_loader};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn load_motifs() -> Result<(), ThoosaError> {
@@ -346,7 +346,7 @@ mod tests {
             Arc::new(RwLock::new(store)),
 
             Arc::new(
-                mock_tensor_loader_2::build()
+                mock_tensor_loader::build()
                     .with_run_cached([
                         (resource_a, lin_t(1000).view((1,-1))),
                         (resource_b, lin_t(1000).view((1,-1)))

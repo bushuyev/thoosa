@@ -27,13 +27,16 @@ cudarc.workspace = true
 libloading.workspace = true
 serde.workspace = true
 serde_json5.workspace = true
+ctor.workspace = true
+chrono.workspace = true
+rayon.workspace = true
+#rand_distr.workspace = true
 
-sci-rs = "0.3.8"
-plotters = { version = "0.3.5"}
-anyhow = "1.0.79"
-ctor = "0.2.6"
-chrono = { version = "0.4.32" }
-rayon = "1.8.1"
+sci-rs = "0"
+plotters = { version = "0"}
+
+
+
 
 thoosa_run_config_args = {path = "../thoosa_macros/thoosa_run_config_args" }
 thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args_derive" }

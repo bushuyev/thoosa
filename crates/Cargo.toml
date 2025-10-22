@@ -82,5 +82,7 @@ tracing = "0"
 tracing-subscriber = { version = "0", features = ["fmt", "env-filter"] }
 console-subscriber = "0"
 uuid = { version = "1.10", features = ["v4", "fast-rng"] }
+statrs = "0"
+
 [profile.test]
 opt-level = 0

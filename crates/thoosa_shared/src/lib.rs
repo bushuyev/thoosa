@@ -31,6 +31,7 @@ use std::{fmt, fs};
 use async_trait::async_trait;
 use ambassador::delegatable_trait;
 use mockall::automock;
+use time_series_generator::{generate_sine_wave, generate_triangle_wave};
 
 pub mod repeat_iter;
 pub mod resource;
@@ -546,6 +547,22 @@ pub fn pulse_v(μ: f32, σ: f32, n: i64, f: f32) -> Vec<f32> {
         .map(|(i, x)| (f * 2. * PI * i as f32 / n as f32).sin() * x)
         .collect::<Vec<_>>()
 }
+
+pub enum MotifKind {
+    Triangle,
+    Sin,
+    Pulse
+}
+
+
+pub fn gen_motif(motif_len: usize, motif_kind: &MotifKind) -> Vec<f32> {
+    match motif_kind {
+        MotifKind::Triangle => generate_triangle_wave(motif_len).into_iter().map(|v| v as f32).collect(),
+        MotifKind::Sin => generate_sine_wave::<f32>(motif_len),
+        MotifKind::Pulse => pulse_v(motif_len as f32 / 2., motif_len as f32 / 4., motif_len as i64, 10.)
+    }
+}
+
 
 pub fn random_v(n: u32, amplitude: f32, max_slope: f32) -> Vec<f32> {
     let mut signal = Vec::with_capacity(n as usize);

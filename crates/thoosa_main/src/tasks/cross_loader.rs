@@ -34,10 +34,24 @@ pub struct CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<
+        In<'i> = Resource,
+        Out = ThoTensor2<ChannelsData2, SimpleId>,
+        Ctx=C
+    > + OutId + 'static,
+
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<
+        In<'i> = CrossInput<'i, &'i Arc<Resource>>,
+        Out = CrossUnfoldClcOutput<R>,
+        Ctx=C
+    > + Send + Sync + 'static,
+
+    RSV: for<'i> SyncStage<
+        In<'i> = CrossUnfoldClcOutput<R>,
+        Out = (),
+        Ctx=C
+    > + Stage<Ctx=C> + Send + Sync + 'static,
     C: RunCtx + 'static,
 {
     loader: Arc<L>,
@@ -216,10 +230,7 @@ where
                 .collect::<Vec<_>>())
         }).await?;
 
-        debug!(
-            "CrossLoader::run  max_batch={max_batch} resources={}",
-            resources.len()
-        );
+        debug!("CrossLoader::run  max_batch={max_batch} resources={}",resources.len());
 
         let mut t_0_batch: Vec<_> = vec![];
         let mut t_0_batch_resources: Vec<_> = vec![];
@@ -541,7 +552,7 @@ pub(crate) mod mock_cross_loader_receiver {
 mod tests {
     use super::mock_cross_loader_clc;
     use super::mock_cross_loader_receiver;
-    use crate::tasks::tensor_loader::{mock_tensor_loader_2};
+    use crate::tasks::tensor_loader::{mock_tensor_loader};
     use super::*;
     use crate::cli::Commands::FindMotifs;
     use crate::tasks::cross_batch_clc::{CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
@@ -730,7 +741,7 @@ mod tests {
 
 
         let loader = Arc::new(
-            mock_tensor_loader_2::build()
+            mock_tensor_loader::build()
                 .with_run_cached([
                     (resource_a.clone(), Tensor::from_slice(&[1.0, 2.0]).view((1,2))),
                     (resource_b.clone(), Tensor::from_slice(&[3.0, 4.0]).view((1,2))),
