@@ -110,7 +110,7 @@ where
 }
 
 #[cfg(test)]
-pub(crate) mod mock_tensor_loader_2 {
+pub(crate) mod mock_tensor_loader {
     use std::collections::HashMap;
     use async_trait::async_trait;
     use futures_util::future::{BoxFuture, Shared};
@@ -170,6 +170,13 @@ pub(crate) mod mock_tensor_loader_2 {
 
     impl MockTensorLoaderBuilder {
 
+        pub fn with_out_id(mut self)->Self {
+            self.mock.expect_out_id().returning(|input_id|{
+                SimpleId::from(format!("loaded_{}", input_id.id()))
+            });
+            self
+        }
+
         pub fn with_run_cached<H>(mut self, h: H) -> Self
         where
             H: IntoIterator<Item=(Resource, Tensor)> ,
@@ -182,7 +189,7 @@ pub(crate) mod mock_tensor_loader_2 {
             self.mock.expect_run_cached().returning(move |input, ctx|{
                 Ok(Arc::clone(data_map
                     .get(&input.id())
-                    .expect("mock loader data should be present")))
+                    .expect(&format!("no mock data for {input:?} in MockTensorLoader"))))
             });
 
             self

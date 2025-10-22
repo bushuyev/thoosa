@@ -3355,8 +3355,16 @@ mod motif_find_tests {
         let sig_1 = join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));
         let sig_2 = join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
 
+        let x = lin_t(n as u32);
+        let sigs_dir = Path::new("/tmp/random_sigs");
+        draw_function_plot(
+            &sigs_dir.join(&format!("sig_{}.png", cdt_for_dir())),
+            (2000, 1000),
+            &vec_f32_from(&x).into_iter().zip(sig_0.clone()).collect::<Vec<(f32, f32)>>(),
+            &[], //ivals.into_iter().map(|v|v.into()).collect::<Vec<(f32, f32)>>(),
+            "sig"
+        ).unwrap();
         /*
-        let x = lin_t(n);
         plot_series(
              vec![
                  (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),

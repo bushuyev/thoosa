@@ -201,9 +201,11 @@ where
         if batch_0_tensors.is_empty() {
             return Err("batch 0 is empty".into());
         }
+        assert_eq!(batch_0_sizes.len(), input.resources_0.len());
 
 
         let batch_0_t = Tensor::concat(batch_0_tensors.as_slice(), 1);
+
 
         let mut batch_1_sizes = vec![];
 
@@ -232,8 +234,6 @@ where
         let batch_1_t = Tensor::concat(batch_1_tensors.as_slice(), 1);
 
 
-
-        assert_eq!(batch_0_sizes.len(), input.resources_0.len());
         assert_eq!(batch_1_sizes.len(), input.resources_1.len());
 
         let resource_ids_sizes_0: Vec<_> = input

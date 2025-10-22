@@ -98,7 +98,7 @@ pub fn plot_series<S>(
 where
     S: Into<ShapeStyle> + Clone,
 {
-    _plot_series_with_points(name_x_y_vec, caption, w_h, path, None)
+    _plot_series(name_x_y_vec, caption, w_h, path, None, None)
 }
 
 pub fn plot_series_with_points<S>(
@@ -111,15 +111,30 @@ pub fn plot_series_with_points<S>(
 where
     S: Into<ShapeStyle> + Clone,
 {
-    _plot_series_with_points(name_x_y_vec, caption, w_h, path, Some(points))
+    _plot_series(name_x_y_vec, caption, w_h, path, Some(points), None)
 }
 
-fn _plot_series_with_points<S>(
+pub fn plot_series_with_lanes<S>(
+    name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
+    caption: &str,
+    w_h: (u32, u32),
+    path: &impl AsRef<std::path::Path>,
+    lanes: &[(i32, i32)],
+) -> Result<(), ThoosaError>
+where
+    S: Into<ShapeStyle> + Clone,
+{
+    _plot_series(name_x_y_vec, caption, w_h, path, None, Some(lanes))
+}
+
+
+fn _plot_series<S>(
     name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
     caption: &str,
     w_h: (u32, u32),
     path: &impl AsRef<std::path::Path>,
     points: Option<&Vec<(f32, f32)>>,
+    lanes: Option<&[(i32, i32)]>,
 ) -> Result<(), ThoosaError>
 where
     S: Into<ShapeStyle> + Clone,
@@ -152,6 +167,10 @@ where
             },
         );
 
+    let scale_x = w_h.0 as f32 / (max_x - min_x);
+
+    debug!("scale_x={scale_x:?} w_h={w_h:?} max_x={max_x} min_x={min_x}");
+
     let root = BitMapBackend::new(path, w_h).into_drawing_area();
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
@@ -176,18 +195,40 @@ where
         .border_style(&BLACK)
         .draw()?;
 
-    // let motif_area = |x: i32, dx: i32| {
-    //     return EmptyElement::at((x as f32, 10.))
-    //         + Rectangle::new([(0, 0), ((dx as f32 *0.963) as i32, w_h.1 as i32 - 80)], &BLUE)//TODO 963?
-    //         + Text::new(
-    //         format!("({:.2},{:.2})", x, dx),
-    //         (5, 5),
-    //         ("sans-serif", 15.0).into_font(),
-    //     );
-    // };
-    //
-    //
-    // chart.plotting_area().draw(&motif_area(100, 100)).expect("Drawing Failure");
+    // if let Some(lanes) = lanes {
+    //     for lane in lanes {
+    //         let motif_area = |x_0: i32, x_1: i32| {
+    //             return EmptyElement::at((x_0 as f32 * scale_x, 0.))
+    //                 + Rectangle::new(
+    //                 [
+    //                      (0, 0),
+    //                      (((x_1-x_0) as f32 * scale_x) as i32, w_h.1 as i32 )
+    //                  ],
+    //                 &BLUE)
+    //                 + Text::new(format!("({:.2},{:.2})", x_0, x_1), (5, 5), ("sans-serif", 15.0).into_font(),
+    //             );
+    //         };
+    //         chart.plotting_area().draw(&motif_area(lane.0, lane.1)).expect("Drawing Failure");
+    //     }
+    // }
+
+
+
+    let motif_area = |x_0: i32, x_1: i32| {
+        return EmptyElement::at((1000., 0.))
+            + Rectangle::new(
+            [
+                (0, 0),
+                (1000, w_h.1 as i32 )
+            ],
+            &BLUE)
+            + Text::new(format!("({:.2},{:.2})", x_0, x_1), (5, 5), ("sans-serif", 15.0).into_font(),
+        );
+    };
+    chart.plotting_area().draw(&motif_area(1000, 2000)).expect("Drawing Failure");
+
+
+
 
     if let Some(points) = points {
         for point in points {
@@ -207,6 +248,85 @@ where
 
     Ok(())
 }
+
+pub fn draw_function_plot(
+    output_path: &impl AsRef<std::path::Path>,
+    w_h: (u32, u32),
+    xy: &[(f32, f32)],
+    bands: &[(f32, f32)],
+    title: &str,
+) -> Result<(), ThoosaError> {
+    let (width, height) = w_h;
+
+    // ----- Determine ranges (include bands in X range) -----
+    let mut xs = xy.iter().map(|(x, _)| *x).collect::<Vec<_>>();
+    xs.extend(bands.iter().flat_map(|(a, b)| [*a, *b]));
+
+    let (mut xmin, mut xmax) = match (xs.iter().cloned().fold(f32::INFINITY, f32::min),
+                                      xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)) {
+        (a, b) if a.is_finite() && b.is_finite() && a < b => (a, b),
+        _ => (0.0, 1.0),
+    };
+
+    let (mut ymin, mut ymax) = match (
+        xy.iter().map(|&(_, y)| y).fold(f32::INFINITY, f32::min),
+        xy.iter().map(|&(_, y)| y).fold(f32::NEG_INFINITY, f32::max),
+    ) {
+        (a, b) if a.is_finite() && b.is_finite() && a < b => (a, b),
+        _ => (-1.0, 1.0),
+    };
+
+    // Add a little padding so the plot isn't glued to edges
+    let pad_x = ((xmax - xmin).abs()).max(1e-6) * 0.05;
+    let pad_y = ((ymax - ymin).abs()).max(1e-6) * 0.10;
+    xmin -= pad_x; xmax += pad_x;
+    ymin -= pad_y; ymax += pad_y;
+
+    // ----- Backend & chart -----
+    let root = BitMapBackend::new(output_path.as_ref(), (width, height)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    let mut chart = ChartBuilder::on(&root)
+        .caption(title, ("sans-serif", 20))
+        .margin(10)
+        .x_label_area_size(35)
+        .y_label_area_size(45)
+        .build_cartesian_2d(xmin..xmax, ymin..ymax)?;
+
+    chart.configure_mesh()
+        .x_labels(20)
+        .y_labels(10)
+        .light_line_style(&TRANSPARENT) // grid only on major lines
+        .draw()?;
+
+    // ----- Draw vertical highlight bands behind the line -----
+    let plot_area = chart.plotting_area();
+    for &(x0, x1) in bands {
+        let (a, b) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
+        // Slightly translucent orange fill
+        plot_area.draw(&Rectangle::new(
+            [(a, ymin), (b, ymax)],
+            RGBAColor(255, 165, 0, 0.20).filled(),
+        ))?;
+    }
+
+    // ----- Draw the function line -----
+    // Filter out NaNs just in case.
+    let clean = xy.iter().copied().filter(|(x, y)| x.is_finite() && y.is_finite());
+    chart
+        .draw_series(LineSeries::new(clean, &BLUE))?
+        .label("f(x)")
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
+
+    chart.configure_series_labels()
+        .background_style(&WHITE.mix(0.8))
+        .border_style(&BLACK)
+        .draw()?;
+
+    root.present()?;
+    Ok(())
+}
+
 
 pub fn plot_3d() { //TODO
     // let root = BitMapBackend::gif(crate::bfgs::opt_tests::OUT_FILE_NAME, (600, 400), 100)?.into_drawing_area();

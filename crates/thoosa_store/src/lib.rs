@@ -326,19 +326,24 @@ mock! {
             &self,
             file_stems: &'a [&'a str],
         ) -> Result<Vec<Resource>, ThoosaError>;
+
         fn list_resource_set_resources_by_descr(
             &self,
             descr: &str,
         ) -> Result<Vec<Resource>, ThoosaError>;
+
         fn list_resource_set_group_sets(
             &self,
             group_descr: &str,
         ) -> Result<Vec<(usize, String)>, ThoosaError>;
+
         fn list_group_labeled_resources_sets(
             &self,
             group_decr: &str,
         ) -> Result<Vec<(String, String)>, ThoosaError>;
+
         fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoosaError>;
+
         fn list_resource_random_in_group(
             &self,
             group_descr: &str,
@@ -462,6 +467,7 @@ impl ResourceStore for SqlStore {
         Ok(group_sets)
     }
 
+    ///returns Vec<(label, resource_set_descr)>
     fn list_group_labeled_resources_sets(
         &self,
         group_descr: &str,
@@ -3256,12 +3262,26 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_list_group_labeled_resources_sets(mut self) -> Self {
+    pub fn with_list_group_labeled_resources_sets<D:IntoIterator<Item=(&'static str, Result<Vec<(String, String)>, ThoosaError>)>>(mut self, data:D) -> Self {
+        let map :HashMap<&'static str, Result<Vec<(String, String)>, ThoosaError>> = HashMap::from_iter(data.into_iter());
 
-        self.store.expect_list_group_labeled_resources_sets()
-            .returning(move |group| {
-                Ok(vec![])
-            });
+    self.store.expect_list_group_labeled_resources_sets()
+        .returning(move |group| {
+            map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()
+        });
+
+        self
+    }
+
+    pub fn with_list_resource_set_resources_by_descr<D:IntoIterator<Item=(&'static str, Result<Vec<Resource>, ThoosaError>)>>(mut self, data:D) -> Self {
+        let map :HashMap<&'static str, Result<Vec<Resource>, ThoosaError>> = HashMap::from_iter(data.into_iter());
+
+        self.store.expect_list_resource_set_resources_by_descr()
+        .returning(move |group| {
+            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()
+        });
+
+
         self
     }
 
