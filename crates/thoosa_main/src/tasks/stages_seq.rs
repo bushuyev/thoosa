@@ -143,7 +143,7 @@ where
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx >  + Send + Sync + Debug + 'static,
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
     Single(Arc<A>),
     Chained(Arc<B>),
@@ -155,7 +155,7 @@ where
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx >  + Send + Sync + Debug + 'static,
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -177,7 +177,7 @@ where
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx >  + Send + Sync + Debug + 'static,
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
     type Ctx = <A as Stage>::Ctx;
     type In<'a> = <A as Stage>::In<'a>
@@ -193,7 +193,7 @@ where
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
-    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx >  + Send + Sync + Debug + 'static,
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId + Send + Sync + Debug + 'static,
 {
     async fn run(
         self: Arc<Self>,
@@ -201,8 +201,8 @@ where
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
         match &*self {
-            StageChainOption::Single(stage) => Arc::clone(stage).run(input, ctx).await,
-            StageChainOption::Chained(stage) => Arc::clone(stage).run(input, ctx).await,
+            StageChainOption::Single(stage) => Arc::clone(stage).run_cached(input, ctx).await,
+            StageChainOption::Chained(stage) => Arc::clone(stage).run_cached(input, ctx).await,
         }
     }
 }

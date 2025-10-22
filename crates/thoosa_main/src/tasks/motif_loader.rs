@@ -325,14 +325,16 @@ mod tests {
 
         let run_id = 1;
 
+        let resource_a = Resource::new(1, 1, "tensor_a", 1000);
+        let resource_b = Resource::new(2, 1, "tensor_b", 1000);
         let mut store = MockStoreBuilder::new()
             .with_list_motif_slices(10u32, None, None, Ok((0i64, run_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
                 TensorIdSliceIdx(2, 100)
             ], HashMap::from([
-                (1, Resource::new(1, 1, "aaa", 1000)),
-                (2, Resource::new(2, 1, "bbb", 1000))
+                (1, resource_a.clone()),
+                (2, resource_b.clone())
             ]))))
             .with_list_run_config_values(
                 run_id,
@@ -343,20 +345,11 @@ mod tests {
         let motif_loader = Arc::new(MotifLoader::new(
             Arc::new(RwLock::new(store)),
 
-            // Arc::new(
-            //     mock_tensor_loader::build::<RunCtx2>()
-            //     .with_data([
-            //         (1, make_wrapper_t("tensor_a", lin_t(1000).view((1,-1)))),
-            //         (2, make_wrapper_t("tensor_b", lin_t(1000).view((1,-1)))),
-            //     ])
-            //     .finish()
-            // )
-
             Arc::new(
                 mock_tensor_loader_2::build()
                     .with_run_cached([
-                        (Resource::new(0, 0, "tensor_a", 1000), lin_t(1000).view((1,-1))),
-                        (Resource::new(0, 0, "tensor_b", 1000), lin_t(1000).view((1,-1)))
+                        (resource_a, lin_t(1000).view((1,-1))),
+                        (resource_b, lin_t(1000).view((1,-1)))
                     ])
                     .finish(),
             )
