@@ -91,7 +91,7 @@ where
     C: RunCtx + 'static
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
-        let resources = input.with_data_ref(0, None, |input|{
+        let labels_resources = input.with_data_ref(0, None, |input|{
             Ok(input
                 .resources_config()
                 .to_resources(&self.store)?
@@ -99,6 +99,42 @@ where
                 .map(|r| Arc::new(r))
                 .collect::<Vec<_>>())
         }).await?;
+        let max_batch = 1000;//TODO
+
+        debug!("SelectMotifsStage::run: resources={labels_resources:?}");
+
+        for label_resources in labels_resources {
+            let resources = &label_resources.1;
+
+            let mut t_0_batch: Vec<_> = vec![];
+            let mut t_0_batch_resources: Vec<_> = vec![];
+            let mut t_0_batch_len = 0;
+
+            let mut skip_0_i = 0;
+
+            for (i_0, resource_0) in resources.iter().enumerate() {
+                info!("on i_0={i_0} resource_0={resource_0:?}");
+
+                let t_0 = Arc::clone(&self.loader)
+                    .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_0.clone())), Arc::clone(&ctx))
+                    .await?;
+
+                t_0_batch_len += t_0.size().dim_1();
+                t_0_batch.push(t_0);
+                t_0_batch_resources.push(resource_0);
+
+                if t_0_batch_len < max_batch && i_0 < resources.len() - 1 {
+                    continue;
+                }
+
+
+            }
+        }
+
+
+
+
+
 
 
         for find_motifs_run_id in &self.find_motifs_run_ids {
@@ -134,6 +170,7 @@ where
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use log::debug;
     use parking_lot::RwLock;
     use tch::Tensor;
     use caching_runner::common::cachable::DevicesWrap;
@@ -147,7 +184,7 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::{gen_motif, MotifKind, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::traits::{DataId, SimpleId};
     use thoosa_store::MockStoreBuilder;
@@ -157,7 +194,7 @@ mod tests {
     use crate::tasks::motif_loader::{mock_motif_loader_2, MotifMeta};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::select_motifs::SelectMotifsStage;
-    use crate::tasks::tensor_loader::{ mock_tensor_loader_2};
+    use crate::tasks::tensor_loader::{mock_tensor_loader};
 
     #[ctor::ctor]
     fn test_init() {
@@ -178,17 +215,35 @@ mod tests {
         let find_motifs_run_id = 1;
         let select_motifs_run_id = 1;
 
+        let motif_0_in_channel_0 = 1u32;
+        let motif_1_in_channel_0 = 2u32;
+
+        let resources_group = "group";
+
         let mut store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
             .with_list_motifs([
-                (find_motifs_run_id as RunId, Ok(vec![1usize]))
+                (find_motifs_run_id as RunId, Ok(vec![
+                    motif_0_in_channel_0 as usize,
+                    motif_1_in_channel_0 as usize,
+                ]))
             ])
-                .with_list_group_labeled_resources_sets()
+            .with_list_group_labeled_resources_sets([
+                (resources_group, Ok(vec![
+                    ("Lable_0".to_string(), "resource_set_for_label_0".to_string()),
+                    ("Lable_1".to_string(), "resource_set_for_label_1".to_string())
+                ]))
+            ])
+            .with_list_resource_set_resources_by_descr([
+                ("resource_set_for_label_0", Ok(vec![resource_a.clone(), resource_b.clone()])),
+                ("resource_set_for_label_1", Ok(vec![]))
+            ])
+
             .build()));
 
 
         let loader = Arc::new(
-            mock_tensor_loader_2::build()
+            mock_tensor_loader::build()
                 .with_run_cached([
                     (resource_a.clone(), Tensor::from_slice(&[1.0, 2.0]).view((1,2))),
                     (resource_b.clone(), Tensor::from_slice(&[3.0, 4.0]).view((1,2))),
@@ -196,9 +251,9 @@ mod tests {
                 .finish(),
         );
 
-
         let motif_loader = Arc::new(mock_motif_loader_2::build().with_run_cached([
-            (select_motifs_run_id, (MotifMeta { channel: 0, run_id: 1 }, Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3))))
+            (motif_0_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id }, motifs_tensor(100, 3, MotifKind::Pulse))),
+            (motif_1_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id }, motifs_tensor(100, 3, MotifKind::Sin)))
         ]).finish());
 
 
@@ -212,11 +267,24 @@ mod tests {
         ));
 
 
+
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Labeled::new("group".into())))), Arc::new(RwLock::new(mock_run_ctx::default()))
+            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Labeled::new(resources_group.into())))), Arc::new(RwLock::new(mock_run_ctx::default()))
         ).await?;
 
         Ok(())
     }
 
+    ///found motif's slices of same kind
+    //TODO make slices a bit different
+    fn motifs_tensor(motif_len:usize, num_slices: usize, motif_kind: MotifKind) -> Tensor {
+        let t = Tensor::stack(
+            (0..num_slices).map(|_| Tensor::from_slice(gen_motif(motif_len, &motif_kind).as_slice())).collect::<Vec<_>>().as_slice(), 0
+        );
+
+        debug!("motifs_tensor: t.size={:?}", t.size());
+
+        t
+        // Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0])
+    }
 }

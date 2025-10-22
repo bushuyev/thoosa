@@ -125,7 +125,7 @@ pub mod mock_average_stage_2 {
     use crate::tasks::average_euclidean_distance::AverageDistanceValue;
     use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
     use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
-    use crate::tasks::tensor_loader::mock_tensor_loader_2::MockTensorLoaderBuilder;
+    use crate::tasks::tensor_loader::mock_tensor_loader::MockTensorLoaderBuilder;
     use async_trait::async_trait;
     use caching_runner::common::cachable::{Cached, DevicesWrap};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
