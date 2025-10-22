@@ -121,7 +121,7 @@ mod tests {
     }
 }
 #[cfg(test)]
-pub mod mock_average_stage_2 {
+pub mod mock_average_stage {
     use crate::tasks::average_euclidean_distance::AverageDistanceValue;
     use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
     use crate::tasks::motif_loader::{MotifLoader, MotifMeta};

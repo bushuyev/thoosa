@@ -217,12 +217,12 @@ where
                 ));
 
                
-                let configurable_loader = config_to_stage(&loader, &run_config);
+                let configured_loader = config_to_stage(&loader, &run_config);
 
                 FindMotifsStages::new(
                     run_config,
                     Arc::new(CrossLoader::new(
-                        configurable_loader,
+                        configured_loader,
                         &store,
                         Arc::new(cross_unfold_clc),
                         receiver,

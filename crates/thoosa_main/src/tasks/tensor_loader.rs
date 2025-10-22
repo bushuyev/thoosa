@@ -170,6 +170,13 @@ pub(crate) mod mock_tensor_loader {
 
     impl MockTensorLoaderBuilder {
 
+        pub fn with_out_id(mut self)->Self {
+            self.mock.expect_out_id().returning(|input_id|{
+                SimpleId::from(format!("loaded_{}", input_id.id()))
+            });
+            self
+        }
+
         pub fn with_run_cached<H>(mut self, h: H) -> Self
         where
             H: IntoIterator<Item=(Resource, Tensor)> ,

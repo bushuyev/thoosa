@@ -34,10 +34,24 @@ pub struct CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<
+        In<'i> = Resource,
+        Out = ThoTensor2<ChannelsData2, SimpleId>,
+        Ctx=C
+    > + OutId + 'static,
+
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<
+        In<'i> = CrossInput<'i, &'i Arc<Resource>>,
+        Out = CrossUnfoldClcOutput<R>,
+        Ctx=C
+    > + Send + Sync + 'static,
+
+    RSV: for<'i> SyncStage<
+        In<'i> = CrossUnfoldClcOutput<R>,
+        Out = (),
+        Ctx=C
+    > + Stage<Ctx=C> + Send + Sync + 'static,
     C: RunCtx + 'static,
 {
     loader: Arc<L>,

@@ -36,18 +36,13 @@ where
             In<'i> = DataId,
             Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
-        > + Cached
-        + OutId
-        + 'static,
+        > + Cached + OutId + 'static,
+
     for<'i> CLC: SyncStage<
             In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
-        > + Adjustable
-        + OutId
-        + Sync
-        + Send
-        + 'static,
+        > + Adjustable + OutId + Sync + Send + 'static,
 {
     id: SimpleId,
     motif_loader: Arc<ML>,
@@ -62,18 +57,13 @@ where
             In<'i> = DataId,
             Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
-        > + Cached
-        + OutId
-        + 'static,
+        > + Cached + OutId + 'static,
+
     for<'i> CLC: SyncStage<
             In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
-        > + Adjustable
-        + OutId
-        + Sync
-        + Send
-        + 'static,
+        > + Adjustable + OutId + Sync + Send + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LoadMotifAndClcDistanceStage").finish()
@@ -87,18 +77,13 @@ where
             In<'i> = DataId,
             Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
-        > + Cached
-        + OutId
-        + 'static,
+        > + Cached + OutId + 'static,
+
     for<'i> CLC: SyncStage<
             In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
-        > + Adjustable
-        + OutId
-        + Sync
-        + Send
-        + 'static,
+        > + Adjustable + OutId + Sync + Send + 'static,
 {
     type ID = SimpleId;
 
@@ -114,18 +99,13 @@ where
             In<'i> = DataId,
             Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
-        > + Cached
-        + OutId
-        + 'static,
+        > + Cached + OutId + 'static,
+
     for<'i> CLC: SyncStage<
             In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
-        > + Adjustable
-        + OutId
-        + Sync
-        + Send
-        + 'static,
+        > + Adjustable + OutId + Sync + Send + 'static,
 {
     pub fn new(motif_loader: Arc<ML>, clc_dist: Arc<CLC>) -> Self {
         Self {
@@ -145,18 +125,13 @@ where
             In<'i> = DataId,
             Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
-        > + Cached
-        + OutId
-        + 'static,
+        > + Cached + OutId + 'static,
+
     for<'i> CLC: SyncStage<
             In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
-        > + Adjustable
-        + OutId
-        + Sync
-        + Send
-        + 'static,
+        > + Adjustable + OutId + Sync + Send + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("{}_avg_ec_dist", input_id))
@@ -170,18 +145,13 @@ where
             In<'i> = DataId,
             Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
-        > + Cached
-        + OutId
-        + 'static,
+        > + Cached + OutId + 'static,
+
     for<'i> CLC: SyncStage<
             In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
-        > + Adjustable
-        + OutId
-        + Sync
-        + Send
-        + 'static,
+        > + Adjustable + OutId + Sync + Send + 'static,
 {
     type In<'a> = DataId;
 
@@ -197,18 +167,13 @@ where
             In<'i> = DataId,
             Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
-        > + Cached
-        + OutId
-        + 'static,
+        > + Cached + OutId + 'static,
+
     for<'i> CLC: SyncStage<
             In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
-        > + Adjustable
-        + OutId
-        + Sync
-        + Send
-        + 'static,
+        > + Adjustable + OutId + Sync + Send + 'static,
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>
     where
@@ -301,7 +266,7 @@ impl OutputBuilder for DistOutputBuilder {
 mod tests {
     use super::{LoadMotifAndClcDistanceStage, RunCtx2};
     use caching_runner::common::cachable::{Cached, DevicesWrap};
-    use crate::tasks::average_euclidean_distance::{mock_average_stage_2, AverageDistanceValue};
+    use crate::tasks::average_euclidean_distance::{mock_average_stage, AverageDistanceValue};
     use crate::tasks::motif_loader::{MotifMeta, mock_motif_loader_2};
     use caching_runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
@@ -321,12 +286,12 @@ mod tests {
 
 
         let motif_loader = Arc::new(mock_motif_loader_2::build().with_run_cached([
-            (42u32, (MotifMeta { channel: 0, run_id: 1 }, Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3))))
+            (42u32, (MotifMeta { channel: 0, run_id: 1, window: 3 }, Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3))))
         ]).finish());
 
         let call_log = Arc::new(Mutex::new(Vec::new()));
 
-        let clc_stage = Arc::new(mock_average_stage_2::builder().fail_while_dim0_gt(3).with_do_run(vec![
+        let clc_stage = Arc::new(mock_average_stage::builder().fail_while_dim0_gt(3).with_do_run(vec![
             AverageDistanceValue::new("0".into(), 10.0),
             AverageDistanceValue::new("1".into(), 30.0)
         ]).with_call_log(Arc::clone(&call_log)).finish());

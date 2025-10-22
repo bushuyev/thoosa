@@ -281,7 +281,7 @@ where
         // Identify this task by its output id for Arbiter fairness.
         let out_key = {
             let out_id = task.out_id(input.id());
-            std::sync::Arc::new(out_id) as std::sync::Arc<dyn CachableIdTr>
+            Arc::new(out_id) as Arc<dyn CachableIdTr>
         };
 
         if run_context.read().acquired_permits() == 0 {

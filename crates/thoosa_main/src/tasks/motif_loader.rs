@@ -78,7 +78,8 @@ where
 #[derive(Debug, Clone)]
 pub struct MotifMeta {
     pub channel:i64,
-    pub run_id: RunId
+    pub run_id: RunId,
+    pub window:u32
 }
 
 impl<L, C> Stage for MotifLoader<L, C>
@@ -151,7 +152,7 @@ where
             let resource_cache = Arc::new(DevicesWrap::wrap_cpu(resource));
 
             let raw_tensor = Arc::clone(&configurable_loader)
-                .run(resource_cache, Arc::clone(&ctx))
+                .run_cached(resource_cache, Arc::clone(&ctx))
                 .await?;
 
             let selector = ChannelsDataVec {
@@ -179,13 +180,12 @@ where
             .map(|tt| tt.t())
             .collect();
 
-
         let output = DataWithExtra::new(
             ThoTensor2::new(
                 motif_id,
                 Tensor::cat(tensors.as_slice(), 0),
             ),
-            MotifMeta{channel, run_id: find_motifs_run_id }
+            MotifMeta{channel, run_id: find_motifs_run_id, window },
         );
 
         Ok(Arc::new(DevicesWrap::wrap(
