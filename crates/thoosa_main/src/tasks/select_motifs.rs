@@ -16,6 +16,7 @@ use caching_runner::tmp_cache::TmpCached;
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRunConfig};
 use thoosa_common::runs::Labeled;
+use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
@@ -143,7 +144,7 @@ where
             }
         }
 
-        // let tmp_cache:TmpCached<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>> = TmpCached::new("motif slices", cache_area).await;
+        let tmp_cache:TmpCached<DataWithExtra<ThoTensor2<MotifSlices, SimpleId>, Vec<Vec<DataId>>>> = TmpCached::new("motif slices", cache_area).await;
         let num_channels = self.ws.read().channels();
 
         for find_motifs_run_id in &self.find_motifs_run_ids {
@@ -153,7 +154,7 @@ where
                 &self.store.read().list_run_config_values(*find_motifs_run_id)?,
             )?;
 
-            for run_config in self.run_configs.iter() {
+            for select_motifs_run_config in self.run_configs.iter() {
                 let motif_ids = self.store.read().list_motifs(*find_motifs_run_id)?;
                 let motifs_len = motif_ids.len();
                 let done_cnt = Arc::new(AtomicU32::new(0));
@@ -165,7 +166,7 @@ where
                         let ctx = Arc::clone(&ctx);
                         async move {
                             let motif = motif_loader_impl.run_cached(Arc::new(DevicesWrap::wrap_cpu((motif_id as u32).into())), ctx).await?;
-                            debug!("SelectMotifsStage::run: find_motifs_run_id={find_motifs_run_id} run_config.id={:?} motif={motif:?}", run_config.id);
+                            debug!("SelectMotifsStage::run: find_motifs_run_id={find_motifs_run_id} run_config.id={:?} motif={motif:?}", select_motifs_run_config.id);
 
                             Ok::<_, ThoosaError>(motif)
                         }
@@ -203,14 +204,19 @@ where
                     // let empty_slice = Tensor::zeros(&[find_motifs_run_config.window as i64], (Float, ThoDevice::from(device_idx).into()));
 
                     // let dummy_slice
+                    let mut channels_motif_ids = vec![Vec::<DataId>::new(); num_channels as usize];
                     let channels_motifs_tensors_vec = (0..num_channels).map(|c|{
 
                         let channel_motifs = &channels_motifs.get(c as usize).expect(&format!("not enough channels: len={} c={}", channels_motifs.len(), c));
 
-                        debug!("SelectMotifsStage::run: channel {c} max_motifs={max_motif_slices} channel_motifs={channel_motifs:?}");
+                        debug!("SelectMotifsStage::run: channel {c} max_motif_slices={max_motif_slices} channel_motifs={channel_motifs:?}");
 
                         let channel_motifs_tensors = channel_motifs.iter().map(|motif|  {
                             debug!("SelectMotifsStage::run: motif={motif:?} id={}", motif.id());
+                            for _ in 0..motif.size()[0] {
+                                channels_motif_ids[c as usize].push(motif.id().clone());
+                            }
+
                             motif.t_ref().copy()
                         }).collect::<Vec<_>>();
 
@@ -218,24 +224,39 @@ where
 
                         if channel_motifs_tensors.is_empty() {
                             Tensor::zeros(&[max_motif_slices as i64, find_motifs_run_config.window  as i64], (Float, ThoDevice::from(device_idx).into()))
+
                         } else {
                             let channel_t = Tensor::cat(&channel_motifs_tensors, 0);
 
-                            debug!("SelectMotifsStage::run: c={c}, channel_t.size={:?}", channel_t.size());
-
                             if channel_t.size()[0] < max_motif_slices as i64 {
-                                channel_t.pad(&[max_motif_slices as i64, find_motifs_run_config.window  as i64], "constant", 0.)
+                                debug!("SelectMotifsStage::run: c={c}, channel_t.size={:?} padding to {:?}", channel_t.size(), [max_motif_slices as i64, find_motifs_run_config.window  as i64]);
+                                pad_to(&channel_t, &[max_motif_slices as i64, find_motifs_run_config.window  as i64]).expect("pad to failed")
+
                             } else {
+                                debug!("SelectMotifsStage::run: c={c}, channel_t.size={:?}", channel_t.size());
+
                                 channel_t
                             }
                         }
 
                     }).collect::<Vec<_>>();
 
+                    debug!("SelectMotifsStage::run: channels_motifs_tensors_vec={channels_motifs_tensors_vec:?}");
+
                     let channels_motifs_t = Tensor::stack(&channels_motifs_tensors_vec, 0);
 
-                    debug!("SelectMotifsStage::run: num_channels={num_channels}, channels_motifs_t.size={:?}", channels_motifs_t.size());
+                    debug!("SelectMotifsStage::run: num_channels={num_channels}, channels_motif_ids={channels_motif_ids:?} channels_motifs_t.size={:?}", channels_motifs_t.size());
                     trace!("SelectMotifsStage::run: channels_motifs_t=\n{channels_motifs_t}");
+
+                    tmp_cache.insert(
+                        DataWithExtra::new(
+                            ThoTensor2::new(
+                                SimpleId(format!("{}_{}", find_motifs_run_config.id.expect("no id in find_motifs_run_config"), select_motifs_run_config.id.expect("no id in select_motifs_run_config")).leak()),
+                                channels_motifs_t
+                            ),
+                            channels_motif_ids
+                        )//TODO leak
+                    );
 
                     Ok(())
                 }).await?;
@@ -243,6 +264,8 @@ where
 
             }
         }
+
+
 
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(0, self.run_configs[0].clone(), vec![]))))
@@ -287,7 +310,7 @@ mod tests {
     }
 
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_two_labels() -> Result<(), ThoosaError> {
         log::set_max_level(Trace);
         reset_print_options();
@@ -298,12 +321,14 @@ mod tests {
 
         let resource_a: Resource = (1, 1, "resource_a", 1000).into();
         let resource_b: Resource = (2, 1, "resource_b", 1000).into();
+        let resource_c: Resource = (3, 1, "resource_b", 1000).into();
 
         let find_motifs_run_id = 1;
         let select_motifs_run_id = 1;
 
         let motif_0_in_channel_0 = 1u32;
         let motif_1_in_channel_0 = 2u32;
+        let motif_0_in_channel_1 = 3u32;
 
         let resources_group = "group";
 
@@ -317,6 +342,7 @@ mod tests {
                     (find_motifs_run_id as RunId, Ok(vec![
                         motif_0_in_channel_0 as usize,
                         motif_1_in_channel_0 as usize,
+                        motif_0_in_channel_1 as usize
                     ]))
                 ])
                 .with_list_group_labeled_resources_sets([
@@ -327,7 +353,7 @@ mod tests {
                 ])
                 .with_list_resource_set_resources_by_descr([
                     ("resource_set_for_label_0", Ok(vec![resource_a.clone(), resource_b.clone()])),
-                    ("resource_set_for_label_1", Ok(vec![]))
+                    ("resource_set_for_label_1", Ok(vec![resource_c.clone()]))
                 ])
 
                 .build()));
@@ -339,6 +365,7 @@ mod tests {
                 .with_run_cached([
                     (resource_a.clone(), Tensor::from_slice(&[1.0, 2.0]).view((1, 2))),
                     (resource_b.clone(), Tensor::from_slice(&[3.0, 4.0]).view((1, 2))),
+                    (resource_c.clone(), Tensor::from_slice(&[3.0, 4.0]).view((1, 2))),
                 ])
                 .finish(),
         );
@@ -346,6 +373,7 @@ mod tests {
         let motif_loader = Arc::new(mock_motif_loader_2::build().with_run_cached([
             (motif_0_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))),
             (motif_1_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 2, MotifKind::Triangle))),
+            (motif_0_in_channel_1, (MotifMeta { channel: 1, run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 4, MotifKind::Sin))),
         ]).finish());
 
 

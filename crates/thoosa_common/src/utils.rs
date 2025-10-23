@@ -384,11 +384,7 @@ pub fn vec_f64_from(t: &Tensor) -> Vec<f64> {
 }
 
 pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoosaError> {
-    debug!(
-        "pad_to: input.size={:?}, to_size{:?}",
-        input.size(),
-        to_size
-    );
+    debug!("pad_to: input.size={:?}, to_size{:?}",input.size(),to_size);
 
     if input.size().len() != to_size.len() {
         ThoosaError::new(format!(
