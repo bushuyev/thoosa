@@ -305,26 +305,82 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         }
     }
 
+    pub async fn with_another<A, B, WA, WB, R>
+    (
+     aw: &'static WA,
+     bw: &'static WB,
+     to_device_idx: usize,
+     _trace_ctx: Option<&'static str>,
+     do_run: impl FnOnce(&A, &B) -> Result<R, ThoosaError>,
+    ) -> Result<R, ThoosaError>
+    where
+        A:Data + WithId + Send + Sync + CopyToDevice + 'static,
+        B:Data + WithId + Send + Sync + CopyToDevice + 'static,
+        WA:AsRef<DevicesWrap<A>> + Debug + 'static,
+        WB:AsRef<DevicesWrap<B>> + Debug + 'static,
+    {
+        let (me, other) = tokio::try_join!(
+            tokio::spawn(aw.as_ref().load_from_any_device_(to_device_idx)),
+            tokio::spawn(bw.as_ref().load_from_any_device_(to_device_idx))
+        )?;
+        let me = me?;
+        let other = other?;
+
+        do_run(&me, &other)
+    }
+
     pub async fn with_data_array<W: AsRef<DevicesWrap<O>> + Debug, R>(
         other: &[W],
         to_device_idx: usize,
         _trace_ctx: Option<&'static str>,
         do_run: impl FnOnce(&[&O]) -> Result<R, ThoosaError>,
     ) -> Result<R, ThoosaError> {
-        let results = try_join_all(
+
+        let results = tokio::try_join!(try_join_all(
             other
                 .into_iter()
                 .map(|w| w.as_ref().load_from_any_device_(to_device_idx)),
-        ).await?;
+        ))?;
 
 
-        if results.is_empty() {
+        if results.0.is_empty() {
             return Err(MyError::SomethingElse(format!("no data in all devices for {other:?} ")).into());
         }
 
-        let refs: Vec<&O> = results.iter().map(|o| &**o).collect();
+        let refs: Vec<&O> = results.0.iter().map(|o| &**o).collect();
         do_run(&refs)
     }
+
+    //TODO use streams + bounds
+    pub async fn with_two_arrays<B, WA, WB, R>
+    (
+        aw: &[WA],
+        bw: &[WB],
+        to_device_idx: usize,
+        _trace_ctx: Option<&'static str>,
+        do_run: impl FnOnce(&[&O], &[&B]) -> Result<R, ThoosaError>,
+    ) -> Result<R, ThoosaError>
+    where
+        // A: Data + WithId + Send + Sync + CopyToDevice + 'static,
+        B: Data + WithId + Send + Sync + CopyToDevice + 'static,
+        WA: AsRef<DevicesWrap<O>> + Debug + 'static,
+        WB: AsRef<DevicesWrap<B>> + Debug + 'static,
+    {
+        let (me, other) = tokio::try_join!(
+            try_join_all(aw
+                .into_iter()
+                .map(|w| w.as_ref().load_from_any_device_(to_device_idx))
+            ),
+            try_join_all(bw
+                .into_iter()
+                .map(|w| w.as_ref().load_from_any_device_(to_device_idx)),
+        ))?;
+
+        let refs_a:Vec<&O> = me.iter().map(|o| &**o).collect();
+        let refs_b:Vec<&B> = other.iter().map(|o| &**o).collect();
+        do_run(&refs_a, &refs_b)
+    }
+
 
     pub fn id(&self) -> &<O as WithId>::ID {
         &self.id
@@ -351,9 +407,9 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         trace_ctx: Option<&'static str>,
         do_run: impl FnOnce(&O) -> Result<R, ThoosaError>,
     ) -> Result<R, ThoosaError> {
-        if to_device_idx != 0 {
-            GlobalCtx::global().reset_all_on_cpu(to_device_idx).await;
-        }
+        // if to_device_idx != 0 {
+        //     GlobalCtx::global().reset_all_on_cpu(to_device_idx).await;
+        // }
 
         match self.load_from_any_device_(to_device_idx).await {
             Ok(v) => Self::do_run_trace_ref(trace_ctx, do_run, v.deref()),

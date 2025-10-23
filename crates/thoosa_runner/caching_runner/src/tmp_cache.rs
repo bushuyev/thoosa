@@ -66,6 +66,13 @@ impl<D: Data + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
 
         res
     }
+    pub fn clone_to_arcs_vec(&self) -> Vec<Arc<DevicesWrap<D>>> {
+        self
+            .map
+            .iter()
+            .map(|entry| Arc::clone(entry.value()))
+            .collect()
+    }
 
     pub async fn for_each<F, R, FR>(self, mut f: F) -> Result<Vec<R>, ThoosaError>
     where
