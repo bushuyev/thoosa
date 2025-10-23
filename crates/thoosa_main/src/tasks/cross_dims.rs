@@ -75,3 +75,14 @@ impl Dims for MotifSlices {
     type Metrics = MonoMetrics<0, 2>; //[i64;2]; // [i64; 2];//slices x window
 
 }
+
+
+#[derive(Clone, Debug)]
+pub struct ChannelsMotifSlices {
+
+}
+
+impl Dims for ChannelsMotifSlices {
+    type Metrics = MonoMetrics<1, 3>; //[i64;3]; // [i64; 3];//channels x slices x window
+
+}
