@@ -31,7 +31,7 @@ pub fn generate_series_with_motif(
     step_sigma: f32,
     amp_range: (f32, f32),
     seed: Option<u64>,
-    motif_kind: MotifKind, // "triangle" or "sine"
+    motif_kind: &MotifKind, // "triangle" or "sine"
 ) -> (Vec<f32>, Vec<Interval>) {
     let mut rng = seed.map(|seed|StdRng::seed_from_u64(seed)).unwrap_or(StdRng::from_os_rng());
 
@@ -42,7 +42,7 @@ pub fn generate_series_with_motif(
     }
 
     // motif template (z-normalized)
-    let mut motif: Vec<f32> = gen_motif(motif_len, &motif_kind);
+    let mut motif: Vec<f32> = gen_motif(motif_len, motif_kind);
 
     let m = motif.iter().sum::<f32>() / motif.len() as f32;
     let s = (motif.iter().map(|v| (v - m).powi(2)).sum::<f32>() / motif.len() as f32).sqrt().max(1e-6);
@@ -88,7 +88,7 @@ mod demo {
     #[test]
     fn gen_demo() {
         let (sig, ivals) = generate_series_with_motif(
-            20_000, 400, 4, 300, 0.4, (0.8, 1.8), None, MotifKind::Pulse,
+            20_000, 400, 4, 300, 0.4, (0.8, 1.8), None, &MotifKind::Pulse,
         );
         debug!("len={} intervals={:?}", sig.len(), ivals);
 
