@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
+use std::future::Future;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use dashmap::mapref::multiple::RefMulti;
@@ -13,7 +14,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::runtime::Handle;
 use futures::executor::block_on;
 use futures_util::future::{join_all, try_join_all};
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::{stream, StreamExt, TryStreamExt};
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Data, SimpleId, WithId};
@@ -68,13 +69,16 @@ impl<D: Data + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
 
     pub async fn for_each<F, R, FR>(self, mut f: F) -> Result<Vec<R>, ThoosaError>
     where
-        FR:Future<Output=Result<R, ThoosaError>>,
-        F:FnMut(&<D as WithId>::ID, &Arc<DevicesWrap<D>>)-> FR +
+        F: FnMut(<D as WithId>::ID, Arc<DevicesWrap<D>>) -> FR,
+        FR: Future<Output = Result<R, ThoosaError>> + Send + 'static,
     {
-        futures::stream::iter(self.map.iter())
-            .map(|ref_multi|  {
-                f(ref_multi.key(), ref_multi.value())
-            })
+        let items: Vec<_> = self
+            .map
+            .iter()
+            .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
+            .collect();
+
+        stream::iter(items.into_iter().map(|(key, value)| f(key, value)))
             .buffer_unordered(10)
             .try_collect::<Vec<R>>()
             .await

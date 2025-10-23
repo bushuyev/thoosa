@@ -265,18 +265,14 @@ where
 
 
 
-        let r = tmp_cache.for_each(|key, value|{
-            let key = key.clone();
-            let value = Arc::clone(&value);
-            async move{
-        
-                debug!("SelectMotifsStage::run: key={key:?} value={value:?} ");
-                Ok(())
-            }
-        }).await;
-
-
-
+        tmp_cache
+            .for_each(|key, value| {
+                async move {
+                    debug!("SelectMotifsStage::run: key={key:?} value={value:?} ");
+                    Ok(())
+                }
+            })
+            .await?;
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(0, self.run_configs[0].clone(), vec![]))))
     }
