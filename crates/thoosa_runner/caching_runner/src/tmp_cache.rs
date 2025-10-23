@@ -1,8 +1,10 @@
+use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
+use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::future::{BoxFuture, Shared};
 use futures_util::{FutureExt, StreamExt};
@@ -26,7 +28,7 @@ pub struct TmpCached<D:Data + WithId  + Output+ Debug + Send + Sync + 'static> {
     cache_area:u64,
     map: Box<DashMap<
         <D as WithId>::ID,
-        Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>>,
+        DevicesWrap<D>,
     >>
 
 }
@@ -36,9 +38,10 @@ impl<D: Data + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
         let cache_area = self.cache_area;
         self.map.insert(
             value.id().clone(),
-            async move {
-                Ok(Arc::new(DevicesWrap::wrap(value, cache_area)))
-            }.boxed().shared()
+            // async move {
+            //     Ok(Arc::new(DevicesWrap::wrap(value, cache_area)))
+            // }.boxed().shared()
+            DevicesWrap::wrap(value, cache_area)
         );
 
     }
@@ -48,15 +51,21 @@ impl<D: Data + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
         for (key, val) in mem::take(&mut self.map).into_iter() {
             res.push(
 
-                Arc::into_inner(val.await.unwrap()).unwrap().take_data(device).await.unwrap()
+                val.take_data(device).await.unwrap()
 
             );
         }
 
         res
     }
-
 }
+
+// impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static, I: for <'a> Iterator<Item=&'a D>> Borrow<I> for TmpCached<D> {
+//     fn borrow(&self) -> &D {
+//         // self.map.iter()
+//         todo!()
+//     }
+// }
 
 impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
 
@@ -64,12 +73,12 @@ impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
 
         let name = format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16)).leak();
 
-        let map: Box<DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>>>> = Box::new(Default::default());
+        let map: Box<DashMap<<D as WithId>::ID, DevicesWrap<D>>> = Box::new(Default::default());
 
-        let ptr_ref: *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>>> = std::ptr::from_ref(&*map);
+        let ptr_ref: *const DashMap<<D as WithId>::ID, DevicesWrap<D>> = std::ptr::from_ref(&*map);
 
-        let map_ref: &'static DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>>, > = unsafe {
-            &*(ptr_ref as *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<D>>, ThoosaError>>> >)
+        let map_ref: &'static DashMap<<D as WithId>::ID, DevicesWrap<D>, > = unsafe {
+            &*(ptr_ref as *const DashMap<<D as WithId>::ID, DevicesWrap<D> >)
         };
 
         GlobalCtx::global().register_cache((name, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
@@ -80,6 +89,18 @@ impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
             cache_area
         }
 
+    }
+}
+
+#[async_trait]
+impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> FuturesRunnerMapPurger for DashMap<<D as thoosa_shared::traits::WithId>::ID, DevicesWrap<D>>{
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize) -> Result<(), ThoosaError> {
+        // todo!()
+        Ok(())
+    }
+
+    async fn purge_cpu(&self, i: u64) {
+        // todo!()
     }
 }
 
