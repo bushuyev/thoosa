@@ -347,6 +347,7 @@ mod tests {
 
             Arc::new(
                 mock_tensor_loader::build()
+                    .with_out_id()
                     .with_run_cached([
                         (resource_a, lin_t(1000).view((1,-1))),
                         (resource_b, lin_t(1000).view((1,-1)))
