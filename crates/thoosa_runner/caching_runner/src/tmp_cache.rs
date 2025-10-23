@@ -7,13 +7,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::future::{BoxFuture, Shared};
-use futures_util::{FutureExt, StreamExt};
+use futures_util::FutureExt;
 use rand::distr::{Alphanumeric, SampleString};
+use log::debug;
 use tokio::io::AsyncWriteExt;
 use tokio::runtime::Handle;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Data, SimpleId, WithId};
+use thoosa_shared::CopyToDevice;
 use crate::common::cachable::{Cached, DevicesWrap};
 use crate::common::{OutId};
 use crate::common::runnable::Stage;
@@ -93,14 +95,48 @@ impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
 }
 
 #[async_trait]
-impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> FuturesRunnerMapPurger for DashMap<<D as thoosa_shared::traits::WithId>::ID, DevicesWrap<D>>{
+impl <D> FuturesRunnerMapPurger for DashMap<<D as thoosa_shared::traits::WithId>::ID, DevicesWrap<D>>
+where
+    D: Data + WithId + Output + CopyToDevice + Debug + Send + Sync + 'static,
+{
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize) -> Result<(), ThoosaError> {
-        // todo!()
+        debug!("TmpCached::purge_gpu: ids_to_keep={ids_to_keep:?} device_idx={device_idx}");
+
+        let keys: Vec<<D as WithId>::ID> = self
+            .iter()
+            .filter(|entry| {
+                ids_to_keep
+                    .map(|set| {
+                        let key: &dyn CachableIdTr = entry.key();
+                        !set.contains(key)
+                    })
+                    .unwrap_or(true)
+            })
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for key in keys {
+            debug!("TmpCached::purge_gpu: key={key:?}");
+            if let Some(value) = self.get(&key) {
+                if let Err(err) = value.dump_to_cpu(device_idx).await {
+                    debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu err={err:?}");
+                } else {
+                    debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu ok");
+                }
+            }
+        }
         Ok(())
     }
 
     async fn purge_cpu(&self, i: u64) {
-        // todo!()
+        debug!("TmpCached::purge_cpu: purge_since={i}");
+        self.retain(|key, value| {
+            let keep = !value.is_on_cpu_since(i);
+            if !keep {
+                debug!("TmpCached::purge_cpu: key={key:?} removed");
+            }
+            keep
+        });
     }
 }
 
