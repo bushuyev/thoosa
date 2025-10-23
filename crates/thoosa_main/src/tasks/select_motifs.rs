@@ -27,7 +27,7 @@ use thoosa_shared::traits::{DataId, SimpleId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use crate::cli::Commands::SelectMotifs;
-use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
+use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifSlices, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::run_ctx_2::RunCtx2;
@@ -144,7 +144,7 @@ where
             }
         }
 
-        let tmp_cache:TmpCached<DataWithExtra<ThoTensor2<MotifSlices, SimpleId>, Vec<Vec<DataId>>>> = TmpCached::new("motif slices", cache_area).await;
+        let tmp_cache:TmpCached<DataWithExtra<ThoTensor2<ChannelsMotifSlices, SimpleId>, Vec<Vec<DataId>>>> = TmpCached::new("motif slices", cache_area).await;
         let num_channels = self.ws.read().channels();
 
         for find_motifs_run_id in &self.find_motifs_run_ids {
@@ -260,13 +260,19 @@ where
 
                     Ok(())
                 }).await?;
-
-
             }
         }
 
 
 
+        tmp_cache
+            .for_each(|key, value| {
+                async move {
+                    debug!("SelectMotifsStage::run: key={key:?} value={value:?} ");
+                    Ok(())
+                }
+            })
+            .await?;
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(0, self.run_configs[0].clone(), vec![]))))
     }
@@ -310,7 +316,7 @@ mod tests {
     }
 
 
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_two_labels() -> Result<(), ThoosaError> {
         log::set_max_level(Trace);
         reset_print_options();
