@@ -10,6 +10,7 @@ thoosa_dummy_data_derive = { path = "../../thoosa_macros/thoosa_dummy_data_deriv
 dashmap.workspace = true
 tokio.workspace = true
 futures-util.workspace = true
+futures.workspace = true
 parking_lot.workspace = true
 async-trait.workspace = true
 cached_derive.workspace = true

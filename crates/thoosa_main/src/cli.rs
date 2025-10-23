@@ -13,6 +13,7 @@ use caching_runner::common::runnable::Stage;
 use clap::{Args, Parser, Subcommand};
 use futures::executor::block_on;
 use futures_util::future::{join_all, try_join_all};
+use futures_util::StreamExt;
 use log::{Level, LevelFilter, debug, error, info, trace, warn};
 use parking_lot::{RawRwLock, RwLock};
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
@@ -30,7 +31,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use std::{fs, process};
-use futures_util::StreamExt;
+
 use plotters::prelude::BLACK;
 use tch::Device::Cpu;
 use tch::Kind::Float;

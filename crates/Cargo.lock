@@ -543,6 +543,7 @@ dependencies = [
  "cached_derive",
  "console-subscriber",
  "dashmap 6.1.0",
+ "futures",
  "futures-util",
  "log",
  "mockall",
