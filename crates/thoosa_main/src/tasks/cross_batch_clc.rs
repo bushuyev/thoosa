@@ -248,7 +248,6 @@ pub fn unfold_and_cat(input: &[&ThoTensor2<ChannelsData2, SimpleId>], unfold_par
     }
 
 
-
     let batch_0_t = Tensor::concat(batch_0_tensors.as_slice(), 1);
     Ok((batch_0_t, batch_0_sizes))
 }

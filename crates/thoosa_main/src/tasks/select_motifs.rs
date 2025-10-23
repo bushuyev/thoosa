@@ -18,12 +18,14 @@ use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRun
 use thoosa_common::runs::Labeled;
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
+use thoosa_motifs::distance::MaskMaker::LocalMin;
 use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{DataId, SimpleId};
+use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use crate::cli::Commands::SelectMotifs;
@@ -280,6 +282,27 @@ where
                             debug!("SelectMotifsStage::run: batch={batch:?} motifs={motifs:?}");
 
                             let (batch_0_t, batch_0_sizes) =  unfold_and_cat(&batch, &UnfoldParams::new(1, motifs[0].extra().1.window as i64, motifs[0].extra().1.step as i64))?;
+
+                            let motifs_stream = ThoCudaStream::new(0);//TODO
+                            let guard = StreamGuard::set(&motifs_stream);//TODO Device
+
+                            let mut mask_makers = vec![
+                                LocalMin {dim: 1},
+                            ];
+
+                            let motifs_stream = ThoCudaStream::new(0);//TODO
+                            let guard = StreamGuard::set(&motifs_stream);//TODO Device
+
+
+                            let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
+                                motifs[0].data().t_ref().shallow_clone(),
+                                batch_0_t,
+                                false,//if true dists are returned
+                                &mut mask_makers,
+                            )?;
+                            drop(guard);
+
+                            debug!("SelectMotifsStage::run: mask={mask:?} dists={dists:?}");
 
 
                             Ok(())
