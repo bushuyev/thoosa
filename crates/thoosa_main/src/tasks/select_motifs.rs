@@ -27,6 +27,7 @@ use thoosa_shared::traits::{DataId, SimpleId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use crate::cli::Commands::SelectMotifs;
+use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifSlices, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
@@ -116,35 +117,9 @@ where
 
         debug!("SelectMotifsStage::run: resources={labels_resources:?}");
 
-        for label_resources in labels_resources {
-            let resources = &label_resources.1;
-
-            let mut t_0_batch: Vec<_> = vec![];
-            let mut t_0_batch_resources: Vec<_> = vec![];
-            let mut t_0_batch_len = 0;
-
-            let mut skip_0_i = 0;
-
-            for (i_0, resource_0) in resources.iter().enumerate() {
-                info!("on i_0={i_0} resource_0={resource_0:?}");
-
-                let t_0 = Arc::clone(&self.loader)
-                    .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_0.clone())), Arc::clone(&ctx))
-                    .await?;
-
-                t_0_batch_len += t_0.size().dim_1();
-                t_0_batch.push(t_0);
-                t_0_batch_resources.push(resource_0);
-
-                if t_0_batch_len < max_batch && i_0 < resources.len() - 1 {
-                    continue;
-                }
 
 
-            }
-        }
-
-        let tmp_cache:TmpCached<DataWithExtra<ThoTensor2<ChannelsMotifSlices, SimpleId>, Vec<Vec<DataId>>>> = TmpCached::new("motif slices", cache_area).await;
+        let tmp_cache:TmpCached<DataWithExtra<ThoTensor2<ChannelsMotifSlices, SimpleId>, (Vec<Vec<DataId>>, FindMotifsRunConfig)>> = TmpCached::new("motif slices", cache_area).await;
         let num_channels = self.ws.read().channels();
 
         for find_motifs_run_id in &self.find_motifs_run_ids {
@@ -254,7 +229,7 @@ where
                                 SimpleId(format!("{}_{}", find_motifs_run_config.id.expect("no id in find_motifs_run_config"), select_motifs_run_config.id.expect("no id in select_motifs_run_config")).leak()),
                                 channels_motifs_t
                             ),
-                            channels_motif_ids
+                            (channels_motif_ids, find_motifs_run_config.clone())
                         )//TODO leak
                     );
 
@@ -264,15 +239,62 @@ where
         }
 
 
+        let motifs = tmp_cache.clone_to_arcs_vec();
 
-        tmp_cache
-            .for_each(|key, value| {
-                async move {
-                    debug!("SelectMotifsStage::run: key={key:?} value={value:?} ");
-                    Ok(())
+
+
+        for label_resources in labels_resources {
+            let resources = &label_resources.1;
+
+            let mut t_0_batch: Vec<_> = vec![];
+            let mut t_0_batch_resources: Vec<_> = vec![];
+            let mut t_0_batch_len = 0;
+
+            let mut skip_0_i = 0;
+
+            for (i_0, resource_0) in resources.iter().enumerate() {
+                info!("on i_0={i_0} resource_0={resource_0:?}");
+
+                let t_0 = Arc::clone(&self.loader)
+                    .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_0.clone())), Arc::clone(&ctx))
+                    .await?;
+
+                t_0_batch_len += t_0.size().dim_1();
+                t_0_batch.push(t_0);
+                t_0_batch_resources.push(resource_0);
+
+                if t_0_batch_len < max_batch && i_0 < resources.len() - 1 {
+                    continue;
                 }
-            })
-            .await?;
+
+                let r = futures::stream::iter(motifs.clone())
+                    .map(|value| {
+                        let t_0_batch = t_0_batch.clone();//cones Arcs
+                        let value = Arc::clone(&value);
+
+                        debug!("SelectMotifsStage::run: t_0_batch={t_0_batch:?} value={value:?}");
+
+                        async move {
+
+                        let _ = DevicesWrap::with_two_arrays(t_0_batch.as_slice(), &[value], device_idx, None, |batch, motifs|{
+                            debug!("SelectMotifsStage::run: batch={batch:?} motifs={motifs:?}");
+
+                            let (batch_0_t, batch_0_sizes) =  unfold_and_cat(&batch, &UnfoldParams::new(1, motifs[0].extra().1.window as i64, motifs[0].extra().1.step as i64))?;
+
+
+                            Ok(())
+                        }).await?;
+
+                        Ok::<(), ThoosaError>(())
+                    }})
+                    .buffer_unordered(10)
+                    .try_collect::<Vec<_>>()
+                    .await?;
+
+            }
+        }
+
+
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(0, self.run_configs[0].clone(), vec![]))))
     }
@@ -285,6 +307,7 @@ mod tests {
     use log::debug;
     use log::LevelFilter::Trace;
     use parking_lot::RwLock;
+    use tch::kind::FLOAT_CPU;
     use tch::Tensor;
     use caching_runner::common::cachable::DevicesWrap;
     use caching_runner::common::{mock_run_ctx, MockRunCtx};
@@ -369,9 +392,9 @@ mod tests {
             mock_tensor_loader::build()
                 .with_out_id()
                 .with_run_cached([
-                    (resource_a.clone(), Tensor::from_slice(&[1.0, 2.0]).view((1, 2))),
-                    (resource_b.clone(), Tensor::from_slice(&[3.0, 4.0]).view((1, 2))),
-                    (resource_c.clone(), Tensor::from_slice(&[3.0, 4.0]).view((1, 2))),
+                    (resource_a.clone(), Tensor::rand(&[3, 10000], FLOAT_CPU)),
+                    (resource_b.clone(), Tensor::rand(&[3, 10000], FLOAT_CPU)),
+                    (resource_c.clone(), Tensor::rand(&[3, 10000], FLOAT_CPU)),
                 ])
                 .finish(),
         );
