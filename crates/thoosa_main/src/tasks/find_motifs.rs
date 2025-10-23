@@ -174,6 +174,7 @@ where
                             mask_makers.push(Tril);
                         }
 
+                        //copy to device is done on streams created in CopyCtx and used in DistsMask::new_async. Should wait for calculation stream to finish.
                         let motifs_stream = ThoCudaStream::new(0);//TODO
                         let guard = StreamGuard::set(&motifs_stream);//TODO Device
 
