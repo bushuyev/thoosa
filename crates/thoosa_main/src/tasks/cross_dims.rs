@@ -2,7 +2,7 @@ use std::cmp::min;
 use std::ops::Range;
 use log::{debug, trace};
 use tch::{IndexOp, Tensor};
-use thoosa_common::dims::Dims;
+use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_shared::{MyError, ThoosaError};
 use thoosa_shared::traits::{DataId, Select, SimpleId};
 use torch_runner::data::ThoTensor2;
@@ -67,22 +67,27 @@ impl ChannelsData2 {
 
 
 #[derive(Clone, Debug)]
-pub struct MotifSlices {
-    
-}
+pub struct MotifSlices;
 
 impl Dims for MotifSlices {
-    type Metrics = MonoMetrics<0, 2>; //[i64;2]; // [i64; 2];//slices x window
+    type Metrics = MonoMetrics<0, 2>; //[i64;2]; // [i64; 2];//slices x window - used to split motif's slices when calculating distances
 
 }
 
 
 #[derive(Clone, Debug)]
-pub struct ChannelsMotifSlices {
+pub struct ChannelsMotifsSlices;
+
+impl Dims for ChannelsMotifsSlices {
+    type Metrics = MonoMetrics<1, 3>; //[i64;3]; // [i64; 3];//channels x slices x window
 
 }
 
-impl Dims for ChannelsMotifSlices {
-    type Metrics = MonoMetrics<1, 3>; //[i64;3]; // [i64; 3];//channels x slices x window
+
+#[derive(Clone, Debug)]
+pub struct ChannelsMotifsDists;
+
+impl Dims for ChannelsMotifsDists {
+    type Metrics = MonoMetrics<1, 2>; //[i64;3]; // [i64; 3];//channels x dists
 
 }

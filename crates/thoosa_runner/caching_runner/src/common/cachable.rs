@@ -6,7 +6,7 @@ use crate::common::*;
 use crate::global_ctx::GlobalCtx;
 use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
-use futures_util::FutureExt;
+use futures_util::{FutureExt, StreamExt, TryStreamExt};
 use futures_util::future::{BoxFuture, Shared, join_all, try_join_all};
 use log::debug;
 use mockall_double::double;
@@ -545,10 +545,8 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     ) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError> {
         //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
         //TODO add GlobalCtx::purge_lock just in case?
-        debug!(
-            "DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",
-            self.id, self.cached_data
-        );
+        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",self.id, self.cached_data);
+
         if to_device_idx != 0 {
             *self.on_cpu_since.write() = None;
         }
@@ -574,6 +572,52 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
             Err(MyError::NotFound.into())
         }
     }
+
+    async fn load_from_any_device(
+        &self,
+        to_device_idx: usize,
+    ) -> Result<(), ThoosaError> {
+        //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
+        //TODO add GlobalCtx::purge_lock just in case?
+        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",self.id, self.cached_data);
+
+        if to_device_idx != 0 {
+            *self.on_cpu_since.write() = None;
+        }
+
+        let read_guard = self.cached_data[to_device_idx].read().await;
+
+        if read_guard.is_some() {
+            Ok(())
+        } else {
+            drop(read_guard);
+
+            for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+                let source_read_guard = op.read().await;
+
+                if source_device_idx != to_device_idx && source_read_guard.is_some() {
+                    drop(source_read_guard);
+                    self.ensure_copied(source_device_idx, to_device_idx, None, false).await?;
+                    return Ok(());
+                }
+            }
+            Err(MyError::NotFound.into())
+        }
+    }
+
+    async fn get_copied(&self, from_device_idx: usize) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError> {
+        let read_guard = self.cached_data[from_device_idx].read().await;
+
+        if read_guard.is_some() {
+            Ok(tokio::sync::RwLockReadGuard::map(
+                read_guard,
+                |val: &Option<O>| val.as_ref().expect("no value behind guard"),
+            ))
+        } else {
+            Err(MyError::NotReady.into())
+        }
+    }
+
 
     pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoosaError> {
         assert_ne!(device_idx, 0);
@@ -765,6 +809,90 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         &self.cached_data
     }
 }
+
+pub async fn with_two_vars_ext<A, B, R>
+(
+    aw: Arc<DevicesWrap<A>>,
+    bw: Arc<DevicesWrap<B>>,
+    to_device_idx: usize,
+    _trace_ctx: Option<&'static str>,
+    do_run: impl FnOnce(&A, &B) -> Result<R, ThoosaError>,
+) -> Result<R, ThoosaError>
+where
+    A: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    B: Data + WithId + Send + Sync + CopyToDevice + 'static,
+{
+    let aw_arc_clone = Arc::clone(&aw);
+    let bw_arc_clone = Arc::clone(&bw);
+
+    let (ra, rb) = tokio::try_join!(
+        tokio::spawn(async move {
+            aw.load_from_any_device(to_device_idx).await?;
+            Ok::<(), ThoosaError>(())
+        }),
+        tokio::spawn(async move {
+            bw.load_from_any_device(to_device_idx).await?;
+            Ok::<(), ThoosaError>(())
+        })
+    )?;
+
+    let (a, b) = tokio::try_join!(
+        aw_arc_clone.get_copied(to_device_idx),
+        bw_arc_clone.get_copied(to_device_idx),
+    )?;
+
+    do_run(&a, &b)
+}
+
+
+
+pub async fn with_two_arrays_ext<A, B, WA, WB, R>
+(
+    aw: Vec<WA>,
+    bw: Vec<WB>,
+    to_device_idx: usize,
+    _trace_ctx: Option<&'static str>,
+    do_run: impl FnOnce(&[&A], &[&B]) -> Result<R, ThoosaError>,
+) -> Result<R, ThoosaError>
+where
+    A: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    B: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    WA: AsRef<DevicesWrap<A>> + Sync + Send + Debug + 'static,
+    WB: AsRef<DevicesWrap<B>> + Sync + Send + Debug + 'static,
+{
+    let aw_arc = Arc::new(aw);
+    let aw_arc_clone = Arc::clone(&aw_arc);
+    let bw_arc = Arc::new(bw);
+    let bw_arc_clone = Arc::clone(&bw_arc);
+
+    let ha = tokio::spawn(async move {
+        try_join_all(aw_arc.iter().map(|v| async move { v.as_ref().load_from_any_device(to_device_idx).await }))
+            .await
+            .map(|_| ())
+    });
+    let hb = tokio::spawn(async move {
+        try_join_all(bw_arc.iter().map(|v| async move { v.as_ref().load_from_any_device(to_device_idx).await }))
+            .await
+            .map(|_| ())
+    });
+
+    let (ra, rb) = tokio::try_join!(ha, hb)?;
+
+    let (a, b) = tokio::try_join!(
+            try_join_all(aw_arc_clone
+                .iter()
+                .map(|w| w.as_ref().get_copied(to_device_idx))
+            ),
+            try_join_all(bw_arc_clone
+                .iter()
+                .map(|w| w.as_ref().get_copied(to_device_idx)),
+        ))?;
+
+    let refs_a:Vec<&A> = a.iter().map(|o| &**o).collect();
+    let refs_b:Vec<&B> = b.iter().map(|o| &**o).collect();
+    do_run(&refs_a, &refs_b)
+}
+
 
 #[cfg(test)]
 mod tests {

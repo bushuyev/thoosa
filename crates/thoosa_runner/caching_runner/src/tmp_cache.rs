@@ -46,6 +46,10 @@ impl<D: Data + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
 
     }
 
+    pub fn get(&self, id: &<D as WithId>::ID) -> Option<Arc<DevicesWrap<D>>> {
+        self.map.get(id).map(|reff| Arc::clone(reff.value()))
+    }
+
     pub async fn take_all(mut self, device:usize) -> Vec<D> {
         let mut res = vec![];
         for (key, val) in mem::take(&mut self.map).into_iter() {
