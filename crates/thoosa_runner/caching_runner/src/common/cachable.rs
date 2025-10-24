@@ -844,12 +844,10 @@ where
     do_run(&a, &b)
 }
 
-
-
-pub async fn with_two_arrays_ext<A, B, WA, WB, R>
+pub async fn with_two_arrays_ext<A, B, R>
 (
-    aw: Vec<WA>,
-    bw: Vec<WB>,
+    aw: Vec<Arc<DevicesWrap<A>>>,
+    bw: Vec<Arc<DevicesWrap<B>>>,
     to_device_idx: usize,
     _trace_ctx: Option<&'static str>,
     do_run: impl FnOnce(&[&A], &[&B]) -> Result<R, ThoosaError>,
@@ -857,8 +855,6 @@ pub async fn with_two_arrays_ext<A, B, WA, WB, R>
 where
     A: Data + WithId + Send + Sync + CopyToDevice + 'static,
     B: Data + WithId + Send + Sync + CopyToDevice + 'static,
-    WA: AsRef<DevicesWrap<A>> + Sync + Send + Debug + 'static,
-    WB: AsRef<DevicesWrap<B>> + Sync + Send + Debug + 'static,
 {
     let aw_arc = Arc::new(aw);
     let aw_arc_clone = Arc::clone(&aw_arc);
