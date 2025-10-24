@@ -133,6 +133,7 @@ pub enum MyError {
     UnsupportedDegadeLevel,
     SomethingElse(String),
     NotFound,
+    NotReady,
 }
 
 // #[derive(Error, Debug)]

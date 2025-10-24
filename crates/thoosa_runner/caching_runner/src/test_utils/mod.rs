@@ -49,16 +49,27 @@ pub fn parse_numeric_part(name: &str) -> Option<f64> {
 pub struct MockDataWithId {
     data: MockData,
     with_id: MockWithId,
-    device: Option<usize>,
+    device: usize,
 }
 
 #[cfg(test)]
 impl MockDataWithId {
     pub fn whatever() -> Self {
+        Self::for_device_and_id(0, "id")
+    }
+
+    pub fn for_device(device: usize) -> Self {
+        let mut me = Self::whatever();
+        me.device = device;
+
+        me
+    }
+
+    pub fn for_device_and_id(device: usize, id:&'static str) -> Self {
         let mut with_id = MockWithId::new();
         with_id
             .expect_id()
-            .return_const(DummyCachableId::from("id"));
+            .return_const(DummyCachableId::from(id));
 
         let mut mock_data = MockData::new();
         mock_data.expect_size().return_const([0]);
@@ -66,19 +77,12 @@ impl MockDataWithId {
         Self {
             data: mock_data,
             with_id,
-            device: None,
+            device,
         }
     }
 
-    pub fn for_device(device: usize) -> Self {
-        let mut me = Self::whatever();
-        me.device = Some(device);
-
-        me
-    }
-
-    pub fn device(&self) -> Option<&usize> {
-        self.device.as_ref()
+    pub fn device(&self) -> &usize {
+        &self.device
     }
 }
 
@@ -97,7 +101,7 @@ impl Select<std::ops::Range<[usize; 1]>> for MockDataWithId {
         Ok(MockDataWithId {
             data,
             with_id,
-            device: Some(self.device.unwrap_or(0)),
+            device: self.device,
         })
     }
 }
@@ -112,7 +116,7 @@ impl Data for MockDataWithId {
     }
 
     fn device(&self) -> usize {
-        self.device.unwrap_or(0)
+        self.device
     }
 }
 
@@ -120,6 +124,6 @@ impl Data for MockDataWithId {
 #[async_trait]
 impl CopyToDevice for MockDataWithId {
     async fn copy_to_device(&self, dst_device: usize) -> Self {
-        MockDataWithId::for_device(dst_device)
+        MockDataWithId::for_device_and_id(dst_device, self.id().0)
     }
 }

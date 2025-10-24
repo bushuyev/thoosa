@@ -271,7 +271,7 @@ pub trait WithId {
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct DummyCachableId(&'static str);
+pub struct DummyCachableId(pub &'static str);
 
 impl Named for DummyCachableId {}
 
@@ -316,6 +316,7 @@ impl Metrics for usize {
 }
 
 ///For adjusting one of tensor's dimensions
+///Idx - dimension to split, Size - number of dimensions
 #[derive(Debug, Clone)]
 pub struct MonoMetrics<const Idx:usize, const Size:usize> {
      dims: [i64; Size]

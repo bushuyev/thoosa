@@ -10,7 +10,7 @@ use parking_lot::RwLock;
 use tch::Kind::Float;
 use tch::Tensor;
 use tokio::io::AsyncWriteExt;
-use caching_runner::common::cachable::{Cached, DevicesWrap};
+use caching_runner::common::cachable::{with_two_arrays_ext, with_two_vars_ext, Cached, DevicesWrap};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::tmp_cache::TmpCached;
@@ -25,14 +25,14 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{Adjustable, DataId, SimpleId};
+use thoosa_shared::traits::{Adjustable, DataId, SimpleId, WithId};
 use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use crate::cli::Commands::SelectMotifs;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifSlices, MotifSlices};
+use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
@@ -131,7 +131,9 @@ where
 
 
 
-        let tmp_cache:TmpCached<DataWithExtra<ThoTensor2<ChannelsMotifSlices, SimpleId>, (Vec<Vec<DataId>>, FindMotifsRunConfig)>> = TmpCached::new("motif slices", cache_area).await;
+        let tmp_moitfs_cache:TmpCached<DataWithExtra<ThoTensor2<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, FindMotifsRunConfig)>> = TmpCached::new("motif slices", cache_area).await;
+        let tmp_dists_cache:TmpCached<ThoTensor2<ChannelsMotifsDists, SimpleId>> = TmpCached::new("motif dists", cache_area).await;
+
         let num_channels = self.ws.read().channels();
         let mut motif_dists = Arc::new(parking_lot::RwLock::new(HashMap::new()));
 
@@ -278,14 +280,22 @@ where
                     trace!("SelectMotifsStage::run: channels_dists_t=\n{channels_dists_t}");
                     trace!("SelectMotifsStage::run: channels_motifs_t=\n{channels_motifs_t}");
 
-                    tmp_cache.insert(
+                    let find_and_select_motifs_id = SimpleId(format!("{}_{}", find_motifs_run_config.id.expect("no id in find_motifs_run_config"), select_motifs_run_config.id.expect("no id in select_motifs_run_config")).leak());
+                    tmp_moitfs_cache.insert(
                         DataWithExtra::new(
                             ThoTensor2::new(
-                                SimpleId(format!("{}_{}", find_motifs_run_config.id.expect("no id in find_motifs_run_config"), select_motifs_run_config.id.expect("no id in select_motifs_run_config")).leak()),
+                                find_and_select_motifs_id.clone(),
                                 channels_motifs_t
                             ),
                             (channels_motif_ids, find_motifs_run_config.clone())
                         )//TODO leak
+                    );
+
+                    tmp_dists_cache.insert(
+                        ThoTensor2::new(
+                            find_and_select_motifs_id,
+                            channels_dists_t
+                        )
                     );
 
                     Ok(())
@@ -294,7 +304,7 @@ where
         }
 
 
-        let motifs = tmp_cache.clone_to_arcs_vec();
+        let motifs = tmp_moitfs_cache.clone_to_arcs_vec();
 
 
         debug!("SelectMotifsStage::run: motif_dists={motif_dists:?}");
@@ -325,52 +335,60 @@ where
 
                 let r = futures::stream::iter(motifs.clone())
                     .map(|value| {
-                        let t_0_batch = t_0_batch.clone();//cones Arcs
-                        let value = Arc::clone(&value);
+                        let t_0_batch = t_0_batch.clone(); //cones Arcs
+                        let value_vec = vec![Arc::clone(&value)];
 
-                        debug!("SelectMotifsStage::run: t_0_batch={t_0_batch:?} value={value:?}");
+                        let dists = tmp_dists_cache.get(value.id()).expect(&format!("no dists for {}", value.id()));
+
+                        debug!("SelectMotifsStage::run: t_0_batch={t_0_batch:?} \nvalue={value:?} \ndists={dists:?}");
 
                         async move {
+                            
+                             let r = with_two_vars_ext(Arc::clone(&value), Arc::clone(&value), device_idx, None, |a, b| {
+                                 debug!("SelectMotifsStage::run: a={a:?} b={b:?}");
+                                 Ok(())
+                             }).await?;
 
-                        let _ = DevicesWrap::with_two_arrays(t_0_batch.as_slice(), &[value], device_idx, None, |batch, motifs|{
-                            debug!("SelectMotifsStage::run: batch={batch:?} motifs={motifs:?}");
+                            let _ = with_two_arrays_ext(t_0_batch.clone(), value_vec, device_idx, None, |batch, motifs| {
+                                debug!("SelectMotifsStage::run: batch={batch:?} motifs={motifs:?}");
 
-                            let (batch_0_t, batch_0_sizes) =  unfold_and_cat(&batch, &UnfoldParams::new(1, motifs[0].extra().1.window as i64, motifs[0].extra().1.step as i64))?;
+                                let (batch_0_t, batch_0_sizes) = unfold_and_cat(&batch, &UnfoldParams::new(1, motifs[0].extra().1.window as i64, motifs[0].extra().1.step as i64))?;
 
-                            let motifs_stream = ThoCudaStream::new(0);//TODO
-                            let guard = StreamGuard::set(&motifs_stream);//TODO Device
+                                let motifs_stream = ThoCudaStream::new(0); //TODO
+                                let guard = StreamGuard::set(&motifs_stream); //TODO Device
 
-                            let mut mask_makers = vec![
-                                LocalMin {dim: 1},
-                                // Le {
-                                //     v: Tensor::full(
-                                //         &[num_channels as i64, 1],
-                                //         0.0,
-                                //         (Float, ThoDevice::from(device_idx).into()),
-                                //     )
-                                // }
-                            ];
+                                let mut mask_makers = vec![
+                                    LocalMin { dim: 1 },
+                                    // Le {
+                                    //     v: Tensor::full(
+                                    //         &[num_channels as i64, 1],
+                                    //         0.0,
+                                    //         (Float, ThoDevice::from(device_idx).into()),
+                                    //     )
+                                    // }
+                                ];
 
-                            let motifs_stream = ThoCudaStream::new(0);//TODO
-                            let guard = StreamGuard::set(&motifs_stream);//TODO Device
-
-
-                            let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
-                                motifs[0].data().t_ref().shallow_clone(),
-                                batch_0_t,
-                                false,//if true dists are returned
-                                &mut mask_makers,
-                            )?;
-                            drop(guard);
-
-                            debug!("SelectMotifsStage::run: mask={mask:?} dists={dists:?}");
+                                let motifs_stream = ThoCudaStream::new(0); //TODO
+                                let guard = StreamGuard::set(&motifs_stream); //TODO Device
 
 
-                            Ok(())
-                        }).await?;
+                                let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
+                                    motifs[0].data().t_ref().shallow_clone(),
+                                    batch_0_t,
+                                    false, //if true dists are returned
+                                    &mut mask_makers,
+                                )?;
+                                drop(guard);
 
-                        Ok::<(), ThoosaError>(())
-                    }})
+                                debug!("SelectMotifsStage::run: mask={mask:?} dists={dists:?}");
+
+
+                                Ok(())
+                            }).await?;
+
+                            Ok::<(), ThoosaError>(())
+                        }
+                    })
                     .buffer_unordered(10)
                     .try_collect::<Vec<_>>()
                     .await?;
