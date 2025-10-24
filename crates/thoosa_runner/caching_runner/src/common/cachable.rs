@@ -6,7 +6,7 @@ use crate::common::*;
 use crate::global_ctx::GlobalCtx;
 use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
-use futures_util::FutureExt;
+use futures_util::{FutureExt, StreamExt, TryStreamExt};
 use futures_util::future::{BoxFuture, Shared, join_all, try_join_all};
 use log::debug;
 use mockall_double::double;
@@ -545,10 +545,8 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     ) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError> {
         //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
         //TODO add GlobalCtx::purge_lock just in case?
-        debug!(
-            "DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",
-            self.id, self.cached_data
-        );
+        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",self.id, self.cached_data);
+
         if to_device_idx != 0 {
             *self.on_cpu_since.write() = None;
         }
@@ -574,6 +572,52 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
             Err(MyError::NotFound.into())
         }
     }
+
+    async fn load_from_any_device(
+        &self,
+        to_device_idx: usize,
+    ) -> Result<(), ThoosaError> {
+        //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
+        //TODO add GlobalCtx::purge_lock just in case?
+        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",self.id, self.cached_data);
+
+        if to_device_idx != 0 {
+            *self.on_cpu_since.write() = None;
+        }
+
+        let read_guard = self.cached_data[to_device_idx].read().await;
+
+        if read_guard.is_some() {
+            Ok(())
+        } else {
+            drop(read_guard);
+
+            for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+                let source_read_guard = op.read().await;
+
+                if source_device_idx != to_device_idx && source_read_guard.is_some() {
+                    drop(source_read_guard);
+                    self.ensure_copied(source_device_idx, to_device_idx, None, false).await?;
+                    return Ok(());
+                }
+            }
+            Err(MyError::NotFound.into())
+        }
+    }
+
+    async fn get_copied(&self, from_device_idx: usize) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError> {
+        let read_guard = self.cached_data[from_device_idx].read().await;
+
+        if read_guard.is_some() {
+            Ok(tokio::sync::RwLockReadGuard::map(
+                read_guard,
+                |val: &Option<O>| val.as_ref().expect("no value behind guard"),
+            ))
+        } else {
+            Err(MyError::NotReady.into())
+        }
+    }
+
 
     pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoosaError> {
         assert_ne!(device_idx, 0);
@@ -766,13 +810,130 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     }
 }
 
+
+#[macro_export]
+macro_rules! with_data {
+    // use a delimiter to disambiguate the closure
+    ( $device:tt, $( $args:tt ),+ ; $f:expr ) => {{
+        // keep all temporaries in this block
+        $( $crate::__arc_call_prep!($args); )*
+        ($f)( $( $crate::__arc_call_arg!($args) ),* )
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __arc_call_prep {
+    // For a collection like Vec<Arc<T>> or &[Arc<T>], build Vec<&T>
+    ( [ $id:ident ] ) => {
+        // shadow the original name *inside* the macro block
+        let $id = $id.iter().map(|x| x.as_ref()).collect::<::std::vec::Vec<_>>();
+    };
+    // Single Arc<T>: nothing to precompute
+    ( $id:ident ) => {
+
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __arc_call_arg {
+    // For a collection: pass &[&T]
+    ( [ $id:ident ] ) => { $id.as_slice() };
+    // For a single Arc<T>: pass &T
+    ( $id:ident ) => { &*$id };
+}
+
+pub async fn with_two_vars_ext<A, B, R>
+(
+    aw: Arc<DevicesWrap<A>>,
+    bw: Arc<DevicesWrap<B>>,
+    to_device_idx: usize,
+    _trace_ctx: Option<&'static str>,
+    do_run: impl FnOnce(&A, &B) -> Result<R, ThoosaError>,
+) -> Result<R, ThoosaError>
+where
+    A: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    B: Data + WithId + Send + Sync + CopyToDevice + 'static,
+{
+    let aw_arc_clone = Arc::clone(&aw);
+    let bw_arc_clone = Arc::clone(&bw);
+
+    let (ra, rb) = tokio::try_join!(
+        tokio::spawn(async move {
+            aw.load_from_any_device(to_device_idx).await?;
+            Ok::<(), ThoosaError>(())
+        }),
+        tokio::spawn(async move {
+            bw.load_from_any_device(to_device_idx).await?;
+            Ok::<(), ThoosaError>(())
+        })
+    )?;
+
+    let (a, b) = tokio::try_join!(
+        aw_arc_clone.get_copied(to_device_idx),
+        bw_arc_clone.get_copied(to_device_idx),
+    )?;
+
+    do_run(&a, &b)
+}
+
+
+
+pub async fn with_two_arrays_ext<A, B, R>
+(
+    aw: Vec<Arc<DevicesWrap<A>>>,
+    bw: Vec<Arc<DevicesWrap<B>>>,
+    to_device_idx: usize,
+    _trace_ctx: Option<&'static str>,
+    do_run: impl FnOnce(&[&A], &[&B]) -> Result<R, ThoosaError>,
+) -> Result<R, ThoosaError>
+where
+    A: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    B: Data + WithId + Send + Sync + CopyToDevice + 'static,
+{
+    let aw_arc = Arc::new(aw);
+    let aw_arc_clone = Arc::clone(&aw_arc);
+    let bw_arc = Arc::new(bw);
+    let bw_arc_clone = Arc::clone(&bw_arc);
+
+    let ha = tokio::spawn(async move {
+        try_join_all(aw_arc.iter().map(|v| async move { v.as_ref().load_from_any_device(to_device_idx).await }))
+            .await
+            .map(|_| ())
+    });
+    let hb = tokio::spawn(async move {
+        try_join_all(bw_arc.iter().map(|v| async move { v.as_ref().load_from_any_device(to_device_idx).await }))
+            .await
+            .map(|_| ())
+    });
+
+    let (ra, rb) = tokio::try_join!(ha, hb)?;
+
+    let (a, b) = tokio::try_join!(
+            try_join_all(aw_arc_clone
+                .iter()
+                .map(|w| w.as_ref().get_copied(to_device_idx))
+            ),
+            try_join_all(bw_arc_clone
+                .iter()
+                .map(|w| w.as_ref().get_copied(to_device_idx)),
+        ))?;
+
+    let refs_a:Vec<&A> = a.iter().map(|o| &**o).collect();
+    let refs_b:Vec<&B> = b.iter().map(|o| &**o).collect();
+    do_run(&refs_a, &refs_b)
+}
+
+
 #[cfg(test)]
 mod tests {
     use crate::common::ThoosaError;
     use crate::global_ctx::{MockGlobalCtx, mock_global_ctx};
     use crate::*;
     use log::debug;
-
+    use thoosa_shared::traits::WithId;
+    use crate::common::cachable::DevicesWrap;
     use crate::test_utils::MockDataWithId;
 
     #[tokio::test]
@@ -831,25 +992,25 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_with_data() -> Result<(), ThoosaError> {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
-        let tested = super::DevicesWrap::wrap(MockDataWithId::whatever(), 0);
-
-        tested
-            .with_data_ref(0, None, |t| {
-                debug!("t={t:?}");
-                Ok(())
-            })
-            .await?;
-        //TODO test
-        Ok(())
-    }
+    // #[tokio::test]
+    // async fn test_with_data() -> Result<(), ThoosaError> {
+    //     let ctx = MockGlobalCtx::global_context();
+    //     ctx.expect().returning(|| {
+    //         Box::leak(Box::new(
+    //             mock_global_ctx::build_default(),
+    //         )) as &'static global_ctx::MockGlobalCtx
+    //     });
+    //     let tested = super::DevicesWrap::wrap(MockDataWithId::whatever(), 0);
+    //
+    //     tested
+    //         .with_data_ref(0, None, |t| {
+    //             debug!("t={t:?}");
+    //             Ok(())
+    //         })
+    //         .await?;
+    //     //TODO test
+    //     Ok(())
+    // }
 
     #[tokio::test]
     async fn test_with_selected_data() -> Result<(), ThoosaError> {
@@ -885,7 +1046,7 @@ mod tests {
 
         tested
             .with_data_ref(1, None, |data_on_1| {
-                assert_eq!(data_on_1.device(), Some(&1));
+                assert_eq!(data_on_1.device(), &1);
 
                 Ok(())
             })
@@ -895,6 +1056,30 @@ mod tests {
 
         tested.dump_to_cpu(1).await?;
         assert!(tested.cached_data[1].read().await.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_with_data() -> Result<(), ThoosaError> {
+        let ctx = MockGlobalCtx::global_context();
+        ctx.expect().returning(|| {
+            Box::leak(Box::new(
+                mock_global_ctx::build_default(),
+            )) as &'static global_ctx::MockGlobalCtx
+        });
+
+        let wrap_a = DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), 0);
+        let wrap_vec = vec![
+            DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "b"), 0),
+            DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "c"), 0)
+        ];
+
+
+
+        with_data!(0, wrap_a, [wrap_vec]; |a:&MockDataWithId, v:&[&MockDataWithId]|{
+            assert_eq!(a.device(), &1);
+        });
 
         Ok(())
     }

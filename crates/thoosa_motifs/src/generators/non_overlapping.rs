@@ -56,9 +56,9 @@ pub fn generate_series_with_motif(
             if intervals.iter().any(|iv| !(start + motif_len + min_gap <= iv.start || start >= iv.end + min_gap)) {
                 continue;
             }
-            let amp = rng.random_range(amp_range.0..amp_range.1);
+            let amp = 1.0;//rng.random_range(amp_range.0..amp_range.1);
             for (k, &mv) in motif.iter().enumerate() {
-                sig[start + k] = sig[start] + amp * mv;
+                sig[start + k] = sig[start] + amp * mv + rng.random_range(amp_range.0..amp_range.1) * 0.4;
             }
             intervals.push(Interval { start, end: start + motif_len });
             continue 'outer;
@@ -88,7 +88,7 @@ mod demo {
     #[test]
     fn gen_demo() {
         let (sig, ivals) = generate_series_with_motif(
-            20_000, 400, 4, 300, 0.4, (0.8, 1.8), None, &MotifKind::Pulse,
+            20_000, 4000, 2, 300, 0.4, (0.8, 1.8), None, &MotifKind::Triangle,
         );
         debug!("len={} intervals={:?}", sig.len(), ivals);
 
