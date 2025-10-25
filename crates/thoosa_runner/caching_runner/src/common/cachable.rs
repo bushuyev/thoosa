@@ -1061,4 +1061,23 @@ mod tests {
         })?;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_with_data_single_val() -> Result<(), ThoosaError> {
+        let ctx = MockGlobalCtx::global_context();
+        ctx.expect().returning(|| {
+            Box::leak(Box::new(
+                mock_global_ctx::build_default(),
+            )) as &'static global_ctx::MockGlobalCtx
+        });
+
+        let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), 0));
+
+        with_data!(1, wrap_a;
+            |a: &MockDataWithId|{
+                assert_eq!(a.device(), &1);
+                Ok::<(), ThoosaError>(())
+        })?;
+        Ok(())
+    }
 }

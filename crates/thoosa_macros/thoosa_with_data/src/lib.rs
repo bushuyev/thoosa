@@ -141,16 +141,18 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
         }
     }
 
-    let join_block = if load_handle_names.is_empty() {
-        quote! {}
-    } else {
-        let joins = load_handle_names;
-        let results = load_handle_results;
-        quote! {
-            let (#(#results),*) = ::tokio::try_join!(#(#joins),*)?;
-            #( #results?; )*
-        }
-    };
+    let await_blocks: Vec<_> = load_handle_names
+        .iter()
+        .zip(load_handle_results.iter())
+        .map(|(handle, result)| {
+            let handle_ident = handle.clone();
+            let result_ident = result.clone();
+            quote! {
+                let #result_ident = #handle_ident.await?;
+                #result_ident?;
+            }
+        })
+        .collect();
 
     quote! {
         {
@@ -159,7 +161,7 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
                 let __device_idx = __with_data_device;
                 #(#prelude)*
                 #(#load_handles)*
-                #join_block
+                #(#await_blocks)*
                 #(#post_load)*
                 (#closure)(#(#arg_refs),*)
             }.await
