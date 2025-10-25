@@ -15,7 +15,7 @@ convert_case = "0.7.1"
 thoosa_run_config_args = {path = "../thoosa_run_config_args" }
 thoosa_macros_utils = {path = "../thoosa_macros_utils" }
 thoosa_shared = {path = "../../thoosa_shared" }
-proc-macro2 = { version = "1.0.93" }
+proc-macro2.workspace = true
 clap.workspace = true
 log.workspace = true
 

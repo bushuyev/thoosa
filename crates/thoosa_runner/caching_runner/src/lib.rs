@@ -1,4 +1,4 @@
-#![recursion_limit = "512"]
+#![feature(macro_metavar_expr_concat)]
 
 pub mod adjusters;
 pub mod common;

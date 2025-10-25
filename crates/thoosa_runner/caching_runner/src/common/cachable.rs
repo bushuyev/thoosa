@@ -22,6 +22,7 @@ use thoosa_shared::MyError;
 use tokio::sync::{Notify, RwLockReadGuard};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Data, Select};
+use thoosa_with_data::with_data;
 
 #[async_trait]
 pub trait Cached: AsyncStage
@@ -810,15 +811,28 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     }
 }
 
-
+/*
 #[macro_export]
 macro_rules! with_data {
     // use a delimiter to disambiguate the closure
     ( $device:tt, $( $args:tt ),+ ; $f:expr ) => {{
         // keep all temporaries in this block
-        $( $crate::__arc_call_prep!($args); )*
-        ($f)( $( $crate::__arc_call_arg!($args) ),* )
+        $( $crate::__with_data_clone_!($args); )*
+        // $( $crate::__arc_call_prep!($args); )*
+        // ($f)( $( $crate::__arc_call_arg!($args) ),* )
     }};
+}
+
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __with_data_clone_ {
+    ( [ $id:ident ] ) => {
+
+    };
+    ( $id:ident ) => {
+         let ${concat($id, _arc)} = std::sync::Arc::new($id);
+    };
 }
 
 #[doc(hidden)]
@@ -842,7 +856,7 @@ macro_rules! __arc_call_arg {
     ( [ $id:ident ] ) => { $id.as_slice() };
     // For a single Arc<T>: pass &T
     ( $id:ident ) => { &*$id };
-}
+}*/
 
 pub async fn with_two_vars_ext<A, B, R>
 (
@@ -928,11 +942,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use crate::common::ThoosaError;
     use crate::global_ctx::{MockGlobalCtx, mock_global_ctx};
     use crate::*;
     use log::debug;
     use thoosa_shared::traits::WithId;
+    use thoosa_with_data::with_data;
     use crate::common::cachable::DevicesWrap;
     use crate::test_utils::MockDataWithId;
 
@@ -1069,18 +1085,27 @@ mod tests {
             )) as &'static global_ctx::MockGlobalCtx
         });
 
-        let wrap_a = DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), 0);
+        let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), 0));
+        let wrap_b = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "d"), 0));
         let wrap_vec = vec![
-            DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "b"), 0),
-            DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "c"), 0)
+            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "b"), 0)),
+            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "c"), 0)),
+        ];
+        let wrap_vec_second = vec![
+            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "e"), 0)),
+            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "f"), 0)),
         ];
 
-
-
-        with_data!(0, wrap_a, [wrap_vec]; |a:&MockDataWithId, v:&[&MockDataWithId]|{
-            assert_eq!(a.device(), &1);
-        });
-
+        with_data!(1, wrap_a, [wrap_vec], wrap_b, [wrap_vec_second];
+            |a: &MockDataWithId, first: &[&MockDataWithId], b: &MockDataWithId, second: &[&MockDataWithId]|{
+                assert_eq!(a.device(), &1);
+                assert_eq!(b.device(), &1);
+                assert_eq!(first.len(), 2);
+                assert!(first.iter().all(|item| *item.device() == 1));
+                assert_eq!(second.len(), 2);
+                assert!(second.iter().all(|item| *item.device() == 1));
+                Ok::<(), ThoosaError>(())
+        })?;
         Ok(())
     }
 }
