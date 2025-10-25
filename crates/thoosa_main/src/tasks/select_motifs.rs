@@ -343,6 +343,7 @@ where
                         debug!("SelectMotifsStage::run: t_0_batch={t_0_batch:?} \nvalue={value:?} \ndists={dists:?}");
 
                         async move {
+                            
                              let r = with_two_vars_ext(Arc::clone(&value), Arc::clone(&value), device_idx, None, |a, b| {
                                  debug!("SelectMotifsStage::run: a={a:?} b={b:?}");
                                  Ok(())

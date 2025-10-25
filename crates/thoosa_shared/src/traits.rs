@@ -271,7 +271,7 @@ pub trait WithId {
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct DummyCachableId(&'static str);
+pub struct DummyCachableId(pub &'static str);
 
 impl Named for DummyCachableId {}
 

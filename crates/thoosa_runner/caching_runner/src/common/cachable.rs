@@ -810,6 +810,40 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     }
 }
 
+
+#[macro_export]
+macro_rules! with_data {
+    // use a delimiter to disambiguate the closure
+    ( $device:tt, $( $args:tt ),+ ; $f:expr ) => {{
+        // keep all temporaries in this block
+        $( $crate::__arc_call_prep!($args); )*
+        ($f)( $( $crate::__arc_call_arg!($args) ),* )
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __arc_call_prep {
+    // For a collection like Vec<Arc<T>> or &[Arc<T>], build Vec<&T>
+    ( [ $id:ident ] ) => {
+        // shadow the original name *inside* the macro block
+        let $id = $id.iter().map(|x| x.as_ref()).collect::<::std::vec::Vec<_>>();
+    };
+    // Single Arc<T>: nothing to precompute
+    ( $id:ident ) => {
+
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __arc_call_arg {
+    // For a collection: pass &[&T]
+    ( [ $id:ident ] ) => { $id.as_slice() };
+    // For a single Arc<T>: pass &T
+    ( $id:ident ) => { &*$id };
+}
+
 pub async fn with_two_vars_ext<A, B, R>
 (
     aw: Arc<DevicesWrap<A>>,
@@ -843,6 +877,8 @@ where
 
     do_run(&a, &b)
 }
+
+
 
 pub async fn with_two_arrays_ext<A, B, R>
 (
@@ -896,7 +932,8 @@ mod tests {
     use crate::global_ctx::{MockGlobalCtx, mock_global_ctx};
     use crate::*;
     use log::debug;
-
+    use thoosa_shared::traits::WithId;
+    use crate::common::cachable::DevicesWrap;
     use crate::test_utils::MockDataWithId;
 
     #[tokio::test]
@@ -955,25 +992,25 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_with_data() -> Result<(), ThoosaError> {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
-        let tested = super::DevicesWrap::wrap(MockDataWithId::whatever(), 0);
-
-        tested
-            .with_data_ref(0, None, |t| {
-                debug!("t={t:?}");
-                Ok(())
-            })
-            .await?;
-        //TODO test
-        Ok(())
-    }
+    // #[tokio::test]
+    // async fn test_with_data() -> Result<(), ThoosaError> {
+    //     let ctx = MockGlobalCtx::global_context();
+    //     ctx.expect().returning(|| {
+    //         Box::leak(Box::new(
+    //             mock_global_ctx::build_default(),
+    //         )) as &'static global_ctx::MockGlobalCtx
+    //     });
+    //     let tested = super::DevicesWrap::wrap(MockDataWithId::whatever(), 0);
+    //
+    //     tested
+    //         .with_data_ref(0, None, |t| {
+    //             debug!("t={t:?}");
+    //             Ok(())
+    //         })
+    //         .await?;
+    //     //TODO test
+    //     Ok(())
+    // }
 
     #[tokio::test]
     async fn test_with_selected_data() -> Result<(), ThoosaError> {
@@ -1009,7 +1046,7 @@ mod tests {
 
         tested
             .with_data_ref(1, None, |data_on_1| {
-                assert_eq!(data_on_1.device(), Some(&1));
+                assert_eq!(data_on_1.device(), &1);
 
                 Ok(())
             })
@@ -1019,6 +1056,30 @@ mod tests {
 
         tested.dump_to_cpu(1).await?;
         assert!(tested.cached_data[1].read().await.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_with_data() -> Result<(), ThoosaError> {
+        let ctx = MockGlobalCtx::global_context();
+        ctx.expect().returning(|| {
+            Box::leak(Box::new(
+                mock_global_ctx::build_default(),
+            )) as &'static global_ctx::MockGlobalCtx
+        });
+
+        let wrap_a = DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), 0);
+        let wrap_vec = vec![
+            DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "b"), 0),
+            DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "c"), 0)
+        ];
+
+
+
+        with_data!(0, wrap_a, [wrap_vec]; |a:&MockDataWithId, v:&[&MockDataWithId]|{
+            assert_eq!(a.device(), &1);
+        });
 
         Ok(())
     }
