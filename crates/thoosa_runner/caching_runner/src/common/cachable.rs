@@ -811,53 +811,6 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     }
 }
 
-/*
-#[macro_export]
-macro_rules! with_data {
-    // use a delimiter to disambiguate the closure
-    ( $device:tt, $( $args:tt ),+ ; $f:expr ) => {{
-        // keep all temporaries in this block
-        $( $crate::__with_data_clone_!($args); )*
-        // $( $crate::__arc_call_prep!($args); )*
-        // ($f)( $( $crate::__arc_call_arg!($args) ),* )
-    }};
-}
-
-
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __with_data_clone_ {
-    ( [ $id:ident ] ) => {
-
-    };
-    ( $id:ident ) => {
-         let ${concat($id, _arc)} = std::sync::Arc::new($id);
-    };
-}
-
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __arc_call_prep {
-    // For a collection like Vec<Arc<T>> or &[Arc<T>], build Vec<&T>
-    ( [ $id:ident ] ) => {
-        // shadow the original name *inside* the macro block
-        let $id = $id.iter().map(|x| x.as_ref()).collect::<::std::vec::Vec<_>>();
-    };
-    // Single Arc<T>: nothing to precompute
-    ( $id:ident ) => {
-
-    };
-}
-
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __arc_call_arg {
-    // For a collection: pass &[&T]
-    ( [ $id:ident ] ) => { $id.as_slice() };
-    // For a single Arc<T>: pass &T
-    ( $id:ident ) => { &*$id };
-}*/
-
 pub async fn with_two_vars_ext<A, B, R>
 (
     aw: Arc<DevicesWrap<A>>,
