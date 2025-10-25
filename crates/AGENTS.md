@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+## Never run cargo fmt!
+
 ## Project Structure & Module Organization
 - Workspace root with `Cargo.toml` (Rust 2024, nightly toolchain).
 - Crates:
@@ -16,13 +18,11 @@
 - Run tests (all): `cargo test`
 - Run tests for a crate: `cargo test -p caching_runner_test -- --nocapture`
 - Lint (if installed): `cargo clippy --all-targets -- -D warnings`
-- Format: `cargo fmt --all`
 Notes:
 - Requires nightly toolchain (`rust-toolchain.toml` is pinned). Install via `rustup toolchain install nightly`.
 - GPU/Torch runs may require `source ./env.sh` to set `LD_PRELOAD`.
 
 ## Coding Style & Naming Conventions
-- Formatting: `cargo fmt` (default rustfmt). 4‑space indent.
 - Linting: keep `clippy` clean; deny warnings in CI/local before PRs.
 - Naming: modules/files `snake_case`; types/traits `PascalCase`; functions/vars `snake_case`.
 - Concurrency: prefer `tokio` primitives; shared maps via `dashmap`; avoid `unsafe`.
@@ -37,7 +37,7 @@ Notes:
 ## Commit & Pull Request Guidelines
 - Commits: short, imperative subjects (e.g., "cleanup", "tensor copy"). Group related changes.
 - PRs: include a clear summary, rationale, and scope; reference issues (e.g., `Fixes #123`).
-- Requirements: passing build/tests, formatted code, no new clippy warnings, add/adjust tests when behavior changes.
+- Requirements: passing build/tests, no new clippy warnings, add/adjust tests when behavior changes.
 - Large changes: outline design in the PR description; include benchmarks if performance‑related.
 
 ## Security & Configuration Tips
