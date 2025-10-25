@@ -4820,6 +4820,7 @@ dependencies = [
  "thoosa_shared",
  "thoosa_shims",
  "thoosa_store",
+ "thoosa_with_data",
  "tokio",
  "torch-sys",
  "torch_runner",
