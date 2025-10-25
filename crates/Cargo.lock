@@ -553,6 +553,7 @@ dependencies = [
  "simplelog",
  "thoosa_dummy_data_derive",
  "thoosa_shared",
+ "thoosa_with_data",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3557,9 +3558,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.101"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89ae43fd86e4158d6db51ad8e2b80f313af9cc74f5c0e03ccb87de09998732de"
+checksum = "5ee95bc4ef87b8d5ba32e8b7714ccc834865276eab0aed5c9958d00ec45f49e8"
 dependencies = [
  "unicode-ident",
 ]
@@ -4967,6 +4968,15 @@ dependencies = [
  "simplelog",
  "thoosa_shared",
  "zstd 0.13.3",
+]
+
+[[package]]
+name = "thoosa_with_data"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
 ]
 
 [[package]]
