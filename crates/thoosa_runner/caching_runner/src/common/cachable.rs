@@ -574,7 +574,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         }
     }
 
-    async fn load_from_any_device(
+    pub async fn load_from_any_device(
         &self,
         to_device_idx: usize,
     ) -> Result<(), ThoosaError> {
@@ -606,7 +606,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         }
     }
 
-    async fn get_copied(&self, from_device_idx: usize) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError> {
+    pub async fn get_copied(&self, from_device_idx: usize) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError> {
         let read_guard = self.cached_data[from_device_idx].read().await;
 
         if read_guard.is_some() {
@@ -1061,4 +1061,6 @@ mod tests {
         })?;
         Ok(())
     }
+
+    
 }

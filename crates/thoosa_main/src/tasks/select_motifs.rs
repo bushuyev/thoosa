@@ -28,6 +28,7 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Adjustable, DataId, SimpleId, WithId};
 use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
 use thoosa_store::Store;
+use thoosa_with_data::with_data;
 use torch_runner::data::ThoTensor2;
 use crate::cli::Commands::SelectMotifs;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
@@ -343,11 +344,18 @@ where
                         debug!("SelectMotifsStage::run: t_0_batch={t_0_batch:?} \nvalue={value:?} \ndists={dists:?}");
 
                         async move {
-                            
-                             let r = with_two_vars_ext(Arc::clone(&value), Arc::clone(&value), device_idx, None, |a, b| {
-                                 debug!("SelectMotifsStage::run: a={a:?} b={b:?}");
-                                 Ok(())
-                             }).await?;
+
+                             // let r = with_two_vars_ext(Arc::clone(&value), Arc::clone(&value), device_idx, None, |a, b| {
+                             //
+                             //     Ok(())
+                             // }).await?;
+
+                            let vec = vec![Arc::clone(&value)];
+                            with_data!(1, Arc::clone(&value), [vec];
+                                |a, b|{
+                                    debug!("SelectMotifsStage::run: a={a:?} b={b:?}");
+                                Ok::<(), ThoosaError>(())
+                            })?;
 
                             let _ = with_two_arrays_ext(t_0_batch.clone(), value_vec, device_idx, None, |batch, motifs| {
                                 debug!("SelectMotifsStage::run: batch={batch:?} motifs={motifs:?}");
