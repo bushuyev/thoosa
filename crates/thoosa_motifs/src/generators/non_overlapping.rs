@@ -1,7 +1,7 @@
 use std::ops::Deref;
-use log::{debug, warn};
+use log::debug;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use thoosa_shared::{gen_motif, pulse_v, MotifKind};
+use thoosa_shared::{gen_motif, pulse_v, MotifKind, ThoosaError};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Interval { pub start: usize, pub end: usize }
@@ -33,7 +33,7 @@ pub fn generate_series_with_motif(
     amp_range: (f32, f32),
     seed: Option<u64>,
     motif_kind: &MotifKind, // "triangle" or "sine"
-) -> (Vec<f32>, Vec<Interval>) {
+) -> Result<(Vec<f32>, Vec<Interval>), ThoosaError> {
     let mut rng = seed.map(|seed|StdRng::seed_from_u64(seed)).unwrap_or(StdRng::from_os_rng());
 
     // random-walk background using our own Normal(0, step_sigma)
@@ -50,26 +50,44 @@ pub fn generate_series_with_motif(
     for v in &mut motif { *v = (*v - m) / s; }
 
     // place non-overlapping intervals
-    let mut intervals = Vec::<Interval>::new();
-    'outer: for _ in 0..repeats {
-        for _ in 0..20_000 {
-            let start = rng.random_range(0..=len.saturating_sub(motif_len));
-            if intervals.iter().any(|iv| !(start + motif_len + min_gap <= iv.start || start >= iv.end + min_gap)) {
-                continue;
-            }
-            let amp = 1.0;//rng.random_range(amp_range.0..amp_range.1);
-            for (k, &mv) in motif.iter().enumerate() {
-                sig[start + k] = sig[start] + amp * mv + rng.random_range(amp_range.0..amp_range.1) * 0.4;
-            }
-            intervals.push(Interval { start, end: start + motif_len });
-            continue 'outer;
-        }
-        warn!("couldn’t place more with constraints");
-        break; // couldn’t place more with constraints
+    if repeats == 0 || motif_len == 0 {
+        return Ok((sig, Vec::new()));
     }
 
-    intervals.sort_by_key(|iv| iv.start);
-    (sig, intervals)
+    let total_motif_space = motif_len.checked_mul(repeats).ok_or_else(|| {
+        ThoosaError::new("motif placement overflows usize")
+    })?;
+    let gaps_between = repeats.saturating_sub(1);
+    let total_gap_space = min_gap.checked_mul(gaps_between).ok_or_else(|| {
+        ThoosaError::new("motif gap sizing overflows usize")
+    })?;
+    let required_space = total_motif_space.checked_add(total_gap_space).ok_or_else(|| {
+        ThoosaError::new("motif layout exceeds addressable range")
+    })?;
+
+    if required_space > len {
+        return Err(ThoosaError::new(format!(
+            "cannot place {repeats} motifs (len={motif_len}) with min_gap={min_gap} into series len={len}"
+        )));
+    }
+
+    let extra_space = len - required_space;
+    let leading_gap = extra_space / 2;
+
+    let mut intervals = Vec::with_capacity(repeats);
+    let mut start = leading_gap;
+    for motif_idx in 0..repeats {
+        let base = sig[start];
+        for (k, &mv) in motif.iter().enumerate() {
+            sig[start + k] = base + mv + rng.random_range(amp_range.0..amp_range.1) * 0.4;
+        }
+        intervals.push(Interval { start, end: start + motif_len });
+        if motif_idx + 1 < repeats {
+            start += motif_len + min_gap;
+        }
+    }
+
+    Ok((sig, intervals))
 }
 
 
@@ -91,7 +109,7 @@ mod demo {
     fn gen_demo() {
         let (sig, ivals) = generate_series_with_motif(
             20_000, 4000, 2, 300, 0.4, (0.8, 1.8), None, &MotifKind::Triangle,
-        );
+        ).expect("motifs should fit");
         debug!("len={} intervals={:?}", sig.len(), ivals);
 
         let test_dir = Path::new("/tmp/random_sigs");//.join(cdt_for_dir());
@@ -114,5 +132,43 @@ mod demo {
         ).unwrap();
 
         println!("saved to {test_dir:?}");
+    }
+
+    #[test]
+    fn generate_series_with_motif_places_everything_when_space_allows() {
+        let len = 200;
+        let motif_len = 10;
+        let repeats = 3;
+        let min_gap = 5;
+        let (_, intervals) = generate_series_with_motif(
+            len,
+            motif_len,
+            repeats,
+            min_gap,
+            0.4,
+            (0.8, 1.8),
+            Some(42),
+            &MotifKind::Triangle,
+        ).expect("motifs should be placed");
+
+        assert_eq!(intervals.len(), repeats);
+        let starts: Vec<_> = intervals.into_iter().map(|iv| iv.start).collect();
+        assert_eq!(starts, vec![80, 95, 110]);
+    }
+
+    #[test]
+    fn generate_series_with_motif_errors_when_series_too_short() {
+        let result = generate_series_with_motif(
+            20,
+            10,
+            2,
+            5,
+            0.4,
+            (0.8, 1.8),
+            None,
+            &MotifKind::Triangle,
+        );
+
+        assert!(result.is_err());
     }
 }
