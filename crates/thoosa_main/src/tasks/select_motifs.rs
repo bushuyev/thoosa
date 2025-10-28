@@ -533,7 +533,7 @@ mod tests {
 
                 .build()));
 
-        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 2, &[MotifKind::Pulse] );
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 2, &[MotifKind::Pulse] )?;
 
         debug!("test_single_label_one_motif: resource_a_intervals={resource_a_intervals:?}");
 
@@ -617,9 +617,9 @@ mod tests {
 
                 .build()));
 
-        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 3, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] );
-        let (resource_b_t, resource_b_intervals) = resource_tensor(resource_b.length() as usize, 100, 3, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] );
-        let (resource_c_t, resource_c_intervals) = resource_tensor(resource_c.length() as usize, 100, 2, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] );
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 3, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] )?;
+        let (resource_b_t, resource_b_intervals) = resource_tensor(resource_b.length() as usize, 100, 3, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] )?;
+        let (resource_c_t, resource_c_intervals) = resource_tensor(resource_c.length() as usize, 100, 2, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] )?;
 
 
         let loader = Arc::new(
@@ -673,20 +673,20 @@ mod tests {
         t
     }
 
-    pub fn resource_tensor(resource_len:usize, motif_len:usize, num_motifs:usize, channels_motif_kinds:&[MotifKind]) -> (Tensor, Vec<Vec<Interval>>) {
+    pub fn resource_tensor(resource_len:usize, motif_len:usize, num_motifs:usize, channels_motif_kinds:&[MotifKind]) -> Result<(Tensor, Vec<Vec<Interval>>), ThoosaError> {
 
-        let (channels_signals, intervals) = channels_motif_kinds.into_iter().map(|kind| {
-            generate_series_with_motif(resource_len, motif_len, num_motifs, 300, 0.4, (0.8, 1.8), None, kind)
-        }).fold((vec![], vec![]), |mut a, v|{
-            a.0.push(v.0);
-            a.1.push(v.1);
-            a
-        });
+        let mut channels_signals = Vec::with_capacity(channels_motif_kinds.len());
+        let mut intervals = Vec::with_capacity(channels_motif_kinds.len());
+        for kind in channels_motif_kinds.iter() {
+            let (signal, ivals) = generate_series_with_motif(resource_len, motif_len, num_motifs, 300, 0.4, (0.8, 1.8), None, kind)?;
+            channels_signals.push(signal);
+            intervals.push(ivals);
+        }
 
         let t = Tensor::stack(channels_signals.into_iter().map(|data|Tensor::from_slice(data.as_slice())).collect::<Vec<Tensor>>().as_slice(), 0);
 
         debug!("resource_tensor: t.size={:?} intervals={intervals:?}", t.size());
 
-        (t, intervals)
+        Ok((t, intervals))
     }
 }
