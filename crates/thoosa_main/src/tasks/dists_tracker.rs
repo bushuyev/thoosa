@@ -7,7 +7,7 @@ use caching_runner::common::RunCtx;
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use std::fmt::{Debug, Formatter};
-use std::iter::Repeat;
+use std::iter::{Repeat, Zip};
 use std::mem;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -179,13 +179,6 @@ where
         }
     }
 
-    fn dist_iter(dists_flattened: Option<Tensor>) -> Box<dyn Iterator<Item = f64>> {
-        //TODO use Either::
-        match dists_flattened.as_ref().map(|v| v.iter::<f64>().unwrap()) {
-            None => Box::new(std::iter::repeat(0f64)) as Box<dyn Iterator<Item = f64>>,
-            Some(v) => Box::new(v) as Box<dyn Iterator<Item = f64>>,
-        }
-    }
 
     pub async fn build_groups(&self) {
         let mut trackers_done = AtomicU32::new(0);
@@ -196,6 +189,15 @@ where
         }
     }
 }
+
+pub fn dist_iter(dists_flattened: Option<Tensor>) -> Box<dyn Iterator<Item = f64>> {
+    //TODO use Either::
+    match dists_flattened.as_ref().map(|v| v.iter::<f64>().unwrap()) {
+        None => Box::new(std::iter::repeat(0f64)) as Box<dyn Iterator<Item = f64>>,
+        Some(v) => Box::new(v) as Box<dyn Iterator<Item = f64>>,
+    }
+}
+
 
 impl<C> Stage for DistsTracker<C>
 where
@@ -224,7 +226,7 @@ where
         let iter_0 = input.iter_0();
         let iter_1 = input.iter_1();
 
-        let (ref mask_cpu, ref dists )= input.clc_result().unpack();
+        let (ref mask_cpu, ref dists_cpu)= input.clc_result().unpack();
 
         tokio::task::block_in_place(|| {
             Handle::current().block_on(async {
@@ -233,7 +235,7 @@ where
                     let iter_1 = iter_1.clone();
                     async move {
                         let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
-                        let dists_flattened = dists
+                        let dists_flattened = dists_cpu
                             .as_ref()
                             .map(|d| d.i((channel as i64, .., ..)).flatten(0, 1));
 
@@ -243,7 +245,7 @@ where
                         trace!("find_motifs_by_euc_dist: dists_flattened=\n{:?}",dists_flattened);
 
                         let mut channel_mask: BoolTensorIterator = (&mask_cpu_flattened).into();
-                        let mut dists_and_mask_iter = channel_mask.zip(Self::dist_iter(dists_flattened));//
+                        let mut dists_and_mask_iter = channel_mask.zip(dist_iter(dists_flattened));//
 
                         debug!("find_motifs_by_euc_dist: channel={channel} mask_cpu_flattened.size={:?}",mask_cpu_flattened.size());
                         trace!("find_motifs_by_euc_dist: mask_cpu_flattened={mask_cpu_flattened}");
