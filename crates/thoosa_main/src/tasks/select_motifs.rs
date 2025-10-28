@@ -7,14 +7,16 @@ use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, error, info, trace};
 use parking_lot::RwLock;
+use tch::Device::Cpu;
 use tch::Kind::Float;
-use tch::Tensor;
+use tch::{IndexOp, Tensor};
 use tokio::io::AsyncWriteExt;
 use caching_runner::common::cachable::{with_two_arrays_ext, with_two_vars_ext, Cached, DevicesWrap};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::tmp_cache::TmpCached;
 use thoosa_common::applicables::ThoDevice;
+use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRunConfig};
 use thoosa_common::runs::Labeled;
 use thoosa_common::utils::pad_to;
@@ -35,6 +37,7 @@ use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEucl
 use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
+use crate::tasks::dists_tracker::dist_iter;
 use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::run_ctx_2::RunCtx2;
@@ -163,7 +166,7 @@ where
                         async move {
                             let motif_id_wrap = Arc::new(DevicesWrap::wrap_cpu((motif_id as u32).into()));
                             let mut motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx).await?;
-                            debug!("SelectMotifsStage::run: find_motifs_run_id={find_motifs_run_id} run_config.id={:?} motif={motif:?}", select_motifs_run_config.id);
+
 
 
                             let avg_motif_dist = load_and_clc_avg_dist_clone
@@ -171,6 +174,8 @@ where
                                 .await?
                                 .with_data_ref(0, None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
                                 .await?;
+
+                            debug!("SelectMotifsStage::run: find_motifs_run_id={find_motifs_run_id} run_config.id={:?} motif={motif:?} avg_motif_dist={avg_motif_dist}", select_motifs_run_config.id);
 
                             motif_avg_dists.write().insert(DataId(motif_id as u32), avg_motif_dist);
 
@@ -380,31 +385,54 @@ where
                                 ];
 
                                 let motifs_stream = ThoCudaStream::new(0); //TODO
-                                let guard = StreamGuard::set(&motifs_stream); //TODO Device
+                                let (ref mask_cpu, ref dists_cpu )=  {
+                                    let guard = StreamGuard::set(&motifs_stream); //TODO Device
 
 
-                                let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
-                                    motifs_v.data().t_ref().shallow_clone(),
-                                    batch_1_t,
-                                    false, //if true dists are returned
-                                    &mut mask_makers,
-                                )?;
-                                drop(guard);
+                                    let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
+                                        motifs_v.data().t_ref().shallow_clone(),
+                                        batch_1_t,
+                                        false, //if true dists are returned
+                                        &mut mask_makers,
+                                    )?;
 
-                                debug!("SelectMotifsStage::run: mask={mask:?} dists={dists:?}");
-                                trace!("SelectMotifsStage::run: mask=\n{mask}");
+                                    (mask.to_device(Cpu), dists.map(|t|t.to_device(Cpu)))
+                                };
+
+                                debug!("SelectMotifsStage::run: mask_cpu={mask_cpu:?} dists={mask_cpu:?}");
+                                trace!("SelectMotifsStage::run: mask_cpu=\n{mask_cpu}");
 
                                 for (channel, motif_ids) in motifs_v.extra().0.iter().enumerate() {
+                                    //extract into fn & merge wit find motifs
+                                    let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
+                                    let dists_flattened = dists_cpu
+                                        .as_ref()
+                                        .map(|d| d.i((channel as i64, .., ..)).flatten(0, 1));
+
+
+                                    debug!("SelectMotifsStage::run: dists_flattened.size={:?}",dists_flattened.as_ref().map(|v| v.size()));
+                                    trace!("SelectMotifsStage::run: mask_cpu_flattened=\n{mask_cpu_flattened}");
+                                    trace!("SelectMotifsStage::run: dists_flattened=\n{:?}",dists_flattened);
+
+                                    let mut channel_mask: BoolTensorIterator = (&mask_cpu_flattened).into();
+                                    let mut dists_and_mask_iter = channel_mask.zip(dist_iter(dists_flattened));//
+
+                                    debug!("SelectMotifsStage::run: channel={channel} mask_cpu_flattened.size={:?}",mask_cpu_flattened.size());
+                                    trace!("SelectMotifsStage::run: mask_cpu_flattened={mask_cpu_flattened}");
+
                                     for motif_id in motif_ids {
                                         let resources_iter= resources_iter.clone();
 
                                         for slice_1 in resources_iter {
 
+                                            if let Some((mask, dist)) = dists_and_mask_iter.next() {
+
+                                                    trace!("SelectMotifsStage::run: motif_id={motif_id:?} slice_1={slice_1:?} mask={mask} dist={dist}");
+                                            }
+
                                         }
                                     }
                                 }
-
-
 
                                 Ok::<(), ThoosaError>(())
                             })?;
@@ -443,6 +471,7 @@ mod tests {
     use thoosa_common::runs::Labeled;
     use thoosa_common::utils::reset_print_options;
     use thoosa_common::ws::mock_ws_simp;
+    use thoosa_motifs::generators::noise::generate_motifs_with_avg_distance;
     use thoosa_motifs::generators::non_overlapping::{generate_series_with_motif, Interval};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::data_with_extra::DataWithExtra;
@@ -464,6 +493,81 @@ mod tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_single_label_one_motif() -> Result<(), ThoosaError> {
+        log::set_max_level(Trace);
+        reset_print_options();
+        GlobalCtx::init_devices(2);
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let run_id = 1;
+
+        let resource_a: Resource = Resource::new(1, 1, "resource_a", 100);
+
+        let find_motifs_run_id = 1;
+        let select_motifs_run_id = 1;
+
+        let motif_0_in_channel_0 = 1u32;
+
+        let resources_group = "group";
+
+        let mut store = Arc::new(RwLock::new(
+            MockStoreBuilder::new()
+                .with_list_run_config_values(
+                    run_id,
+                    Ok(FindMotifsRunConfig::new(Some(run_id), 100, 100, None, None).to_properties_iter(None).collect()),
+                )
+                .with_list_motifs([
+                    (find_motifs_run_id as RunId, Ok(vec![
+                        motif_0_in_channel_0 as usize,
+                    ]))
+                ])
+                .with_list_group_labeled_resources_sets([
+                    (resources_group, Ok(vec![
+                        ("Lable_0".to_string(), "resource_set_for_label_0".to_string()),
+                    ]))
+                ])
+                .with_list_resource_set_resources_by_descr([
+                    ("resource_set_for_label_0", Ok(vec![resource_a.clone()])),
+                ])
+
+                .build()));
+
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 3, &[MotifKind::Pulse] );
+
+        debug!("test_single_label_one_motif: resource_a_intervals={resource_a_intervals:?}");
+
+        let loader = Arc::new(
+            mock_tensor_loader::build()
+                .with_out_id()
+                .with_run_cached([
+                    (resource_a.clone(), resource_a_t),
+                ])
+                .finish(),
+        );
+
+        let motif_loader = Arc::new(mock_motif_loader_2::build().with_run_cached([
+            (motif_0_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))),
+        ]).finish());
+
+
+        let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
+            &ws,
+            &store,
+            loader,
+            motif_loader,
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
+            vec![find_motifs_run_id],
+        ));
+
+
+        let result = select_motifs_stage.run(
+            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Labeled::new(resources_group.into())))), Arc::new(RwLock::new(mock_run_ctx::default())),
+        ).await?;
+
+        Ok(())
+    }
+
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_two_labels() -> Result<(), ThoosaError> {
@@ -476,7 +580,7 @@ mod tests {
 
         let resource_a: Resource = Resource::new(1, 1, "resource_a", 900);
         let resource_b: Resource = Resource::new(2, 1, "resource_b", 800);
-        let resource_c: Resource = Resource::new(3, 1, "resource_b", 600);
+        let resource_c: Resource = Resource::new(3, 1, "resource_c", 600);
 
         let find_motifs_run_id = 1;
         let select_motifs_run_id = 1;
@@ -513,9 +617,9 @@ mod tests {
 
                 .build()));
 
-        let (resource_a_t, resoruce_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 3, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] );
-        let (resource_b_t, resoruce_b_intervals) = resource_tensor(resource_b.length() as usize, 100, 3, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] );
-        let (resource_c_t, resoruce_c_intervals) = resource_tensor(resource_c.length() as usize, 100, 2, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] );
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 3, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] );
+        let (resource_b_t, resource_b_intervals) = resource_tensor(resource_b.length() as usize, 100, 3, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] );
+        let (resource_c_t, resource_c_intervals) = resource_tensor(resource_c.length() as usize, 100, 2, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] );
 
 
         let loader = Arc::new(
@@ -556,8 +660,12 @@ mod tests {
     ///found motif's slices of same kind
     //TODO make slices a bit different
     pub fn motifs_tensor(motif_len:usize, num_slices: usize, motif_kind: MotifKind) -> Tensor {
+
+
         let t = Tensor::stack(
-            (0..num_slices).map(|_| Tensor::from_slice(gen_motif(motif_len, &motif_kind).as_slice())).collect::<Vec<_>>().as_slice(), 0
+            generate_motifs_with_avg_distance(
+                gen_motif(motif_len, &motif_kind).as_slice(), num_slices, 0.1, 0.2, None
+            ).0.into_iter().map(|motif| Tensor::from_slice(motif.as_slice())).collect::<Vec<_>>().as_slice(), 0
         );
 
         debug!("motifs_tensor: t.size={:?}", t.size());
