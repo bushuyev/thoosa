@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use log::{debug, warn};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use thoosa_shared::{gen_motif, pulse_v, MotifKind};
 
@@ -63,6 +64,7 @@ pub fn generate_series_with_motif(
             intervals.push(Interval { start, end: start + motif_len });
             continue 'outer;
         }
+        warn!("couldn’t place more with constraints");
         break; // couldn’t place more with constraints
     }
 
