@@ -41,7 +41,7 @@ pub struct Resource {
     id: ResourceId,
     import_id: u32,
     file_stem: String,
-    length: u32,
+    length: u32,//TODO rename to data_len
     applied_id: CachableId,
 }
 

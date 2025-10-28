@@ -67,6 +67,18 @@ impl UnfoldParams {
             step,
         }
     }
+
+    pub fn dimension(&self) -> i64 {
+        self.dimension
+    }
+
+    pub fn size(&self) -> i64 {
+        self.size
+    }
+
+    pub fn step(&self) -> i64 {
+        self.step
+    }
 }
 
 pub struct CrossUnfoldClc<F, R, CUC, C>
@@ -185,18 +197,17 @@ where
         let (batch_0_t, batch_0_sizes) =  unfold_and_cat(&input.tensors[0..input.resources_0.len()], &unfold_params)?;
 
         assert_eq!(batch_0_sizes.len(), input.resources_0.len());
-
-
-        let (batch_1_t, batch_1_sizes) =  unfold_and_cat(&input.tensors[input.resources_0.len()..], &unfold_params)?;
-
-        assert_eq!(batch_1_sizes.len(), input.resources_1.len());
-
         let resource_ids_sizes_0: Vec<_> = input
             .resources_0
             .into_iter()
             .zip(batch_0_sizes.into_iter())
             .map(|v| (v.0.as_ref().id(), v.1 as usize))
             .collect();
+
+
+        let (batch_1_t, batch_1_sizes) =  unfold_and_cat(&input.tensors[input.resources_0.len()..], &unfold_params)?;
+
+        assert_eq!(batch_1_sizes.len(), input.resources_1.len());
 
         let resource_ids_sizes_1: Vec<_> = input
             .resources_1
