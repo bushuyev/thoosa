@@ -533,7 +533,7 @@ mod tests {
 
                 .build()));
 
-        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 3, &[MotifKind::Pulse] );
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 2, &[MotifKind::Pulse] );
 
         debug!("test_single_label_one_motif: resource_a_intervals={resource_a_intervals:?}");
 
