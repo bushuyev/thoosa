@@ -596,7 +596,7 @@ mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[&[(2, MotifKind::Pulse)]])?;
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[vec![(2, MotifKind::Pulse)]])?;
 
         let mut store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
@@ -618,7 +618,6 @@ mod tests {
                     ("resource_set_for_label_0", Ok(vec![resource_a.clone()])),
                 ])
                 .with_add_slices_to_motif(resource_a_intervals.iter().enumerate().map(|(c, intervals)|{
-                    //run_id, motif_id, channel
                     (1, motif_0_in_channel_0, c as i64, intervals.iter().map(|int| IdSlice(0, resource_a.id(), int.start as u32)).collect::<HashSet<_>>())
                 }))
                 .build()));
@@ -701,7 +700,19 @@ mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[&[(1, MotifKind::Pulse)], &[(1, MotifKind::Triangle)]])?;
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[vec![(1, MotifKind::Pulse), (1, MotifKind::Triangle)]])?;
+
+        let add_slices_entries = resource_a_intervals.iter().enumerate().flat_map(|(c, intervals)|{
+            let channel = c as i64;
+            let mut entries = Vec::new();
+            if let Some(first) = intervals.get(0) {
+                entries.push((1, motif_0_in_channel_0, channel, HashSet::from([IdSlice(0, resource_a.id(), first.start as u32)])));
+            }
+            if let Some(second) = intervals.get(1) {
+                entries.push((1, motif_1_in_channel_0, channel, HashSet::from([IdSlice(0, resource_a.id(), second.start as u32)])));
+            }
+            entries
+        }).collect::<Vec<_>>();
 
         let mut store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
@@ -723,10 +734,7 @@ mod tests {
                 .with_list_resource_set_resources_by_descr([
                     ("resource_set_for_label_0", Ok(vec![resource_a.clone()])),
                 ])
-                .with_add_slices_to_motif(resource_a_intervals.iter().enumerate().map(|(c, intervals)|{
-                    //run_id, motif_id, channel
-                    (1, motif_0_in_channel_0, c as i64, intervals.iter().map(|int| IdSlice(0, resource_a.id(), int.start as u32)).collect::<HashSet<_>>())
-                }))
+                .with_add_slices_to_motif(add_slices_entries)
                 .build()));
 
         // draw_function_plot(
@@ -837,9 +845,9 @@ mod tests {
 
                 .build()));
 
-        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[&[(3, MotifKind::Pulse)], &[(3, MotifKind::Triangle)], &[(3, MotifKind::Sin)]])?;
-        let (resource_b_t, resource_b_intervals) = resource_tensor(resource_b.length() as usize, 100, &[&[(3, MotifKind::Pulse)], &[(3, MotifKind::Triangle)], &[(3, MotifKind::Sin)]])?;
-        let (resource_c_t, resource_c_intervals) = resource_tensor(resource_c.length() as usize, 100, &[&[(2, MotifKind::Pulse)], &[(2, MotifKind::Triangle)], &[(2, MotifKind::Sin)]])?;
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[vec![(3, MotifKind::Pulse)], vec![(3, MotifKind::Triangle)], vec![(3, MotifKind::Sin)]])?;
+        let (resource_b_t, resource_b_intervals) = resource_tensor(resource_b.length() as usize, 100, &[vec![(3, MotifKind::Pulse)], vec![(3, MotifKind::Triangle)], vec![(3, MotifKind::Sin)]])?;
+        let (resource_c_t, resource_c_intervals) = resource_tensor(resource_c.length() as usize, 100, &[vec![(2, MotifKind::Pulse)], vec![(2, MotifKind::Triangle)], vec![(2, MotifKind::Sin)]])?;
 
 
         let loader = Arc::new(
@@ -894,7 +902,7 @@ mod tests {
     }
 
     ///returns Tensor [channels x resource_len] + channels[ intervals[Interval] ]
-    pub fn resource_tensor(resource_len:usize, motif_len:usize, channels_motif_kinds:&[&[(usize, MotifKind)]]) -> Result<(Tensor, Vec<Vec<Interval>>), ThoosaError> {
+    pub fn resource_tensor(resource_len:usize, motif_len:usize, channels_motif_kinds:&[Vec<(usize, MotifKind)>]) -> Result<(Tensor, Vec<Vec<Interval>>), ThoosaError> {
         use rand::{rngs::StdRng, Rng, SeedableRng};
         const MIN_GAP: usize = 300;
         const STEP_SIGMA: f32 = 0.4;
@@ -910,7 +918,9 @@ mod tests {
         let mut channels_signals = Vec::with_capacity(channels_motif_kinds.len());
         let mut channels_intervals = Vec::with_capacity(channels_motif_kinds.len());
 
-        for channel_kinds in channels_motif_kinds.iter() {
+        let channels_count = channels_motif_kinds.len().max(1);
+
+        for (channel_idx, channel_kinds) in channels_motif_kinds.iter().enumerate() {
             let total_repeats: usize = channel_kinds.iter().map(|(repeats, _)| *repeats).sum();
 
             let mut rng = StdRng::from_os_rng();
@@ -935,8 +945,20 @@ mod tests {
                 )));
             }
 
-            let leading_gap = (resource_len - required_space) / 2;
-            let mut current = leading_gap;
+            let extra_space = resource_len - required_space;
+            let channel_start = resource_len * channel_idx / channels_count;
+            let channel_end = resource_len * (channel_idx + 1) / channels_count;
+            let segment_len = channel_end.saturating_sub(channel_start);
+            let use_segment = segment_len >= required_space;
+            let slack = if use_segment {
+                segment_len - required_space
+            } else {
+                extra_space
+            };
+            let start_bound = if use_segment { channel_start } else { 0 };
+            let end_bound = if use_segment { channel_end } else { resource_len };
+
+            let mut current = start_bound + slack / 2;
             let mut intervals = Vec::with_capacity(total_repeats);
             let mut placed = 0usize;
 
@@ -948,16 +970,18 @@ mod tests {
                 let motifs = generate_motifs_with_avg_distance(
                     gen_motif(motif_len, kind).as_slice(),
                     (*repeats).max(2),
-                    0.1,
                     0.2,
+                    0.3,
                     None,
                 ).0;
 
                 for motif in motifs.into_iter().take(*repeats) {
                     let start = current;
                     let end = start + motif_len;
-                    if end > resource_len {
-                        return Err(ThoosaError::new("motif placement exceeds resource length"));
+                    if end > end_bound {
+                        return Err(ThoosaError::new(format!(
+                            "motif placement exceeds resource length for channel {channel_idx}"
+                        )));
                     }
 
                     for (offset, value) in motif.iter().enumerate() {
@@ -989,7 +1013,7 @@ mod tests {
         let (tensor, intervals) = resource_tensor(
             1000,
             50,
-            &[&[(1, MotifKind::Pulse), (1, MotifKind::Sin)], &[(2, MotifKind::Triangle)]],
+            &[vec![(1, MotifKind::Pulse), (1, MotifKind::Sin)], vec![(2, MotifKind::Triangle)]],
         )?;
 
         assert_eq!(tensor.size()[0], 2i64);
@@ -997,6 +1021,22 @@ mod tests {
         assert_eq!(intervals[0].len(), 2);
         assert_eq!(intervals[1].len(), 2);
         assert!(intervals[0][0].end <= intervals[0][1].start);
+
+        Ok(())
+    }
+
+    #[test]
+    fn resource_tensor_offsets_channels_when_space_allows() -> Result<(), ThoosaError> {
+        let (_, intervals) = resource_tensor(
+            1000,
+            100,
+            &[vec![(1, MotifKind::Pulse)], vec![(1, MotifKind::Triangle)]],
+        )?;
+
+        assert_eq!(intervals.len(), 2);
+        assert_eq!(intervals[0].len(), 1);
+        assert_eq!(intervals[1].len(), 1);
+        assert!(intervals[0][0].end <= intervals[1][0].start);
 
         Ok(())
     }
