@@ -603,6 +603,8 @@ mod tests {
 
         let resources_group = "group";
 
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 2, &[MotifKind::Pulse] )?;
+
         let mut store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
                 .with_list_run_config_values(
@@ -622,14 +624,11 @@ mod tests {
                 .with_list_resource_set_resources_by_descr([
                     ("resource_set_for_label_0", Ok(vec![resource_a.clone()])),
                 ])
-
-                .with_add_slices_to_motif(vec![
-                    (1, 1, 0, HashSet::from([IdSlice(0, 1, 250), IdSlice(0, 1, 650)]))
-                ])
+                .with_add_slices_to_motif(resource_a_intervals.iter().enumerate().map(|(c, intervals)|{
+                    //run_id, motif_id, channel
+                    (1, motif_0_in_channel_0, c as i64, intervals.iter().map(|int| IdSlice(0, resource_a.id(), int.start as u32)).collect::<HashSet<_>>())
+                }))
                 .build()));
-
-        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 2, &[MotifKind::Pulse] )?;
-
 
         // draw_function_plot(
         //     &test_dir.join(&format!("resource_a{}.png", cdt_for_dir())),
