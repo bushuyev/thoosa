@@ -420,13 +420,6 @@ where
                                 };
 
                                 debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");
-                                // for mask_in_channel in channel_masks.iter() {
-                                //     trace!("SelectMotifsStage::run: mask_in_channel=\n{}", mask_in_channel.0);
-                                //     if let Some(dists_in_channel) = mask_in_channel.1.as_ref() {
-                                //         trace!("SelectMotifsStage::run: dists_in_channel=\n{dists_in_channel}", );
-                                //     }
-                                // }
-
                                 for (channel, mask_idsts_ids) in channel_masks_dists_ids.into_iter().enumerate() {
 
                                     debug!("SelectMotifsStage::run: channel={channel} mask_idsts_ids={:?}", mask_idsts_ids.2);
@@ -685,6 +678,111 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_1_label_1_channel_2_motifs() -> Result<(), ThoosaError> {
+        let test_dir = Path::new("/tmp/test_single_label_one_motif");//.join(cdt_for_dir());
+        fs::create_dir_all(test_dir).await?;
+
+        log::set_max_level(Trace);
+        reset_print_options();
+        GlobalCtx::init_devices(2);
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let run_id = 1;
+
+        let resource_a: Resource = Resource::new(1, 1, "resource_a", 1000);
+
+        let find_motifs_run_id = 1;
+        let select_motifs_run_id = 1;
+
+        let motif_0_in_channel_0 = 1u32;
+
+        let resources_group = "group";
+
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 2, &[MotifKind::Pulse] )?;
+
+        let mut store = Arc::new(RwLock::new(
+            MockStoreBuilder::new()
+                .with_list_run_config_values(
+                    run_id,
+                    Ok(FindMotifsRunConfig::new(Some(run_id), 100, 100, None, None).to_properties_iter(None).collect()),
+                )
+                .with_list_motifs([
+                    (find_motifs_run_id as RunId, Ok(vec![
+                        motif_0_in_channel_0 as usize,
+                    ]))
+                ])
+                .with_list_group_labeled_resources_sets([
+                    (resources_group, Ok(vec![
+                        ("Lable_0".to_string(), "resource_set_for_label_0".to_string()),
+                    ]))
+                ])
+                .with_list_resource_set_resources_by_descr([
+                    ("resource_set_for_label_0", Ok(vec![resource_a.clone()])),
+                ])
+                .with_add_slices_to_motif(resource_a_intervals.iter().enumerate().map(|(c, intervals)|{
+                    //run_id, motif_id, channel
+                    (1, motif_0_in_channel_0, c as i64, intervals.iter().map(|int| IdSlice(0, resource_a.id(), int.start as u32)).collect::<HashSet<_>>())
+                }))
+                .build()));
+
+        // draw_function_plot(
+        //     &test_dir.join(&format!("resource_a{}.png", cdt_for_dir())),
+        //     (2000, 1000),
+        //     vec_f32_from(&resource_a_t.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>().as_slice(),
+        //     &resource_a_intervals[0].iter().map(|v|(*v).into()).collect::<Vec<(f32, f32)>>(),
+        //     "resource_a"
+        // )?;
+
+        debug!("test_single_label_one_motif: resource_a_t={resource_a_t:?} resource_a_intervals={resource_a_intervals:?}");
+
+        let loader = Arc::new(
+            mock_tensor_loader::build()
+                .with_out_id()
+                .with_run_cached([
+                    (resource_a.clone(), resource_a_t.shallow_clone()),
+                ])
+                .finish(),
+        );
+
+        let motif_t = motifs_tensor(100, 3, MotifKind::Pulse);
+
+        // draw_function_plot(
+        //     &test_dir.join(&format!("motif_0_{}.png", cdt_for_dir())),
+        //     (2000, 1000),
+        //     vec_f32_from(&motif_t.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>().as_slice(),
+        //     &resource_a_intervals[0].iter().map(|v|(*v).into()).collect::<Vec<(f32, f32)>>(),
+        //     "motif_0"
+        // )?;
+
+
+        // let (mask, dists) = clc_dist_d2_and_mask(z_norm(&resource_a_t.unfold(1, 100, 50), 1), z_norm(&motif_t, 1), true, &mut vec![])?;
+        let (mask, dists) = clc_dist_d2_and_mask(resource_a_t.unfold(1, 100, 50), motif_t.shallow_clone(), true, &mut vec![])?;
+        debug!("test_single_label_one_motif: mask=\n{mask} dists=\n{}", dists.unwrap());
+
+        let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
+            (motif_0_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_t)),
+        ]).finish());
+
+
+        let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
+            &ws,
+            &store,
+            loader,
+            motif_loader,
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
+            vec![find_motifs_run_id],
+        ));
+
+
+        let result = select_motifs_stage.run(
+            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Labeled::new(resources_group.into())))), Arc::new(RwLock::new(mock_run_ctx::default())),
+        ).await?;
+
+        Ok(())
+    }
+
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
