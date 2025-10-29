@@ -697,10 +697,11 @@ mod tests {
         let select_motifs_run_id = 1;
 
         let motif_0_in_channel_0 = 1u32;
+        let motif_1_in_channel_0 = 2u32;
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[&[(2, MotifKind::Pulse)]])?;
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[&[(1, MotifKind::Pulse)], &[(1, MotifKind::Triangle)]])?;
 
         let mut store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
@@ -711,6 +712,7 @@ mod tests {
                 .with_list_motifs([
                     (find_motifs_run_id as RunId, Ok(vec![
                         motif_0_in_channel_0 as usize,
+                        motif_1_in_channel_0 as usize,
                     ]))
                 ])
                 .with_list_group_labeled_resources_sets([
@@ -746,7 +748,8 @@ mod tests {
                 .finish(),
         );
 
-        let motif_t = motifs_tensor(100, 3, MotifKind::Pulse);
+        let motif_0_t = motifs_tensor(100, 3, MotifKind::Pulse);
+        let motif_1_t = motifs_tensor(100, 2, MotifKind::Triangle);
 
         // draw_function_plot(
         //     &test_dir.join(&format!("motif_0_{}.png", cdt_for_dir())),
@@ -758,11 +761,12 @@ mod tests {
 
 
         // let (mask, dists) = clc_dist_d2_and_mask(z_norm(&resource_a_t.unfold(1, 100, 50), 1), z_norm(&motif_t, 1), true, &mut vec![])?;
-        let (mask, dists) = clc_dist_d2_and_mask(resource_a_t.unfold(1, 100, 50), motif_t.shallow_clone(), true, &mut vec![])?;
-        debug!("test_single_label_one_motif: mask=\n{mask} dists=\n{}", dists.unwrap());
+        // let (mask, dists) = clc_dist_d2_and_mask(resource_a_t.unfold(1, 100, 50), motif_0_t.shallow_clone(), true, &mut vec![])?;
+        // debug!("test_single_label_one_motif: mask=\n{mask} dists=\n{}", dists.unwrap());
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (motif_0_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_t)),
+            (motif_0_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_0_t)),
+            (motif_1_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_1_t)),
         ]).finish());
 
 
@@ -944,8 +948,8 @@ mod tests {
                 let motifs = generate_motifs_with_avg_distance(
                     gen_motif(motif_len, kind).as_slice(),
                     (*repeats).max(2),
+                    0.1,
                     0.2,
-                    0.3,
                     None,
                 ).0;
 
