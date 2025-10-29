@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use log::{debug, error, trace, warn};
 use mockall::mock;
+use mockall::predicate::eq;
 use rand::Rng;
 use rand::seq::SliceRandom;
 use rusqlite::types::Value;
@@ -38,7 +39,7 @@ use thoosa_shared::*;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct IdSlice(u32, ResourceId, u32); //id, tensor id, slice idx
+pub struct IdSlice(pub u32, pub ResourceId, pub u32); //id, tensor id, slice idx
 
 impl PartialEq<Self> for IdSlice {
     fn eq(&self, other: &Self) -> bool {
@@ -160,6 +161,14 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         run_id: RunId,
         channel: i64,
         groups: HashMap<u16, HashSet<IdSlice>>,
+    ) -> Result<(), ThoosaError>;
+
+    fn add_slices_to_motif(
+        &mut self,
+        run_id: RunId,
+        motif_id: u32,
+        channel: i64,
+        slices: HashSet<IdSlice>,
     ) -> Result<(), ThoosaError>;
 
     fn list_motifs(&self, run_id: RunId) -> Result<Vec<usize>, ThoosaError>;
@@ -284,6 +293,15 @@ mock! {
             channel: i64,
             groups: HashMap<u16, HashSet<IdSlice>>,
         ) -> Result<(), ThoosaError>;
+
+        fn add_slices_to_motif(
+            &mut self,
+            run_id: RunId,
+            motif_id: u32,
+            channel: i64,
+            groups: HashSet<IdSlice>,
+        ) -> Result<(), ThoosaError>;
+
         fn list_motifs(&self, run_id: RunId) -> Result<Vec<usize>, ThoosaError>;
         fn list_motifs_slices(
             &self,
@@ -1309,9 +1327,7 @@ impl Store for SqlStore {
                 let motif_id: i64 =
                     t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
-                debug!(
-                    "save_slices_groups_as_motifs_from_tmp_db: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted}"
-                );
+                debug!("save_slices_groups_as_motifs_from_tmp_db: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted}");
                 trace!("save_slices_groups_as_motifs_from_tmp_db: slices={slices:?} ");
 
                 let mut slices_chunks = slices.into_iter().array_chunks::<500>();
@@ -1328,6 +1344,33 @@ impl Store for SqlStore {
 
         t.commit()?;
 
+        Ok(())
+    }
+
+    fn add_slices_to_motif(
+        &mut self,
+        run_id: RunId,
+        motif_id: u32,
+        channel: i64,
+        slices: HashSet<IdSlice>,
+    ) -> Result<(), ThoosaError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        debug!("save_slices_groups_as_motifs_from_file: run_id={run_id:?}, channel={channel:?}");
+
+        {
+            let mut slices_chunks = slices.into_iter().array_chunks::<500>();
+            while let Some(chunk) = slices_chunks.next() {
+                Self::insert_slices(&t, run_id, channel, motif_id as i64, chunk.into_iter())?
+            }
+            if let Some(reminder) = slices_chunks.into_remainder() {
+                if reminder.len() > 0 {
+                    Self::insert_slices(&t, run_id, channel, motif_id as i64, reminder)?
+                }
+            }
+        }
+        t.commit()?;
         Ok(())
     }
 
@@ -2451,10 +2494,7 @@ pub fn filter_groups_by_slices_count(max_slices_counts: Option<u32>, groups: Has
             if v.1.len() < max_slices_counts as usize {
                 a.insert(v.0, v.1);
             } else {
-                warn!(
-                    "load_slices_into_groups: skipping group with {} slices",
-                    v.1.len()
-                );
+                warn!("load_slices_into_groups: skipping group with {} slices",v.1.len());
             }
             a
         }),
@@ -3195,6 +3235,20 @@ impl MockStoreBuilder {
         Self {
             store: MockStore::new()
         }
+    }
+
+    //run_id, motif_id, channel, slices
+    pub fn with_add_slices_to_motif(mut self, inputs:impl IntoIterator<Item=(RunId, u32, i64, HashSet<IdSlice>)> ) -> Self {
+        for inps in inputs {
+            self.store.expect_add_slices_to_motif().with(
+                eq(inps.0),
+                eq(inps.1),
+                eq(inps.2),
+                eq(inps.3),
+            ).times(1).return_const(Ok(()));
+        }
+
+        self
     }
 
     pub fn with_list_motifs<R:Into<HashMap<RunId, Result<Vec<usize>, ThoosaError>>>>(mut self, results: R) -> Self {

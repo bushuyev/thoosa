@@ -198,7 +198,7 @@ where
 
 
 #[cfg(test)]
-pub mod mock_motif_loader_2 {
+pub mod mock_motif_loader {
     use std::collections::HashMap;
     use async_trait::async_trait;
     use futures_util::future::{BoxFuture, Shared};
