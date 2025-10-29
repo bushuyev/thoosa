@@ -617,8 +617,11 @@ mod tests {
                 .with_list_resource_set_resources_by_descr([
                     ("resource_set_for_label_0", Ok(vec![resource_a.clone()])),
                 ])
-                .with_add_slices_to_motif(resource_a_intervals.iter().enumerate().map(|(c, intervals)|{
-                    (1, motif_0_in_channel_0, c as i64, intervals.iter().map(|int| IdSlice(0, resource_a.id(), int.start as u32)).collect::<HashSet<_>>())
+                .with_add_slices_to_motif(resource_a_intervals.iter().enumerate().map(|(c, channel)|{
+                    let slices = channel.get(0)
+                        .map(|motif_intervals| motif_intervals.iter().map(|int| IdSlice(0, resource_a.id(), int.start as u32)).collect::<HashSet<_>>())
+                        .unwrap_or_default();
+                    (1, motif_0_in_channel_0, c as i64, slices)
                 }))
                 .build()));
 
@@ -702,17 +705,18 @@ mod tests {
 
         let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[vec![(1, MotifKind::Pulse), (1, MotifKind::Triangle)]])?;
 
-        let add_slices_entries = resource_a_intervals.iter().enumerate().flat_map(|(c, intervals)|{
-            let channel = c as i64;
-            let mut entries = Vec::new();
-            if let Some(first) = intervals.get(0) {
-                entries.push((1, motif_0_in_channel_0, channel, HashSet::from([IdSlice(0, resource_a.id(), first.start as u32)])));
+        let motif_ids = [motif_0_in_channel_0, motif_1_in_channel_0];
+        let resource_a_id = resource_a.id();
+        let mut add_slices_entries = Vec::new();
+        for (c, channel) in resource_a_intervals.iter().enumerate() {
+            let channel_idx = c as i64;
+            for (m_idx, motif_intervals) in channel.iter().enumerate() {
+                if let Some(&motif_id) = motif_ids.get(m_idx) {
+                    let slices = motif_intervals.iter().map(|int| IdSlice(0, resource_a_id, int.start as u32)).collect::<HashSet<_>>();
+                    add_slices_entries.push((1, motif_id, channel_idx, slices));
+                }
             }
-            if let Some(second) = intervals.get(1) {
-                entries.push((1, motif_1_in_channel_0, channel, HashSet::from([IdSlice(0, resource_a.id(), second.start as u32)])));
-            }
-            entries
-        }).collect::<Vec<_>>();
+        }
 
         let mut store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
@@ -901,8 +905,8 @@ mod tests {
         t
     }
 
-    ///returns Tensor [channels x resource_len] + channels[ intervals[Interval] ]
-    pub fn resource_tensor(resource_len:usize, motif_len:usize, channels_motif_kinds:&[Vec<(usize, MotifKind)>]) -> Result<(Tensor, Vec<Vec<Interval>>), ThoosaError> {
+    ///returns Tensor [channels x resource_len] + channels[ motifs[ intervals[Interval] ] ]
+    pub fn resource_tensor(resource_len:usize, motif_len:usize, channels_motif_kinds:&[Vec<(usize, MotifKind)>]) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoosaError> {
         use rand::{rngs::StdRng, Rng, SeedableRng};
         const MIN_GAP: usize = 300;
         const STEP_SIGMA: f32 = 0.4;
@@ -931,7 +935,7 @@ mod tests {
 
             if motif_len == 0 || total_repeats == 0 {
                 channels_signals.push(signal);
-                channels_intervals.push(Vec::new());
+                channels_intervals.push(channel_kinds.iter().map(|_| Vec::new()).collect());
                 continue;
             }
 
@@ -959,11 +963,12 @@ mod tests {
             let end_bound = if use_segment { channel_end } else { resource_len };
 
             let mut current = start_bound + slack / 2;
-            let mut intervals = Vec::with_capacity(total_repeats);
+            let mut channel_motif_intervals = Vec::with_capacity(channel_kinds.len());
             let mut placed = 0usize;
 
             for (repeats, kind) in channel_kinds.iter() {
                 if *repeats == 0 {
+                    channel_motif_intervals.push(Vec::new());
                     continue;
                 }
 
@@ -974,6 +979,8 @@ mod tests {
                     0.3,
                     None,
                 ).0;
+
+                let mut motif_intervals = Vec::with_capacity(*repeats);
 
                 for motif in motifs.into_iter().take(*repeats) {
                     let start = current;
@@ -988,17 +995,24 @@ mod tests {
                         signal[start + offset] = *value;
                     }
 
-                    intervals.push(Interval { start, end });
+                    motif_intervals.push(Interval { start, end });
                     placed += 1;
                     current = end;
                     if placed < total_repeats {
                         current = current.checked_add(MIN_GAP).ok_or_else(|| ThoosaError::new("motif gap sizing overflows usize"))?;
                     }
                 }
+
+                channel_motif_intervals.push(motif_intervals);
+            }
+
+            // ensure we push placeholders for motifs that had zero repeats but were skipped
+            while channel_motif_intervals.len() < channel_kinds.len() {
+                channel_motif_intervals.push(Vec::new());
             }
 
             channels_signals.push(signal);
-            channels_intervals.push(intervals);
+            channels_intervals.push(channel_motif_intervals);
         }
 
         let t = Tensor::stack(channels_signals.into_iter().map(|data|Tensor::from_slice(data.as_slice())).collect::<Vec<Tensor>>().as_slice(), 0);
@@ -1019,8 +1033,13 @@ mod tests {
         assert_eq!(tensor.size()[0], 2i64);
         assert_eq!(intervals.len(), 2);
         assert_eq!(intervals[0].len(), 2);
-        assert_eq!(intervals[1].len(), 2);
-        assert!(intervals[0][0].end <= intervals[0][1].start);
+        assert_eq!(intervals[1].len(), 1);
+        assert_eq!(intervals[0][0].len(), 1);
+        assert_eq!(intervals[0][1].len(), 1);
+        assert_eq!(intervals[1][0].len(), 2);
+        let first_pulse = intervals[0][0].last().unwrap();
+        let first_sin = intervals[0][1].first().unwrap();
+        assert!(first_pulse.end <= first_sin.start);
 
         Ok(())
     }
@@ -1036,7 +1055,11 @@ mod tests {
         assert_eq!(intervals.len(), 2);
         assert_eq!(intervals[0].len(), 1);
         assert_eq!(intervals[1].len(), 1);
-        assert!(intervals[0][0].end <= intervals[1][0].start);
+        assert_eq!(intervals[0][0].len(), 1);
+        assert_eq!(intervals[1][0].len(), 1);
+        let first_channel_interval = &intervals[0][0][0];
+        let second_channel_interval = &intervals[1][0][0];
+        assert!(first_channel_interval.end <= second_channel_interval.start);
 
         Ok(())
     }
