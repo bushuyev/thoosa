@@ -554,7 +554,7 @@ mod tests {
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::generators::noise::generate_motifs_with_avg_distance;
-    use thoosa_motifs::generators::non_overlapping::{generate_series_with_motif, Interval};
+    use thoosa_motifs::generators::non_overlapping::Interval;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::Resource;
@@ -596,7 +596,7 @@ mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 2, &[MotifKind::Pulse] )?;
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[&[(2, MotifKind::Pulse)]])?;
 
         let mut store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
@@ -700,7 +700,7 @@ mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 2, &[MotifKind::Pulse] )?;
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[&[(2, MotifKind::Pulse)]])?;
 
         let mut store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
@@ -833,9 +833,9 @@ mod tests {
 
                 .build()));
 
-        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 3, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] )?;
-        let (resource_b_t, resource_b_intervals) = resource_tensor(resource_b.length() as usize, 100, 3, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] )?;
-        let (resource_c_t, resource_c_intervals) = resource_tensor(resource_c.length() as usize, 100, 2, &[MotifKind::Pulse, MotifKind::Triangle, MotifKind::Sin] )?;
+        let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[&[(3, MotifKind::Pulse)], &[(3, MotifKind::Triangle)], &[(3, MotifKind::Sin)]])?;
+        let (resource_b_t, resource_b_intervals) = resource_tensor(resource_b.length() as usize, 100, &[&[(3, MotifKind::Pulse)], &[(3, MotifKind::Triangle)], &[(3, MotifKind::Sin)]])?;
+        let (resource_c_t, resource_c_intervals) = resource_tensor(resource_c.length() as usize, 100, &[&[(2, MotifKind::Pulse)], &[(2, MotifKind::Triangle)], &[(2, MotifKind::Sin)]])?;
 
 
         let loader = Arc::new(
@@ -890,14 +890,87 @@ mod tests {
     }
 
     ///returns Tensor [channels x resource_len] + channels[ intervals[Interval] ]
-    pub fn resource_tensor(resource_len:usize, motif_len:usize, motif_repeats:usize, channels_motif_kinds:&[MotifKind]) -> Result<(Tensor, Vec<Vec<Interval>>), ThoosaError> {
+    pub fn resource_tensor(resource_len:usize, motif_len:usize, channels_motif_kinds:&[&[(usize, MotifKind)]]) -> Result<(Tensor, Vec<Vec<Interval>>), ThoosaError> {
+        use rand::{rngs::StdRng, Rng, SeedableRng};
+        const MIN_GAP: usize = 300;
+        const STEP_SIGMA: f32 = 0.4;
+
+        fn normal_step(rng: &mut StdRng, sigma: f32) -> f32 {
+            let u1: f32 = rng.random::<f32>().max(f32::MIN_POSITIVE);
+            let u2: f32 = rng.random::<f32>();
+            let r = (-2.0 * u1.ln()).sqrt();
+            let theta = std::f32::consts::TAU * u2;
+            sigma * r * theta.cos()
+        }
 
         let mut channels_signals = Vec::with_capacity(channels_motif_kinds.len());
         let mut channels_intervals = Vec::with_capacity(channels_motif_kinds.len());
-        for kind in channels_motif_kinds.iter() {
-            let (signal, ivals) = generate_series_with_motif(resource_len, motif_len, motif_repeats, 300, 0.4, (0.8, 1.8), None, kind)?;
+
+        for channel_kinds in channels_motif_kinds.iter() {
+            let total_repeats: usize = channel_kinds.iter().map(|(repeats, _)| *repeats).sum();
+
+            let mut rng = StdRng::from_os_rng();
+            let mut signal = vec![0f32; resource_len];
+            for idx in 1..resource_len {
+                signal[idx] = signal[idx - 1] + normal_step(&mut rng, STEP_SIGMA);
+            }
+
+            if motif_len == 0 || total_repeats == 0 {
+                channels_signals.push(signal);
+                channels_intervals.push(Vec::new());
+                continue;
+            }
+
+            let total_motif_space = motif_len.checked_mul(total_repeats).ok_or_else(|| ThoosaError::new("motif placement overflows usize"))?;
+            let total_gap_space = MIN_GAP.checked_mul(total_repeats.saturating_sub(1)).ok_or_else(|| ThoosaError::new("motif gap sizing overflows usize"))?;
+            let required_space = total_motif_space.checked_add(total_gap_space).ok_or_else(|| ThoosaError::new("motif layout exceeds addressable range"))?;
+
+            if required_space > resource_len {
+                return Err(ThoosaError::new(format!(
+                    "cannot place {total_repeats} motifs (len={motif_len}) with min_gap={MIN_GAP} into series len={resource_len}"
+                )));
+            }
+
+            let leading_gap = (resource_len - required_space) / 2;
+            let mut current = leading_gap;
+            let mut intervals = Vec::with_capacity(total_repeats);
+            let mut placed = 0usize;
+
+            for (repeats, kind) in channel_kinds.iter() {
+                if *repeats == 0 {
+                    continue;
+                }
+
+                let motifs = generate_motifs_with_avg_distance(
+                    gen_motif(motif_len, kind).as_slice(),
+                    (*repeats).max(2),
+                    0.2,
+                    0.3,
+                    None,
+                ).0;
+
+                for motif in motifs.into_iter().take(*repeats) {
+                    let start = current;
+                    let end = start + motif_len;
+                    if end > resource_len {
+                        return Err(ThoosaError::new("motif placement exceeds resource length"));
+                    }
+
+                    for (offset, value) in motif.iter().enumerate() {
+                        signal[start + offset] = *value;
+                    }
+
+                    intervals.push(Interval { start, end });
+                    placed += 1;
+                    current = end;
+                    if placed < total_repeats {
+                        current = current.checked_add(MIN_GAP).ok_or_else(|| ThoosaError::new("motif gap sizing overflows usize"))?;
+                    }
+                }
+            }
+
             channels_signals.push(signal);
-            channels_intervals.push(ivals);
+            channels_intervals.push(intervals);
         }
 
         let t = Tensor::stack(channels_signals.into_iter().map(|data|Tensor::from_slice(data.as_slice())).collect::<Vec<Tensor>>().as_slice(), 0);
@@ -905,6 +978,23 @@ mod tests {
         debug!("resource_tensor: t.size={:?} intervals={channels_intervals:?}", t.size());
 
         Ok((t, channels_intervals))
+    }
+
+    #[test]
+    fn resource_tensor_supports_multiple_kinds_per_channel() -> Result<(), ThoosaError> {
+        let (tensor, intervals) = resource_tensor(
+            1000,
+            50,
+            &[&[(1, MotifKind::Pulse), (1, MotifKind::Sin)], &[(2, MotifKind::Triangle)]],
+        )?;
+
+        assert_eq!(tensor.size()[0], 2i64);
+        assert_eq!(intervals.len(), 2);
+        assert_eq!(intervals[0].len(), 2);
+        assert_eq!(intervals[1].len(), 2);
+        assert!(intervals[0][0].end <= intervals[0][1].start);
+
+        Ok(())
     }
 
     #[test]
