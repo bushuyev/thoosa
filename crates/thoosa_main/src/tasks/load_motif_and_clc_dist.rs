@@ -267,7 +267,7 @@ mod tests {
     use super::{LoadMotifAndClcDistanceStage, RunCtx2};
     use caching_runner::common::cachable::{Cached, DevicesWrap};
     use crate::tasks::average_euclidean_distance::{mock_average_stage, AverageDistanceValue};
-    use crate::tasks::motif_loader::{MotifMeta, mock_motif_loader_2};
+    use crate::tasks::motif_loader::{MotifMeta, mock_motif_loader};
     use caching_runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
     use parking_lot::{Mutex, RwLock};
@@ -285,7 +285,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default()));
 
 
-        let motif_loader = Arc::new(mock_motif_loader_2::build().with_run_cached([
+        let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (42u32, (MotifMeta { channel: 0, run_id: 1, window: 3 }, Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3))))
         ]).finish());
 

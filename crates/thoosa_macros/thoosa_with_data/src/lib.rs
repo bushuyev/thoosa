@@ -157,7 +157,7 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
     quote! {
         {
             let __with_data_device = #device_expr;
-            async move {
+            async {
                 let __device_idx = __with_data_device;
                 #(#prelude)*
                 #(#load_handles)*
