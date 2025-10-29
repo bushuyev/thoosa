@@ -1612,7 +1612,7 @@ pub mod tests {
 }
 
 pub fn z_norm(t: &Tensor, dim: i64) -> Tensor {
-    let mean_t = t.mean_dim(dim, false, Float);
+    let mean_t = t.mean_dim(dim, true, Float);
     let std_t = t.std(false);
     let z_t = (t - mean_t) / std_t;
     z_t

@@ -1,15 +1,16 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
 use tch::Device::Cpu;
 use tch::Kind::Float;
-use tch::{IndexOp, Tensor};
+use tch::{IndexOp, Kind, Tensor};
 use tokio::io::AsyncWriteExt;
 use caching_runner::common::cachable::{with_two_arrays_ext, with_two_vars_ext, Cached, DevicesWrap};
 use caching_runner::common::{OutId, RunCtx};
@@ -29,7 +30,7 @@ use thoosa_shared::run_configs::RunId;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Adjustable, DataId, SimpleId, WithId};
 use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
-use thoosa_store::Store;
+use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use torch_runner::data::ThoTensor2;
 use crate::cli::Commands::SelectMotifs;
@@ -136,7 +137,7 @@ where
 
 
 
-        let tmp_moitfs_cache:TmpCached<DataWithExtra<ThoTensor2<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, FindMotifsRunConfig)>> = TmpCached::new("motif slices", cache_area).await;
+        let tmp_moitfs_cache:TmpCached<DataWithExtra<ThoTensor2<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, FindMotifsRunConfig, SelectMotifsRunConfig)>> = TmpCached::new("motif slices", cache_area).await;
         let tmp_motifs_avg_dists_cache:TmpCached<ThoTensor2<ChannelsMotifsDists, SimpleId>> = TmpCached::new("motif dists", cache_area).await;
 
         let num_channels = self.ws.read().channels();
@@ -191,7 +192,9 @@ where
 
                 //building tensor with all motifs' slices (ChannelsMotifSlices) found by current find_motifs_run_id, storing them in tmp_cache. Channels where number of motifs is less than max slices are padded with zeros.
                 // channels x motif_0_slice_0...motif_0_slice_last + motif_1_slice_0...motif_1_slice_last + ...
-                DevicesWrap::with_data_array(&loaded_motifs, device_idx, None, |data|{
+                with_data!(device_idx, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>]|{
+
+
                     let channels_motifs = data.into_iter().fold(
 
                         (0..num_channels).map(|_|vec![]).collect::<Vec<_>>(),//vec for each channel
@@ -284,7 +287,7 @@ where
                     let channels_motif_avg_dists_t = Tensor::stack(&channels_motif_avg_dists_tensors_vec, 0);
 
                     debug!("SelectMotifsStage::run: num_channels={num_channels}, channels_motif_ids={channels_motif_ids:?} channels_motifs_t.size={:?}", channels_motifs_t.size());
-                    trace!("SelectMotifsStage::run: channels_dists_t=\n{channels_motif_avg_dists_t}");
+                    trace!("SelectMotifsStage::run: channels_motif_avg_dists_t=\n{channels_motif_avg_dists_t}");
                     trace!("SelectMotifsStage::run: channels_motifs_t=\n{channels_motifs_t}");
 
                     let find_and_select_motifs_id = SimpleId(format!("{}_{}", find_motifs_run_config.id.expect("no id in find_motifs_run_config"), select_motifs_run_config.id.expect("no id in select_motifs_run_config")).leak());
@@ -294,7 +297,7 @@ where
                                 find_and_select_motifs_id.clone(),
                                 channels_motifs_t
                             ),
-                            (channels_motif_ids, find_motifs_run_config.clone())
+                            (channels_motif_ids, find_motifs_run_config.clone(), select_motifs_run_config.clone())
                         )//TODO leak
                     );
 
@@ -305,8 +308,8 @@ where
                         )
                     );
 
-                    Ok(())
-                }).await?;
+                    Ok::<(), ThoosaError>(())
+                })?;
             }
         }
 
@@ -347,19 +350,19 @@ where
 
                         let motifs_avg_dists_arc_wrap = tmp_motifs_avg_dists_cache.get(motifs_arc_wrap.id()).expect(&format!("no dists for {}", motifs_arc_wrap.id()));
 
-
+                        let store = Arc::clone(&self.store);
                         debug!("SelectMotifsStage::run: t_0_batch={t_1_batch:?} \nmotifs_arc_wrap={motifs_arc_wrap:?} \ndists_arc_wrap={motifs_avg_dists_arc_wrap:?}");
                         let t_1_batch_resources = t_1_batch_resources.clone();
                         async move {
 
-                            with_data!(1, [t_1_batch], motifs_arc_wrap, motifs_avg_dists_arc_wrap;
+                            with_data!(device_idx, [t_1_batch], motifs_arc_wrap, motifs_avg_dists_arc_wrap;
                                 |
                                     batch_v:&[&ThoTensor2<ChannelsData2, SimpleId>],
-                                    motifs_v:&DataWithExtra<ThoTensor2<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, FindMotifsRunConfig)>,
+                                    motifs_v:&DataWithExtra<ThoTensor2<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, FindMotifsRunConfig, SelectMotifsRunConfig)>,
                                     motifs_avg_dists:&ThoTensor2<ChannelsMotifsDists, SimpleId>
                                 |{
 
-                                let unfold_params = UnfoldParams::new(1, motifs_v.extra().1.window as i64, motifs_v.extra().1.step as i64);
+                                let unfold_params = UnfoldParams::new(1, motifs_v.extra().1.window as i64, 50/*motifs_v.extra().1.step as i64*/);
                                 let (batch_1_t, batch_1_sizes) = unfold_and_cat(&batch_v, &unfold_params)?;
                                 assert_eq!(batch_1_sizes.len(), batch_v.len());
 
@@ -377,7 +380,7 @@ where
                                 let guard = StreamGuard::set(&motifs_stream); //TODO Device
 
                                 let mut mask_makers = vec![
-                                    LocalMin { dim: 1 },
+                                    LocalMin { dim: 2 },
                                     Le {
                                        // we'll have mask/dists from clc_dist_d2_and_mask in shape[channels x num_motifs x num_blocks_in_batch] so motif's average dists which are  [channels x num_motifs] should be expanded to match calculated dists
                                         v:motifs_avg_dists.t_ref().unsqueeze(-1).expand([-1, -1, batch_1_t.data().size()[1]], false)
@@ -385,7 +388,7 @@ where
                                 ];
 
                                 let motifs_stream = ThoCudaStream::new(0); //TODO
-                                let (ref mask_cpu, ref dists_cpu )=  {
+                                let channel_masks_dists_ids  = {
                                     let guard = StreamGuard::set(&motifs_stream); //TODO Device
 
 
@@ -395,41 +398,58 @@ where
                                         false, //if true dists are returned
                                         &mut mask_makers,
                                     )?;
+                                    let keep_dists = true;
 
-                                    (mask.to_device(Cpu), dists.map(|t|t.to_device(Cpu)))
+                                    let channel_masks_dists_ids = (0..num_channels)
+                                        .map(|c| {
+                                            (
+                                                fold_mask(mask.i((0,.., ..)), &motifs_v.extra().0[c as usize], 0).to_device(Cpu),
+                                                dists.as_ref().map(|d|fold_dists(d.i((0,.., ..)), &motifs_v.extra().0[c as usize], 0).to_device(Cpu)),
+                                                motifs_v.extra().0[c as usize].iter().fold((vec![], HashSet::new()), |mut acc, d| {
+                                                    if !acc.1.contains(d) {
+                                                        acc.1.insert(d);
+                                                        acc.0.push(d.clone());
+                                                    }
+                                                    acc
+                                                }).0
+                                            )
+                                        })
+                                        .collect::<Vec<(Tensor, Option<Tensor>, Vec<DataId>)>>();
+
+                                    channel_masks_dists_ids
                                 };
 
-                                debug!("SelectMotifsStage::run: mask_cpu={mask_cpu:?} dists={mask_cpu:?}");
-                                trace!("SelectMotifsStage::run: mask_cpu=\n{mask_cpu}");
+                                debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");
+                                // for mask_in_channel in channel_masks.iter() {
+                                //     trace!("SelectMotifsStage::run: mask_in_channel=\n{}", mask_in_channel.0);
+                                //     if let Some(dists_in_channel) = mask_in_channel.1.as_ref() {
+                                //         trace!("SelectMotifsStage::run: dists_in_channel=\n{dists_in_channel}", );
+                                //     }
+                                // }
 
-                                for (channel, motif_ids) in motifs_v.extra().0.iter().enumerate() {
-                                    //extract into fn & merge wit find motifs
-                                    let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
-                                    let dists_flattened = dists_cpu
-                                        .as_ref()
-                                        .map(|d| d.i((channel as i64, .., ..)).flatten(0, 1));
+                                for (channel, mask_idsts_ids) in channel_masks_dists_ids.into_iter().enumerate() {
 
+                                    debug!("SelectMotifsStage::run: channel={channel} mask_idsts_ids={:?}", mask_idsts_ids.2);
 
-                                    debug!("SelectMotifsStage::run: dists_flattened.size={:?}",dists_flattened.as_ref().map(|v| v.size()));
-                                    trace!("SelectMotifsStage::run: mask_cpu_flattened=\n{mask_cpu_flattened}");
-                                    trace!("SelectMotifsStage::run: dists_flattened=\n{:?}",dists_flattened);
-
-                                    let mut channel_mask: BoolTensorIterator = (&mask_cpu_flattened).into();
-                                    let mut dists_and_mask_iter = channel_mask.zip(dist_iter(dists_flattened));//
-
-                                    debug!("SelectMotifsStage::run: channel={channel} mask_cpu_flattened.size={:?}",mask_cpu_flattened.size());
-                                    trace!("SelectMotifsStage::run: mask_cpu_flattened={mask_cpu_flattened}");
-
-                                    for motif_id in motif_ids {
+                                    let mut mask_in_channel = BoolTensorIterator::from(&mask_idsts_ids.0);
+                                    for motif_id in mask_idsts_ids.2 {
                                         let resources_iter= resources_iter.clone();
 
+                                        let mut slices = HashSet::new();
                                         for slice_1 in resources_iter {
 
-                                            if let Some((mask, dist)) = dists_and_mask_iter.next() {
-
-                                                    trace!("SelectMotifsStage::run: motif_id={motif_id:?} slice_1={slice_1:?} mask={mask} dist={dist}");
+                                            if let Some(mask) = mask_in_channel.next() {
+                                                trace!("SelectMotifsStage::run: motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} mask={mask}");
+                                                if mask {
+                                                    slices.insert(IdSlice(0, slice_1.0, slice_1.1));
+                                                }
+                                            } else {
+                                                warn!("SelectMotifsStage::run: no mask for motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} ");
                                             }
+                                        }
 
+                                        if !slices.is_empty(){
+                                           store.write().add_slices_to_motif(motifs_v.extra().2.id.expect("no select_motifs_run_config_id"), *motif_id, channel as i64, slices)?;
                                         }
                                     }
                                 }
@@ -447,21 +467,89 @@ where
             }
         }
 
-
-
         Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(0, self.run_configs[0].clone(), vec![]))))
     }
 }
 
+
+fn fold_mask<I>(mask: Tensor, ids: &Vec<I>, dim: usize) -> Tensor
+where
+    I:PartialEq + Debug
+{
+
+    reduce_by_groups(mask, |chunk|{
+        chunk.any_dim(dim as i64, true)
+    }, ids, dim)
+}
+
+fn fold_dists<I>(mask: Tensor, ids: &Vec<I>, dim: usize) -> Tensor
+where
+    I:PartialEq + Debug
+{
+
+    reduce_by_groups(mask, |chunk|{
+        chunk.mean_dim(&[dim as i64][..], true, chunk.kind())
+    }, ids, dim)
+}
+
+
+fn reduce_by_groups<I, F>(full: Tensor, reduce:F, ids: &Vec<I>, dim: usize) -> Tensor
+    where
+        I:PartialEq + Debug,
+        F: Fn(Tensor) -> Tensor,
+{
+    debug!("fold_mask: mask={full:?} ids={ids:?}");
+    trace!("fold_mask: mask=\n{full}");
+
+    assert!(!ids.is_empty(), "ids must not be empty");
+
+    let sizes = full.size();
+    let nd = sizes.len();
+    assert!(0 <= dim && dim < nd, "dim out of range");
+    assert_eq!(sizes[dim] as usize, ids.len(), "ids length mismatch");
+
+
+    let mut out: Vec<Tensor> = Vec::new();
+
+    // reduce a contiguous chunk [start, start+len) along `dim`
+    let mut push_group = |start: usize, len: usize| {
+        let s = start as i64;
+        let l = len as i64;
+
+        // slice the chunk and OR-reduce along the folded dim, keeping dim for concat
+        let chunk = full.narrow(dim as i64, s, l);
+        let reduced = reduce(chunk);
+        out.push(reduced);
+    };
+
+    // one-pass scan over contiguous ids
+    let mut start = 0usize;
+    let mut prev = &ids[0];
+    for (i, id) in ids.iter().enumerate().skip(1) {
+        if id != prev {
+            push_group(start, i - start);
+            start = i;
+            prev = id;
+        }
+    }
+    // flush the last run
+    push_group(start, ids.len() - start);
+
+    Tensor::cat(&out, dim as i64)
+}
+
+
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
+    use std::path::Path;
     use std::sync::Arc;
     use log::debug;
     use log::LevelFilter::Trace;
     use parking_lot::RwLock;
     use tch::kind::FLOAT_CPU;
-    use tch::Tensor;
+    use tch::{IndexOp, Kind, Tensor};
+    use tokio::fs;
     use caching_runner::common::cachable::DevicesWrap;
     use caching_runner::common::{mock_run_ctx, MockRunCtx};
     use caching_runner::common::runnable::AsyncStage;
@@ -469,23 +557,24 @@ mod tests {
     use caching_runner::global_ctx::{GlobalCtx};
     use thoosa_common::find_motifs_run_config::{ByLabelVarianceConfig, FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig};
     use thoosa_common::runs::Labeled;
-    use thoosa_common::utils::reset_print_options;
+    use thoosa_common::utils::{draw_function_plot, reset_print_options, vec_f32_from, z_norm, z_norm_2};
     use thoosa_common::ws::mock_ws_simp;
+    use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::generators::noise::generate_motifs_with_avg_distance;
     use thoosa_motifs::generators::non_overlapping::{generate_series_with_motif, Interval};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::{gen_motif, MotifKind, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::{cdt_for_dir, gen_motif, MotifKind, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::traits::{DataId, SimpleId};
-    use thoosa_store::MockStoreBuilder;
+    use thoosa_store::{IdSlice, MockStoreBuilder};
     use torch_runner::data::ThoTensor2;
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
-    use crate::tasks::motif_loader::{mock_motif_loader_2, MotifMeta};
+    use crate::tasks::motif_loader::{mock_motif_loader, MotifMeta};
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::select_motifs::SelectMotifsStage;
+    use crate::tasks::select_motifs::{fold_dists, fold_mask, SelectMotifsStage};
     use crate::tasks::tensor_loader::{mock_tensor_loader};
 
     #[ctor::ctor]
@@ -495,6 +584,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_single_label_one_motif() -> Result<(), ThoosaError> {
+        let test_dir = Path::new("/tmp/test_single_label_one_motif");//.join(cdt_for_dir());
+        fs::create_dir_all(test_dir).await?;
+
         log::set_max_level(Trace);
         reset_print_options();
         GlobalCtx::init_devices(2);
@@ -502,7 +594,7 @@ mod tests {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
         let run_id = 1;
 
-        let resource_a: Resource = Resource::new(1, 1, "resource_a", 100);
+        let resource_a: Resource = Resource::new(1, 1, "resource_a", 1000);
 
         let find_motifs_run_id = 1;
         let select_motifs_run_id = 1;
@@ -531,23 +623,50 @@ mod tests {
                     ("resource_set_for_label_0", Ok(vec![resource_a.clone()])),
                 ])
 
+                .with_add_slices_to_motif(vec![
+                    (1, 1, 0, HashSet::from([IdSlice(0, 1, 250), IdSlice(0, 1, 650)]))
+                ])
                 .build()));
 
         let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, 2, &[MotifKind::Pulse] )?;
 
-        debug!("test_single_label_one_motif: resource_a_intervals={resource_a_intervals:?}");
+
+        // draw_function_plot(
+        //     &test_dir.join(&format!("resource_a{}.png", cdt_for_dir())),
+        //     (2000, 1000),
+        //     vec_f32_from(&resource_a_t.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>().as_slice(),
+        //     &resource_a_intervals[0].iter().map(|v|(*v).into()).collect::<Vec<(f32, f32)>>(),
+        //     "resource_a"
+        // )?;
+
+        debug!("test_single_label_one_motif: resource_a_t={resource_a_t:?} resource_a_intervals={resource_a_intervals:?}");
 
         let loader = Arc::new(
             mock_tensor_loader::build()
                 .with_out_id()
                 .with_run_cached([
-                    (resource_a.clone(), resource_a_t),
+                    (resource_a.clone(), resource_a_t.shallow_clone()),
                 ])
                 .finish(),
         );
 
-        let motif_loader = Arc::new(mock_motif_loader_2::build().with_run_cached([
-            (motif_0_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))),
+        let motif_t = motifs_tensor(100, 3, MotifKind::Pulse);
+
+        // draw_function_plot(
+        //     &test_dir.join(&format!("motif_0_{}.png", cdt_for_dir())),
+        //     (2000, 1000),
+        //     vec_f32_from(&motif_t.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>().as_slice(),
+        //     &resource_a_intervals[0].iter().map(|v|(*v).into()).collect::<Vec<(f32, f32)>>(),
+        //     "motif_0"
+        // )?;
+
+
+        // let (mask, dists) = clc_dist_d2_and_mask(z_norm(&resource_a_t.unfold(1, 100, 50), 1), z_norm(&motif_t, 1), true, &mut vec![])?;
+        let (mask, dists) = clc_dist_d2_and_mask(resource_a_t.unfold(1, 100, 50), motif_t.shallow_clone(), true, &mut vec![])?;
+        debug!("test_single_label_one_motif: mask=\n{mask} dists=\n{}", dists.unwrap());
+
+        let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
+            (motif_0_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_t)),
         ]).finish());
 
 
@@ -633,7 +752,7 @@ mod tests {
                 .finish(),
         );
 
-        let motif_loader = Arc::new(mock_motif_loader_2::build().with_run_cached([
+        let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (motif_0_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))),
             (motif_1_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 2, MotifKind::Triangle))),
             (motif_0_in_channel_1, (MotifMeta { channel: 1, run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 4, MotifKind::Sin))),
@@ -664,7 +783,7 @@ mod tests {
 
         let t = Tensor::stack(
             generate_motifs_with_avg_distance(
-                gen_motif(motif_len, &motif_kind).as_slice(), num_slices, 0.1, 0.2, None
+                gen_motif(motif_len, &motif_kind).as_slice(), num_slices, 0.2, 0.3, None
             ).0.into_iter().map(|motif| Tensor::from_slice(motif.as_slice())).collect::<Vec<_>>().as_slice(), 0
         );
 
@@ -673,20 +792,158 @@ mod tests {
         t
     }
 
-    pub fn resource_tensor(resource_len:usize, motif_len:usize, num_motifs:usize, channels_motif_kinds:&[MotifKind]) -> Result<(Tensor, Vec<Vec<Interval>>), ThoosaError> {
+    ///returns Tensor [channels x resource_len] + channels[ intervals[Interval] ]
+    pub fn resource_tensor(resource_len:usize, motif_len:usize, motif_repeats:usize, channels_motif_kinds:&[MotifKind]) -> Result<(Tensor, Vec<Vec<Interval>>), ThoosaError> {
 
         let mut channels_signals = Vec::with_capacity(channels_motif_kinds.len());
-        let mut intervals = Vec::with_capacity(channels_motif_kinds.len());
+        let mut channels_intervals = Vec::with_capacity(channels_motif_kinds.len());
         for kind in channels_motif_kinds.iter() {
-            let (signal, ivals) = generate_series_with_motif(resource_len, motif_len, num_motifs, 300, 0.4, (0.8, 1.8), None, kind)?;
+            let (signal, ivals) = generate_series_with_motif(resource_len, motif_len, motif_repeats, 300, 0.4, (0.8, 1.8), None, kind)?;
             channels_signals.push(signal);
-            intervals.push(ivals);
+            channels_intervals.push(ivals);
         }
 
         let t = Tensor::stack(channels_signals.into_iter().map(|data|Tensor::from_slice(data.as_slice())).collect::<Vec<Tensor>>().as_slice(), 0);
 
-        debug!("resource_tensor: t.size={:?} intervals={intervals:?}", t.size());
+        debug!("resource_tensor: t.size={:?} intervals={channels_intervals:?}", t.size());
 
-        Ok((t, intervals))
+        Ok((t, channels_intervals))
+    }
+
+    #[test]
+    fn test_fold_mask(){
+        let mask = Tensor::from_slice(&[
+            false, true,   false, false, false, //1
+            false, true,   false, false, false, //1
+            false, false,  false, false, false, //1
+
+            false, false,  true,  false, false, //2
+            false, false,  false, false, false, //2
+        ] ).view((1, 5, -1));
+        debug!("mask: \n{mask}");
+
+
+        let ids = vec![1, 1, 1, 2, 2];
+
+        let folded_mask = fold_mask(mask, &ids, 1);
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                false, true,   false, false, false, //1
+                false, false,  true,  false, false, //2
+            ] ).view((1, 2, -1)),
+            folded_mask,
+        );
+
+
+    }
+
+
+    #[test]
+    fn test_fold_mask_all_false() {
+        let mask = Tensor::zeros([1, 4, 3], (Kind::Bool, tch::Device::Cpu));
+        let ids = vec![7, 7, 8, 8];
+        let folded = fold_mask(mask, &ids, 1);
+        let expected = Tensor::zeros([1, 2, 3], (Kind::Bool, tch::Device::Cpu));
+        assert_eq!(folded, expected);
+    }
+
+    #[test]
+    fn test_fold_dists_basic_avg_rows() {
+        // shape: [1, 5, 3], fold along dim=1 with ids = [1,1,1,2,2]
+        // Group 1 (rows 0..2) avg -> [3,3,3]
+        // Group 2 (rows 3..4) avg -> [5,5,10]
+        let x = Tensor::from_slice(&[
+            // row 0
+            1.0f32, 2.0, 3.0,
+            // row 1
+            3.0, 2.0, 1.0,
+            // row 2
+            5.0, 5.0, 5.0,
+            // row 3
+            10.0, 0.0, 10.0,
+            // row 4
+            0.0, 10.0, 10.0,
+        ])
+            .view([1, 5, 3]);
+
+        let ids = vec![1, 1, 1, 2, 2];
+
+        let folded = fold_dists(x, &ids, 1);
+        let expected = Tensor::from_slice(&[
+            // group 1 avg:
+            3.0f32, 3.0, 3.0,
+            // group 2 avg:
+            5.0, 5.0, 10.0,
+        ])
+            .view([1, 2, 3]);
+
+        assert_eq!(folded, expected);
+    }
+
+    #[test]
+    fn test_fold_dists_last_dim_avg_cols() {
+        // Fold along the last dimension (dim=2). shape: [2, 2, 4]
+        // ids = [10,10,20,20] -> two groups of contiguous columns
+        let x = Tensor::from_slice(&[
+            // batch 0
+            // row 0
+            1.0f32, 3.0, 5.0, 7.0,
+            // row 1
+            2.0, 4.0, 6.0, 8.0,
+            // batch 1
+            // row 0
+            10.0, 0.0, 10.0, 0.0,
+            // row 1
+            0.0, 10.0, 20.0, 30.0,
+        ]).view([2, 2, 4]);
+
+        let ids = vec![10, 10, 20, 20];
+
+        let folded = fold_dists(x, &ids, 2);
+
+        // For batch 0:
+        // row0: [1,3,5,7] -> A=(1+3)/2=2, B=(5+7)/2=6
+        // row1: [2,4,6,8] -> A=3, B=7
+        //
+        // For batch 1:
+        // row0: [10,0,10,0] -> A=5, B=5
+        // row1: [0,10,20,30] -> A=5, B=25
+        let expected = Tensor::from_slice(&[
+            // batch 0
+            2.0f32, 6.0, // row 0 -> [A,B]
+            3.0, 7.0,    // row 1 -> [A,B]
+            // batch 1
+            5.0, 5.0,    // row 0
+            5.0, 25.0,   // row 1
+        ])
+            .view([2, 2, 2]);
+
+        assert_eq!(folded, expected);
+    }
+
+    #[test]
+    fn test_fold_mask_bool_or_contiguous() {
+        // sanity check for boolean folding using same machinery
+        let mask = Tensor::from_slice(&[
+            false, true,   false, false, false, //1
+            false, true,   false, false, false, //1
+            false, false,  false, false, false, //1
+            false, false,  true,  false, false, //2
+            false, false,  false, false, false, //2
+        ])
+            .view([1, 5, 5]);
+
+        let ids = vec![1, 1, 1, 2, 2];
+
+        let folded_mask = fold_mask(mask, &ids, 1);
+
+        let expected = Tensor::from_slice(&[
+            false, true,  false, false, false, // group 1 (OR of first 3)
+            false, false, true,  false, false, // group 2 (OR of last 2)
+        ])
+            .view([1, 2, 5]);
+
+        assert_eq!(folded_mask, expected);
     }
 }

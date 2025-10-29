@@ -2,6 +2,7 @@ use std::ops::Deref;
 use log::debug;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use thoosa_shared::{gen_motif, pulse_v, MotifKind, ThoosaError};
+use crate::generators::noise::generate_motifs_with_avg_distance;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Interval { pub start: usize, pub end: usize }
@@ -42,6 +43,9 @@ pub fn generate_series_with_motif(
         sig[i] = sig[i - 1] + normal_step(&mut rng, step_sigma);
     }
 
+    let mut motif_0 =  generate_motifs_with_avg_distance(
+        gen_motif(motif_len, &motif_kind).as_slice(), repeats, 0.1, 0.2, None
+    );
     // motif template (z-normalized)
     let mut motif: Vec<f32> = gen_motif(motif_len, motif_kind);
 
@@ -78,8 +82,8 @@ pub fn generate_series_with_motif(
     let mut start = leading_gap;
     for motif_idx in 0..repeats {
         let base = sig[start];
-        for (k, &mv) in motif.iter().enumerate() {
-            sig[start + k] = base + mv + rng.random_range(amp_range.0..amp_range.1) * 0.4;
+        for (k, &mv) in motif_0.0[motif_idx].iter().enumerate() {
+            sig[start + k] = /*base +*/ mv;
         }
         intervals.push(Interval { start, end: start + motif_len });
         if motif_idx + 1 < repeats {
