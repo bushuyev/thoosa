@@ -398,9 +398,12 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         let lock = v.swap_remove(to_device_idx);
         let opt: Option<O> = lock.into_inner();
         Ok(opt.expect(&format!("no data in {to_device_idx} for {:?}", self.id)))
-
     }
 
+    pub async fn clone_from_cpu(&self) -> Result<O, ThoosaError>
+    where O: Clone {
+        Ok(self.cached_data[0].read().await.clone().expect("no data in cpu"))
+    }
 
     pub async fn with_data_ref<R>(
         &self,
@@ -811,86 +814,9 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     }
 }
 
-pub async fn with_two_vars_ext<A, B, R>
-(
-    aw: Arc<DevicesWrap<A>>,
-    bw: Arc<DevicesWrap<B>>,
-    to_device_idx: usize,
-    _trace_ctx: Option<&'static str>,
-    do_run: impl FnOnce(&A, &B) -> Result<R, ThoosaError>,
-) -> Result<R, ThoosaError>
-where
-    A: Data + WithId + Send + Sync + CopyToDevice + 'static,
-    B: Data + WithId + Send + Sync + CopyToDevice + 'static,
-{
-    let aw_arc_clone = Arc::clone(&aw);
-    let bw_arc_clone = Arc::clone(&bw);
-
-    let (ra, rb) = tokio::try_join!(
-        tokio::spawn(async move {
-            aw.load_from_any_device(to_device_idx).await?;
-            Ok::<(), ThoosaError>(())
-        }),
-        tokio::spawn(async move {
-            bw.load_from_any_device(to_device_idx).await?;
-            Ok::<(), ThoosaError>(())
-        })
-    )?;
-
-    let (a, b) = tokio::try_join!(
-        aw_arc_clone.get_copied(to_device_idx),
-        bw_arc_clone.get_copied(to_device_idx),
-    )?;
-
-    do_run(&a, &b)
-}
 
 
 
-pub async fn with_two_arrays_ext<A, B, R>
-(
-    aw: Vec<Arc<DevicesWrap<A>>>,
-    bw: Vec<Arc<DevicesWrap<B>>>,
-    to_device_idx: usize,
-    _trace_ctx: Option<&'static str>,
-    do_run: impl FnOnce(&[&A], &[&B]) -> Result<R, ThoosaError>,
-) -> Result<R, ThoosaError>
-where
-    A: Data + WithId + Send + Sync + CopyToDevice + 'static,
-    B: Data + WithId + Send + Sync + CopyToDevice + 'static,
-{
-    let aw_arc = Arc::new(aw);
-    let aw_arc_clone = Arc::clone(&aw_arc);
-    let bw_arc = Arc::new(bw);
-    let bw_arc_clone = Arc::clone(&bw_arc);
-
-    let ha = tokio::spawn(async move {
-        try_join_all(aw_arc.iter().map(|v| async move { v.as_ref().load_from_any_device(to_device_idx).await }))
-            .await
-            .map(|_| ())
-    });
-    let hb = tokio::spawn(async move {
-        try_join_all(bw_arc.iter().map(|v| async move { v.as_ref().load_from_any_device(to_device_idx).await }))
-            .await
-            .map(|_| ())
-    });
-
-    let (ra, rb) = tokio::try_join!(ha, hb)?;
-
-    let (a, b) = tokio::try_join!(
-            try_join_all(aw_arc_clone
-                .iter()
-                .map(|w| w.as_ref().get_copied(to_device_idx))
-            ),
-            try_join_all(bw_arc_clone
-                .iter()
-                .map(|w| w.as_ref().get_copied(to_device_idx)),
-        ))?;
-
-    let refs_a:Vec<&A> = a.iter().map(|o| &**o).collect();
-    let refs_b:Vec<&B> = b.iter().map(|o| &**o).collect();
-    do_run(&refs_a, &refs_b)
-}
 
 
 #[cfg(test)]

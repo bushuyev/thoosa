@@ -12,7 +12,7 @@ use tch::Device::Cpu;
 use tch::Kind::Float;
 use tch::{IndexOp, Kind, Tensor};
 use tokio::io::AsyncWriteExt;
-use caching_runner::common::cachable::{with_two_arrays_ext, with_two_vars_ext, Cached, DevicesWrap};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::tmp_cache::TmpCached;
@@ -35,10 +35,11 @@ use thoosa_with_data::with_data;
 use torch_runner::data::ThoTensor2;
 use crate::cli::Commands::SelectMotifs;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
+use crate::tasks::batched_moitfs_loader::{BatchedMotifsInput, BatchedMotifsLoader};
 use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::dists_tracker::dist_iter;
+use crate::tasks::dists_tracker::{dist_iter, DistsMask};
 use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::run_ctx_2::RunCtx2;
@@ -57,6 +58,7 @@ where
     ws:Arc<RwLock<Box<dyn Workspace>>>,
     loader:Arc<L>,
     motif_loader:Arc<ML>,
+    batched_motifs_loader:Arc<BatchedMotifsLoader<ML, C>>,
     pd:PhantomData<C>,
     run_configs:Vec<SelectMotifsRunConfig>,
     find_motifs_run_ids:Vec<RunId>,
@@ -83,15 +85,18 @@ where
             Arc::new(AverageEuclideanDistanceStage::<C>::new()),
         ));
 
+        let batched_motifs_loader = Arc::new(BatchedMotifsLoader::new(Arc::clone(&motif_loader), Arc::clone(&load_and_clc_avg_dist)));
+
         Self {
             store: Arc::clone(store),
             ws: Arc::clone(ws),
             loader,
             motif_loader,
-            pd: Default::default(),
+            batched_motifs_loader,
             run_configs,
             find_motifs_run_ids,
-            load_and_clc_avg_dist
+            load_and_clc_avg_dist,
+            pd: Default::default(),
         }
     }
 
@@ -123,7 +128,7 @@ where
             (guard.device_idx(), guard.cache_area())
         };
 
-        let labels_resources = input.with_data_ref(0, None, |input|{
+        let labels_resources = input.with_data_ref(0, None, |input|{//TODO replace with with_data!(device_idx,
             Ok(input
                 .resources_config()
                 .to_resources(&self.store)?
@@ -141,9 +146,10 @@ where
         let tmp_motifs_avg_dists_cache:TmpCached<ThoTensor2<ChannelsMotifsDists, SimpleId>> = TmpCached::new("motif dists", cache_area).await;
 
         let num_channels = self.ws.read().channels();
-        let mut motif_avg_dists = Arc::new(parking_lot::RwLock::new(HashMap::new()));
+
 
         for find_motifs_run_id in &self.find_motifs_run_ids {
+            let mut motif_avg_dists = Arc::new(parking_lot::RwLock::new(HashMap::new()));
 
             let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(
                 *find_motifs_run_id,
@@ -152,6 +158,10 @@ where
 
             for select_motifs_run_config in self.run_configs.iter() {
                 let motif_ids = self.store.read().list_motifs(*find_motifs_run_id)?;
+
+                let out = Arc::clone(&self.batched_motifs_loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(BatchedMotifsInput::new(*find_motifs_run_id, motif_ids.clone()))), Arc::clone(&ctx)).await;
+
+
                 let motifs_len = motif_ids.len();
                 let done_cnt = Arc::new(AtomicU32::new(0));
 
@@ -317,9 +327,9 @@ where
         let find_motifs_runs_motifs = tmp_moitfs_cache.clone_to_arcs_vec();
 
 
-        debug!("SelectMotifsStage::run: motif_dists={motif_avg_dists:?}");
+        // debug!("SelectMotifsStage::run: motif_dists={motif_avg_dists:?}");
 
-        
+
             let mut t_1_batch: Vec<_> = vec![];
             let mut t_1_batch_resources: Vec<_> = vec![];
             let mut t_1_batch_len = 0;
@@ -406,6 +416,7 @@ where
                                             if ids.is_empty(){
                                                 None
                                             } else {
+                                                // let mask = DistsMask::new_async(mask, dists, true).await;
                                                 Some((
                                                     fold_mask(mask.i((c as i64,.., ..)), &ids, 0).to_device(Cpu),
 
