@@ -705,16 +705,7 @@ mod tests {
         let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[vec![(1, MotifKind::Pulse), (1, MotifKind::Triangle)]])?;
 
 
-        let add_slices_entries_a = resource_a_intervals.iter().enumerate().flat_map(|(c, channel_intervals)|{
-            let channel_0_motifs_ids_ref = &channel_0_motifs_ids;
-            let resource_a_ref = &resource_a;
-
-            channel_intervals.iter().enumerate().map(move |(m_idx, motif_intervals) |{
-                let motif_id = channel_0_motifs_ids_ref.get(m_idx).expect(&format!("no motif for index {m_idx}"));
-
-                (run_id, *motif_id, c as i64, motif_intervals.iter().map(|int| IdSlice(0, resource_a_ref.id(), int.start as u32)).collect::<HashSet<_>>())
-            })
-        }).collect::<Vec<_>>();
+        let add_slices_entries_a = resources_add_slices_to_motif_expectations(run_id, &resource_a, &channel_0_motifs_ids, &resource_a_intervals);
 
         let mut store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
@@ -779,7 +770,18 @@ mod tests {
         Ok(())
     }
 
+    fn resources_add_slices_to_motif_expectations(run_id: RunId, resource_a: &Resource, channel_0_motifs_ids: &Vec<u32>, resource_a_intervals: &Vec<Vec<Vec<Interval>>>) -> Vec<(RunId, u32, i64, HashSet<IdSlice>)> {
+        resource_a_intervals.iter().enumerate().flat_map(|(c, channel_intervals)| {
+            let channel_0_motifs_ids_ref = &channel_0_motifs_ids;
+            let resource_a_ref = &resource_a;
 
+            channel_intervals.iter().enumerate().map(move |(m_idx, motif_intervals)| {
+                let motif_id = channel_0_motifs_ids_ref.get(m_idx).expect(&format!("no motif for index {m_idx}"));
+
+                (run_id, *motif_id, c as i64, motif_intervals.iter().map(|int| IdSlice(0, resource_a_ref.id(), int.start as u32)).collect::<HashSet<_>>())
+            })
+        }).collect::<Vec<_>>()
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_two_labels() -> Result<(), ThoosaError> {
