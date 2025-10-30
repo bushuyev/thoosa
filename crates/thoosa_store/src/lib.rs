@@ -3238,7 +3238,8 @@ impl MockStoreBuilder {
     }
 
     //run_id, motif_id, channel, slices
-    pub fn with_add_slices_to_motif(mut self, inputs:impl IntoIterator<Item=(RunId, u32, i64, HashSet<IdSlice>)> ) -> Self {
+    pub fn with_add_slices_to_motif(mut self, inputs:impl IntoIterator<Item=(RunId, u32, i64, HashSet<IdSlice>)> + Debug ) -> Self {
+        debug!("with_add_slices_to_motif: inputs={inputs:?}");
         for inps in inputs {
             self.store.expect_add_slices_to_motif().with(
                 eq(inps.0),
