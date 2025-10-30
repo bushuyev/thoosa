@@ -698,25 +698,14 @@ mod tests {
         let find_motifs_run_id = 1;
         let select_motifs_run_id = 1;
 
-        let motif_0_in_channel_0 = 1u32;
-        let motif_1_in_channel_0 = 2u32;
+        let channel_0_motifs_ids = vec![1u32, 2u32];
 
         let resources_group = "group";
 
         let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, 100, &[vec![(1, MotifKind::Pulse), (1, MotifKind::Triangle)]])?;
 
-        let motif_ids = [motif_0_in_channel_0, motif_1_in_channel_0];
-        let resource_a_id = resource_a.id();
-        let mut add_slices_entries = Vec::new();
-        for (c, channel) in resource_a_intervals.iter().enumerate() {
-            let channel_idx = c as i64;
-            for (m_idx, motif_intervals) in channel.iter().enumerate() {
-                if let Some(&motif_id) = motif_ids.get(m_idx) {
-                    let slices = motif_intervals.iter().map(|int| IdSlice(0, resource_a_id, int.start as u32)).collect::<HashSet<_>>();
-                    add_slices_entries.push((1, motif_id, channel_idx, slices));
-                }
-            }
-        }
+
+        let add_slices_entries_a = resources_add_slices_to_motif_expectations(run_id, &resource_a, &channel_0_motifs_ids, &resource_a_intervals);
 
         let mut store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
@@ -726,8 +715,8 @@ mod tests {
                 )
                 .with_list_motifs([
                     (find_motifs_run_id as RunId, Ok(vec![
-                        motif_0_in_channel_0 as usize,
-                        motif_1_in_channel_0 as usize,
+                        channel_0_motifs_ids[0] as usize,
+                        channel_0_motifs_ids[1] as usize,
                     ]))
                 ])
                 .with_list_group_labeled_resources_sets([
@@ -738,16 +727,9 @@ mod tests {
                 .with_list_resource_set_resources_by_descr([
                     ("resource_set_for_label_0", Ok(vec![resource_a.clone()])),
                 ])
-                .with_add_slices_to_motif(add_slices_entries)
+                .with_add_slices_to_motif(add_slices_entries_a)
                 .build()));
 
-        // draw_function_plot(
-        //     &test_dir.join(&format!("resource_a{}.png", cdt_for_dir())),
-        //     (2000, 1000),
-        //     vec_f32_from(&resource_a_t.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>().as_slice(),
-        //     &resource_a_intervals[0].iter().map(|v|(*v).into()).collect::<Vec<(f32, f32)>>(),
-        //     "resource_a"
-        // )?;
 
         debug!("test_single_label_one_motif: resource_a_t={resource_a_t:?} resource_a_intervals={resource_a_intervals:?}");
 
@@ -763,22 +745,11 @@ mod tests {
         let motif_0_t = motifs_tensor(100, 3, MotifKind::Pulse);
         let motif_1_t = motifs_tensor(100, 2, MotifKind::Triangle);
 
-        // draw_function_plot(
-        //     &test_dir.join(&format!("motif_0_{}.png", cdt_for_dir())),
-        //     (2000, 1000),
-        //     vec_f32_from(&motif_t.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>().as_slice(),
-        //     &resource_a_intervals[0].iter().map(|v|(*v).into()).collect::<Vec<(f32, f32)>>(),
-        //     "motif_0"
-        // )?;
 
-
-        // let (mask, dists) = clc_dist_d2_and_mask(z_norm(&resource_a_t.unfold(1, 100, 50), 1), z_norm(&motif_t, 1), true, &mut vec![])?;
-        // let (mask, dists) = clc_dist_d2_and_mask(resource_a_t.unfold(1, 100, 50), motif_0_t.shallow_clone(), true, &mut vec![])?;
-        // debug!("test_single_label_one_motif: mask=\n{mask} dists=\n{}", dists.unwrap());
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (motif_0_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_0_t)),
-            (motif_1_in_channel_0, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_1_t)),
+            (channel_0_motifs_ids[0], (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_0_t)),
+            (channel_0_motifs_ids[1], (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_1_t)),
         ]).finish());
 
 
@@ -799,7 +770,18 @@ mod tests {
         Ok(())
     }
 
+    fn resources_add_slices_to_motif_expectations(run_id: RunId, resource_a: &Resource, channel_0_motifs_ids: &Vec<u32>, resource_a_intervals: &Vec<Vec<Vec<Interval>>>) -> Vec<(RunId, u32, i64, HashSet<IdSlice>)> {
+        resource_a_intervals.iter().enumerate().flat_map(|(c, channel_intervals)| {
+            let channel_0_motifs_ids_ref = &channel_0_motifs_ids;
+            let resource_a_ref = &resource_a;
 
+            channel_intervals.iter().enumerate().map(move |(m_idx, motif_intervals)| {
+                let motif_id = channel_0_motifs_ids_ref.get(m_idx).expect(&format!("no motif for index {m_idx}"));
+
+                (run_id, *motif_id, c as i64, motif_intervals.iter().map(|int| IdSlice(0, resource_a_ref.id(), int.start as u32)).collect::<HashSet<_>>())
+            })
+        }).collect::<Vec<_>>()
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_two_labels() -> Result<(), ThoosaError> {
@@ -905,6 +887,7 @@ mod tests {
         t
     }
 
+    ///channels_motif_kinds - channels x (how many times motif should appear in the sequence x MotifKind)
     ///returns Tensor [channels x resource_len] + channels[ motifs[ intervals[Interval] ] ]
     pub fn resource_tensor(resource_len:usize, motif_len:usize, channels_motif_kinds:&[Vec<(usize, MotifKind)>]) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoosaError> {
         use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -975,8 +958,8 @@ mod tests {
                 let motifs = generate_motifs_with_avg_distance(
                     gen_motif(motif_len, kind).as_slice(),
                     (*repeats).max(2),
+                    0.1,
                     0.2,
-                    0.3,
                     None,
                 ).0;
 
