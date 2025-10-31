@@ -59,6 +59,7 @@ where
     batch_clc: Arc<CLC>,
     receiver: Arc<RSV>,
     chunk_size: usize,
+    on_batch_done: Box<dyn Fn(R) -> BoxFuture<'static, R> + Sync + Send>,
     on_all_done: Box<dyn Fn(&Arc<RSV>) -> BoxFuture<'static, ()> + Sync + Send>,
     pd: PhantomData<(ResC, R, C)>,
 }
@@ -88,15 +89,17 @@ where
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     C: RunCtx + 'static,
 {
-    pub fn new<OnAllDone>(
+    pub fn new<OnAllDone, OnBatchDone>(
         loader: Arc<L>,
         store: &Arc<RwLock<Box<dyn Store>>>,
         batch_clc: Arc<CLC>,
         receiver: Arc<RSV>,
         chunk_size: usize,
+        on_batch_done:OnBatchDone,
         on_all_done: OnAllDone,
     ) -> Self
     where
+        OnBatchDone: Fn(R) -> BoxFuture<'static, R> + Sync + Send + 'static,
         OnAllDone: Fn(&Arc<RSV>) -> BoxFuture<'static, ()> + Sync + Send + 'static,
     {
         Self {
@@ -105,6 +108,7 @@ where
             batch_clc,
             receiver,
             chunk_size,
+            on_batch_done: Box::new(on_batch_done),
             on_all_done: Box::new(on_all_done),
             pd: Default::default(),
         }
@@ -273,7 +277,7 @@ where
                     continue;
                 }
 
-                let cross_clc_output = DevicesWrap::with_data_array(
+                let mut cross_clc_output = DevicesWrap::with_data_array(
                     [t_0_batch.clone(), t_1_batch].concat().as_slice(), //t_0_batch and t_1_batch are DataCacheWrappers
                     device_idx,
                     None,
@@ -287,11 +291,15 @@ where
 
                         debug!("input={input:?}");
 
-                        Arc::clone(&self.batch_clc).do_run(&input, Arc::clone(&ctx))
+                        let mut out = Arc::clone(&self.batch_clc).do_run(&input, Arc::clone(&ctx))?;
+
+                        Ok(out)
 
                     },
                 )
                 .await?;
+
+                let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await;
 
                 let receiver_arc = Arc::clone(&self.receiver);
                 let ctx_arc = Arc::clone(&ctx);
@@ -683,7 +691,7 @@ mod tests {
                 )?;
 
                 debug!("CrossBatchClc::do_run:  dists={dists:?}");
-                Ok(DistsMask::new(dists.0, dists.1))
+                Ok(DistsMask::new(dists.0, dists.1, true))
             },
             (),
             UnfoldParams::new(1, 2, 1),
@@ -703,6 +711,9 @@ mod tests {
             batch_clc,
             receiver,
             20,
+            |batch|{
+                async {batch}.boxed()
+            },
             |p| {
                 async {
                     // cross_loader.receiver;
@@ -794,7 +805,7 @@ mod tests {
                 .finish(),
         );
 
-        let ctx = Arc::new(RwLock::new(mock_run_ctx::default()));
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
 
         let mut mocked_store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
@@ -811,6 +822,9 @@ mod tests {
             batch_clc,
             receiver,
             2,
+            |batch|{
+                async {batch}.boxed()
+            },
             |p| {
                 async {
                     // cross_loader.receiver;

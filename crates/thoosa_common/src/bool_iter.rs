@@ -10,7 +10,7 @@ pub struct BoolTensorIterator<'a> {
 
 impl<'a> BoolTensorIterator<'a> {
     fn new(tensor: &'a Tensor) -> Self {
-        assert_eq!(tensor.kind(), Kind::Bool);
+        assert_eq!(Kind::Bool, tensor.kind());
         let numel = tensor.numel() as usize;
         let data_ptr = tensor.data_ptr() as *const u8;
         BoolTensorIterator {
