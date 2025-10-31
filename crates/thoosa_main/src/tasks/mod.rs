@@ -13,3 +13,4 @@ pub mod transforms;
 pub mod stages_seq;
 pub mod select_motifs;
 pub mod batched_moitfs_loader;
+pub mod resources_motifs_clc_dist;
