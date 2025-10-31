@@ -130,8 +130,6 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
 
     assert!(src_t.as_ref().device().ne(&Device::Cpu));
 
-    tch::Cuda::synchronize(0);//TODO remove
-
 
     let src_ptr: usize = src_t.as_ref().data_ptr() as usize;
     let src_size = src_t.as_ref().size();
@@ -147,8 +145,6 @@ pub async fn move_d2h(
 ) -> Tensor {
 
     assert!(src_t.as_ref().device().ne(&Device::Cpu));
-
-    tch::Cuda::synchronize(0);//TODO remove
 
 
     let src_ptr: usize = src_t.data_ptr() as usize;

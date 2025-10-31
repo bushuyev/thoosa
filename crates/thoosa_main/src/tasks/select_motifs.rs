@@ -255,7 +255,7 @@ where
                                         if ids.is_empty(){
                                             None
                                         } else {
-                                            // let mask = DistsMask::new_async(mask, dists, true).await;
+
                                             Some((
                                                 DistsMask::new(
                                                     fold_mask(mask.i((c as i64,.., ..)), &ids, 0),
