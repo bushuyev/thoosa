@@ -282,7 +282,7 @@ mod tests {
     async fn test_load_and_clc_average_euclidean_distance() -> Result<(), ThoosaError> {
         GlobalCtx::init_devices(2);
 
-        let ctx = Arc::new(RwLock::new(mock_run_ctx::default()));
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([

@@ -255,15 +255,7 @@ where
                     motif.t_ref().copy()
                 }).collect::<Vec<_>>();
 
-                //building dists tensors for each channel to compare matches with
-                let channel_avg_dists_tensors = channel_motifs.iter().map(|motif|  {
-                    let read_guard = motif_avg_dists.read();
-                    let avg_dist = read_guard.get(&motif.id()).unwrap();
 
-                    debug!("SelectMotifsStage::run: motif.id={} dist={avg_dist}", motif.id());
-
-                    Tensor::from_slice(vec![*avg_dist; motif.size()[0] as usize].as_slice())
-                }).collect::<Vec<_>>();
 
                 debug!("SelectMotifsStage::run: c={c}, channel_motifs_tensors={:?}", channel_motifs_tensors);
 
@@ -274,8 +266,18 @@ where
                     )
 
                 } else {
+                    //building dists tensors for each channel to compare matches with
+                    let channel_avg_dists_tensors = channel_motifs.iter().map(|motif|  {
+                        let read_guard = motif_avg_dists.read();
+                        let avg_dist = read_guard.get(&motif.id()).unwrap();
+
+                        debug!("SelectMotifsStage::run: motif.id={} dist={avg_dist}", motif.id());
+
+                        Tensor::from_slice(vec![*avg_dist; motif.size()[0] as usize].as_slice())
+                    }).collect::<Vec<_>>();
+
                     let channel_t = Tensor::cat(&channel_motifs_tensors, 0);
-                    let motif_avg_dists_t = Tensor::cat(&channel_avg_dists_tensors, 0);
+                    let motif_avg_dists_t = Tensor::cat(&channel_avg_dists_tensors, 0).to_device(ThoDevice::from(device_idx).into());
 
                     if channel_t.size()[0] < max_motif_slices as i64 {
                         debug!("SelectMotifsStage::run: c={c}, channel_t.size={:?} padding to {:?}", channel_t.size(), [max_motif_slices as i64, input.find_motifs_run_config.window  as i64]);
@@ -296,7 +298,7 @@ where
 
             };
 
-            debug!("SelectMotifsStage::run: channels_dists_tensors_vec={channels_motif_avg_dists_tensors_vec:?}");
+            debug!("SelectMotifsStage::run: channels_motif_avg_dists_tensors_vec={channels_motif_avg_dists_tensors_vec:?}");
             debug!("SelectMotifsStage::run: channels_motifs_tensors_vec={channels_motifs_tensors_vec:?}");
 
             let channels_motifs_t = Tensor::stack(&channels_motifs_tensors_vec, 0);

@@ -356,7 +356,7 @@ mod tests {
             )
         ));
 
-        let ctx = Arc::new(RwLock::new(mock_run_ctx::default()));
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
 
         let num_devices = GlobalCtx::global().device_count();
         let cache_area = ctx.read().cache_area();

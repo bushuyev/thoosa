@@ -11,6 +11,7 @@ use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use futures_util::future::BoxFuture;
 use tch::Tensor;
 use tch::kind::FLOAT_CPU;
 use thoosa_common::utils::tensor_mem_size;
@@ -151,6 +152,12 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
     pub fn iter_1(&self) -> SlicesIter {
         self.iter_1.clone()
     }
+
+    pub async fn replace_clc_result<OnBatchDone>(mut self, f: &OnBatchDone) -> Self
+    where OnBatchDone: Fn(R) -> BoxFuture<'static, R> + Sync + Send + 'static,{
+        self.clc_result = f(self.clc_result).await;
+        self
+    }
 }
 
 impl<R: Debug> WithId for CrossUnfoldClcOutput<R> {
@@ -275,7 +282,8 @@ mod tests {
     use log::debug;
     use parking_lot::RwLock;
     use std::sync::Arc;
-    use tch::Device::Cuda;
+    use tch::Device::{Cpu, Cuda};
+    use tch::Kind::{Bool, Uint8};
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use thoosa_common::utils::lin_t;
@@ -309,8 +317,9 @@ mod tests {
                 assert!(t_1.allclose(&tensor_01, 0.1, 0.1, false));
 
                 Ok(DistsMask::new(
-                    Tensor::rand(&[0], FLOAT_CPU),
+                    Tensor::rand(&[0], FLOAT_CPU).lt(0.5),
                     Some(Tensor::rand(&[0], FLOAT_CPU)),
+                    false,
                 ))
             },
             MeanDistsCtx::new(3, Cuda(0)),
