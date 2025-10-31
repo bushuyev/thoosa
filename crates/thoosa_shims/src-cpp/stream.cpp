@@ -4,8 +4,8 @@
 extern "C" {
 
   void *tho_get_current_stream(int device) {
-    c10::cuda::CUDAStream stream = c10::cuda::getCurrentCUDAStream(device);
-    return stream;
+    c10::cuda::CUDAStream s = c10::cuda::getCurrentCUDAStream(device);
+    return new c10::cuda::CUDAStream(s);
   }
 
   void *tho_get_stream_from_pool(int device, bool high_pri) {

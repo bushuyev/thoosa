@@ -84,7 +84,7 @@ impl UnfoldParams {
 
 pub struct CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
     C: RunCtx + 'static,
 {
     batch_clc_fn: F,
@@ -95,7 +95,7 @@ where
 
 impl<F, R, CUC, C> Debug for CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
     C: RunCtx + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -106,7 +106,7 @@ where
 
 impl<F, R, CUC, C> CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
     C: RunCtx + 'static,
 {
     pub fn new(batch_clc: F, cross_batch_ctx: CUC, unfold_params: UnfoldParams) -> Self {
@@ -174,7 +174,7 @@ impl<R: Debug> Output for CrossUnfoldClcOutput<R> {}
 
 impl<F, R, CUC, C> Stage for CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
     R: Debug,
     C: RunCtx + 'static,
 {
@@ -187,14 +187,14 @@ where
 
 impl<F, R, CUC, C> SyncStage for CrossUnfoldClc<F, R, CUC, C>//CUC Cross Unfold Context
 where
-    for<'a> F: Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError> + 'a,
+    for<'a> F: Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError> + 'a,
     R: Debug + Output + Input + Send + 'static,
     for<'a> CUC: 'a,
     C: RunCtx + 'static,
 {
 
 
-    fn do_run<'s>(self: Arc<Self>, input: &Self::In<'s>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    fn do_run<'s>(self: Arc<Self>, input: &Self::In<'s>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
         Self: Sized
     {
@@ -231,7 +231,7 @@ where
             tensor_mem_size(&batch_1_t)
         );
 
-        (self.batch_clc_fn)(batch_0_t, batch_1_t, &input, &self.cross_batch_ctx).map(|v| {
+        (self.batch_clc_fn)(batch_0_t, batch_1_t, &input, &self.cross_batch_ctx, &ctx).map(|v| {
             CrossUnfoldClcOutput::new(
                 v,
                 SlicesIter::new(unfold_params.step as usize, resource_ids_sizes_0),
@@ -297,7 +297,7 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
         let cross_batch_clc = Arc::new(CrossUnfoldClc::new(
-            |t_0, t_1, input, ctx| {
+            |t_0, t_1, input, ctx, _| {
                 debug!("t_0=\n{t_0}");
                 debug!("t_1=\n{t_1}");
 
@@ -320,6 +320,7 @@ mod tests {
                     Tensor::rand(&[0], FLOAT_CPU).lt(0.5),
                     Some(Tensor::rand(&[0], FLOAT_CPU)),
                     false,
+                    None,
                 ))
             },
             MeanDistsCtx::new(3, Cuda(0)),
