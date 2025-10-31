@@ -17,7 +17,7 @@ use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::tmp_cache::TmpCached;
-use thoosa_common::applicables::ThoDevice;
+use thoosa_common::applicables::{with_cuda_stream, ThoDevice};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
@@ -32,7 +32,7 @@ use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Adjustable, DataId, SimpleId, WithId};
-use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
+use thoosa_shims::stream::{ThoStreamGuard, ThoCudaStream};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use torch_runner::data::ThoTensor2;
@@ -226,8 +226,6 @@ where
 
                             debug!("SelectMotifsStage::run: batch_0_t.size()={:?} motifs_v.data().t_ref().size={:?} motifs_avg_dists.t_ref().size()={:?}", batch_1_t.size(), batched_motifs_output.motifs.data().t_ref().size(), batched_motifs_output.motifs_avg_dists.t_ref().size());
 
-                            let motifs_stream = ThoCudaStream::new(0); //TODO device
-                            let guard = StreamGuard::set(&motifs_stream);
 
                             let mut mask_makers = vec![
                                 LocalMin { dim: 2 },
@@ -237,17 +235,24 @@ where
                                 }
                             ];
 
-                            let motifs_stream = ThoCudaStream::new(0); //TODO
+
                             let channel_masks_dists_ids  = {
-                                let guard = StreamGuard::set(&motifs_stream); //TODO Device
+
+                                if device_idx > 0 {
+                                    let motifs_stream = ThoCudaStream::new((device_idx - 1) as i32);//TODO cuda_device_idx
+                                    let guard = ThoStreamGuard::set(&motifs_stream);
+                                }
 
 
-                                let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
-                                    batched_motifs_output.motifs.data().t_ref().shallow_clone(),
-                                    batch_1_t,
-                                    true, //TODO params if true dists are returned
-                                    &mut mask_makers,
-                                )?;
+
+                                 let ((mask, dists), motifs_stream) = with_cuda_stream(device_idx, ||{
+                                    thoosa_motifs::distance::clc_dist_d2_and_mask(
+                                        batched_motifs_output.motifs.data().t_ref().shallow_clone(),
+                                        batch_1_t.shallow_clone(),
+                                        true, //TODO params if true dists are returned
+                                        &mut mask_makers,
+                                    ).unwrap()
+                                });
 
                                 let channel_masks_dists_ids = (0..num_channels)
                                     .map(|c| {
@@ -260,7 +265,8 @@ where
                                                 DistsMask::new(
                                                     fold_mask(mask.i((c as i64,.., ..)), &ids, 0),
                                                     dists.as_ref().map(|d|fold_dists(d.i((c as i64,.., ..)), &ids, 0)),
-                                                    true
+                                                    true,
+                                                    motifs_stream.clone()
                                                 ),
 
                                                 ids.iter().fold((vec![], HashSet::new()), |mut acc, d| {
@@ -321,7 +327,6 @@ where
                 .await?;
 
         }
-        // }
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(0, self.run_configs[0].clone(), vec![]))))
     }
@@ -708,7 +713,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_3_resources_2_labels_3_channels_3_motifs() -> Result<(), ThoosaError> {
+    async fn test_3_resources_2_labels_3_channels_3_motifs_cuda() -> Result<(), ThoosaError> {
         log::set_max_level(Trace);
         reset_print_options();
         GlobalCtx::init_devices(2);

@@ -21,7 +21,7 @@ use tch::{Device, Kind, Tensor};
 use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
 use tokio::runtime::Handle;
-use thoosa_common::applicables::ThoDevice;
+use thoosa_common::applicables::{with_cuda_stream, ThoDevice};
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SlicesFilter};
 use thoosa_common::loader::LoadRunner;
@@ -36,7 +36,7 @@ use tokio::task::{JoinError, JoinSet};
 use caching_runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_shared::traits::{Data, SimpleId, WithId};
-use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
+use thoosa_shims::stream::{ThoStreamGuard, ThoCudaStream};
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::transforms::freq_filter::FreqFilter;
@@ -57,7 +57,7 @@ where
     cross_loader: Arc<CrossLoader<
             RC,
         L,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
             DistsTracker<C>,
             DistsMask,
             C,
@@ -75,7 +75,7 @@ where
         cross_loader: Arc<CrossLoader<
             RC,
             L,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
             DistsTracker<C>,
             DistsMask,
             C,
@@ -132,6 +132,7 @@ where
     ) -> Self {
         // let band_filter = Arc::new(FreqFilter::new());
 
+
         let cross_loaders = run_configs
             .into_iter()
             .map(|run_config| {
@@ -139,12 +140,14 @@ where
 
                 let filter = run_config.slices_filter.clone();
 
-                let cross_unfold_clc: CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync >,
+                let cross_unfold_clc: CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoosaError> + Send + Sync >,
                     DistsMask,
                     MeanDistsCtx,
                     C,
                 > = CrossUnfoldClc::new(
-                    Box::new(move |t_0, t_1, input, means_ctx| {
+
+                    Box::new(move |t_0, t_1, input, means_ctx, ctx| {
+                        let device_idx = ctx.read().device_idx();
                         let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
 
                         let mut mask_makers = match &filter {
@@ -175,23 +178,22 @@ where
                         }
 
                         //copy to device is done on streams created in CopyCtx and used in DistsMask::new_async. Should wait for calculation stream to finish.
-                        let motifs_stream = ThoCudaStream::new(0);//TODO
-                        let guard = StreamGuard::set(&motifs_stream);//TODO Device
 
-                        let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
-                            t_0,
-                            t_1,
-                            fixed_config.keep_slice_matches,//if true dists are returned
-                            &mut mask_makers,
-                        )?;
-                        drop(guard);
+
+                        let ((mask, dists), motifs_stream) = with_cuda_stream(device_idx, ||{
+                            thoosa_motifs::distance::clc_dist_d2_and_mask(
+                                t_0.shallow_clone(),
+                                t_1.shallow_clone(),
+                                fixed_config.keep_slice_matches,//if true dists are returned + slices are stored in sqlite
+                                &mut mask_makers,
+                            ).unwrap()
+                        });
 
                         debug!("CrossBatchClc::do_run:  dists={dists:?}");
-                        if mask.device().ne(&Cpu) {
-                            motifs_stream.synchronize();
-                            Ok(DistsMask::new(mask, dists, true))
+                        if device_idx > 0 {
+                            Ok(DistsMask::new(mask, dists, true, motifs_stream))
                         } else {
-                            Ok(DistsMask::new(mask, dists, false))
+                            Ok(DistsMask::new(mask, dists, false, None))
                         }
 
                     }),

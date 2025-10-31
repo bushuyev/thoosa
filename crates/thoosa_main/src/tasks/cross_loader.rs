@@ -678,7 +678,7 @@ mod tests {
         ));
 
         let batch_clc = Arc::new(CrossUnfoldClc::new(
-            |t_0, t_1, input, ctx| {
+            |t_0, t_1, input, ctx, _| {
                 let mut mask_makers = vec![];
                 // if is_diag {
                 //     mask_makers.push(Tril);
@@ -691,7 +691,7 @@ mod tests {
                 )?;
 
                 debug!("CrossBatchClc::do_run:  dists={dists:?}");
-                Ok(DistsMask::new(dists.0, dists.1, true))
+                Ok(DistsMask::new(dists.0, dists.1, true, None))
             },
             (),
             UnfoldParams::new(1, 2, 1),
