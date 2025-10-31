@@ -29,6 +29,7 @@ use thoosa_motifs::find::{FixedFindMotifsConfig, SimpleMotifTracker};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{SimpleId, WithId};
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_store::fs_store::FileMotifTrackerStore;
 use thoosa_store::{SqlMotifTrackerStore, Store};
 use torch_runner::data::ThoTensor2;
@@ -38,6 +39,7 @@ pub struct DistsMask {
     mask: Tensor,
     dists: Option<Tensor>,
     sizes: Option<(Vec<i64>, Option<Vec<i64>>)>,//if packed
+    stream_to_sync: Option<ThoCudaStream>,
 }
 
 
@@ -55,7 +57,8 @@ impl WithId for DistsMask {
 }
 
 impl DistsMask {
-    pub fn new(mask: Tensor, dists: Option<Tensor>, pack: bool) -> Self {
+
+    pub fn new(mask: Tensor, dists: Option<Tensor>, pack: bool, stream_to_sync: Option<ThoCudaStream>) -> Self {
         assert_eq!(mask.kind(), Bool);
         Self {
             sizes: if pack {
@@ -70,16 +73,22 @@ impl DistsMask {
                 mask
             },
 
-            dists
+            dists,
+            stream_to_sync
         }
     }
 
-  
 
     pub async fn to_cpu(self) -> Self  {
+
         if self.mask.device().eq(&Cpu) {
             self
         } else {
+            if let Some(stream) = self.stream_to_sync {
+                stream.synchronize();
+            }
+
+
             Self {
 
                 mask: if self.sizes.is_some() {
@@ -90,6 +99,7 @@ impl DistsMask {
 
                 dists: None,
                 sizes: self.sizes,
+                stream_to_sync:None
             }
         }
     }
