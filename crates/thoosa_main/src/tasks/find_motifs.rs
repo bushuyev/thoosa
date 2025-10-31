@@ -186,22 +186,12 @@ where
                         )?;
                         drop(guard);
 
-
                         debug!("CrossBatchClc::do_run:  dists={dists:?}");
                         if mask.device().ne(&Cpu) {
-
-                            Ok(
-                                tokio::task::block_in_place(|| {
-                                    Handle::current().block_on(async {
-                                        motifs_stream.synchronize();
-
-                                        DistsMask::new_async(mask, dists, true).await
-
-                                    })
-                                })
-                            )
+                            motifs_stream.synchronize();
+                            Ok(DistsMask::new(mask, dists, true))
                         } else {
-                            Ok(DistsMask::new(mask, dists))
+                            Ok(DistsMask::new(mask, dists, false))
                         }
 
                     }),
@@ -228,6 +218,9 @@ where
                         Arc::new(cross_unfold_clc),
                         receiver,
                         fixed_config.max_chunk_size as usize,
+                        |batch|{
+                            async {batch.to_cpu().await}.boxed()
+                        },
                         |receiver| {
                             let dists_tracker = Arc::clone(receiver);
                             async move {

@@ -121,7 +121,6 @@ pub fn speed_gb_per_s(bytes: u64, millis: u64) -> f64 {
     gigabytes / seconds
 }
 
-#[allow(dead_code)]
 pub async fn copy_d2h<R: AsRef<Tensor>>(
     init_type: Kind,
     src_t: &R,
@@ -131,14 +130,29 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
 
     assert!(src_t.as_ref().device().ne(&Device::Cpu));
 
-    tch::Cuda::synchronize(0);
-
 
     let src_ptr: usize = src_t.as_ref().data_ptr() as usize;
     let src_size = src_t.as_ref().size();
 
     copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size).await
 }
+
+pub async fn move_d2h(
+    init_type: Kind,
+    src_t: Tensor,
+    buf_size: usize,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
+) -> Tensor {
+
+    assert!(src_t.as_ref().device().ne(&Device::Cpu));
+
+
+    let src_ptr: usize = src_t.data_ptr() as usize;
+    let src_size = src_t.size();
+
+    copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size).await
+}
+
 
 pub async fn copy_d2h_from_ptr_result(
     init_type: Kind,
@@ -241,7 +255,7 @@ pub async fn copy_d2h_from_ptr(
     }
 }
 
-#[allow(dead_code)]
+
 pub async fn copy_h2d<R: AsRef<Tensor>>(
     init_type: Kind,
     src_t: &R,
@@ -265,6 +279,33 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
     )
     .await
 }
+
+
+pub async fn move_h2d(
+    init_type: Kind,
+    src_t: Tensor,
+    buf_size: usize,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
+    dst_device_idx: usize,
+) -> Tensor {
+    assert!(src_t.as_ref().device().eq(&Cpu));
+    assert!(dst_device_idx > 0);
+
+    let src_ptr = src_t.data_ptr() as usize; // CPU mem
+    let src_size = src_t.size();
+
+    copy_h2d_from_ptr(
+        init_type,
+        buf_size,
+        bufs_pool,
+        dst_device_idx,
+        src_ptr,
+        &src_size,
+    )
+        .await
+}
+
+
 
 pub async fn copy_h2d_from_ptr(
     init_type: Kind,

@@ -13,11 +13,12 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
-use tch::kind::FLOAT_CPU;
+use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::{IndexOp, Kind, Tensor};
 use tokio::runtime::Handle;
 use futures::{stream, StreamExt};
-use tch::Kind::{Bool, Uint8};
+use tch::Device::Cpu;
+use tch::Kind::{Bool, Float, Uint8};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
@@ -39,16 +40,6 @@ pub struct DistsMask {
     sizes: Option<(Vec<i64>, Option<Vec<i64>>)>,//if packed
 }
 
-/*#[async_trait]
-impl CopyToDevice for DistWithMask {
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
-        DistWithMask {
-            mask: CopyCtx::instance().copy(&self.mask, 0, self.mask.kind()).await,
-            dists: None,
-        }
-    }
-}
-*/
 
 unsafe impl Sync for DistsMask {}
 
@@ -64,28 +55,41 @@ impl WithId for DistsMask {
 }
 
 impl DistsMask {
-    pub fn new(mask: Tensor, dists: Option<Tensor>) -> Self {
-        Self { mask, dists, sizes: None }
-    }
-
-    pub async fn new_async(mask: Tensor, dists: Option<Tensor>, pack: bool) -> Self {
-        debug!("DistsMask::new_async: pack={pack}");
+    pub fn new(mask: Tensor, dists: Option<Tensor>, pack: bool) -> Self {
+        assert_eq!(mask.kind(), Bool);
         Self {
-            mask: if pack {
-                CopyCtx::instance().copy(&pack_bits_bool(&mask), 0, Uint8).await
-            } else {
-                CopyCtx::instance().copy(&mask, 0, Bool).await
-            },
-            dists: match dists.as_ref() {
-                None => None,
-                Some(t) => {
-                    Some(CopyCtx::instance().copy(&t, 0, t.kind()).await)//TODO to Half?
-                }
-            },
             sizes: if pack {
-                Some((mask.size(), dists.map(|t|t.size())))
+                Some((mask.size(), dists.as_ref().map(|t|t.size())))
             } else {
                 None
+            },
+
+            mask: if pack {
+                pack_bits_bool(&mask)
+            } else {
+                mask
+            },
+
+            dists
+        }
+    }
+
+  
+
+    pub async fn to_cpu(self) -> Self  {
+        if self.mask.device().eq(&Cpu) {
+            self
+        } else {
+            Self {
+
+                mask: if self.sizes.is_some() {
+                    CopyCtx::instance().move_t(self.mask, 0, Uint8).await
+                } else {
+                    CopyCtx::instance().move_t(self.mask, 0, Bool).await
+                },
+
+                dists: None,
+                sizes: self.sizes,
             }
         }
     }
@@ -99,6 +103,7 @@ impl DistsMask {
                         &self.mask,
                         Some(size.0.iter().fold(1, |mut a, v| {a*=v; a}))
                     )
+                    .to_kind(Bool)
                     .view(size.0.as_slice()),
                     self.dists
                 )

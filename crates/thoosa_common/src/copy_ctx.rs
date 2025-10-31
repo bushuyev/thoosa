@@ -1,4 +1,4 @@
-use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem, PinnedHostBuffer};
+use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem, move_d2h, move_h2d, PinnedHostBuffer};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::ThoCudaStream;
 use log::debug;
@@ -104,6 +104,14 @@ impl CopyCtx {
 
         let buf_size = elts_in_buff * max_elt_size;
         buf_size
+    }
+
+    pub async fn move_t(&self, src_t: Tensor, dst_device: usize, kind: Kind) -> Tensor {
+        if dst_device == 0 {
+            move_d2h(kind, src_t, self.buf_size, &self.bufs_pool).await
+        } else {
+            move_h2d(kind, src_t, self.buf_size, &self.bufs_pool, dst_device).await
+        }
     }
 
     pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_device: usize, kind: Kind) -> Tensor {
