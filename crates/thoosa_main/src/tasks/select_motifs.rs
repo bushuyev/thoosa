@@ -141,16 +141,11 @@ where
         debug!("SelectMotifsStage::run: resources={labels_resources:?}");
 
 
-
-        let tmp_moitfs_cache:TmpCached<DataWithExtra<ThoTensor2<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, FindMotifsRunConfig, SelectMotifsRunConfig)>> = TmpCached::new("motif slices", cache_area).await;
-        let tmp_motifs_avg_dists_cache:TmpCached<ThoTensor2<ChannelsMotifsDists, SimpleId>> = TmpCached::new("motif dists", cache_area).await;
-
         let num_channels = self.ws.read().channels();
 
         let mut batched_motifs = vec![];
 
         for find_motifs_run_id in &self.find_motifs_run_ids {
-            let mut motif_avg_dists = Arc::new(parking_lot::RwLock::new(HashMap::new()));
 
             let find_motifs_run_config = Arc::new(FindMotifsRunConfig::from_properties_map__(
                 *find_motifs_run_id,
@@ -170,324 +165,155 @@ where
                     Arc::clone(&ctx)
                 ).await?);
 
-
-                let motifs_len = motif_ids.len();
-                let done_cnt = Arc::new(AtomicU32::new(0));
-
-                let loaded_motifs = futures::stream::iter(motif_ids)
-                    .map( |motif_id| {
-                        let done_cnt = Arc::clone(&done_cnt);
-                        let motif_loader_clone = Arc::clone(&self.motif_loader);
-                        let load_and_clc_avg_dist_clone = Arc::clone(&self.load_and_clc_avg_dist);
-                        let ctx = Arc::clone(&ctx);
-                        let ctx_for_clc = Arc::clone(&ctx);
-                        let motif_avg_dists = Arc::clone(&motif_avg_dists);
-
-                        async move {
-                            let motif_id_wrap = Arc::new(DevicesWrap::wrap_cpu((motif_id as u32).into()));
-                            let mut motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx).await?;
-
-
-
-                            let avg_motif_dist = load_and_clc_avg_dist_clone
-                                .run_cached(Arc::clone(&motif_id_wrap), ctx_for_clc)
-                                .await?
-                                .with_data_ref(0, None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
-                                .await?;
-
-                            debug!("SelectMotifsStage::run: find_motifs_run_id={find_motifs_run_id} run_config.id={:?} motif={motif:?} avg_motif_dist={avg_motif_dist}", select_motifs_run_config.id);
-
-                            motif_avg_dists.write().insert(DataId(motif_id as u32), avg_motif_dist);
-
-
-                            Ok::<_, ThoosaError>(motif)
-                        }
-                    })
-                    .buffer_unordered(10)
-                    .try_collect::<Vec<_>>()
-                    .await?;
-
-                debug!("SelectMotifsStage::run: loaded_motifs={loaded_motifs:?}");
-
-                //building tensor with all motifs' slices (ChannelsMotifSlices) found by current find_motifs_run_id, storing them in tmp_cache. Channels where number of motifs is less than max slices are padded with zeros.
-                // channels x motif_0_slice_0...motif_0_slice_last + motif_1_slice_0...motif_1_slice_last + ...
-                // with_data!(device_idx, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>]|{
-                //
-                //
-                //     let channels_motifs = data.into_iter().fold(
-                //
-                //         (0..num_channels).map(|_|vec![]).collect::<Vec<_>>(),//vec for each channel
-                //
-                //         |mut acc, item| {
-                //
-                //             assert_eq!(
-                //                 find_motifs_run_config.window, item.extra().window,
-                //                 "window is not same: find_motifs_run_config.window={} item.extra().window={}item.extra().window, motif_id={:?}", find_motifs_run_config.window, item.extra().window, item.data().id()
-                //             );
-                //
-                //             acc[item.extra().channel as usize].push(item.data());
-                //         acc
-                //     });
-                //
-                //     let max_motif_slices = channels_motifs
-                //         .iter()
-                //         .map(|v|
-                //             v.iter()
-                //             .map(|t|t.size()[0] as usize)//num motif slices known for each motif
-                //             .sum::<usize>())
-                //         .max().unwrap_or(0);
-                //
-                //     // let empty_slice = Tensor::zeros(&[find_motifs_run_config.window as i64], (Float, ThoDevice::from(device_idx).into()));
-                //
-                //     // let dummy_slice
-                //     let mut channels_motif_ids = vec![Vec::<DataId>::new(); num_channels as usize];
-                //     let mut channels_motifs_tensors_vec = vec![];
-                //     let mut channels_motif_avg_dists_tensors_vec = vec![];
-                //     for c in 0..num_channels {
-                //
-                //         let channel_motifs = &channels_motifs.get(c as usize).expect(&format!("not enough channels: len={} c={}", channels_motifs.len(), c));
-                //
-                //         debug!("SelectMotifsStage::run: channel {c} max_motif_slices={max_motif_slices} channel_motifs={channel_motifs:?}");
-                //
-                //         let channel_motifs_tensors = channel_motifs.iter().map(|motif|  {
-                //             debug!("SelectMotifsStage::run: motif={motif:?} id={}", motif.id());
-                //             for _ in 0..motif.size()[0] {
-                //                 channels_motif_ids[c as usize].push(motif.id().clone());
-                //             }
-                //
-                //             motif.t_ref().copy()
-                //         }).collect::<Vec<_>>();
-                //
-                //         //building dists tensors for each channel to compare matches with
-                //         let channel_avg_dists_tensors = channel_motifs.iter().map(|motif|  {
-                //             let read_guard = motif_avg_dists.read();
-                //             let avg_dist = read_guard.get(&motif.id()).unwrap();
-                //
-                //             debug!("SelectMotifsStage::run: motif.id={} dist={avg_dist}", motif.id());
-                //
-                //             Tensor::from_slice(vec![*avg_dist; motif.size()[0] as usize].as_slice())
-                //         }).collect::<Vec<_>>();
-                //
-                //         debug!("SelectMotifsStage::run: c={c}, channel_motifs_tensors={:?}", channel_motifs_tensors);
-                //
-                //         let (motifs_t, moitf_avg_dists_t) = if channel_motifs_tensors.is_empty() {
-                //             (
-                //                 Tensor::zeros(&[max_motif_slices as i64, find_motifs_run_config.window  as i64], (Float, ThoDevice::from(device_idx).into())),
-                //                 Tensor::zeros(&[max_motif_slices as i64], (Float, ThoDevice::from(device_idx).into()))
-                //             )
-                //
-                //         } else {
-                //             let channel_t = Tensor::cat(&channel_motifs_tensors, 0);
-                //             let motif_avg_dists_t = Tensor::cat(&channel_avg_dists_tensors, 0);
-                //
-                //             if channel_t.size()[0] < max_motif_slices as i64 {
-                //                 debug!("SelectMotifsStage::run: c={c}, channel_t.size={:?} padding to {:?}", channel_t.size(), [max_motif_slices as i64, find_motifs_run_config.window  as i64]);
-                //                 (
-                //                     pad_to(&channel_t, &[max_motif_slices as i64, find_motifs_run_config.window  as i64]).expect("pad to failed"),
-                //                     pad_to(&motif_avg_dists_t, &[max_motif_slices as i64]).expect("pad to failed")
-                //                 )
-                //
-                //             } else {
-                //                 debug!("SelectMotifsStage::run: c={c}, channel_t.size={:?}", channel_t.size());
-                //
-                //                 (channel_t, motif_avg_dists_t)
-                //             }
-                //         };
-                //
-                //         channels_motif_avg_dists_tensors_vec.push(moitf_avg_dists_t);
-                //         channels_motifs_tensors_vec.push(motifs_t);
-                //
-                //     };
-                //
-                //     debug!("SelectMotifsStage::run: channels_dists_tensors_vec={channels_motif_avg_dists_tensors_vec:?}");
-                //     debug!("SelectMotifsStage::run: channels_motifs_tensors_vec={channels_motifs_tensors_vec:?}");
-                //
-                //     let channels_motifs_t = Tensor::stack(&channels_motifs_tensors_vec, 0);
-                //     let channels_motif_avg_dists_t = Tensor::stack(&channels_motif_avg_dists_tensors_vec, 0);
-                //
-                //     debug!("SelectMotifsStage::run: num_channels={num_channels}, channels_motif_ids={channels_motif_ids:?} channels_motifs_t.size={:?}", channels_motifs_t.size());
-                //     trace!("SelectMotifsStage::run: channels_motif_avg_dists_t=\n{channels_motif_avg_dists_t}");
-                //     trace!("SelectMotifsStage::run: channels_motifs_t=\n{channels_motifs_t}");
-                //
-                //     let find_and_select_motifs_id = SimpleId(format!("{}_{}", find_motifs_run_config.id.expect("no id in find_motifs_run_config"), select_motifs_run_config.id.expect("no id in select_motifs_run_config")).leak());
-                //     tmp_moitfs_cache.insert(
-                //         DataWithExtra::new(
-                //             ThoTensor2::new(
-                //                 find_and_select_motifs_id.clone(),
-                //                 channels_motifs_t
-                //             ),
-                //             (channels_motif_ids, find_motifs_run_config.clone(), select_motifs_run_config.clone())
-                //         )//TODO leak
-                //     );
-                //
-                //     tmp_motifs_avg_dists_cache.insert(
-                //         ThoTensor2::new(
-                //             find_and_select_motifs_id,
-                //             channels_motif_avg_dists_t
-                //         )
-                //     );
-                //
-                //     Ok::<(), ThoosaError>(())
-                // })?;
             }
         }
 
 
-        // let find_motifs_runs_motifs = tmp_moitfs_cache.clone_to_arcs_vec();
 
+        let mut t_1_batch: Vec<_> = vec![];
+        let mut t_1_batch_resources: Vec<_> = vec![];
+        let mut t_1_batch_len = 0;
 
-        // debug!("SelectMotifsStage::run: motif_dists={motif_avg_dists:?}");
-
-
-            let mut t_1_batch: Vec<_> = vec![];
-            let mut t_1_batch_resources: Vec<_> = vec![];
-            let mut t_1_batch_len = 0;
-
-            let mut skip_0_i = 0;
+        let mut skip_0_i = 0;
 
         let num_resources = labels_resources.iter().map(|label_resources|label_resources.1.len()).sum::<usize>();
 
-            for (i_0, resource_0) in labels_resources.iter().flat_map(|label_resources|label_resources.1.iter()).enumerate() {
-                info!("on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
+        for (i_0, resource_0) in labels_resources.iter().flat_map(|label_resources|label_resources.1.iter()).enumerate() {
+            info!("on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
 
-                let t_0 = Arc::clone(&self.loader)
-                    .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_0.clone())), Arc::clone(&ctx))
-                    .await?;
+            let t_0 = Arc::clone(&self.loader)
+                .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_0.clone())), Arc::clone(&ctx))
+                .await?;
 
-                t_1_batch_len += t_0.size().dim_1();
-                t_1_batch.push(t_0);
-                t_1_batch_resources.push(resource_0);
+            t_1_batch_len += t_0.size().dim_1();
+            t_1_batch.push(t_0);
+            t_1_batch_resources.push(resource_0);
 
-                if t_1_batch_len < max_batch && i_0 < num_resources -1 {
-                    continue;
-                }
+            if t_1_batch_len < max_batch && i_0 < num_resources -1 {
+                continue;
+            }
 
-                let r = futures::stream::iter(batched_motifs.clone())
-                    .map(|batched_motifs_output_wrap| {
-                        let t_1_batch = t_1_batch.clone(); //cones Arcs
-                        // let value_vec = vec![Arc::clone(&value)];
+            let r = futures::stream::iter(batched_motifs.clone())
+                .map(|batched_motifs_output_wrap| {
+                    let t_1_batch = t_1_batch.clone(); //cones Arcs
 
-                        // let motifs_avg_dists_arc_wrap = tmp_motifs_avg_dists_cache.get(motifs_arc_wrap.id()).expect(&format!("no dists for {}", motifs_arc_wrap.id()));
+                    let store = Arc::clone(&self.store);
+                    debug!("SelectMotifsStage::run: t_0_batch={t_1_batch:?} \nbatched_motifs_output_wrap={batched_motifs_output_wrap:?}");
 
-                        let store = Arc::clone(&self.store);
-                        // debug!("SelectMotifsStage::run: t_0_batch={t_1_batch:?} \nmotifs_arc_wrap={motifs_arc_wrap:?} \ndists_arc_wrap={motifs_avg_dists_arc_wrap:?}");
-                        let t_1_batch_resources = t_1_batch_resources.clone();
-                        async move {
+                    let t_1_batch_resources = t_1_batch_resources.clone();
+                    async move {
 
-                            with_data!(device_idx, [t_1_batch], batched_motifs_output_wrap;
-                                |
-                                    batch_v:&[&ThoTensor2<ChannelsData2, SimpleId>],
-                                    // motifs_v:&DataWithExtra<ThoTensor2<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, FindMotifsRunConfig, SelectMotifsRunConfig)>,
-                                    // motifs_avg_dists:&ThoTensor2<ChannelsMotifsDists, SimpleId>
-                                    batched_motifs_output:&BatchedMotifsOutput
-                                |{
+                        with_data!(device_idx, [t_1_batch], batched_motifs_output_wrap;
+                            |
+                                batch_v:&[&ThoTensor2<ChannelsData2, SimpleId>],
+                                batched_motifs_output:&BatchedMotifsOutput
+                            |{
 
-                                let unfold_params = UnfoldParams::new(1, batched_motifs_output.motifs.extra().1.window as i64, batched_motifs_output.motifs.extra().1.step as i64);
-                                let (batch_1_t, batch_1_sizes) = unfold_and_cat(&batch_v, &unfold_params)?;
-                                assert_eq!(batch_1_sizes.len(), batch_v.len());
+                            let unfold_params = UnfoldParams::new(1, batched_motifs_output.motifs.extra().1.window as i64, batched_motifs_output.motifs.extra().1.step as i64);
+                            let (batch_1_t, batch_1_sizes) = unfold_and_cat(&batch_v, &unfold_params)?;
+                            assert_eq!(batch_1_sizes.len(), batch_v.len());
 
-                                let resource_ids_sizes_0: Vec<_> = t_1_batch_resources
-                                    .into_iter()
-                                    .zip(batch_1_sizes.into_iter())
-                                    .map(|v| (v.0.id(), v.1 as usize))
-                                    .collect();
+                            let resource_ids_sizes_0: Vec<_> = t_1_batch_resources
+                                .into_iter()
+                                .zip(batch_1_sizes.into_iter())
+                                .map(|v| (v.0.id(), v.1 as usize))
+                                .collect();
 
-                                let resources_iter = SlicesIter::new(unfold_params.step() as usize, resource_ids_sizes_0);
+                            let resources_iter = SlicesIter::new(unfold_params.step() as usize, resource_ids_sizes_0);
 
-                                debug!("SelectMotifsStage::run: batch_0_t.size()={:?} motifs_v.data().t_ref().size={:?} motifs_avg_dists.t_ref().size()={:?}", batch_1_t.size(), batched_motifs_output.motifs.data().t_ref().size(), batched_motifs_output.motifs_avg_dists.t_ref().size());
+                            debug!("SelectMotifsStage::run: batch_0_t.size()={:?} motifs_v.data().t_ref().size={:?} motifs_avg_dists.t_ref().size()={:?}", batch_1_t.size(), batched_motifs_output.motifs.data().t_ref().size(), batched_motifs_output.motifs_avg_dists.t_ref().size());
 
-                                let motifs_stream = ThoCudaStream::new(0); //TODO
+                            let motifs_stream = ThoCudaStream::new(0); //TODO device
+                            let guard = StreamGuard::set(&motifs_stream);
+
+                            let mut mask_makers = vec![
+                                LocalMin { dim: 2 },
+                                Le {
+                                   // we'll have mask/dists from clc_dist_d2_and_mask in shape[channels x num_motifs x num_blocks_in_batch] so motif's average dists which are  [channels x num_motifs] should be expanded to match calculated dists
+                                    v:batched_motifs_output.motifs_avg_dists.t_ref().unsqueeze(-1).expand([-1, -1, batch_1_t.data().size()[1]], false)
+                                }
+                            ];
+
+                            let motifs_stream = ThoCudaStream::new(0); //TODO
+                            let channel_masks_dists_ids  = {
                                 let guard = StreamGuard::set(&motifs_stream); //TODO Device
 
-                                let mut mask_makers = vec![
-                                    LocalMin { dim: 2 },
-                                    Le {
-                                       // we'll have mask/dists from clc_dist_d2_and_mask in shape[channels x num_motifs x num_blocks_in_batch] so motif's average dists which are  [channels x num_motifs] should be expanded to match calculated dists
-                                        v:batched_motifs_output.motifs_avg_dists.t_ref().unsqueeze(-1).expand([-1, -1, batch_1_t.data().size()[1]], false)
-                                    }
-                                ];
 
-                                let motifs_stream = ThoCudaStream::new(0); //TODO
-                                let channel_masks_dists_ids  = {
-                                    let guard = StreamGuard::set(&motifs_stream); //TODO Device
+                                let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
+                                    batched_motifs_output.motifs.data().t_ref().shallow_clone(),
+                                    batch_1_t,
+                                    true, //TODO params if true dists are returned
+                                    &mut mask_makers,
+                                )?;
 
+                                let channel_masks_dists_ids = (0..num_channels)
+                                    .map(|c| {
+                                        let ids = &batched_motifs_output.motifs.extra().0[c as usize];
+                                        if ids.is_empty(){
+                                            None
+                                        } else {
+                                            // let mask = DistsMask::new_async(mask, dists, true).await;
+                                            Some((
+                                                fold_mask(mask.i((c as i64,.., ..)), &ids, 0).to_device(Cpu),
 
-                                    let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
-                                        batched_motifs_output.motifs.data().t_ref().shallow_clone(),
-                                        batch_1_t,
-                                        false, //if true dists are returned
-                                        &mut mask_makers,
-                                    )?;
-                                    let keep_dists = true;
+                                                dists.as_ref().map(|d|fold_dists(d.i((c as i64,.., ..)), &ids, 0).to_device(Cpu)),
 
-                                    let channel_masks_dists_ids = (0..num_channels)
-                                        .map(|c| {
-                                            let ids = &batched_motifs_output.motifs.extra().0[c as usize];
-                                            if ids.is_empty(){
-                                                None
-                                            } else {
-                                                // let mask = DistsMask::new_async(mask, dists, true).await;
-                                                Some((
-                                                    fold_mask(mask.i((c as i64,.., ..)), &ids, 0).to_device(Cpu),
-
-                                                    dists.as_ref().map(|d|fold_dists(d.i((c as i64,.., ..)), &ids, 0).to_device(Cpu)),
-
-                                                    ids.iter().fold((vec![], HashSet::new()), |mut acc, d| {
-                                                        if !acc.1.contains(d) {
-                                                            acc.1.insert(d);
-                                                            acc.0.push(d.clone());
-                                                        }
-                                                        acc
-                                                    }).0
-                                                ))
-                                            }
-                                        })
-                                        .collect::<Vec<Option<(Tensor, Option<Tensor>, Vec<DataId>)>>>();
-
-                                    channel_masks_dists_ids
-                                };
-
-                                debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");
-                                for channel_mask_idsts_ids in channel_masks_dists_ids.into_iter().enumerate() {
-                                    if let (channel, Some(mask_idsts_ids)) = channel_mask_idsts_ids {
-
-                                        debug!("SelectMotifsStage::run: channel={channel} mask_idsts_ids={:?}", mask_idsts_ids.2);
-
-                                        let mut mask_in_channel = BoolTensorIterator::from(&mask_idsts_ids.0);
-                                        for motif_id in mask_idsts_ids.2 {
-                                            let resources_iter= resources_iter.clone();
-
-                                            let mut slices = HashSet::new();
-                                            for slice_1 in resources_iter {
-
-                                                if let Some(mask) = mask_in_channel.next() {
-                                                    trace!("SelectMotifsStage::run: motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} mask={mask}");
-                                                    if mask {
-                                                        slices.insert(IdSlice(0, slice_1.0, slice_1.1));
+                                                ids.iter().fold((vec![], HashSet::new()), |mut acc, d| {
+                                                    if !acc.1.contains(d) {
+                                                        acc.1.insert(d);
+                                                        acc.0.push(d.clone());
                                                     }
-                                                } else {
-                                                    warn!("SelectMotifsStage::run: no mask for motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} ");
-                                                }
-                                            }
+                                                    acc
+                                                }).0
+                                            ))
+                                        }
+                                    })
+                                    .collect::<Vec<Option<(Tensor, Option<Tensor>, Vec<DataId>)>>>();
 
-                                            if !slices.is_empty(){
-                                               store.write().add_slices_to_motif(batched_motifs_output.motifs.extra().2.id.expect("no select_motifs_run_config_id"), *motif_id, channel as i64, slices)?;
+                                channel_masks_dists_ids
+                            };
+
+                            debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");
+                            for channel_mask_idsts_ids in channel_masks_dists_ids.into_iter().enumerate() {
+                                if let (channel, Some(mask_idsts_ids)) = channel_mask_idsts_ids {
+
+                                    debug!("SelectMotifsStage::run: channel={channel} mask_idsts_ids={:?}", mask_idsts_ids.2);
+
+                                    let mut mask_in_channel = BoolTensorIterator::from(&mask_idsts_ids.0);
+                                    for motif_id in mask_idsts_ids.2 {
+                                        let resources_iter= resources_iter.clone();
+
+                                        let mut slices = HashSet::new();
+                                        for slice_1 in resources_iter {
+
+                                            if let Some(mask) = mask_in_channel.next() {
+                                                trace!("SelectMotifsStage::run: motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} mask={mask}");
+                                                if mask {
+                                                    slices.insert(IdSlice(0, slice_1.0, slice_1.1));
+                                                }
+                                            } else {
+                                                warn!("SelectMotifsStage::run: no mask for motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} ");
                                             }
+                                        }
+
+                                        if !slices.is_empty(){
+                                           store.write().add_slices_to_motif(batched_motifs_output.motifs.extra().2.id.expect("no select_motifs_run_config_id"), *motif_id, channel as i64, slices)?;
                                         }
                                     }
                                 }
-
-                                Ok::<(), ThoosaError>(())
-                            })?;
+                            }
 
                             Ok::<(), ThoosaError>(())
-                        }
-                    })
-                    .buffer_unordered(10)
-                    .try_collect::<Vec<_>>()
-                    .await?;
+                        })?;
 
-            }
+                        Ok::<(), ThoosaError>(())
+                    }
+                })
+                .buffer_unordered(10)
+                .try_collect::<Vec<_>>()
+                .await?;
+
+        }
         // }
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(0, self.run_configs[0].clone(), vec![]))))

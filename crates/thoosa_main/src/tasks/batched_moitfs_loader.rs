@@ -177,16 +177,20 @@ where
         let loaded_motifs = futures::stream::iter(input.motif_ids)
         .map( |motif_id| {
             let done_cnt = Arc::clone(&done_cnt);
+
             let motif_loader_clone = Arc::clone(&self.motif_loader);
             let load_and_clc_avg_dist_clone = Arc::clone(&self.load_and_clc_avg_dist);
+
             let ctx = Arc::clone(&ctx);
             let ctx_for_clc = Arc::clone(&ctx);
             let motif_avg_dists = Arc::clone(&motif_avg_dists);
 
+            let find_motifs_run_config_id = input.find_motifs_run_config.id;
+            let select_motifs_run_config_id = input.select_motifs_run_config.id;
+
             async move {
                 let motif_id_wrap = Arc::new(DevicesWrap::wrap_cpu((motif_id as u32).into()));
                 let mut motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx).await?;
-
 
 
                 let avg_motif_dist = load_and_clc_avg_dist_clone
@@ -195,7 +199,7 @@ where
                     .with_data_ref(0, None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
                     .await?;
 
-                // debug!("SelectMotifsStage::run: find_motifs_run_id={find_motifs_run_id} run_config.id={:?} motif={motif:?} avg_motif_dist={avg_motif_dist}", select_motifs_run_config.id);
+                debug!("SelectMotifsStage::run: find_motifs_run_id={:?} run_config.id={:?} motif={motif:?} avg_motif_dist={avg_motif_dist}", find_motifs_run_config_id, select_motifs_run_config_id);
 
                 motif_avg_dists.write().insert(DataId(motif_id as u32), avg_motif_dist);
 
@@ -203,7 +207,7 @@ where
                 Ok::<_, ThoosaError>(motif)
             }
         })
-        .buffer_unordered(10)
+        .buffer_unordered(10)//TODO buffer_unordered
         .try_collect::<Vec<_>>()
         .await?;
 
@@ -232,9 +236,7 @@ where
                     .sum::<usize>())
                 .max().unwrap_or(0);
 
-            // let empty_slice = Tensor::zeros(&[find_motifs_run_config.window as i64], (Float, ThoDevice::from(device_idx).into()));
 
-            // let dummy_slice
             let mut channels_motif_ids = vec![Vec::<DataId>::new(); num_channels as usize];
             let mut channels_motifs_tensors_vec = vec![];
             let mut channels_motif_avg_dists_tensors_vec = vec![];
