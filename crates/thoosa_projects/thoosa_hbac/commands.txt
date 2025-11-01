@@ -17,15 +17,15 @@ cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logg
 
 
 
-cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test_hbac/  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'10',window:'1000',dist_quantile:'0.1',descr:'lalala'}"
+cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test_hbac/  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'10',window:'1000',dist_quantile:'0.1',descr:'lalala'}"
 
 
-cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test_hbac/  find-motifs --resources="group:pure group 100" --chunk-size=2 --window=100..1000:100 --step=100 --dist-quantile=0.01
+cargo run --release  --bin thoosa_hbac   -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test_hbac/  find-motifs --resources="group:pure group 100" --chunk-size=2 --window=100..1000:100 --step=100 --dist-quantile=0.01
 17:12:50 [INFO] All done in 6699984 mls
 
 
-cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=12 --resources-group="pure group 1000"
-cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/tmp/ws_test_hbac/  select-motifs2 --find-motifs-run-ids=12 --resources-group="pure group 1000" --run-config-cnt="{motif_selector: {ByLabelVariance:{}}}"
+
+cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=12 --resources-group="pure group 1000" --run-config-cnt="{motif_selector: {ByLabelVariance:{"_dummy":"0"}}}"
 
 cargo run   -- --term-logger-level=INFO --write-logger-level=DEBUG --ws-path=/tmp/ws_test_hbac/  train-label-nets --train-resource-group="pure group 100" --valid-resource-group="group 1 labels/100/0-100" --select-motifs-for-label-run-ids=254 --lr=0.00001..0.001 --num-layers=1..5 --opt-max-evals=20 --opt-n-init=10 --batch-size=6 --cycles=100
 

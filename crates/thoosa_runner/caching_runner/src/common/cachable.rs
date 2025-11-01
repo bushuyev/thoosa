@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
 use futures_util::{FutureExt, StreamExt, TryStreamExt};
 use futures_util::future::{BoxFuture, Shared, join_all, try_join_all};
-use log::debug;
+use log::{debug, trace};
 use mockall_double::double;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -549,7 +549,8 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     ) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError> {
         //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
         //TODO add GlobalCtx::purge_lock just in case?
-        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",self.id, self.cached_data);
+        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx}",self.id);
+        trace!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",self.id, self.cached_data);
 
         if to_device_idx != 0 {
             *self.on_cpu_since.write() = None;

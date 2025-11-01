@@ -32,12 +32,20 @@ impl Select<ChannelsDataVec> for ThoTensor2<ChannelsData2, SimpleId> {
             .try_into()
             .expect("ChannelsData2::select unable to convert size");
 
+
+
         let mut subs = Vec::with_capacity(ranges.len());
         for range in &ranges {
             subs.push(ChannelsData2::sub_single(self, range, &size));
         }
 
-        let stacked = Tensor::vstack(subs.as_slice());
+        //TODO the size then should be checked to decide if tensor is valid. Should be a better solution
+        let stacked = if subs.is_empty() {
+            Tensor::empty(&[0], (self.t_ref().kind(), self.t_ref().device()))
+        } else {
+            Tensor::vstack(subs.as_slice())
+        };
+
         let sub = ThoTensor2::new(
             SimpleId::from(format!("{}:{ranges:?}", self.id().0)),
             stacked,
@@ -59,6 +67,8 @@ impl ChannelsData2 {
         trace!("ChannelsData2::subview: t=\n{t}");
 
         let sub_t = t.t_ref().i((channel_range.clone(), data_range.clone()));
+
+        // assert_eq!(sub_t.size(), [])
         sub_t
     }
 }
