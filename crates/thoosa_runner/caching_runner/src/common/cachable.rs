@@ -823,13 +823,19 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use crate::common::ThoosaError;
+    use crate::common::{DropIf, MockRunCtx, OutId, ThoosaError};
     use crate::global_ctx::{MockGlobalCtx, mock_global_ctx};
     use crate::*;
     use log::debug;
-    use thoosa_shared::traits::WithId;
+    use mockall::mock;
+    use parking_lot::RwLock;
+    use thoosa_shared::MyError;
+    use thoosa_shared::traits::{Adjustable, WithId};
     use thoosa_with_data::with_data;
     use crate::common::cachable::DevicesWrap;
+    use crate::common::runnable::{Stage, SyncStage};
+    use crate::oom_handler::{mock_input_context, Adjusters, Contexts, MockRunCtxContext, MockRunnableContext, OOMHandler};
+    use crate::oom_handler::test_types::{TestInput, TestOutput};
     use crate::test_utils::MockDataWithId;
 
     #[tokio::test]
@@ -976,6 +982,7 @@ mod tests {
             Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "f"), 0)),
         ];
 
+        //TODO ensure that asserts were actually invoked
         with_data!(1, wrap_a, [wrap_vec], wrap_b, [wrap_vec_second];
             |a: &MockDataWithId, first: &[&MockDataWithId], b: &MockDataWithId, second: &[&MockDataWithId]|{
                 assert_eq!(a.device(), &1);
@@ -988,6 +995,83 @@ mod tests {
         })?;
         Ok(())
     }
+
+    // #[tokio::test]
+    // async fn test_with_data_and_oom()-> Result<(), ThoosaError> {
+    //
+    //     let ctx = MockGlobalCtx::global_context();
+    //     ctx.expect().returning(|| {
+    //         Box::leak(Box::new(
+    //             mock_global_ctx::build_default(),
+    //         )) as &'static global_ctx::MockGlobalCtx
+    //     });
+    //
+    //
+    //     let (task, task_calls) = crate::oom_handler::mock_runnable::build([
+    //         Err(ThoosaError::from(MyError::OutOfMemory)),
+    //         Ok(TestOutput::new(10.)),
+    //     ]);
+    //     let (input_adj, input_calls) = crate::oom_handler::mock_input_adjuster::build([[0]..[1]]);
+    //     let oom_handler = OOMHandler::new(vec![Adjusters::Input(Box::new(input_adj))], None);
+    //     let ctx_mock = crate::common::mock_run_ctx::build()
+    //         .with_device_idx(1)
+    //         .with_acquired_permits(1)
+    //         .with_drop_permits(vec![DropIf::IfNotMax])
+    //         .finish();
+    //
+    //     let test_input = TestInput::new(1);
+    //     let input = Arc::new(DevicesWrap::wrap(test_input.clone(), 0));
+    //
+    //     let out = ;
+    //     // let mocked_stat = Moc
+    //
+    //     let __with_data_device = 1;
+    //     async move {
+    //         let __device_idx = __with_data_device;
+    //         let __with_data_var_0 = ::std::sync::Arc::clone(&input);
+    //         let __with_data_handle_0 = ::tokio::spawn({
+    //             let __wrap = ::std::sync::Arc::clone(&__with_data_var_0);
+    //             let __device_idx = __device_idx;
+    //             async move {
+    //                 __wrap.load_from_any_device(__device_idx).await?;
+    //                 Ok::<(), ::thoosa_shared::ThoosaError>(())
+    //             }
+    //         });
+    //         let __with_data_handle_res_0 = __with_data_handle_0.await?;
+    //         __with_data_handle_res_0?;
+    //         let __with_data_guard_0 = __with_data_var_0.get_copied(__device_idx).await?;
+    //         let __with_data_ref_0 = &*__with_data_guard_0;
+    //
+    //
+    //         // (|a: &TestInput| {
+    //         //     assert_eq!(&test_input.data.0, &a.data.0);
+    //         //     Ok::<(), ThoosaError>(())
+    //         // })(__with_data_ref_0)
+    //
+    //         oom_handler
+    //             .run(
+    //                 &Arc::new(task),
+    //                 Arc::clone(&input),
+    //                 Arc::new(RwLock::new(ctx_mock)),
+    //                 Contexts::new(
+    //                     mock_input_context::build()
+    //                         .with_partial_output(TestOutput::new(10.))
+    //                         .with_all_done(&[true])
+    //                         .with_build_final_output(TestOutput::new(10.))
+    //                         .finish(),
+    //                     MockRunnableContext::new(),
+    //                     MockRunCtxContext::new(),
+    //                 ),
+    //             )
+    //             .await?
+    //
+    //
+    //
+    //     }.await;
+    //
+    //
+    //     Ok(())
+    // }
 
     #[tokio::test]
     async fn test_with_data_single_val() -> Result<(), ThoosaError> {

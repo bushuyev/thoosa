@@ -414,37 +414,37 @@ mod tests {
         let sig_2_v = sig_three_imp(n, max_y, None, None);
 
         let x = lin_t(n);
-        plot_series(
-            vec![
-                (
-                    format!("Sig0"),
-                    plotters::prelude::RED,
-                    vec_f32_from(&x)
-                        .into_iter()
-                        .zip(sig_0_v.clone())
-                        .collect::<Vec<(f32, f32)>>(),
-                ),
-                (
-                    format!("Sig1"),
-                    plotters::prelude::GREEN,
-                    vec_f32_from(&x)
-                        .into_iter()
-                        .zip(sig_1_v.clone())
-                        .collect::<Vec<(f32, f32)>>(),
-                ),
-                (
-                    format!("Sig2"),
-                    plotters::prelude::BLACK,
-                    vec_f32_from(&x)
-                        .into_iter()
-                        .zip(sig_2_v.clone())
-                        .collect::<Vec<(f32, f32)>>(),
-                ),
-            ],
-            "test_find_motifs_euc",
-            (2000, 1000),
-            &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str(),
-        )?;
+        // plot_series(
+        //     vec![
+        //         (
+        //             format!("Sig0"),
+        //             plotters::prelude::RED,
+        //             vec_f32_from(&x)
+        //                 .into_iter()
+        //                 .zip(sig_0_v.clone())
+        //                 .collect::<Vec<(f32, f32)>>(),
+        //         ),
+        //         (
+        //             format!("Sig1"),
+        //             plotters::prelude::GREEN,
+        //             vec_f32_from(&x)
+        //                 .into_iter()
+        //                 .zip(sig_1_v.clone())
+        //                 .collect::<Vec<(f32, f32)>>(),
+        //         ),
+        //         (
+        //             format!("Sig2"),
+        //             plotters::prelude::BLACK,
+        //             vec_f32_from(&x)
+        //                 .into_iter()
+        //                 .zip(sig_2_v.clone())
+        //                 .collect::<Vec<(f32, f32)>>(),
+        //         ),
+        //     ],
+        //     "test_find_motifs_euc",
+        //     (2000, 1000),
+        //     &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str(),
+        // )?;
 
         let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
         debug!(
