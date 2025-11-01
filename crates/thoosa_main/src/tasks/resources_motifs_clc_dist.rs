@@ -67,36 +67,12 @@ where
 
         let unfold_params = UnfoldParams::new(
             1,
-            input
-                .batched_motifs_output
-                .motifs
-                .extra()
-                .1
-                .window as i64,
-            input
-                .batched_motifs_output
-                .motifs
-                .extra()
-                .1
-                .step as i64,
+            input.batched_motifs_output.motifs.extra().1.window as i64,
+            input.batched_motifs_output.motifs.extra().1.step as i64,
         );
 
         let (batch_1_t, batch_1_sizes) = unfold_and_cat(input.batch, &unfold_params)?;
-        debug!(
-            "ClcRresourcesMotifsDist::do_run: batch_1_t.size()={:?} motifs.size={:?} avg_dists.size={:?}",
-            batch_1_t.size(),
-            input
-                .batched_motifs_output
-                .motifs
-                .data()
-                .t_ref()
-                .size(),
-            input
-                .batched_motifs_output
-                .motifs_avg_dists
-                .t_ref()
-                .size()
-        );
+        debug!("ClcRresourcesMotifsDist::do_run: batch_1_t.size()={:?} motifs.size={:?} avg_dists.size={:?}",batch_1_t.size(),input.batched_motifs_output.motifs.data().t_ref().size(),input.batched_motifs_output.motifs_avg_dists.t_ref().size());
 
         let resource_ids_sizes = input
             .resource_ids

@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use async_trait::async_trait;
-use log::debug;
+use log::{debug, trace, warn};
 use parking_lot::RwLock;
 use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
@@ -155,9 +155,18 @@ where
                 .run_cached(resource_cache, Arc::clone(&ctx))
                 .await?;
 
+            let size = raw_tensor.size();
+
             let selector = ChannelsDataVec {
                 ranges: slices
                     .into_iter()
+                    .filter(|slice| {
+                        let r = MonoMetrics::from([channel + 1, (slice + window) as i64])  <  *size;
+                        if !r {
+                            warn!("MotifLoader::run: slice={slice:?} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id}");
+                        }
+                        r
+                    })
                     .map(|slice| {
                         MonoMetrics::from([channel, slice as i64])..MonoMetrics::from([channel + 1, (slice + window) as i64])
                     })
@@ -165,8 +174,12 @@ where
             };
 
             raw_tensor.with_selected_data(device_idx, selector, |tt| {
-                debug!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t_ref());
-                tmp_cache.insert(tt);
+                trace!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t_ref());
+                if tt.size() == &[0] {
+                    warn!("MotifLoader::run/with_data:  resource_id={resource_id}  got empty motif for motif_id={motif_id}");
+                } else {
+                    tmp_cache.insert(tt);
+                }
 
                 Ok(())
             }).await?;
