@@ -453,60 +453,38 @@ pub(crate) mod mock_cross_loader_receiver {
     use super::RunCtx2;
     use caching_runner::common::runnable::{Stage, SyncStage};
     use caching_runner::common::RunCtx;
+    use mockall::mock;
     use parking_lot::RwLock;
     use std::fmt::Debug;
-    use std::marker::PhantomData;
     use std::sync::Arc;
     use thoosa_shared::ThoosaError;
     use thoosa_shared::applicables_runner::{Input, Output};
 
-    type ReceiveFn<In, C> = dyn Fn(In, Arc<RwLock<C>>) -> Result<(), ThoosaError> + Send + Sync + 'static;
-
-    #[derive(Clone)]
-    pub struct MockCrossLoaderReceiver<In, C>
-    where
-        In: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        receive_fn: Arc<ReceiveFn<In, C>>,
-        _ctx: PhantomData<C>,
-    }
-
-    impl<In, C> std::fmt::Debug for MockCrossLoaderReceiver<In, C>
-    where
-        In: Input + Output + Send + Debug + 'static,
-        C: RunCtx,
-    {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("MockCrossLoaderReceiver").finish()
-        }
-    }
-
-    impl<In, C> Stage for MockCrossLoaderReceiver<In, C>
-    where
-        In: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        type Ctx = C;
-
-        type In<'a> = In
+    mock! {
+        #[derive(Debug)]
+        pub CrossLoaderReceiver<In, C>
         where
-            Self: 'a;
-        type Out = ();
-    }
+            In: Input + Output + Send + Debug + 'static,
+            C: RunCtx + 'static,
+        {
+        }
 
-    impl<In, C> SyncStage for MockCrossLoaderReceiver<In, C>
-    where
-        In: Input + Output + Send + Debug + 'static,
-        C: RunCtx + 'static,
-    {
-        fn consume<'s>(
-            self: Arc<Self>,
-            out: Self::In<'s>,
-            ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<(), ThoosaError> {
-            let f = Arc::clone(&self.receive_fn);
-            f(out, ctx)
+        impl<In, C> Stage for CrossLoaderReceiver<In, C>
+        where
+            In: Input + Output + Send + Debug + 'static,
+            C: RunCtx + 'static,
+        {
+            type Ctx = C;
+            type In<'a> = In where Self: 'a;
+            type Out = ();
+        }
+
+        impl<In, C> SyncStage for CrossLoaderReceiver<In, C>
+        where
+            In: Input + Output + Send + Debug + 'static,
+            C: RunCtx + 'static,
+        {
+            fn consume<'s>(self: Arc<Self>, out: <Self as Stage>::In<'s>, ctx: Arc<RwLock<<Self as Stage>::Ctx>>) -> Result<<Self as Stage>::Out, ThoosaError>;
         }
     }
 
@@ -515,8 +493,8 @@ pub(crate) mod mock_cross_loader_receiver {
         In: Input + Output + Send + Debug + 'static,
         C: RunCtx + 'static,
     {
-        receive_fn: Option<Arc<ReceiveFn<In, C>>>,
-        _ctx: PhantomData<C>,
+        mock: MockCrossLoaderReceiver<In, C>,
+        consume_configured: bool,
     }
 
     impl<In, C> MockCrossLoaderReceiverBuilder<In, C>
@@ -528,18 +506,20 @@ pub(crate) mod mock_cross_loader_receiver {
         where
             F: Fn(In, Arc<RwLock<C>>) -> Result<(), ThoosaError> + Send + Sync + 'static,
         {
-            self.receive_fn = Some(Arc::new(f));
+            let receive_fn = Arc::new(f);
+            self.mock
+                .expect_consume()
+                .returning(move |out, ctx| receive_fn(out, ctx));
+            self.consume_configured = true;
             self
         }
 
         pub fn finish(self) -> MockCrossLoaderReceiver<In, C> {
-            let receive_fn = self
-                .receive_fn
-                .expect("MockCrossLoaderReceiverBuilder requires receive_fn to be set");
-            MockCrossLoaderReceiver {
-                receive_fn,
-                _ctx: PhantomData,
-            }
+            assert!(
+                self.consume_configured,
+                "MockCrossLoaderReceiverBuilder requires receive_fn to be set"
+            );
+            self.mock
         }
     }
 
@@ -549,8 +529,8 @@ pub(crate) mod mock_cross_loader_receiver {
         C: RunCtx + 'static,
     {
         MockCrossLoaderReceiverBuilder {
-            receive_fn: None,
-            _ctx: PhantomData,
+            mock: MockCrossLoaderReceiver::new(),
+            consume_configured: false,
         }
     }
 }
