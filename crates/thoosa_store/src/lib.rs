@@ -1647,7 +1647,7 @@ impl Store for SqlStore {
                         ),
                         Error,
                     >| {
-                        debug!("list_motif_slices: v={v:?}");
+                        
                         let v = v?;
                         let (mut a, mut channel_set, mut run_id, mut resources_map) = a?;
 

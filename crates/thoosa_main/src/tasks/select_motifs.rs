@@ -142,6 +142,10 @@ where
         let max_batch = 10000;//TODO
 
         debug!("SelectMotifsStage::run: resources={labels_resources:?}");
+        if labels_resources.is_empty() {
+            warn!("SelectMotifsStage::run: no labels resources");
+            return Err("Nothing to do ".into())
+        }
 
 
         let num_channels = self.ws.read().channels() as usize;
@@ -184,7 +188,7 @@ where
             info!("on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
 
             let t_0 = Arc::clone(&self.loader)
-                .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_0.clone())), Arc::clone(&ctx))
+                .run(Arc::new(DevicesWrap::wrap_cpu(resource_0.clone())), Arc::clone(&ctx))
                 .await?;
 
             t_1_batch_len += t_0.size().dim_1();
@@ -194,7 +198,6 @@ where
             if t_1_batch_len < max_batch && i_0 < num_resources -1 {
                 continue;
             }
-
 
 
             let r = futures::stream::iter(batched_motifs.clone())
@@ -231,8 +234,7 @@ where
                                 batched_motifs_output,
                             );
 
-                            clc_stage
-                                .do_run(&clc_input, Arc::clone(&ctx_clone))
+                            clc_stage.do_run(&clc_input, Arc::clone(&ctx_clone))
                         })?;
 
                         debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");
