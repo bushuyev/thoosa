@@ -13,9 +13,11 @@ use tch::Kind::{Float, Uint8};
 use tch::{IndexOp, Kind, Tensor};
 use tch::kind::FLOAT_CUDA;
 use tokio::io::AsyncWriteExt;
+use caching_runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use caching_runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use caching_runner::tmp_cache::TmpCached;
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
@@ -39,7 +41,7 @@ use crate::tasks::batched_moitfs_loader::{BatchedMotifsInput, BatchedMotifsLoade
 use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
+use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::RawTensorLoader;
@@ -236,6 +238,15 @@ where
 
                             clc_stage.do_run(&clc_input, Arc::clone(&ctx_clone))
                         })?;
+
+                        // let dist = OOMHandler::new(vec![Adjusters::Input(Box::new(SplitsAdjuster::<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, MotifSlicesSelector>::new([2, -1].into())))], None)
+                        //     .run(
+                        //         &self.clc_resources_motifs_dist,
+                        //         Arc::clone(&motif),
+                        //         Arc::clone(&ctx),
+                        //         Contexts::new(SplitsAdjusterContextImpl::new(motif_size.clone(), (self.output_builder)(out_id.clone())), NoopRunnableContext {}, NoopRunCtxContext {}),
+                        //     )
+                        //     .await?;
 
                         debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");
                         for channel_mask_idsts_ids in channel_masks_dists_ids.into_iter().enumerate() {
