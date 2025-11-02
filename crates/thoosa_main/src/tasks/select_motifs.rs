@@ -13,11 +13,14 @@ use tch::Kind::{Float, Uint8};
 use tch::{IndexOp, Kind, Tensor};
 use tch::kind::FLOAT_CUDA;
 use tokio::io::AsyncWriteExt;
+use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
 use caching_runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use caching_runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use caching_runner::global_ctx::GlobalCtx;
+use caching_runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use caching_runner::permits::{PermitStep, MAX_PERMITS};
 use caching_runner::tmp_cache::TmpCached;
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
@@ -45,7 +48,7 @@ use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifS
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::RawTensorLoader;
-use crate::tasks::resources_motifs_clc_dist::{ClcRresourcesMotifsDist, ClcRresourcesMotifsDistInput, ClcRresourcesMotifsDistOutput};
+use crate::tasks::resources_motifs_clc_dist::{ClcRresourcesMotifsDist, ClcResourcesMotifsDistInput, ClcRresourcesMotifsDistOutput};
 
 pub use crate::tasks::resources_motifs_clc_dist::{fold_dists, fold_mask};
 
@@ -128,9 +131,9 @@ where
     C: RunCtx + Adjustable + 'static
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
-        let (device_idx, cache_area) = {
+        let (device_idx, cache_area, ctx_name) = {
             let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area())
+            (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
         let labels_resources = input.with_data_ref(0, None, |input|{//TODO replace with with_data!(device_idx,
@@ -174,7 +177,6 @@ where
                     ))),
                     Arc::clone(&ctx)
                 ).await?);
-
             }
         }
 
@@ -185,6 +187,8 @@ where
         let mut skip_0_i = 0;
 
         let num_resources = labels_resources.iter().map(|label_resources|label_resources.1.len()).sum::<usize>();
+
+
 
         for (i_0, resource_0) in labels_resources.iter().flat_map(|label_resources|label_resources.1.iter()).enumerate() {
             info!("on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
@@ -201,7 +205,6 @@ where
                 continue;
             }
 
-
             let r = futures::stream::iter(batched_motifs.clone())
                 .map(|batched_motifs_output_wrap| {
                     let t_1_batch = t_1_batch.clone(); //cones Arcs
@@ -214,12 +217,8 @@ where
                     let t_1_batch_resources = t_1_batch_resources.clone();
                     async move {
 
-                        let ClcRresourcesMotifsDistOutput {
-                            select_motifs_run_config_id: find_motifs_run_config_id,
-                            channel_masks_dists_ids,
-                            resources_iter,
-                            ..
-                        } = with_data!(device_idx, [t_1_batch], batched_motifs_output_wrap;
+                       /*
+                        let clc_input = Arc::new(DevicesWrap::wrap(with_data!(device_idx, [t_1_batch], batched_motifs_output_wrap;
                             |
                                 batch_v:&[&ThoTensor2<ChannelsData2, SimpleId>],
                                 batched_motifs_output:&BatchedMotifsOutput
@@ -230,23 +229,36 @@ where
                                 .map(|resource| resource.id())
                                 .collect::<Vec<_>>();
 
-                            let clc_input = ClcRresourcesMotifsDistInput::new(
+                            let clc_input = ClcResourcesMotifsDistInput::new(
                                 batch_v,
                                 resource_ids,
                                 batched_motifs_output,
                             );
 
-                            clc_stage.do_run(&clc_input, Arc::clone(&ctx_clone))
-                        })?;
+                            // clc_stage.do_run(&clc_input, Arc::clone(&ctx_clone))
+                                Ok::<_, ThoosaError>(clc_input)
+                        })?, cache_area));
 
-                        // let dist = OOMHandler::new(vec![Adjusters::Input(Box::new(SplitsAdjuster::<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, MotifSlicesSelector>::new([2, -1].into())))], None)
-                        //     .run(
-                        //         &self.clc_resources_motifs_dist,
-                        //         Arc::clone(&motif),
-                        //         Arc::clone(&ctx),
-                        //         Contexts::new(SplitsAdjusterContextImpl::new(motif_size.clone(), (self.output_builder)(out_id.clone())), NoopRunnableContext {}, NoopRunCtxContext {}),
-                        //     )
-                        //     .await?;
+                        let out_id = Arc::new(SimpleId("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
+
+
+                        let ClcRresourcesMotifsDistOutput {
+                                select_motifs_run_config_id: find_motifs_run_config_id,
+                                channel_masks_dists_ids,
+                                resources_iter,
+                                ..
+                            } = OOMHandler::new(vec![  Adjusters::RunContext(Box::new(PermitsAdjuster::new(
+                            MAX_PERMITS,
+                            *PermitStep::TEN,
+                            move |n| GlobalCtx::global().acquire_many(device_idx, n, out_id.clone()),
+                        )))], None)
+                            .run(
+                                &self.clc_resources_motifs_dist,
+                                Arc::clone(&clc_input),
+                                Arc::clone(&ctx),
+                                Contexts::new(NoopInputContext(None), NoopRunnableContext {}, PermitsAdjustContextImpl::new(ctx_name)),
+                            )
+                            .await?;
 
                         debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");
                         for channel_mask_idsts_ids in channel_masks_dists_ids.into_iter().enumerate() {
@@ -280,7 +292,8 @@ where
                             }
                         }
 
-                        Ok::<(), ThoosaError>(())
+                        Ok::<(), ThoosaError>(())*/
+                        Err::<(), ThoosaError>("todo".into())
                     }
                 })
                 .buffer_unordered(10)

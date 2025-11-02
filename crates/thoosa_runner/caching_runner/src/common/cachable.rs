@@ -259,6 +259,7 @@ where
 {
 }
 
+
 impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     pub fn wrap(o: O, cache_area: u64) -> Self {
         let id = o.id().clone();
@@ -816,6 +817,52 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
 }
 
 
+pub trait WithDataRef<O>:WithId + Debug
+where
+    O: Data + WithId + Send + Sync + CopyToDevice{
+
+
+    async fn with_data_ref<R>(
+        &self,
+        to_device_idx: usize,
+        trace_ctx: Option<&'static str>,
+        do_run: impl FnOnce(&O) -> Result<R, ThoosaError>,
+    ) -> Result<R, ThoosaError>;
+
+
+    async fn with_selected_data_ref<S, R>(
+        &self,
+        to_device_idx: usize,
+        selector: S,
+        trace_ctx: Option<&'static str>,
+        do_run: impl FnOnce(&<O as Select<S>>::Output) -> Result<R, ThoosaError>,
+    ) -> Result<R, ThoosaError>
+    where
+        O: Select<S>,
+        <O as Select<S>>::Output: Data + WithId + Send + Sync + CopyToDevice,
+        S: Clone;
+
+
+
+}
+
+
+impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef<O> for DevicesWrap<O> {
+
+    async fn with_selected_data_ref<S, R>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: impl FnOnce(&<O as Select<S>>::Output) -> Result<R, ThoosaError>) -> Result<R, ThoosaError>
+    where
+        O: Select<S>,
+        <O as Select<S>>::Output: Data + WithId + Send + Sync + CopyToDevice,
+        S: Clone
+    {
+        self.with_selected_data_ref(to_device_idx, selector, trace_ctx, do_run).await
+    }
+
+    async fn with_data_ref<R>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: impl FnOnce(&O) -> Result<R, ThoosaError>) -> Result<R, ThoosaError> {
+        self.with_data_ref(to_device_idx, trace_ctx, do_run).await
+    }
+}
+
 
 
 
@@ -995,6 +1042,9 @@ mod tests {
         })?;
         Ok(())
     }
+
+
+
 
     // #[tokio::test]
     // async fn test_with_data_and_oom()-> Result<(), ThoosaError> {
