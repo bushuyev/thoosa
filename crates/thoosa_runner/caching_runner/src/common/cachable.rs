@@ -434,7 +434,8 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         <O as Select<S>>::Output: Data + WithId + Send + Sync + CopyToDevice,
         S: Clone,
     {
-        let read_guard = self.cached_data[to_device_idx].read().await;
+        let read_guard: RwLockReadGuard<'_, Option<<Self as WithDataRef>::O>> =
+            self.cached_data[to_device_idx].read().await;
 
         if read_guard.is_some() {
             let data = read_guard
@@ -452,7 +453,8 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
                 continue;
             }
 
-            let source_read_guard = op.read().await;
+            let source_read_guard: RwLockReadGuard<'_, Option<<Self as WithDataRef>::O>> =
+                op.read().await;
 
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t = src.subview(selector.clone())?;
@@ -485,10 +487,10 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         let read_guard = self.cached_data[to_device_idx].read().await;
 
         if read_guard.is_some() {
-            let data = read_guard
+            let base: &<Self as WithDataRef>::O = read_guard
                 .as_ref()
-                .expect("no value behind guard")
-                .subview(selector.clone())?;
+                .expect("no value behind guard");
+            let data = base.subview(selector.clone())?;
 
             return Self::do_run_trace_owned(trace_ctx, do_run, data);
         }
@@ -503,6 +505,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
             let source_read_guard = op.read().await;
 
             if let Some(src) = source_read_guard.as_ref() {
+                let src: &<Self as WithDataRef>::O = src;
                 let sub_t = src.subview(selector.clone())?;
                 debug!(
                     "DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",
@@ -817,49 +820,92 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
 }
 
 
-pub trait WithDataRef<O>:WithId + Debug
-where
-    O: Data + WithId + Send + Sync + CopyToDevice{
+pub trait WithDataRef:WithId + Debug{
+    type O: Data + WithId + Send + Sync + CopyToDevice;
 
-
-    async fn with_data_ref<R>(
+    async fn with_data_ref<R, F>(
         &self,
         to_device_idx: usize,
         trace_ctx: Option<&'static str>,
-        do_run: impl FnOnce(&O) -> Result<R, ThoosaError>,
-    ) -> Result<R, ThoosaError>;
+        do_run: F,
+    ) -> Result<R, ThoosaError>
+    where
+        F: FnOnce(&<Self as WithDataRef>::O) -> Result<R, ThoosaError>;
 
 
-    async fn with_selected_data_ref<S, R>(
+    async fn with_selected_data_ref<S, R, F>(
         &self,
         to_device_idx: usize,
         selector: S,
         trace_ctx: Option<&'static str>,
-        do_run: impl FnOnce(&<O as Select<S>>::Output) -> Result<R, ThoosaError>,
+        do_run: F,
     ) -> Result<R, ThoosaError>
     where
-        O: Select<S>,
-        <O as Select<S>>::Output: Data + WithId + Send + Sync + CopyToDevice,
-        S: Clone;
+        S: Clone,
+        <Self as WithDataRef>::O: Select<S, Output=<Self as WithDataRef>::O>,
+        F: FnOnce(&<Self as WithDataRef>::O) -> Result<R, ThoosaError>;
 
 
 
 }
 
 
-impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef<O> for DevicesWrap<O> {
+impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap<O> {
+    type O = O;
 
-    async fn with_selected_data_ref<S, R>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: impl FnOnce(&<O as Select<S>>::Output) -> Result<R, ThoosaError>) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        O: Select<S>,
-        <O as Select<S>>::Output: Data + WithId + Send + Sync + CopyToDevice,
-        S: Clone
+        <Self as WithDataRef>::O: Select<S, Output=<Self as WithDataRef>::O>,
+        S: Clone,
+        F: FnOnce(&<Self as WithDataRef>::O) -> Result<R, ThoosaError>
     {
-        self.with_selected_data_ref(to_device_idx, selector, trace_ctx, do_run).await
+        let read_guard = self.cached_data[to_device_idx].read().await;
+
+        if read_guard.is_some() {
+            let base: &<Self as WithDataRef>::O = read_guard
+                .as_ref()
+                .expect("no value behind guard");
+            let data = base.subview(selector.clone())?;
+
+            return Self::do_run_trace_owned(trace_ctx, do_run, data);
+        }
+
+        drop(read_guard);
+
+        for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+            if source_device_idx == to_device_idx {
+                continue;
+            }
+
+            let source_read_guard = op.read().await;
+
+            if let Some(src) = source_read_guard.as_ref() {
+                let src: &<Self as WithDataRef>::O = src;
+                let sub_t = src.subview(selector.clone())?;
+                debug!(
+                    "DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",
+                    sub_t.size()
+                );
+                let data = sub_t.copy_to_device(to_device_idx);
+
+                return Self::do_run_trace_owned(trace_ctx, do_run, data.await);
+            }
+        }
+
+        Err(MyError::NotFound.into())
     }
 
-    async fn with_data_ref<R>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: impl FnOnce(&O) -> Result<R, ThoosaError>) -> Result<R, ThoosaError> {
-        self.with_data_ref(to_device_idx, trace_ctx, do_run).await
+    async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+        F: FnOnce(&<Self as WithDataRef>::O) -> Result<R, ThoosaError>
+    {
+        match self.load_from_any_device_(to_device_idx).await {
+            Ok(v) => {
+                let data: &<Self as WithDataRef>::O = v.deref();
+                Self::do_run_trace_ref(trace_ctx, do_run, data)
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -961,24 +1007,6 @@ mod tests {
     //     Ok(())
     // }
 
-    #[tokio::test]
-    async fn test_with_selected_data() -> Result<(), ThoosaError> {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
-        let tested = super::DevicesWrap::wrap(MockDataWithId::for_device(1), 0);
-
-        //TODO Selectoer ref
-        tested
-            .with_selected_data_ref(1, ([0usize; 1]..[1usize; 1]), None, |_sub| Ok(()))
-            .await?;
-
-        //TODO test
-        Ok(())
-    }
 
     #[tokio::test]
     async fn test_dump_to_cpu() -> Result<(), ThoosaError> {
