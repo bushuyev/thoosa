@@ -1,5 +1,5 @@
 use crate::common::{PermitsCtx, RunCtx};
-use crate::common::cachable::DevicesWrap;
+use crate::common::cachable::{DevicesWrap, WithDataRef};
 use crate::common::runnable::{Stage, SyncStage};
 use crate::common::{DropIf, OutId};
 #[double]
@@ -219,7 +219,7 @@ impl RunCtxContext for NoopRunCtxContext {}
 pub struct OOMHandler<'a, R, IC, RC, RCC, S>
 where
     R: SyncStage + Adjustable + OutId + 'a,
-    <R as Stage>::In<'a>: Data ,
+    <R as Stage>::In<'a>: Data,
     R::Ctx: Adjustable,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
@@ -262,10 +262,22 @@ where
     }
 
     #[instrument]
-    pub async fn run(
+    pub async fn run_2<W: WithDataRef<<R as Stage>::In<'a>>>(
         &self,
         task: &Arc<R>,
         input: Arc<DevicesWrap<<R as Stage>::In<'a>>>,
+        run_context: Arc<RwLock<R::Ctx>>,
+        mut contexts: Contexts<'a, R, IC, RC, RCC>,
+    ) -> Result<R::Out, ThoosaError>{
+        todo!()
+    }
+
+
+    #[instrument]
+    pub async fn run<W: WithDataRef<<R as Stage>::In<'a>, ID=<R::In<'a> as WithId>::ID>>(
+        &self,
+        task: &Arc<R>,
+        input: Arc<W>,
         run_context: Arc<RwLock<R::Ctx>>,
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
@@ -957,7 +969,7 @@ mod tests {
                 Contexts::new(
                     super::mock_input_context::build()
                         .with_partial_output(TestOutput::new(10.))
-                        .with_all_done(&[true]) 
+                        .with_all_done(&[true])
                         .with_build_final_output(TestOutput::new(10.))
                         .finish(),
                     super::MockRunnableContext::new(),

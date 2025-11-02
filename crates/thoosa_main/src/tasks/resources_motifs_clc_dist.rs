@@ -8,12 +8,14 @@ use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
 
 use caching_runner::common::runnable::{Stage, SyncStage};
-use caching_runner::common::RunCtx;
+use caching_runner::common::{OutId, RunCtx};
+use caching_runner::common::cachable::{DevicesWrap, WithDataRef};
 use thoosa_common::applicables::with_cuda_stream;
+use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::traits::{Adjustable, DataId, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, DataId, Select, SimpleId, WithId};
 use thoosa_shared::ThoosaError;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 
@@ -33,6 +35,20 @@ where
     _ctx: PhantomData<C>,
 }
 
+impl <C> Adjustable for ClcRresourcesMotifsDist<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{}
+
+impl <C>  OutId for  ClcRresourcesMotifsDist<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        format!("ClcRresourcesMotifsDist_{}", input_id).into()
+    }
+}
+
 impl<C> ClcRresourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
@@ -50,7 +66,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = ClcRresourcesMotifsDistInput<'a>;
+    type In<'a> = ClcResourcesMotifsDistInput<'a>;
     type Out = ClcRresourcesMotifsDistOutput;
 }
 
@@ -174,15 +190,30 @@ where
     }
 }
 
-#[derive(Debug)]
-pub struct ClcRresourcesMotifsDistInput<'a> {
+
+#[derive(Debug, DummyData)]
+#[dummy_data(no_clone)]
+pub struct ClcResourcesMotifsDistInputDeviceWrapper {
+    id: SimpleId,
+    batch: Vec<Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>,
+    resource_ids: Vec<ResourceId>,
+    batched_motifs_output: Arc<DevicesWrap<BatchedMotifsOutput>>,
+}
+
+// impl IDeviceWrap<>
+
+
+#[derive(Debug, DummyData)]
+#[dummy_data(no_clone)]
+pub struct ClcResourcesMotifsDistInput<'a> {
     id: SimpleId,
     batch: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
     resource_ids: Vec<ResourceId>,
     batched_motifs_output: &'a BatchedMotifsOutput,
 }
 
-impl<'a> ClcRresourcesMotifsDistInput<'a> {
+
+impl<'a> ClcResourcesMotifsDistInput<'a> {
     pub fn new(
         batch: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
         resource_ids: Vec<ResourceId>,
@@ -198,7 +229,15 @@ impl<'a> ClcRresourcesMotifsDistInput<'a> {
 
 }
 
-impl<'a> WithId for ClcRresourcesMotifsDistInput<'a> {
+impl <'a> Select<()> for ClcResourcesMotifsDistInput<'a> {
+    type Output =  ClcResourcesMotifsDistInput<'a>;
+
+    fn subview(&self, selector: ()) -> Result<Self::Output, ThoosaError> {
+        unimplemented!()
+    }
+}
+
+impl<'a> WithId for ClcResourcesMotifsDistInput<'a> {
     type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
@@ -206,7 +245,7 @@ impl<'a> WithId for ClcRresourcesMotifsDistInput<'a> {
     }
 }
 
-impl<'a> thoosa_shared::applicables_runner::Input for ClcRresourcesMotifsDistInput<'a> {}
+impl<'a> thoosa_shared::applicables_runner::Input for ClcResourcesMotifsDistInput<'a> {}
 
 #[derive(Debug)]
 pub struct ClcRresourcesMotifsDistOutput {
