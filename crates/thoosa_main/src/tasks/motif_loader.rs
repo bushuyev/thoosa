@@ -29,7 +29,7 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader};
 use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
-use caching_runner::common::cachable::{Cached, DevicesWrap};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_shared::traits::Adjustable;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
@@ -108,7 +108,7 @@ where
         for<'a> Self::In<'a>: Send + Sync,
     {
         let motif_id = input
-            .with_data_ref(0, None, |id| Ok(id.clone()))
+            .with_data_ref(0, None, |id: &DataId| Ok(id.clone()))
             .await?;
 
         let motif_id_value = motif_id.clone().0;
@@ -217,7 +217,7 @@ pub mod mock_motif_loader {
     use futures_util::future::{BoxFuture, Shared};
     use mockall::mock;
     use std::sync::Arc;
-    use caching_runner::common::cachable::{Cached, DevicesWrap};
+    use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use caching_runner::common::{MockRunCtx, OutId};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use thoosa_shared::{CopyToDevice, ThoosaError};
@@ -284,7 +284,7 @@ pub mod mock_motif_loader {
             self.mock.expect_run_cached().returning(move |input, ctx| {
                 block_in_place(|| {
                     Handle::current().block_on(async {
-                        input.with_data_ref(0, None, |v| {
+                        input.with_data_ref(0, None, |v: &DataId| {
                             Ok(Arc::clone(data_map
                                 .get(v)
                                 .expect(&format!("no mock data for {input:? } in MockMotifLoader"))))
@@ -318,7 +318,7 @@ mod tests {
     use parking_lot::RwLock;
     use tch::Tensor;
     use caching_runner::common::{mock_run_ctx, RunCtx};
-    use caching_runner::common::cachable::{Cached, DevicesWrap};
+    use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::utils::lin_t;
@@ -326,10 +326,13 @@ mod tests {
     use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::DataId;
+    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_store::MockStoreBuilder;
-    use crate::tasks::motif_loader::MotifLoader;
+    use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::{mock_tensor_loader};
+    use crate::tasks::cross_dims::MotifSlices;
+    use torch_runner::data::ThoTensor2;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn load_motifs() -> Result<(), ThoosaError> {
@@ -379,7 +382,7 @@ mod tests {
             .run_cached(Arc::clone(&input_id), Arc::clone(&ctx))
             .await?;
 
-        let r = motif.with_data_ref(0, None, |t|{
+        let r = motif.with_data_ref(0, None, |t: &DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>|{
             let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
 
             trace!("motif.t={} dist={dist}", t.data().t_ref());

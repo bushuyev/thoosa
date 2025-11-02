@@ -84,21 +84,22 @@ use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConf
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId, Runnable};
 use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
 use thoosa_shared::CopyToDevice;
+use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{ResourceType, ThoosaError, cdt, cdt_for_dir};
 use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Runtime;
 use torch_runner::data::ThoTensor2;
 use torch_sys::at_grad_set_enabled;
-use caching_runner::common::cachable::{Cached, DevicesWrap};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::RunCtx;
 use caching_runner::common::runnable::AsyncStage;
 use caching_runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
-use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage};
-use crate::tasks::motif_loader::{MotifLoader};
+use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
+use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
 
 #[derive(Parser, Clone, Debug)]
@@ -1775,7 +1776,7 @@ async fn plot_motif(
         .with_data_ref(0, None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
         .await?;
 
-    let r = motif.with_data_ref(0, None, |motif| {
+    let r = motif.with_data_ref(0, None, |motif: &DataWithExtra<ThoTensor2<_, DataId>, MotifMeta>| {
         let run_id = motif.extra().run_id;
         let channel = motif.extra().channel;
 

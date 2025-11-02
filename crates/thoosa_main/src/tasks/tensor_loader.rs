@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use tch::Device;
-use caching_runner::common::cachable::{Cached, DevicesWrap};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::dims::Dims;
 use thoosa_shared::CopyToDevice;
@@ -73,7 +73,7 @@ where
         let target_device = self.device.ordinal();
 
         input
-            .with_data_ref(0, None, |resource| {
+            .with_data_ref(0, None, |resource: &Resource| {
                 let tensor = (self.loader_fn)(resource, &self.device);
                 Ok(Arc::new(DevicesWrap::wrap(
                     tensor,
@@ -124,6 +124,7 @@ pub(crate) mod mock_tensor_loader {
     use thoosa_shared::traits::{Named, SimpleId};
     use thoosa_shared::traits::WithId;
     use torch_runner::data::ThoTensor2;
+    use crate::tasks::cross_dims::ChannelsData2;
     use dashmap::DashMap;
     use parking_lot::RwLock;
     use tch::kind::FLOAT_CPU;
@@ -131,7 +132,6 @@ pub(crate) mod mock_tensor_loader {
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
     use caching_runner::global_ctx::GlobalCtx;
-    use crate::tasks::cross_dims::ChannelsData2;
 
     mock! {
         #[derive(Debug)]
@@ -213,15 +213,17 @@ pub(crate) mod mock_tensor_loader {
 mod tests {
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
-    use caching_runner::common::cachable::{Cached, DevicesWrap};
+    use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use caching_runner::global_ctx::GlobalCtx;
     use rand::Rng;
     use std::sync::Arc;
     use tch::{Device, Tensor};
+    use crate::tasks::cross_dims::ChannelsData2;
     use thoosa_common::applicables::ThoDevice;
     use thoosa_shared::ThoosaError;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
+    use thoosa_shared::traits::SimpleId;
     use torch_runner::data::ThoTensor2;
 
     #[tokio::test]
@@ -250,7 +252,7 @@ mod tests {
             .map_err(|e| ThoosaError::new("zzz"))?;
 
         let result = loaded
-            .with_data_ref(0, None, |v| {
+            .with_data_ref(0, None, |v: &ThoTensor2<ChannelsData2, SimpleId>| {
                 println!("loaded: v={v:?}");
                 v.run_inner(|t| {
                     Ok(Tensor::from_slice(&data)

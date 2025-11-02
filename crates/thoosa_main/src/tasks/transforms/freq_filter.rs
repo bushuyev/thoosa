@@ -6,7 +6,7 @@ use parking_lot::RwLock;
 use tch::{IndexOp, TchError, Tensor};
 use tch::Device::Cuda;
 use cached_derive::Cached;
-use caching_runner::common::cachable::{Cached, DevicesWrap};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::OutId;
 use caching_runner::common::RunCtx;
 use caching_runner::common::runnable::{AsyncStage, Stage};
@@ -107,7 +107,7 @@ where
         let num_devices = GlobalCtx::global().device_count();
 
         let filtered = input
-            .with_data_ref(device_idx, None, |tensor| {
+            .with_data_ref(device_idx, None, |tensor: &ThoTensor2<ChannelsData2, SimpleId>| {
 
                 let t = notch_band_rfft(tensor.t_ref(), 200., 58., 62.)?;//TODO params
 

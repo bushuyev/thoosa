@@ -33,12 +33,15 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
-use caching_runner::common::cachable::{Cached, DevicesWrap};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_shared::traits::{Data, SimpleId, WithId};
+use thoosa_shared::data_with_extra::DataWithExtra;
+use crate::tasks::average_euclidean_distance::AverageDistanceValue;
+use crate::tasks::motif_loader::MotifMeta;
 use thoosa_shims::stream::{ThoStreamGuard, ThoCudaStream};
 use torch_runner::data::ThoTensor2;
-use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 
@@ -345,7 +348,7 @@ mod tests {
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use caching_runner::common::RunCtx;
-    use caching_runner::common::cachable::DevicesWrap;
+    use caching_runner::common::cachable::{DevicesWrap, WithDataRef};
     use caching_runner::common::runnable::{AsyncStage, Stage};
     use caching_runner::global_ctx::GlobalCtx;
     use log::debug;
@@ -368,6 +371,7 @@ mod tests {
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{DataId, SimpleId};
+    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::{
         cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoosaError,
     };
@@ -375,7 +379,9 @@ mod tests {
     use torch_runner::data::ThoTensor2;
     use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
     use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
-    use crate::tasks::motif_loader::{MotifLoader};
+    use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
+    use crate::tasks::cross_dims::MotifSlices;
+    use crate::tasks::average_euclidean_distance::AverageDistanceValue;
     use crate::tasks::select_motifs::SelectMotifsStage;
 
     #[ctor::ctor]
@@ -586,7 +592,7 @@ mod tests {
             .await?;
 
             motif
-                .with_data_ref(1, None, |t| {
+                .with_data_ref(1, None, |t: &DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>| {
                     debug!("motif_id={motif_id_raw} slices={:?}", t.data());
 
                     Ok(())
@@ -596,7 +602,7 @@ mod tests {
             let _dist = Arc::clone(&clc_dist)
                 .run_cached(Arc::clone(&motif_id), Arc::clone(&ctx))
                 .await?
-                .with_data_ref(0, None, |dist_val| Ok(dist_val.value()))
+                .with_data_ref(0, None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
                 .await?;
         }
         ////////////////Select
