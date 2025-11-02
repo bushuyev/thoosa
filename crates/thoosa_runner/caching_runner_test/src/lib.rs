@@ -11,7 +11,7 @@ use caching_runner::oom_handler::{
 };
 use caching_runner::permits::{NumPermits, PermitStep, MAX_PERMITS};
 
-use caching_runner::common::cachable::{Cached, DevicesWrap};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use log::debug;
 use parking_lot::RwLock;
@@ -322,7 +322,7 @@ mod tests {
     use ambassador::Delegate;
     use async_trait::async_trait;
     use caching_runner::adjusters::splits::OutputBuilder;
-    use caching_runner::common::cachable::{Cached, DevicesWrap};
+    use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use caching_runner::common::{ambassador_impl_PermitsCtx, DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
@@ -970,7 +970,7 @@ mod tests {
 
         debug!("loaded_tensor_1_0={loaded_tensor_1_0:?}");
         loaded_tensor_1_0
-            .with_data_ref(1, None, |data| {
+            .with_data_ref(1, None, |data: &DLoadedTensor| {
                 assert_eq!(data.data.0, [0.0, 1.0, 2.0]);
 
                 Ok(())
@@ -1020,7 +1020,7 @@ mod tests {
             .await?;
 
         multed
-            .with_data_ref(1, None, |data| {
+            .with_data_ref(1, None, |data: &DMulTaskOutput| {
                 assert_eq!(
                     data.data.0,
                     (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()

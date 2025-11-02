@@ -5,7 +5,7 @@ use crate::tasks::cross_dims::{ChannelsData2};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader};
 use async_trait::async_trait;
-use caching_runner::common::cachable::{Cached, DevicesWrap};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
@@ -225,7 +225,7 @@ where
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
         let device_idx = ctx.read().device_idx();
 
-        let resources = input.with_data_ref(0, None, |input|{
+        let resources = input.with_data_ref(0, None, |input: &ResourcesConfigInput<ResC>|{
             Ok(input
                 .resources_config
                 .to_resources(&self.store)?
