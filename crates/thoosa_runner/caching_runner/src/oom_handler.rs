@@ -262,7 +262,7 @@ where
     }
 
     #[instrument]
-    pub async fn run_2<W: WithDataRef<O=<R as Stage>::In<'a>>>(
+    pub async fn run_2(
         &self,
         task: &Arc<R>,
         input: Arc<DevicesWrap<<R as Stage>::In<'a>>>,
@@ -274,13 +274,13 @@ where
 
 
     #[instrument]
-    pub async fn run<W: WithDataRef<O=<R as Stage>::In<'a>> + WithId<ID=<R::In<'a> as WithId>::ID>>(
+    pub async fn run(
         &self,
         task: &Arc<R>,
-        input: Arc<W>,
+        input: Arc<DevicesWrap<<R as Stage>::In<'a>>>,
         run_context: Arc<RwLock<R::Ctx>>,
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
-    ) -> Result<R::Out, ThoosaError>{
+    ) -> Result<R::Out, ThoosaError> {
         let (device_idx, ctx_name) = {
             let guard = run_context.read();
             (guard.device_idx(), guard.name())
