@@ -417,7 +417,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         <O as Select<S>>::Output: Data + WithId + Send + Sync + CopyToDevice,
         S: Clone,
     {
-        let read_guard: RwLockReadGuard<'_, Option<<Self as WithDataRef>::O>> =
+        let read_guard: RwLockReadGuard<'_, Option<O>> =
             self.cached_data[to_device_idx].read().await;
 
         if read_guard.is_some() {
@@ -436,7 +436,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
                 continue;
             }
 
-            let source_read_guard: RwLockReadGuard<'_, Option<<Self as WithDataRef>::O>> =
+            let source_read_guard: RwLockReadGuard<'_, Option<O>> =
                 op.read().await;
 
             if let Some(src) = source_read_guard.as_ref() {
@@ -756,19 +756,19 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
 
 
 pub trait WithDataRef:WithId + Debug{
-    type O: Data + WithId + Send + Sync + CopyToDevice;
+    type O<'o>: Data + WithId + Send + Sync + CopyToDevice;
 
-    async fn with_data_ref<R, F>(
+    async fn with_data_ref<'f, R, F>(
         &self,
         to_device_idx: usize,
         trace_ctx: Option<&'static str>,
         do_run: F,
     ) -> Result<R, ThoosaError>
     where
-        F: FnOnce(&Self::O) -> Result<R, ThoosaError>;
+        F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
 
 
-    async fn with_selected_data_ref<S, R, F>(
+    async fn with_selected_data_ref<'f, S, R, F>(
         &self,
         to_device_idx: usize,
         selector: S,
@@ -777,8 +777,8 @@ pub trait WithDataRef:WithId + Debug{
     ) -> Result<R, ThoosaError>
     where
         S: Clone,
-        Self::O: Select<S, Output=Self::O>,
-        F: FnOnce(&Self::O) -> Result<R, ThoosaError>;
+        Self::O<'f>: Select<S, Output=Self::O<'f>>,
+        F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
 
 
 
@@ -786,22 +786,22 @@ pub trait WithDataRef:WithId + Debug{
 
 
 impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap<O> {
-    type O = O;
+    type O<'o> = O;
 
-    async fn with_selected_data_ref<S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'f, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        <Self as WithDataRef>::O: Select<S, Output=<Self as WithDataRef>::O>,
+        <Self as WithDataRef>::O<'f>: Select<S, Output=<Self as WithDataRef>::O<'f>>,
         S: Clone,
-        F: FnOnce(&Self::O) -> Result<R, ThoosaError>,
+        F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
     {
-        let read_guard: RwLockReadGuard<'_, Option<Self::O>> =
+        let read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> =
             self.cached_data[to_device_idx].read().await;
 
         if read_guard.is_some() {
-            let base: &Self::O = read_guard
+            let base: &Self::O<'_> = read_guard
                 .as_ref()
                 .expect("no value behind guard");
-            let data: Self::O = base.subview(selector.clone())?;
+            let data: Self::O<'_> = base.subview(selector.clone())?;
 
             return Self::do_run_trace_owned(trace_ctx, do_run, data);
         }
@@ -813,12 +813,11 @@ impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap
                 continue;
             }
 
-            let source_read_guard: RwLockReadGuard<'_, Option<Self::O>> =
+            let source_read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> =
                 op.read().await;
 
             if let Some(src) = source_read_guard.as_ref() {
-                // let src: &Self::O = src;
-                let sub_t: Self::O = src.subview(selector.clone())?;
+                let sub_t: Self::O<'_> = src.subview(selector.clone())?;
                 debug!(
                     "DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",
                     sub_t.size()
@@ -832,13 +831,13 @@ impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap
         Err(MyError::NotFound.into())
     }
 
-    async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_data_ref<'f, R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        F: FnOnce(&Self::O) -> Result<R, ThoosaError>
+        F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
         match self.load_from_any_device_(to_device_idx).await {
             Ok(v) => {
-                let data: &Self::O = v.deref();
+                let data: &Self::O<'_> = v.deref();
                 Self::do_run_trace_ref(trace_ctx, do_run, data)
             }
             Err(e) => Err(e),
