@@ -15,7 +15,7 @@ use tch::kind::FLOAT_CUDA;
 use tokio::io::AsyncWriteExt;
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
 use caching_runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
-use caching_runner::common::cachable::{Cached, DevicesWrap};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::global_ctx::GlobalCtx;
@@ -136,7 +136,7 @@ where
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
-        let labels_resources = input.with_data_ref(0, None, |input|{//TODO replace with with_data!(device_idx,
+        let labels_resources = input.with_data_ref(0, None, |input: &ResourcesConfigInput<Labeled>|{//TODO replace with with_data!(device_idx,
             Ok(input
                 .resources_config()
                 .to_resources(&self.store)?

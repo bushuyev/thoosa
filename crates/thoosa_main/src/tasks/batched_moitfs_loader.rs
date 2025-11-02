@@ -10,7 +10,7 @@ use parking_lot::RwLock;
 use tch::Kind::Float;
 use tch::Tensor;
 use cached_derive::Cached;
-use caching_runner::common::cachable::{Cached, DevicesWrap};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::tmp_cache::TmpCached;

@@ -262,7 +262,7 @@ where
     }
 
     #[instrument]
-    pub async fn run_2<W: WithDataRef<<R as Stage>::In<'a>>>(
+    pub async fn run_2<W: WithDataRef<O=<R as Stage>::In<'a>>>(
         &self,
         task: &Arc<R>,
         input: Arc<DevicesWrap<<R as Stage>::In<'a>>>,
@@ -274,16 +274,13 @@ where
 
 
     #[instrument]
-    pub async fn run<W: WithDataRef<<R as Stage>::In<'a>, ID=<R::In<'a> as WithId>::ID>>(
+    pub async fn run<W: WithDataRef<O=<R as Stage>::In<'a>> + WithId<ID=<R::In<'a> as WithId>::ID>>(
         &self,
         task: &Arc<R>,
         input: Arc<W>,
         run_context: Arc<RwLock<R::Ctx>>,
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
-    ) -> Result<R::Out, ThoosaError>
-    // where
-    //     <R as Stage>::In<'a>: WithId +  Select<S, Output=<R as Stage>::In<'a>> + Send + Sync,
-    {
+    ) -> Result<R::Out, ThoosaError>{
         let (device_idx, ctx_name) = {
             let guard = run_context.read();
             (guard.device_idx(), guard.name())
@@ -390,7 +387,7 @@ where
                                     input_select_adjusted.as_ref()
                                 {
                                     panic_to_err_async!(input.with_selected_data_ref(device_idx, selector.clone(), None, |data| {
-                                        Arc::clone(task_to_run).do_run(&data, Arc::clone(&run_context))
+                                        Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
                                     }).await)
 
                                 } else {

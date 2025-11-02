@@ -11,6 +11,7 @@ mod output_builders;
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
 use caching_runner::common::{DropIf, PermitsCtx};
+use caching_runner::common::cachable::WithDataRef;
 use caching_runner::permits::{MAX_PERMITS, NumPermits, RunnerPerm};
 // test-only imports live under cfg(test)
 use data::ThoTensor2;
@@ -98,7 +99,7 @@ mod tests {
     use thoosa_shared::traits::{Data, MonoMetrics, Select};
     use crate::output_builders::BuildAs;
     use async_trait::async_trait;
-    use caching_runner::common::cachable::{Cached, DevicesWrap};
+    use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
@@ -585,7 +586,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
             let ctx_for_run = Arc::clone(&ctx);
 
             let output = input
-                .with_data_ref(device_idx, None, move |tensor| {
+                .with_data_ref(device_idx, None, move |tensor: &ThoTensor2<LoadedTensor, SimpleId>| {
                     Arc::clone(&stage).do_run(tensor, Arc::clone(&ctx_for_run))
                 })
                 .await?;
@@ -786,8 +787,8 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
         debug!("loaded_tensor_0_0={loaded_tensor_0_0:?}");
 
-        let tensor_data_0_0 = loaded_tensor_0_0
-            .with_data_ref(load_to_device, None, |tensor_data_0_0| {
+            let tensor_data_0_0 = loaded_tensor_0_0
+            .with_data_ref(load_to_device, None, |tensor_data_0_0: &ThoTensor2<LoadedTensor, SimpleId>| {
                 debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
 
                 assert!(
@@ -813,7 +814,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
             .await?;
 
         loaded_tensor_0_0
-            .with_data_ref(load_to_device, None, |tensor_data_0_1| {
+            .with_data_ref(load_to_device, None, |tensor_data_0_1: &ThoTensor2<LoadedTensor, SimpleId>| {
                 // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
                 assert_eq!(&tensor_data_0_0, tensor_data_0_1.t_ref());

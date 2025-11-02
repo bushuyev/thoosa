@@ -5,7 +5,7 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use cached_derive::Cached;
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
-use caching_runner::common::cachable::{Cached, DevicesWrap};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
@@ -265,7 +265,7 @@ impl OutputBuilder for DistOutputBuilder {
 #[cfg(test)]
 mod tests {
     use super::{LoadMotifAndClcDistanceStage, RunCtx2};
-    use caching_runner::common::cachable::{Cached, DevicesWrap};
+    use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use crate::tasks::average_euclidean_distance::{mock_average_stage, AverageDistanceValue};
     use crate::tasks::motif_loader::{MotifMeta, mock_motif_loader};
     use caching_runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
@@ -307,7 +307,7 @@ mod tests {
         let input_id = Arc::new(DevicesWrap::wrap_cpu(input_id_value.clone()));
         let result = stage.run_cached(Arc::clone(&input_id), Arc::clone(&ctx)).await?;
 
-        let result_value = result.with_data_ref(0, None, |val| Ok(val.clone())).await?;
+        let result_value: AverageDistanceValue = result.with_data_ref(0, None, |val: &AverageDistanceValue| Ok(val.clone())).await?;
 
         assert_eq!(result_value.value(), 20.0);
         let expected_id = SimpleId::from(format!("{}_avg_ec_dist", input_id_value));

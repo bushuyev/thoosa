@@ -15,7 +15,7 @@ mod tests {
     use caching_runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
     use ambassador::Delegate;
     use caching_runner::common::ambassador_impl_PermitsCtx;
-    use caching_runner::common::cachable::{Cached, DevicesWrap};
+    use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
@@ -755,7 +755,7 @@ mod tests {
             let ctx_for_run = Arc::clone(&ctx);
 
             let output = input
-                .with_data_ref(device_idx, None, move |tensor| {
+                .with_data_ref(device_idx, None, move |tensor: &Self::In<'_>| {
                     Arc::clone(&stage).do_run(tensor, Arc::clone(&ctx_for_run))
                 })
                 .await?;
@@ -966,7 +966,7 @@ mod tests {
 
         debug!("acc={acc:?}");
 
-        acc.with_data_ref(0, None, |acc_t| {
+        acc.with_data_ref(0, None, |acc_t: &ThoTensor2<ClsOut, SimpleId>| {
             debug!("acc_t={acc_t:?} t=\n{}", acc_t.t_ref());
 
             // Dim impls are to define domain-specific operations on tensors
@@ -1021,7 +1021,7 @@ mod tests {
             .run_cached(input_cache, Arc::clone(&ctx))
             .await?;
 
-        acc.with_data_ref(1, None, |acc| {
+        acc.with_data_ref(1, None, |acc: &ThoTensor2<ClsOut, SimpleId>| {
             let v = ClsOut::accuracy(acc);
             assert!(v > 0.9, "training accuracy too low (4 files): {v}");
             Ok(())
@@ -1081,7 +1081,7 @@ mod tests {
             .run_cached(input_cache, Arc::clone(&ctx))
             .await?;
 
-        acc.with_data_ref(1, None, |acc| {
+        acc.with_data_ref(1, None, |acc: &ThoTensor2<ClsOut, SimpleId>| {
             debug!("acc={}", acc.t_ref());
 
             let v = ClsOut::accuracy(acc);
