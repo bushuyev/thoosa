@@ -13,6 +13,7 @@ use caching_runner::common::cachable::{DevicesWrap, WithDataRef};
 use thoosa_common::applicables::with_cuda_stream;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
+use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Adjustable, DataId, Select, SimpleId, WithId};
@@ -80,7 +81,7 @@ where
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
         let device_idx = ctx.read().device_idx();
-
+/*
         let unfold_params = UnfoldParams::new(
             1,
             input.batched_motifs_output.motifs.extra().1.window as i64,
@@ -186,7 +187,8 @@ where
                 .expect("no select_motifs_run_config_id"),
             channel_masks_dists_ids,
             resources_iter,
-        ))
+        ))*/
+        todo!()
     }
 }
 
@@ -200,6 +202,12 @@ pub struct ClcResourcesMotifsDistInputDeviceWrapper {
     batched_motifs_output: Arc<DevicesWrap<BatchedMotifsOutput>>,
 }
 
+impl ClcResourcesMotifsDistInputDeviceWrapper {
+    pub fn new(id: SimpleId, batch: Vec<Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>, resource_ids: Vec<ResourceId>, batched_motifs_output: Arc<DevicesWrap<BatchedMotifsOutput>>) -> Self {
+        Self { id, batch, resource_ids, batched_motifs_output }
+    }
+}
+
 impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
     type ID = SimpleId;
 
@@ -211,16 +219,16 @@ impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
 impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     type O<'o> = ClcResourcesMotifsDistInput<'o>;
 
-    async fn with_data_ref<'f, R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+        F: for <'f> FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
         let t_1_batch= self.batch.clone();
         let batched_motifs_output = Arc::clone(&self.batched_motifs_output);
         with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
             |
-             batch_v:&'f [&ThoTensor2<ChannelsData2, SimpleId>],
-             batched_motifs_output:&'f BatchedMotifsOutput
+             batch_v:&[&ThoTensor2<ChannelsData2, SimpleId>],
+             batched_motifs_output:&BatchedMotifsOutput
             |{
 
                 do_run(&ClcResourcesMotifsDistInput::new(
@@ -230,16 +238,29 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
                 ))
 
         })
-        // todo!()
     }
 
-    async fn with_selected_data_ref<'f, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
         S: Clone,
-        Self::O<'f>: Select<S, Output=Self::O<'f>>,
-        F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+        Self::O<'o>: Select<S, Output=Self::O<'o>>,
+        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
-        todo!()
+        let t_1_batch= self.batch.clone();
+        let batched_motifs_output = Arc::clone(&self.batched_motifs_output);
+        with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
+            |
+             batch_v:&[&ThoTensor2<ChannelsData2, SimpleId>],
+             batched_motifs_output:&BatchedMotifsOutput
+            |{
+
+                do_run(&ClcResourcesMotifsDistInput::new(
+                    &batch_v[..],//TODO select [selector] slice from t_1_batch
+                    self.resource_ids.clone(),
+                    batched_motifs_output,
+                ))
+
+        })
     }
 }
 
@@ -251,6 +272,7 @@ pub struct ClcResourcesMotifsDistInput<'a> {
     batch: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
     resource_ids: Vec<ResourceId>,
     batched_motifs_output: &'a BatchedMotifsOutput,
+    pd:PhantomData<&'a ()>
 }
 
 
@@ -259,12 +281,13 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
         batch: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
         resource_ids: Vec<ResourceId>,
         batched_motifs_output: &'a BatchedMotifsOutput,
-    ) -> ClcResourcesMotifsDistInput<'a>{
+    ) -> ClcResourcesMotifsDistInput<'a> {
         Self {
             id: SimpleId("ClcRresourcesMotifsDistInput"),
             batch,
             resource_ids,
             batched_motifs_output,
+            pd: Default::default(),
         }
     }
 
@@ -286,7 +309,7 @@ impl<'a> WithId for ClcResourcesMotifsDistInput<'a> {
     }
 }
 
-impl<'a> thoosa_shared::applicables_runner::Input for ClcResourcesMotifsDistInput<'a> {}
+impl<'a> Input for ClcResourcesMotifsDistInput<'a> {}
 
 #[derive(Debug)]
 pub struct ClcRresourcesMotifsDistOutput {
