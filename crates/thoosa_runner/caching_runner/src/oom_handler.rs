@@ -216,27 +216,26 @@ pub struct NoopRunCtxContext {}
 impl RunCtxContext for NoopRunCtxContext {}
 
 #[derive(Debug)]
-pub struct OOMHandler<'a, R, IC, RC, RCC, S>
+pub struct OOMHandler<'a, 'x, R, IC, RC, RCC, S>
 where
-    R: SyncStage + Adjustable + OutId + 'a,
+    R: SyncStage + Adjustable + OutId,
     for<'i> <R as Stage>::In<'i>: Data,
     R::Ctx: Adjustable,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default,
-    for<'i> <R as Stage>::In<'i>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
+    for<'i> <R as Stage>::In<'i>: Select<S, Output=<R as Stage>::In<'x>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId
 {
     adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
     #[allow(dead_code)]
     statistics: Option<&'a Arc<Statistics>>,
-    pd_rc: PhantomData<RC>,
-    pd_rcc: PhantomData<RCC>,
+    pd_rc: PhantomData<(&'x RC, RCC)>,
 }
 
-impl<'a, R, IC, RC, RCC, S> OOMHandler<'a, R, IC, RC, RCC, S>
+impl<'a, 'x, R, IC, RC, RCC, S> OOMHandler<'a, 'x, R, IC, RC, RCC, S>
 where
     R: SyncStage + Adjustable + OutId + 'a,
     for<'i> <R as Stage>::In<'i>: Data ,
@@ -245,7 +244,7 @@ where
     RC: RunnableContext,
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default,
-    for<'i> <R as Stage>::In<'i>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
+    for<'i> <R as Stage>::In<'i>: Select<S, Output=<R as Stage>::In<'x>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId
 {
@@ -257,32 +256,49 @@ where
             adjusters,
             statistics,
             pd_rc: Default::default(),
-            pd_rcc: Default::default(),
         }
     }
 
-    // #[instrument]
-    // pub async fn run<W>(
-    //     &self,
-    //     task: &Arc<R>,
-    //     input: Arc<W>,
-    //     run_context: Arc<RwLock<R::Ctx>>,
-    //     mut contexts: Contexts<'a, R, IC, RC, RCC>,
-    // ) -> Result<R::Out, ThoosaError>
-    // where
-    //   for <'f> W: WithDataRef<O<'f>=<R as Stage>::In<'f>> + WithId<ID=<R::In<'a> as WithId>::ID>
-    // {
-
-
-    #[instrument]
-    pub async fn run(
+    pub async fn run_2<W>(
         &self,
         task: &Arc<R>,
-        input: Arc<DevicesWrap<<R as Stage>::In<'a>>>,
+        input: Arc<W>,
         run_context: Arc<RwLock<R::Ctx>>,
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
+    where
+            W: WithDataRef<O<'x>=<R as Stage>::In<'x>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
+            W: WithId<ID=<R::In<'x> as WithId>::ID>,
+            'x:'static
     {
+
+        // self.run(task, input, run_context, contexts).await
+        todo!()
+    }
+
+    // #[instrument]
+    pub async fn run<W>(
+        &self,
+        task: &Arc<R>,
+        input: Arc<W>,
+        run_context: Arc<RwLock<R::Ctx>>,
+        mut contexts: Contexts<'a, R, IC, RC, RCC>,
+    ) -> Result<R::Out, ThoosaError>
+    where
+       for <'f> W: WithDataRef<O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
+       W:WithId<ID=<R::In<'x> as WithId>::ID>
+    {
+
+
+    // #[instrument]
+    // pub async fn run(
+    //     &self,
+    //     task: &Arc<R>,
+    //     input: Arc<DevicesWrap<<R as Stage>::In<'a>>>,
+    //     run_context: Arc<RwLock<R::Ctx>>,
+    //     mut contexts: Contexts<'a, R, IC, RC, RCC>,
+    // ) -> Result<R::Out, ThoosaError>
+    // {
 
         let (device_idx, ctx_name) = {
             let guard = run_context.read();

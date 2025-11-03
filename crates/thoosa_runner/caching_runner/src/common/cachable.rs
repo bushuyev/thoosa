@@ -765,7 +765,7 @@ pub trait WithDataRef:WithId + Debug{
         do_run: F,
     ) -> Result<R, ThoosaError>
     where
-        F: for <'f> FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
+       for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
 
 
     async fn with_selected_data_ref<'o, S, R, F>(
@@ -783,7 +783,7 @@ pub trait WithDataRef:WithId + Debug{
 
     async fn dummy<R, F>(&self, f:F) -> Result<R, ThoosaError>
     where
-        F: for <'f> FnOnce() -> Result<R, ThoosaError> {
+        for <'f> F:  FnOnce() -> Result<R, ThoosaError> {
 
         (f)()
 
@@ -840,7 +840,7 @@ impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap
 
     async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        F: for <'f> FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
         match self.load_from_any_device_(to_device_idx).await {
             Ok(v) => {
