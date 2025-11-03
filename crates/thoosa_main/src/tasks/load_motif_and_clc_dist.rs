@@ -192,7 +192,7 @@ where
         let num_devices = GlobalCtx::global().device_count();
 
         let dist = OOMHandler::new(vec![Adjusters::Input(Box::new(SplitsAdjuster::<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, MotifSlicesSelector>::new([2, -1].into())))], None)
-            .run_2(
+            .run(
                 &self.clc_dist,
                 Arc::clone(&motif),
                 Arc::clone(&ctx),
