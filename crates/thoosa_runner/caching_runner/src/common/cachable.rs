@@ -781,6 +781,13 @@ pub trait WithDataRef:WithId + Debug{
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
 
 
+    async fn dummy<R, F>(&self, f:F) -> Result<R, ThoosaError>
+    where
+        F: for <'f> FnOnce() -> Result<R, ThoosaError> {
+
+        (f)()
+
+    }
 
 }
 
