@@ -755,7 +755,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
 }
 
 
-pub trait WithDataRef:WithId + Debug{
+pub trait WithDataRef: WithId + Debug {
     type O<'o>: Data + WithId + Send + Sync + CopyToDevice;
 
     async fn with_data_ref<R, F>(
