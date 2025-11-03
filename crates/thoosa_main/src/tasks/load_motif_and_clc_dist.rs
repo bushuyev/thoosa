@@ -176,8 +176,6 @@ where
         > + Adjustable + OutId + Sync + Send + 'static,
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>
-    where
-        for<'a> Self::In<'a>: Send + Sync,
     {
         let out_id = self.out_id(input.id());
 
@@ -194,7 +192,7 @@ where
         let num_devices = GlobalCtx::global().device_count();
 
         let dist = OOMHandler::new(vec![Adjusters::Input(Box::new(SplitsAdjuster::<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, MotifSlicesSelector>::new([2, -1].into())))], None)
-            .run(
+            .run_2(
                 &self.clc_dist,
                 Arc::clone(&motif),
                 Arc::clone(&ctx),
