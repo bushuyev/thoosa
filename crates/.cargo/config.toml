@@ -4,6 +4,7 @@ target-dir = "target"
 rustflags = [
     "-C", "link-arg=-Wl,--no-as-needed", "--cfg", "tokio_unstable",
 #    "-C", "link-arg=-Wl,-rpath,/home/bu/dvl/torch/libtorch-2.7.1/",
+    "-Zhigher-ranked-assumptions"
 ]
 
 [env]
