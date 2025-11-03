@@ -81,7 +81,7 @@ where
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
         let device_idx = ctx.read().device_idx();
-/*
+
         let unfold_params = UnfoldParams::new(
             1,
             input.batched_motifs_output.motifs.extra().1.window as i64,
@@ -187,8 +187,7 @@ where
                 .expect("no select_motifs_run_config_id"),
             channel_masks_dists_ids,
             resources_iter,
-        ))*/
-        todo!()
+        ))
     }
 }
 
@@ -272,7 +271,6 @@ pub struct ClcResourcesMotifsDistInput<'a> {
     batch: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
     resource_ids: Vec<ResourceId>,
     batched_motifs_output: &'a BatchedMotifsOutput,
-    pd:PhantomData<&'a ()>
 }
 
 
@@ -287,7 +285,6 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
             batch,
             resource_ids,
             batched_motifs_output,
-            pd: Default::default(),
         }
     }
 
