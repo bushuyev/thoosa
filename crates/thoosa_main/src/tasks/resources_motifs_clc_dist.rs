@@ -18,7 +18,7 @@ use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Adjustable, DataId, Select, SimpleId, WithId};
 use thoosa_shared::ThoosaError;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-
+use thoosa_with_data::with_data;
 use crate::tasks::batched_moitfs_loader::BatchedMotifsOutput;
 use crate::tasks::cross_batch_clc::{unfold_and_cat, UnfoldParams};
 use crate::tasks::cross_dims::ChannelsData2;
@@ -200,7 +200,48 @@ pub struct ClcResourcesMotifsDistInputDeviceWrapper {
     batched_motifs_output: Arc<DevicesWrap<BatchedMotifsOutput>>,
 }
 
-// impl IDeviceWrap<>
+impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
+    type ID = SimpleId;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
+    type O<'o> = ClcResourcesMotifsDistInput<'o>;
+
+    async fn with_data_ref<'f, R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+        F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+    {
+        let t_1_batch= self.batch.clone();
+        let batched_motifs_output = Arc::clone(&self.batched_motifs_output);
+        with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
+            |
+             batch_v:&'f [&ThoTensor2<ChannelsData2, SimpleId>],
+             batched_motifs_output:&'f BatchedMotifsOutput
+            |{
+
+                do_run(&ClcResourcesMotifsDistInput::new(
+                    batch_v,
+                    self.resource_ids.clone(),
+                    batched_motifs_output,
+                ))
+
+        })
+        // todo!()
+    }
+
+    async fn with_selected_data_ref<'f, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+        S: Clone,
+        Self::O<'f>: Select<S, Output=Self::O<'f>>,
+        F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+    {
+        todo!()
+    }
+}
 
 
 #[derive(Debug, DummyData)]
@@ -218,7 +259,7 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
         batch: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
         resource_ids: Vec<ResourceId>,
         batched_motifs_output: &'a BatchedMotifsOutput,
-    ) -> Self {
+    ) -> ClcResourcesMotifsDistInput<'a>{
         Self {
             id: SimpleId("ClcRresourcesMotifsDistInput"),
             batch,
