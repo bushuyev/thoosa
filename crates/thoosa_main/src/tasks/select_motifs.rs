@@ -48,7 +48,7 @@ use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifS
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::RawTensorLoader;
-use crate::tasks::resources_motifs_clc_dist::{ClcRresourcesMotifsDist, ClcResourcesMotifsDistInput, ClcRresourcesMotifsDistOutput};
+use crate::tasks::resources_motifs_clc_dist::{ClcRresourcesMotifsDist, ClcResourcesMotifsDistInput, ClcRresourcesMotifsDistOutput, ClcResourcesMotifsDistInputDeviceWrapper};
 
 pub use crate::tasks::resources_motifs_clc_dist::{fold_dists, fold_mask};
 
@@ -215,29 +215,18 @@ where
                     debug!("SelectMotifsStage::run: t_0_batch={t_1_batch:?} \nbatched_motifs_output_wrap={batched_motifs_output_wrap:?}");
 
                     let t_1_batch_resources = t_1_batch_resources.clone();
+                    let resource_ids = t_1_batch_resources
+                        .iter()
+                        .map(|resource| resource.id())
+                        .collect::<Vec<_>>();
+
+                    let clc_resources_input = Arc::new(ClcResourcesMotifsDistInputDeviceWrapper::new(
+                        "ClcResourcesMotifsDistInputDeviceWrapper".into(),
+                        t_1_batch,
+                        resource_ids,
+                        batched_motifs_output_wrap
+                    ));
                     async move {
-
-                       /*
-                        let clc_input = Arc::new(DevicesWrap::wrap(with_data!(device_idx, [t_1_batch], batched_motifs_output_wrap;
-                            |
-                                batch_v:&[&ThoTensor2<ChannelsData2, SimpleId>],
-                                batched_motifs_output:&BatchedMotifsOutput
-                            |{
-
-                            let resource_ids = t_1_batch_resources
-                                .iter()
-                                .map(|resource| resource.id())
-                                .collect::<Vec<_>>();
-
-                            let clc_input = ClcResourcesMotifsDistInput::new(
-                                batch_v,
-                                resource_ids,
-                                batched_motifs_output,
-                            );
-
-                            // clc_stage.do_run(&clc_input, Arc::clone(&ctx_clone))
-                                Ok::<_, ThoosaError>(clc_input)
-                        })?, cache_area));
 
                         let out_id = Arc::new(SimpleId("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
 
@@ -252,10 +241,10 @@ where
                             *PermitStep::TEN,
                             move |n| GlobalCtx::global().acquire_many(device_idx, n, out_id.clone()),
                         )))], None)
-                            .run(
-                                &self.clc_resources_motifs_dist,
-                                Arc::clone(&clc_input),
-                                Arc::clone(&ctx),
+                            .run_2(
+                                &clc_stage,
+                                Arc::clone(&clc_resources_input),
+                                ctx_clone,
                                 Contexts::new(NoopInputContext(None), NoopRunnableContext {}, PermitsAdjustContextImpl::new(ctx_name)),
                             )
                             .await?;
@@ -292,8 +281,8 @@ where
                             }
                         }
 
-                        Ok::<(), ThoosaError>(())*/
-                        Err::<(), ThoosaError>("todo".into())
+                        Ok::<(), ThoosaError>(())
+                        // Err::<(), ThoosaError>("todo".into())
                     }
                 })
                 .buffer_unordered(10)

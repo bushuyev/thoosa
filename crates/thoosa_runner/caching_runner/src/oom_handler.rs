@@ -262,13 +262,43 @@ where
     }
 
     #[instrument]
-    pub async fn run_2(
+    pub async fn run_2<W: WithDataRef<O<'a>=<R as Stage>::In<'a>> + WithId<ID=<R::In<'a> as WithId>::ID>>(
         &self,
         task: &Arc<R>,
-        input: Arc<DevicesWrap<<R as Stage>::In<'a>>>,
+        input: Arc<W>,
         run_context: Arc<RwLock<R::Ctx>>,
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>{
+        let (device_idx, ctx_name) = {
+            let guard = run_context.read();
+            (guard.device_idx(), guard.name())
+        };
+        debug!("OOMHandler::run: ctx_name={ctx_name} input.id={:?}",input.id());
+
+        let out_key = {
+            let out_id = task.out_id(input.id());
+            Arc::new(out_id) as Arc<dyn CachableIdTr>
+        };
+
+        if run_context.read().acquired_permits() == 0 {
+            let result = GlobalCtx::global()
+                .acquire_many(device_idx, 1, out_key.clone())
+                .await?;
+            run_context.write().add_permit(result);
+        }
+
+        debug!("OOMHandler::run: ctx_name={ctx_name}  acquired_permits={:?}",run_context.read().acquired_permits());
+
+
+
+        // match panic_to_err_async!(
+         let x =   input
+                .with_data_ref(device_idx, None, |data| {
+                    Arc::clone(task).do_run(data, Arc::clone(&run_context))
+                })
+                .await;
+
+
         todo!()
     }
 
