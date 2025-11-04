@@ -148,6 +148,7 @@ pub fn clc_dist_d2_and_mask(
 
     let distances = Tensor::f_cdist(&t_0, &t_1, 2.0, 0)?;
 
+    debug!("clc_dist_d2_and_mask: t_0.size={:?}, t_0.device={:?}, t_1.size={:?}, t_1.device={:?}",t_0.size(), t_0.device(), t_1.size(), t_1.device());
     debug!("clc_dist_d2_and_mask: mask_makers={mask_makers:?} distances size={:?}",distances.size());
     trace!("clc_dist_d2_and_mask: distances=\n{distances} device={:?}",distances.device());
 

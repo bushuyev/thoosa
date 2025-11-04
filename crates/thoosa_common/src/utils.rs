@@ -461,7 +461,7 @@ pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> Tensor {
     one_hot.sum_dim_intlist(1, false, Kind::Int)
 }
 
-//free_mem, total_mem
+//TODO replace with same from cuda_utils free_mem, total_mem
 pub fn cuda_mem() -> (usize, usize) {
     use cudarc::driver::CudaContext;
     use cust::sys::cuMemGetInfo_v2;

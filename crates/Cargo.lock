@@ -551,6 +551,7 @@ dependencies = [
  "parking_lot",
  "rand 0.9.2",
  "simplelog",
+ "thoosa_common",
  "thoosa_dummy_data_derive",
  "thoosa_shared",
  "thoosa_with_data",

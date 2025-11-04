@@ -7,7 +7,7 @@ use crate::global_ctx::GlobalCtx;
 use crate::permits::MAX_PERMITS;
 use crate::statistics::Statistics;
 use async_trait::async_trait;
-use log::debug;
+use log::{debug, trace};
 use mockall::automock;
 use mockall_double::double;
 use parking_lot::RwLock;
@@ -22,6 +22,7 @@ use thoosa_shared::CopyToDevice;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
 use thoosa_shared::{MyError, ThoosaError};
 use tracing::instrument;
+use thoosa_common::cuda_utils::cuda_mem;
 
 #[async_trait]
 pub trait Adjuster<AC>: Debug + Send + Sync {
@@ -308,7 +309,6 @@ where
                 })
                 .await
         ) {
-            Ok(o) => Ok(o),
             Err(te) => {
                 match te.what() {
                     MyError::OutOfMemory => {
@@ -419,7 +419,7 @@ where
 
                                         match te.what() {
                                             MyError::OutOfMemory => {
-                                                debug!("OOMHandler::run: err ctx_name={ctx_name}  adjust_context={contexts:?}");
+                                                debug!("OOMHandler::run: OutOfMemory ctx_name={ctx_name}  adjust_context={contexts:?}");
 
                                                 if !adjuster.degrade(&mut contexts) {
                                                     match adjuster {
@@ -453,8 +453,12 @@ where
                     }
                 }
 
-                Err(MyError::SomethingElse(format!("all failed: task={task:?} input={input:?}")).into())
+                debug!("all failed: task={task:?} input.mem_size={:?} cuda_mem: {:?}", input.mem_size(), cuda_mem());
+                trace!("all failed: task={task:?} input={input:?}");
+
+                Err(MyError::SomethingElse(format!("all failed: task={task:?}")).into())
             }
+            Ok(o) => Ok(o),
         }
     }
 }

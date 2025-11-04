@@ -82,6 +82,7 @@ pub mod mock_run_ctx {
             fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>;
             fn cache_area(&self) -> u64;
         }
+
     }
 
     pub struct MockRunCtxBuilder {
