@@ -35,6 +35,7 @@ impl<D: Dims, Id: Named + Clone> Data for ThoTensor2<D, Id> {
     type Metrics = D::Metrics;
 
 
+    //TODO rename to metrics
     fn size(&self) -> Self::Metrics {
         self.t
             .size()
@@ -46,6 +47,10 @@ impl<D: Dims, Id: Named + Clone> Data for ThoTensor2<D, Id> {
 
     fn device(&self) -> usize {
         ThoDevice::from(self.t.device()).ordinal()
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.size().iter().fold(1u64, | a, v| (a * (*v as u64))) * self.t.kind().elt_size_in_bytes() as u64
     }
 }
 

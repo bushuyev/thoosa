@@ -13,6 +13,7 @@ use crate::{CopyToDevice, ThoosaError};
 use uuid::Uuid;
 use async_trait::async_trait;
 use parking_lot::RwLock;
+use thoosa_dummy_data_derive::DummyData;
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
@@ -191,7 +192,8 @@ impl Display for TmpId {
     }
 }
 ///--------------------
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, DummyData)]
+#[dummy_data(clone)]
 pub struct DataId(pub u32);//for sql-store based stuff
 
 unsafe impl Send for DataId {}
@@ -220,24 +222,6 @@ impl From<&u32> for DataId {
     }
 }
 
-#[async_trait]
-impl CopyToDevice for DataId {
-    async fn copy_to_device(&self, _dst_device: usize) -> Self {
-        self.clone()
-    }
-}
-
-impl Data for DataId {
-    type Metrics = ();
-
-    fn size(&self) -> Self::Metrics {
-        ()
-    }
-
-    fn device(&self) -> usize {
-        0
-    }
-}
 
 impl From<u32> for DataId {
     fn from(value: u32) -> Self {
@@ -290,11 +274,19 @@ pub trait Metrics:Default {//TODO remove Default
     fn cap(&self, other:&mut  Self)  {
         todo!()
     }
+
+    fn num_elts(&self)->usize{
+        0
+    }
 }
 
 impl Metrics for () {} //for stages without output
 
-impl Metrics for [usize; 1] {}
+impl Metrics for [usize; 1] {
+    fn num_elts(&self) -> usize {
+        self[0]
+    }
+}
 
 //TODO  for tests, replace with MonoMetrics
 impl Metrics for i64 {
@@ -341,6 +333,10 @@ impl <const Idx:usize, const Size:usize> Metrics for MonoMetrics<Idx, Size> {
                 *other_dim = *my_dim;
             }
         }
+    }
+
+    fn num_elts(&self) -> usize {
+        self.dims.iter().fold(1, |mut a, v| a * (*v as usize))
     }
 }
 
@@ -487,6 +483,10 @@ pub trait Data: Debug + CopyToDevice {
     fn track_used_in(&self, _token: &'static str) {}
 
     fn device(&self) -> usize;
+
+    fn mem_size(&self) -> u64 {
+        0
+    }
 }
 
 

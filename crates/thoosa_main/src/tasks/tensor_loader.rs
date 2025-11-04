@@ -1,5 +1,5 @@
 use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::run_ctx_2::RunCtx2;
+use crate::tasks::run_ctx_2::{MotifsCtx, RunCtx2};
 use async_trait::async_trait;
 use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::common::{OutId, RunCtx};
@@ -28,7 +28,7 @@ type LoadFn = dyn Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> 
 #[cache_name = "LoadedTensorId"]
 pub struct RawTensorLoader<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MotifsCtx + 'static,
 {
     device: ThoDevice,
     loader_fn: Box<LoadFn>,
@@ -37,7 +37,7 @@ where
 
 impl<C> Debug for RawTensorLoader<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MotifsCtx + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TensorLoader")
@@ -49,7 +49,7 @@ where
 
 impl<C> Stage for RawTensorLoader<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MotifsCtx + 'static,
 {
     type In<'a> = Resource;
     type Out = ThoTensor2<ChannelsData2, SimpleId>;
@@ -59,7 +59,7 @@ where
 #[async_trait]
 impl<C> AsyncStage for RawTensorLoader<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MotifsCtx + 'static,
 {
 
     async fn run(
@@ -82,11 +82,18 @@ where
             })
             .await
     }
+
+    fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+    where
+        Self: 'a
+    {
+        
+    }
 }
 
 impl<C> OutId for RawTensorLoader<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MotifsCtx + 'static,
 {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("loaded_{}", input_id.id()))
@@ -95,7 +102,7 @@ where
 
 impl<C> RawTensorLoader<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MotifsCtx + 'static,
 {
     pub fn new<F>(loader_fn: F, device: ThoDevice) -> Self
     where

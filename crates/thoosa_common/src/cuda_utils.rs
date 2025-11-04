@@ -163,10 +163,7 @@ pub async fn copy_d2h_from_ptr_result(
 ) -> Result<Tensor, ThoosaError> {
     let tensor_mem_size = tensor_mem_size(init_type, &src_size);
 
-    debug!(
-        "copy_d2h: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size_bytes}",
-        src_size
-    );
+    debug!("copy_d2h: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size_bytes}",src_size);
 
     let chunks = tensor_mem_size / buf_size_bytes;
 
@@ -210,10 +207,7 @@ pub async fn copy_d2h_from_ptr_result(
                 );
                 let r: sys::CUresult = std::mem::transmute(raw);
                 if r != sys::CUresult::CUDA_SUCCESS {
-                    return Err(MyError::SomethingElse(format!(
-                        "cuMemcpyDtoHAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}"
-                    ))
-                    .into());
+                    return Err(MyError::SomethingElse(format!("cuMemcpyDtoHAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")).into());
                 }
 
                 buf_stream.1.synchronize();

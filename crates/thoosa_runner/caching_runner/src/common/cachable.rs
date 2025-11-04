@@ -161,7 +161,7 @@ where
     inflights: Box<[tokio::sync::Mutex<Option<Arc<tokio::sync::Notify>>>]>,
     cache_area: AtomicU64,
     size: O::Metrics,
-
+    mem_size: u64,
     //contains cache age ( GlobalCtx::cache_age - increated when something is being cached from Cachable::run_cached). The smaller the value the longer it was in the cpu
     on_cpu_since: parking_lot::RwLock<Option<u64>>,
     pd: PhantomData<O>,
@@ -265,6 +265,8 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         let id = o.id().clone();
         let size = o.size();
         let device_ordinal = o.device();
+        let mem_size = o.mem_size();
+
         let num_devices: usize = GlobalCtx::global().device_count();
         let mut o_op = Some(o);
 
@@ -284,6 +286,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
             .collect::<Vec<_>>()
             .into_boxed_slice();
 
+
         Self {
             id,
             cached_data: device_futures,
@@ -291,11 +294,13 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
             cache_area: AtomicU64::new(cache_area),
             size,
             on_cpu_since: Default::default(),
+            mem_size,
             pd: PhantomData,
         }
     }
 
     pub fn wrap_cpu(o: O) -> Self {//TODO replace with union
+        let mem_size = o.mem_size();
         Self {
             id: o.id().clone(),
             cached_data: Box::new([tokio::sync::RwLock::new(Some(o))]),
@@ -303,6 +308,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
             cache_area: AtomicU64::new(0),
             size: Default::default(),
             on_cpu_since: Default::default(),
+            mem_size,
             pd: PhantomData,
         }
     }
@@ -566,32 +572,22 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoosaError> {
         assert_ne!(device_idx, 0);
 
-        debug!(
-            "DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx}",
-            self.id
-        );
+        debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx}",self.id);
 
-        if let Ok(mut lock) = self.cached_data[device_idx].try_write() {
+        if let Some(Ok(mut lock)) = self.cached_data.get(device_idx).map(|v|v.try_write()) {
             if self.cached_data[0].read().await.is_none() {
                 let data = lock.take();
 
-                self.ensure_copied(device_idx, 0, data.as_ref(), false)
-                    .await?;
+                self.ensure_copied(device_idx, 0, data.as_ref(), false).await?;
 
-                debug!(
-                    "DataCacheWrapper::dump_to_cpu: 1. id={:?} copied to cpu done",
-                    self.id
-                );
-            } else {
-                drop(lock.take());
+                debug!("DataCacheWrapper::dump_to_cpu: 1. id={:?} copied to cpu done",self.id);
             }
+            drop(lock.take());
+
         } else {
             //if it's locked then it should be one of the parent futures being built, waiting on it will deadlock
             //TODO log warning?
-            debug!(
-                "DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}",
-                self.id, self.cached_data[device_idx]
-            )
+            debug!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}",self.id, self.cached_data)
         }
 
         let is_all_on_cpu = self.is_all_on_cpu().await;
@@ -600,10 +596,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
             *self.on_cpu_since.write() = Some(GlobalCtx::global().cache_age());
         }
 
-        debug!(
-            "DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}",
-            self.id
-        );
+        debug!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}",self.id);
 
         Ok(())
     }
@@ -789,6 +782,9 @@ pub trait WithDataRef: WithId + Debug {
 
     }
 
+    fn mem_size(&self) ->u64{
+        0
+    }
 }
 
 
@@ -849,6 +845,10 @@ impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap
             }
             Err(e) => Err(e),
         }
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.mem_size
     }
 }
 

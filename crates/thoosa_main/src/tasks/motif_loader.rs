@@ -218,7 +218,7 @@ pub mod mock_motif_loader {
     use mockall::mock;
     use std::sync::Arc;
     use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-    use caching_runner::common::{MockRunCtx, OutId};
+    use caching_runner::common::{MockRunCtx, OutId, RunCtx};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::resource::Resource;
