@@ -157,8 +157,7 @@ impl GlobalCtx {
         for (type_name, map) in maps.iter() {
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
 
-            map.purge_gpu(required_ids.get(type_name).map(|v| *v), device_idx)
-                .await?;
+            map.purge_gpu(required_ids.get(type_name).map(|v| *v), device_idx).await?;
 
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} done");
         }

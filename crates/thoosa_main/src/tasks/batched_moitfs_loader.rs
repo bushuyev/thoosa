@@ -24,30 +24,36 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, SimpleId, WithId};
+use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use torch_runner::data::ThoTensor2;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::cross_dims::{ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
 use crate::tasks::motif_loader::MotifMeta;
+use crate::tasks::run_ctx_2::MotifsCtx;
 
 #[derive(Debug, Clone, DummyData)]
 pub struct BatchedMotifsInput {
-    id:RunId, //TODO Enum with options - ByFindMotifsRunId, etc
-    motif_ids: Vec<usize>,
+
+    id:SimpleId,
     find_motifs_run_config: Arc<FindMotifsRunConfig>,
     select_motifs_run_config: Arc<SelectMotifsRunConfig>,
 }
 
 impl BatchedMotifsInput {
-    pub fn new(id:RunId, motif_ids: Vec<usize>, find_config: Arc<FindMotifsRunConfig>, select_config: Arc<SelectMotifsRunConfig>,) -> Self {
-        Self { id, motif_ids, find_motifs_run_config: find_config, select_motifs_run_config: select_config }
+    pub fn new( find_config: Arc<FindMotifsRunConfig>, select_config: Arc<SelectMotifsRunConfig>) -> Self {
+        Self {
+            id: format!("{}_{}", find_config.id.unwrap(), select_config.id.unwrap()).into(),
+            find_motifs_run_config: find_config,
+            select_motifs_run_config: select_config
+        }
     }
 }
 impl Input for BatchedMotifsInput {}
 
 impl WithId for BatchedMotifsInput {
-    type ID = RunId;
+    type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -108,11 +114,12 @@ impl Output for BatchedMotifsOutput {}
 pub struct BatchedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     motif_loader:Arc<ML>,
     load_and_clc_avg_dist:Arc<LoadMotifAndClcDistanceStage<ML, AverageEuclideanDistanceStage<C>, C>>,
     ws:Arc<RwLock<Box<dyn Workspace>>>,
+    store: Arc<RwLock<Box<dyn Store>>>,
     pd:PhantomData<C>,
 }
 
@@ -120,7 +127,7 @@ where
 impl <ML, C> OutId for BatchedMotifsLoader<ML, C>
 where
 ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
-C: RunCtx + Adjustable + 'static
+C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         format!("BatchedMotifsLoader_{}",  input_id).into()
@@ -130,13 +137,19 @@ C: RunCtx + Adjustable + 'static
 impl <ML, C> BatchedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MotifsCtx + Adjustable + 'static
 {
-    pub fn new(ws:Arc<RwLock<Box<dyn Workspace>>>, motif_loader:Arc<ML>, load_and_clc_avg_dist:Arc<LoadMotifAndClcDistanceStage<ML, AverageEuclideanDistanceStage<C>, C>>) -> Self {
+    pub fn new(
+        ws: Arc<RwLock<Box<dyn Workspace>>>,
+        motif_loader: Arc<ML>,
+        load_and_clc_avg_dist: Arc<LoadMotifAndClcDistanceStage<ML, AverageEuclideanDistanceStage<C>, C>>,
+        store: Arc<RwLock<Box<dyn Store>>>) -> Self
+    {
         Self {
             ws,
             motif_loader,
             load_and_clc_avg_dist,
+            store,
             pd: Default::default(),
         }
     }
@@ -146,7 +159,7 @@ where
 impl <ML, C> Stage for BatchedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MotifsCtx + Adjustable + 'static
 
 {
     type Ctx = C;
@@ -158,7 +171,7 @@ where
 impl <ML, C> AsyncStage for BatchedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MotifsCtx + Adjustable + 'static
 
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
@@ -174,7 +187,9 @@ where
 
         let input = input.clone_from_cpu().await?;
 
-        let loaded_motifs = futures::stream::iter(input.motif_ids)
+        let motif_ids = self.store.read().list_motifs(input.find_motifs_run_config.id.expect("no id in find_motifs_run_config"))?;
+
+        let loaded_motifs = futures::stream::iter(motif_ids)
         .map( |motif_id| {
             let done_cnt = Arc::clone(&done_cnt);
 
@@ -326,5 +341,12 @@ where
 
         })
 
+    }
+
+    fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+    where
+        Self: 'a
+    {
+        ctx.write().add_batched_motifs_id(self.out_id(input.id()));
     }
 }

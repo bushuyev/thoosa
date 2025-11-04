@@ -2,7 +2,8 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-
+use async_trait::async_trait;
+use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
@@ -16,8 +17,8 @@ use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::traits::{Adjustable, DataId, Select, SimpleId, WithId};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::traits::{Adjustable, Data, DataId, Select, SimpleId, WithId};
+use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
 use crate::tasks::batched_moitfs_loader::BatchedMotifsOutput;
@@ -123,7 +124,7 @@ where
                 let _guard = ThoStreamGuard::set(&motifs_stream);
             }
 
-            let ((mask, dists), motifs_stream) = with_cuda_stream(device_idx, || {
+            let ((mask_dists_result), motifs_stream) = with_cuda_stream(device_idx, || {
                 thoosa_motifs::distance::clc_dist_d2_and_mask(
                     input
                         .batched_motifs_output
@@ -135,8 +136,9 @@ where
                     true,
                     &mut mask_makers,
                 )
-                .unwrap()
             });
+
+            let (mask, dists) = mask_dists_result?;
 
             (0..self.num_channels)
                 .map(|c| {
@@ -264,8 +266,8 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 
-#[derive(Debug, DummyData)]
-#[dummy_data(no_clone)]
+#[derive(Debug)] //DummyData
+// #[dummy_data(no_clone)]
 pub struct ClcResourcesMotifsDistInput<'a> {
     id: SimpleId,
     batch: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
@@ -288,6 +290,36 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
         }
     }
 
+}
+
+#[async_trait]
+impl <'a> CopyToDevice for ClcResourcesMotifsDistInput<'a> {
+    async fn copy_to_device(&self, dst_device: usize) -> Self{
+        !unimplemented!()
+    }
+}
+
+impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
+    type Metrics = ();
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
+        0
+    }
+
+    fn mem_size(&self) -> u64 {
+
+        let batch_mem_size = self.batch.iter().map(|t|t.mem_size()).sum::<u64>();
+        let motifs_output_mem_size =  self.batched_motifs_output.motifs.mem_size();
+        let motifs_avg_dists_mem_size = self.batched_motifs_output.motifs_avg_dists.mem_size();
+
+        debug!("ClcResourcesMotifsDistInput::mem_size: batch_mem_size={} motifs_output_mem_size={} motifs_avg_dists_mem_size={}", batch_mem_size, motifs_output_mem_size, motifs_avg_dists_mem_size);
+
+        batch_mem_size + motifs_output_mem_size + motifs_avg_dists_mem_size
+    }
 }
 
 impl <'a> Select<()> for ClcResourcesMotifsDistInput<'a> {
@@ -370,9 +402,8 @@ where
     I: PartialEq + Debug,
     F: Fn(Tensor) -> Tensor,
 {
-    debug!(
-        "fold_mask: mask={full:?} ids={ids:?} dim={dim}"
-    );
+    debug!("fold_mask: mask={full:?} dim={dim}");
+    trace!("fold_mask: ids={ids:?} ");
     trace!("fold_mask: mask=\n{full}");
 
     let sizes = full.size();

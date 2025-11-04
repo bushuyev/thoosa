@@ -3252,6 +3252,12 @@ impl MockStoreBuilder {
         self
     }
 
+    pub fn with_add_slices_to_motif_at_least_once(mut self)->Self {
+        self.store.expect_add_slices_to_motif().times(1..).return_const(Ok(()));
+
+        self
+    }
+
     pub fn with_list_motifs<R:Into<HashMap<RunId, Result<Vec<usize>, ThoosaError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_motifs().returning(
