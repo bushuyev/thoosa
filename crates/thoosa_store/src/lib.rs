@@ -366,6 +366,12 @@ mock! {
             &self,
             group_descr: &str,
         ) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError>;
+
+        fn list_resources_not_in_group(
+            &self,
+            group_descr: &str,
+        ) -> Result<Vec<Resource>, ThoosaError>;
+
     }
 }
 
@@ -593,6 +599,39 @@ impl ResourceStore for SqlStore {
 
         Ok(r)
     }
+
+    fn list_resources_not_in_group(
+        &self,
+        group_descr: &str,
+    ) -> Result<Vec<Resource>, ThoosaError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        let group_sets = {
+            let mut stmt = t.prepare("SELECT r.id, r.import_id, r.key, r.length FROM resources AS r WHERE NOT EXISTS ( SELECT 1 FROM resource_resources_set AS rrs JOIN resource_set        AS rs  ON rs.id = rrs.set_id JOIN resource_set_group  AS g   ON g.id = rs.group_id WHERE rrs.resource_id = r.id AND g.descr = ? )")?;
+
+            let vec = stmt
+                .query_map([group_descr], |row| {
+                    //TODO move group_slices out, not for store
+                    Ok(Resource::new(
+                        row.get::<usize, u32>(0)?,
+                        row.get::<usize, u32>(1)?,
+                        row.get::<usize, String>(2)?,
+                        row.get::<usize, u32>(3)?
+                    ))
+                })?
+                .map(|v| v.unwrap())
+                .collect();
+
+            vec
+        };
+
+        t.commit()?;
+
+        Ok(group_sets)
+
+    }
+
 }
 
 //TODO move out all prepare stmts
@@ -1588,8 +1627,7 @@ impl Store for SqlStore {
         let channel_slices = {
             let mut stmt = t.prepare(
                 &[
-                    "SELECT m.channel_id, m.run_id, \
-                    r.id,  r.import_id, r.key, s.slice_idx \
+                    "SELECT m.channel_id, m.run_id, r.id,  r.import_id, r.key, s.slice_idx \
                     FROM motifs m \
                     LEFT JOIN slices s on s.motif_id=m.id \
                     LEFT JOIN resources r on s.resource_id=r.id \
@@ -2982,6 +3020,11 @@ mod store_tests {
 
         assert_eq!(7, channel);
         assert_eq!(find_motifs_run_id, run_id_);
+
+
+        let resources = store.read().list_resources_not_in_group("pure group 10");
+
+        debug!("resources={resources:?}");
         //
         // // let (_channel, _run_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_id, channel as usize)))?;
         // //

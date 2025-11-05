@@ -173,16 +173,20 @@ where
                     .collect(),
             };
 
-            raw_tensor.with_selected_data(device_idx, selector, |tt| {
-                trace!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t_ref());
-                if tt.size() == &[0] {
-                    warn!("MotifLoader::run/with_data:  resource_id={resource_id}  got empty motif for motif_id={motif_id}");
-                } else {
-                    tmp_cache.insert(tt);
-                }
+            if !selector.ranges.is_empty() {
+                raw_tensor.with_selected_data(device_idx, selector, |tt| {
+                    trace!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t_ref());
+                    if tt.size() == &[0] {
+                        warn!("MotifLoader::run/with_data:  resource_id={resource_id}  got empty motif for motif_id={motif_id}");
+                    } else {
+                        tmp_cache.insert(tt);
+                    }
 
-                Ok(())
-            }).await?;
+                    Ok(())
+                }).await?;
+            } else {
+                warn!("Empty selector for resource_id={resource_id}  got empty motif for motif_id={motif_id}");
+            }
 
         }
 
