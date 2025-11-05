@@ -319,17 +319,21 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
         let batched_motifs_output = Arc::clone(&self.batched_motifs_output);
         // let range = selector.start.dim_0() as usize..selector.end.dim_0() as usize;
 
+        // self.batched_motifs_output.
+        // let x = self.select(selector);
+
         with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
             |
              batch_v:&[&ThoTensor2<ChannelsData2, SimpleId>],
              batched_motifs_output:&BatchedMotifsOutput
             |{
-
-                do_run(&ClcResourcesMotifsDistInput::new(
-                    &batch_v[..],//TODO select [selector] slice from t_1_batch
+                let inpt = ClcResourcesMotifsDistInput::new(
+                    &batch_v,//TODO select [selector] slice from t_1_batch
                     self.resource_ids.clone(),
                     batched_motifs_output,
-                ))
+                );
+
+                do_run(&inpt)
 
         })
     }

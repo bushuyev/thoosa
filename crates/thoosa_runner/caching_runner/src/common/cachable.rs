@@ -798,8 +798,7 @@ impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
-        let read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> =
-            self.cached_data[to_device_idx].read().await;
+        let read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> = self.cached_data[to_device_idx].read().await;
 
         if read_guard.is_some() {
             let base: &Self::O<'_> = read_guard
@@ -817,8 +816,7 @@ impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap
                 continue;
             }
 
-            let source_read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> =
-                op.read().await;
+            let source_read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> = op.read().await;
 
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t: Self::O<'_> = src.subview(selector.clone())?;
