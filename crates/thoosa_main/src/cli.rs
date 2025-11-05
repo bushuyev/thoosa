@@ -411,7 +411,7 @@ where
                         select_motifs_args.find_motifs_run_ids.clone()
                     ))
                 },
-                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
+                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "select motifs"))),
             ).await?;
 
             // let run_ids = run_all_grid_step(

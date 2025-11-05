@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
@@ -15,7 +16,7 @@ use tch::kind::FLOAT_CUDA;
 use tokio::io::AsyncWriteExt;
 use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
-use caching_runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
+use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -35,7 +36,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{Adjustable, DataId, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, DataId, MonoMetrics, SimpleId, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use torch_runner::data::ThoTensor2;
@@ -45,7 +46,7 @@ use crate::tasks::batched_moitfs_loader::{BatchedMotifsInput, BatchedMotifsLoade
 use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
+use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::run_ctx_2::{MotifsCtx, RunCtx2};
 use crate::tasks::tensor_loader::RawTensorLoader;
@@ -53,7 +54,7 @@ use crate::tasks::resources_motifs_clc_dist::{ClcRresourcesMotifsDist, ClcResour
 
 pub use crate::tasks::resources_motifs_clc_dist::{fold_dists, fold_mask};
 
-#[derive(Debug)]
+
 pub struct SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
@@ -61,6 +62,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
 
+    id:SimpleId,
     store: Arc<RwLock<Box<dyn Store>>>,
     ws:Arc<RwLock<Box<dyn Workspace>>>,
     loader:Arc<L>,
@@ -70,7 +72,66 @@ where
     run_configs:Vec<SelectMotifsRunConfig>,
     find_motifs_run_ids:Vec<RunId>,
     load_and_clc_avg_dist:Arc<LoadMotifAndClcDistanceStage<ML, AverageEuclideanDistanceStage<C>, C>>,
-    clc_resources_motifs_dist:Arc<ClcRresourcesMotifsDist<C>>
+    clc_resources_motifs_dist:Arc<ClcRresourcesMotifsDist<C>>,
+    output_builder: Box<dyn Fn(<Self as WithId>::ID) -> Box<dyn OutputBuilder<O = ClcRresourcesMotifsDistOutput>> + Send + Sync>,
+}
+
+impl <L, ML, C> Debug for SelectMotifsStage<L, ML, C>
+where
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    C: RunCtx + MotifsCtx + Adjustable + 'static {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SelectMotifsStage")
+            .field("id", self.id())
+            .field("run_configs", &self.run_configs)
+            .field("find_motifs_run_ids", &self.find_motifs_run_ids)
+            .finish()
+    }
+}
+
+impl  <L, ML, C> WithId for SelectMotifsStage<L, ML, C>
+where
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    C: RunCtx + MotifsCtx + Adjustable + 'static
+{
+    type ID = SimpleId;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+#[derive(Debug)]
+struct SelectMotifsSavableResultBuilder {
+    id:SimpleId,
+    output:Vec<ClcRresourcesMotifsDistOutput>
+}
+
+impl SelectMotifsSavableResultBuilder {
+    pub fn new(id:SimpleId) -> Self {
+        Self {
+            id,
+            output: vec![],
+        }
+    }
+}
+impl OutputBuilder for SelectMotifsSavableResultBuilder {
+    type O = ClcRresourcesMotifsDistOutput;
+
+    fn add_partial_output(&mut self, o: Self::O) {
+        debug!("SelectMotifsSavableResultBuilder::add_partial_output: o={o:?}");
+       self.output.push(o);
+    }
+
+    fn build(self: Box<Self>) -> Self::O {
+        ClcRresourcesMotifsDistOutput::new(
+            self.output[0].select_motifs_run_config_id.clone(),
+            vec![],
+            self.output[0].resources_iter.clone()
+        )
+    }
 }
 
 impl <L, ML, C> SelectMotifsStage<L, ML, C>
@@ -96,6 +157,7 @@ where
         let batched_motifs_loader = Arc::new(BatchedMotifsLoader::new(Arc::clone(ws), Arc::clone(&motif_loader), Arc::clone(&load_and_clc_avg_dist), Arc::clone(store)));
         let clc_resources_motifs_dist = Arc::new(ClcRresourcesMotifsDist::<C>::new(ws.read().channels() as usize));
         Self {
+            id: "SelectMotifsStage".into(),
             store: Arc::clone(store),
             ws: Arc::clone(ws),
             loader,
@@ -106,6 +168,7 @@ where
             load_and_clc_avg_dist,
             clc_resources_motifs_dist,
             pd: Default::default(),
+            output_builder: Box::new(|id| Box::new(SelectMotifsSavableResultBuilder::new(id))),
         }
     }
 
@@ -180,7 +243,7 @@ where
 
         let mut t_1_batch: Vec<_> = vec![];
         let mut t_1_batch_resources: Vec<_> = vec![];
-        let mut t_1_batch_len = 0;
+        let mut t_1_batch_dim_0_size = 0;
 
         let mut skip_0_i = 0;
 
@@ -189,21 +252,22 @@ where
 
 
         for (i_0, resource_0) in labels_resources.iter().flat_map(|label_resources|label_resources.1.iter()).enumerate() {
-            info!("on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
+            debug!("SelectMotifsStage::run: on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
 
             let t_0 = Arc::clone(&self.loader)
-                .run(Arc::new(DevicesWrap::wrap_cpu(resource_0.clone())), Arc::clone(&ctx))
+                .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_0.clone())), Arc::clone(&ctx))
                 .await?;
 
-            t_1_batch_len += t_0.size().dim_1();
+            t_1_batch_dim_0_size += t_0.size().dim_1();
             t_1_batch.push(t_0);
             t_1_batch_resources.push(resource_0);
 
-            if t_1_batch_len < max_batch && i_0 < num_resources -1 {
+            if t_1_batch_dim_0_size < max_batch && i_0 < num_resources -1 {
                 continue;
             }
+            info!("running batch {} length", t_1_batch.len());
 
-            info!("on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
+            let t_1_batch_len = t_1_batch.len();
 
             let r = futures::stream::iter(batched_motifs.clone())
                 .map(|batched_motifs_output_wrap| {
@@ -221,20 +285,21 @@ where
                         .collect::<Vec<_>>();
 
                     let clc_resources_input = Arc::new(ClcResourcesMotifsDistInputDeviceWrapper::new(
-                        "ClcResourcesMotifsDistInputDeviceWrapper".into(),
+                        format!("ClcResourcesMotifsDistInputDeviceWrapper: resource_ids={resource_ids:?}").into(),
                         t_1_batch,
                         resource_ids,
                         batched_motifs_output_wrap
                     ));
 
                     debug!("SelectMotifsStage::run: clc_resources_input={clc_resources_input:?}");
-
+                    let output_builder = (self.output_builder)(SimpleId("zzz"));
                     async move {
 
                         let out_id = Arc::new(SimpleId("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
 
 
                         let required_ids = HashMap::new();
+
                         let ClcRresourcesMotifsDistOutput {
                                 select_motifs_run_config_id: find_motifs_run_config_id,
                                 channel_masks_dists_ids,
@@ -242,15 +307,17 @@ where
                                 ..
                         } = OOMHandler::new(
                             vec![
-                                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TEN, move |n| GlobalCtx::global().acquire_many(device_idx, n, out_id.clone())))),
+                                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, out_id.clone())))),
                                 Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                                Adjusters::Input(Box::new(SplitsAdjuster::<ClcResourcesMotifsDistInputDeviceWrapper, std::ops::Range<MonoMetrics<0, 1>>>::new(1.into()))),
                             ], None)
                             .run(
                                 &clc_stage,
                                 Arc::clone(&clc_resources_input),
                                 ctx_clone,
                                 Contexts::new(
-                                    NoopInputContext(None),
+                                    // NoopInputContext(None),
+                                    SplitsAdjusterContextImpl::new(t_1_batch_len.into(), output_builder),
                                     NoopRunnableContext {},
                                     PermitsAndDumpToCpuAdjustableContex::new(
                                         PermitsAdjustContextImpl::new(ctx_name),
@@ -301,6 +368,10 @@ where
                 .await?;
 
 
+
+            t_1_batch_dim_0_size = 0;;
+            t_1_batch.clear();
+            t_1_batch_resources.clear();
         }
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(0, self.run_configs[0].clone(), vec![]))))

@@ -191,7 +191,10 @@ where
         };
         let num_devices = GlobalCtx::global().device_count();
 
-        let dist = OOMHandler::new(vec![Adjusters::Input(Box::new(SplitsAdjuster::<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, MotifSlicesSelector>::new([2, -1].into())))], None)
+        let dist = OOMHandler::new(
+            vec![
+                Adjusters::Input(Box::new(SplitsAdjuster::<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, MotifSlicesSelector>::new([2, -1].into())))
+            ], None)
             .run(
                 &self.clc_dist,
                 Arc::clone(&motif),
@@ -233,7 +236,7 @@ impl Select<MotifSlicesSelector> for ThoTensor2<MotifSlices, DataId> {
 }
 
 #[derive(Debug)]
-struct DistOutputBuilder {
+pub struct DistOutputBuilder {
     id: SimpleId,
     values: Vec<f32>,
 }
