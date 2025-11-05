@@ -307,6 +307,9 @@ impl Metrics for usize {
 
 }
 
+//for resources batch vec in ClcResourcesMotifsDistInputDeviceWrapper
+impl Metrics for Range<i64> {}
+
 ///For adjusting one of tensor's dimensions
 ///Idx - dimension to split, Size - number of dimensions
 #[derive(Debug, Clone)]
@@ -351,7 +354,7 @@ impl <const Idx:usize, const Size:usize> Default for MonoMetrics<Idx, Size> {
 
 impl <const Idx:usize, const Size:usize> MonoMetrics<Idx, Size> {
 
-    //TODO remove
+    //TODO remove - replace with 'effective dim Idx and 'others'
     pub fn dim_0(&self) -> i64 {
         self.dims[0]
     }
@@ -469,6 +472,14 @@ impl <const Idx:usize, const Size:usize> From<&[i64; 2]> for MonoMetrics<Idx, Si
         me.dims[0] = value[0];
         me.dims[1] = value[1];
         me
+    }
+}
+
+impl From<usize> for MonoMetrics<0, 1> {
+    fn from(value: usize) -> Self {
+        MonoMetrics {
+            dims: [value as i64],
+        }
     }
 }
 

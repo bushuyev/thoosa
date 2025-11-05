@@ -10,7 +10,7 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics};
 
 #[derive(Debug)]
-pub struct SplitsAdjuster<A, RA>
+pub struct SplitsAdjuster<A, RA>//A - target adjustable, RA its range
 where
     A: Data + Adjustable,
     <A as Data>::Metrics: DivAssign<i64>,
@@ -40,7 +40,7 @@ impl <AC, AJ, RA:Debug> Adjuster<AC> for SplitsAdjuster<AJ, RA>
 where
     AC:SplitsAdjusterContext<Metrics = <AJ as Data>::Metrics>,
     AJ: Data + Adjustable,
-    <AJ as Data>::Metrics: DivAssign<i64>,
+    <AJ as Data>::Metrics: DivAssign<i64>,//TODO replace i64 with num_traits type
     <AJ as Data>::Metrics: PartialOrd<<AJ as Data>::Metrics>,
     for<'a, 'b> &'a <AJ as Data>::Metrics: Add<&'b <AJ as Data>::Metrics, Output = <AJ as Data>::Metrics>,
     RA:Adjustable + From<std::ops::Range<AJ::Metrics>>
@@ -68,9 +68,13 @@ where
         debug!("SplitsAdjuster::degrade: 0. adjust_context={adjust_context:?}");
 
         (*adjust_context.split_len_mut()) /= 2;
-        debug!("SplitsAdjuster::degrade: 1. adjust_context={adjust_context:?}");
 
-        adjust_context.split_len() > &self.min_split_len
+
+        let can_degrade = adjust_context.split_len() > &self.min_split_len;
+
+        debug!("SplitsAdjuster::degrade: 1. adjust_context={adjust_context:?} self.min_split_len={:?} can_degrade={can_degrade}", self.min_split_len);
+
+        can_degrade
     }
 }
 

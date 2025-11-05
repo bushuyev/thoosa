@@ -1,6 +1,8 @@
+use std::cmp::min;
 use std::collections::HashSet;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use std::ops::{DivAssign, Range};
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
@@ -14,10 +16,10 @@ use caching_runner::common::cachable::{DevicesWrap, WithDataRef};
 use thoosa_common::applicables::with_cuda_stream;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
-use thoosa_shared::applicables_runner::Input;
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::traits::{Adjustable, Data, DataId, Select, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
@@ -28,13 +30,21 @@ use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::slices_iter::SlicesIter;
 use torch_runner::data::ThoTensor2;
 
-#[derive(Debug)]
 pub struct ClcRresourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
     num_channels: usize,
     _ctx: PhantomData<C>,
+}
+
+impl <C> Debug for ClcRresourcesMotifsDist<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClcRresourcesMotifsDist").finish()
+    }
 }
 
 impl <C> Adjustable for ClcRresourcesMotifsDist<C>
@@ -90,7 +100,7 @@ where
         );
 
         let (batch_1_t, batch_1_sizes) = unfold_and_cat(input.batch, &unfold_params)?;
-        debug!("ClcRresourcesMotifsDist::do_run: batch_1_t.size()={:?} motifs.size={:?} avg_dists.size={:?}",batch_1_t.size(),input.batched_motifs_output.motifs.data().t_ref().size(),input.batched_motifs_output.motifs_avg_dists.t_ref().size());
+        debug!("ClcResourcesMotifsDist::do_run: batch_1_t.size={:?} motifs.size={:?} avg_dists.size={:?} input.resource_ids={:?}",batch_1_t.size(),input.batched_motifs_output.motifs.data().t_ref().size(), input.batched_motifs_output.motifs_avg_dists.t_ref().size(), input.resource_ids);
 
         let resource_ids_sizes = input
             .resource_ids
@@ -194,13 +204,71 @@ where
 }
 
 
-#[derive(Debug, DummyData)]
-#[dummy_data(no_clone)]
+#[derive(Debug)]
 pub struct ClcResourcesMotifsDistInputDeviceWrapper {
     id: SimpleId,
     batch: Vec<Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>,
     resource_ids: Vec<ResourceId>,
     batched_motifs_output: Arc<DevicesWrap<BatchedMotifsOutput>>,
+}
+
+impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapper {
+
+}
+
+
+//it's i64 because SplitsAdjuster is used for building tensor select and has to require DivAssing<i64> for Data::Metrics
+impl Select<std::ops::Range<MonoMetrics<0, 1>>> for ClcResourcesMotifsDistInputDeviceWrapper {
+    type Output = ClcResourcesMotifsDistInputDeviceWrapper;
+
+    fn subview(&self, selector: std::ops::Range<MonoMetrics<0, 1>>) -> Result<Self::Output, ThoosaError> {
+        debug!("ClcResourcesMotifsDistInputDeviceWrapper::subview: selector={selector:?}");
+
+        let range = selector.start.dim_0() as usize..selector.end.dim_0() as usize;
+
+        Ok(ClcResourcesMotifsDistInputDeviceWrapper {
+            id:self.id.clone(),
+            batch: self.batch[range.clone()].to_vec(),
+            resource_ids: self.resource_ids[range].to_vec(),
+            batched_motifs_output: Arc::clone(&self.batched_motifs_output)
+        })
+    }
+}
+
+#[async_trait]
+impl CopyToDevice for ClcResourcesMotifsDistInputDeviceWrapper {
+    async fn copy_to_device(&self, dst_device: usize) -> Self {
+        let batch = futures::stream::iter(&self.batch)
+            .map(|b|{
+                Arc::clone(b).copy_to_device(dst_device)
+            })
+            .buffer_unordered(10)
+            .collect::<Vec<_>>()
+            .await;
+
+        let batched_motifs_output = Arc::clone(&self.batched_motifs_output).copy_to_device(dst_device).await;
+        ClcResourcesMotifsDistInputDeviceWrapper {
+            id: self.id.clone(),
+            batch,
+            resource_ids: self.resource_ids.clone(),
+            batched_motifs_output,
+        }
+    }
+
+}
+
+//implemented so that ClcResourcesMotifsDistInputDeviceWrapper's resources batch can be adjusted.
+// Batched_motifs_output can't be adjusted since moitfs' ranges do not match in different channels
+impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
+    type Metrics = MonoMetrics<0, 1>;
+
+    fn size(&self) -> Self::Metrics {
+        self.batch.len().into()
+    }
+
+    fn device(&self) -> usize {
+        0 //self.batched_motifs_output.device()
+    }
 }
 
 impl ClcResourcesMotifsDistInputDeviceWrapper {
@@ -249,6 +317,8 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     {
         let t_1_batch= self.batch.clone();
         let batched_motifs_output = Arc::clone(&self.batched_motifs_output);
+        // let range = selector.start.dim_0() as usize..selector.end.dim_0() as usize;
+
         with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
             |
              batch_v:&[&ThoTensor2<ChannelsData2, SimpleId>],
@@ -300,14 +370,14 @@ impl <'a> CopyToDevice for ClcResourcesMotifsDistInput<'a> {
 }
 
 impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
-    type Metrics = ();
+    type Metrics = MonoMetrics<0, 1>;
 
     fn size(&self) -> Self::Metrics {
-        ()
+        self.batch.len().into()
     }
 
     fn device(&self) -> usize {
-        0
+        self.batch[0].device()
     }
 
     fn mem_size(&self) -> u64 {
@@ -322,10 +392,12 @@ impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
     }
 }
 
-impl <'a> Select<()> for ClcResourcesMotifsDistInput<'a> {
+impl <'a> Select<std::ops::Range<MonoMetrics<0, 1>>> for ClcResourcesMotifsDistInput<'a> {
     type Output =  ClcResourcesMotifsDistInput<'a>;
 
-    fn subview(&self, selector: ()) -> Result<Self::Output, ThoosaError> {
+    fn subview(&self, selector: std::ops::Range<MonoMetrics<0, 1>>) -> Result<Self::Output, ThoosaError> {
+        debug!("ClcResourcesMotifsDistInput::subview: selector={selector:?}");
+
         unimplemented!()
     }
 }
@@ -349,7 +421,7 @@ pub struct ClcRresourcesMotifsDistOutput {
 }
 
 impl ClcRresourcesMotifsDistOutput {
-    fn new(
+    pub fn new(
         select_motifs_run_config_id: RunId,
         channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<DataId>)>>,
         resources_iter: SlicesIter,

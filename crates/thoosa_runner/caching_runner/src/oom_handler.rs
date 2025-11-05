@@ -23,6 +23,7 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithI
 use thoosa_shared::{MyError, ThoosaError};
 use tracing::instrument;
 use thoosa_common::cuda_utils::cuda_mem;
+use thoosa_common::utils::os_thread_id;
 
 #[async_trait]
 pub trait Adjuster<AC>: Debug + Send + Sync {
@@ -152,7 +153,7 @@ where
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
-    <R as Stage>::In<'a>: Select<S>,
+    // <R as Stage>::In<'a>: Select<S>,
     S: Adjustable + Debug + Default + Clone
 {
     Input(Box<dyn Adjuster<IC, A =S> + 'a>),
@@ -165,11 +166,11 @@ where
     R: Stage + 'a,
     IC: InputContext<'a, R>,
     R: Adjustable,
-    <R as Stage>::In<'a>: Data + Debug,
+    <R as Stage>::In<'a>: Data + Select<S> + Debug,
     RC: RunnableContext,
     RCC: RunCtxContext,
     <R as Stage>::Ctx: Adjustable,
-    <R as Stage>::In<'a>: Select<S>,
+    // <R as Stage>::In<'a>: Select<S>,
     S: Adjustable + Debug + Default + Clone
 {
     fn degrade(&self, adjust_context: &mut Contexts<'a, R, IC, RC, RCC>) -> bool {
@@ -277,7 +278,7 @@ where
             let guard = run_context.read();
             (guard.device_idx(), guard.name())
         };
-        debug!("OOMHandler::run: ctx_name={ctx_name} input.id={:?}",input.id());
+        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} input.id={:?}", os_thread_id(), input.id());
 
         // Identify this task by its output id for Arbiter fairness.
         let out_key = {
@@ -292,7 +293,7 @@ where
             run_context.write().add_permit(result);
         }
 
-        debug!("OOMHandler::run: ctx_name={ctx_name}  acquired_permits={:?}",run_context.read().acquired_permits());
+        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}   acquired_permits={:?}", os_thread_id(), run_context.read().acquired_permits());
 
         let mut i = 0;
 
@@ -312,18 +313,20 @@ where
             Err(te) => {
                 match te.what() {
                     MyError::OutOfMemory => {
-                        debug!("OOMHandler::run: ctx_name={ctx_name} oom 0");
+                        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  oom 0", os_thread_id());
 
                         let mut task_adjusted = None::<Arc<R>>;
 
                         for adjuster in &self.adjusters {
+                            debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  starting adjuster={adjuster:?}", os_thread_id());
+
                             loop {
                                 i += 1;
                                 if i > 10000 {
                                     //TODO
                                     panic!("OOMHandler: ctx_name={ctx_name}  i={i}");
                                 }
-                                debug!("OOMHandler::run: ctx_name={ctx_name} oom i={i}");
+                                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} oom i={i}", os_thread_id());
 
                                 match adjuster {
                                     Adjusters::Input(input_ad) => {
@@ -372,11 +375,10 @@ where
                                     run_context.write().add_permit(result);
                                 }
 
-                                debug!("OOMHandler::run: ctx_name={ctx_name} 1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",run_context.read().acquired_permits());
+                                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",os_thread_id(), run_context.read().acquired_permits());
 
-                                let run_result = if let Some(selector) =
-                                    input_select_adjusted.as_ref()
-                                {
+                                let run_result = if let Some(selector) = input_select_adjusted.as_ref() {
+
                                     panic_to_err_async!(input.with_selected_data_ref(device_idx, selector.clone(), None, |data| {
                                         Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
                                     }).await)
@@ -388,16 +390,13 @@ where
 
                                 };
 
-                                match run_result
-                                {
+                                match run_result {
                                     Ok(v) => {
                                         contexts.input.add_partial_output(v);
 
                                         let all_done = contexts.input.all_done();
 
-                                        debug!(
-                                            "OOMHandler::run: ctx_name={ctx_name}  ok adjust_context={contexts:?} all_done={all_done}"
-                                        );
+                                        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}", os_thread_id());
 
                                         if all_done {
                                             run_context.write().drop_permits(DropIf::Always);
@@ -419,7 +418,7 @@ where
 
                                         match te.what() {
                                             MyError::OutOfMemory => {
-                                                debug!("OOMHandler::run: OutOfMemory ctx_name={ctx_name}  adjust_context={contexts:?}");
+                                                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                 if !adjuster.degrade(&mut contexts) {
                                                     match adjuster {
@@ -438,7 +437,7 @@ where
                                                 }
                                             }
                                             e => {
-                                                debug!("OOMHandler::run: err ctx_name={ctx_name} other error 1");
+                                                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} other error 1", os_thread_id());
                                                 return Err(te);
                                             }
                                         }
@@ -448,13 +447,13 @@ where
                         }
                     }
                     _ => {
-                        debug!("OOMHandler::run: ctx_name={ctx_name} other error 2");
+                        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  other error 2", os_thread_id());
                         return Err(te);
                     }
                 }
 
-                debug!("all failed: task={task:?} input.mem_size={:?} cuda_mem: {:?}", input.mem_size(), cuda_mem());
-                trace!("all failed: task={task:?} input={input:?}");
+                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  all failed: input.mem_size={:?} cuda_mem: {:?}", os_thread_id(), input.mem_size(), cuda_mem());
+                trace!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} all failed: task={task:?} input={input:?}", os_thread_id());
 
                 Err(MyError::SomethingElse(format!("all failed: task={task:?}")).into())
             }

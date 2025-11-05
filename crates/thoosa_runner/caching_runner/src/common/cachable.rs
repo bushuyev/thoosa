@@ -529,7 +529,8 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     ) -> Result<(), ThoosaError> {
         //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
         //TODO add GlobalCtx::purge_lock just in case?
-        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",self.id, self.cached_data);
+        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx}",self.id);
+        trace!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx}  self.cached_data={:?}",self.id, self.cached_data);
 
         if to_device_idx != 0 {
             *self.on_cpu_since.write() = None;
