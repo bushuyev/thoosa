@@ -913,6 +913,7 @@ pub enum ResourceType {
     List(Vec<String>),
     Set(String),
     Group(String),
+    NotInGroup(String),
 }
 
 pub fn parse_resources(s: &str) -> Result<ResourceType, Box<dyn Error + Send + Sync + 'static>> {
@@ -926,6 +927,8 @@ pub fn parse_resources(s: &str) -> Result<ResourceType, Box<dyn Error + Send + S
         Ok(ResourceType::Set(s[value_pos..].to_string()))
     } else if s.starts_with("group") {
         Ok(ResourceType::Group(s[value_pos..].to_string()))
+    } else if s.starts_with("not_group") {
+        Ok(ResourceType::NotInGroup(s[value_pos..].to_string()))
     } else {
         panic!("unknown resource type {s}, expecting list, set or group")
     }

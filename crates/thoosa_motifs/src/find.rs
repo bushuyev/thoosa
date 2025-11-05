@@ -2171,8 +2171,8 @@ pub struct SelectMotifsArgs {
 }
 
 impl SelectMotifsArgs {
-    pub fn resource_config(&self) -> Labeled {
-        Labeled::new(self.resources_group.clone())
+    pub fn resource_config(&self) -> Simple {
+        Simple::new(ResourceType::NotInGroup(self.resources_group.clone()))
     }
 }
 
