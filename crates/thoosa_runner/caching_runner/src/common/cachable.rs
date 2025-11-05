@@ -770,8 +770,8 @@ pub trait WithDataRef: WithId + Debug {
         do_run: F,
     ) -> Result<R, ThoosaError>
     where
-        S: Clone,
-         Self::O<'o>: Select<S, Output=Self::O<'o>>,
+        S: Clone + Debug + 'static,
+        Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
 
 
@@ -794,7 +794,7 @@ impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap
 
     async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        S: Clone,
+        S: Clone + Debug+ 'static,
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
@@ -850,10 +850,6 @@ impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap
         self.mem_size
     }
 }
-
-
-
-
 
 #[cfg(test)]
 mod tests {

@@ -243,7 +243,7 @@ where
 
         let mut t_1_batch: Vec<_> = vec![];
         let mut t_1_batch_resources: Vec<_> = vec![];
-        let mut t_1_batch_len = 0;
+        let mut t_1_batch_dim_0_size = 0;
 
         let mut skip_0_i = 0;
 
@@ -252,20 +252,22 @@ where
 
 
         for (i_0, resource_0) in labels_resources.iter().flat_map(|label_resources|label_resources.1.iter()).enumerate() {
-            info!("on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
+            debug!("SelectMotifsStage::run: on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
 
             let t_0 = Arc::clone(&self.loader)
                 .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_0.clone())), Arc::clone(&ctx))
                 .await?;
 
-            t_1_batch_len += t_0.size().dim_1();
+            t_1_batch_dim_0_size += t_0.size().dim_1();
             t_1_batch.push(t_0);
             t_1_batch_resources.push(resource_0);
 
-            if t_1_batch_len < max_batch && i_0 < num_resources -1 {
+            if t_1_batch_dim_0_size < max_batch && i_0 < num_resources -1 {
                 continue;
             }
+            info!("running batch {} length", t_1_batch.len());
 
+            let t_1_batch_len = t_1_batch.len();
 
             let r = futures::stream::iter(batched_motifs.clone())
                 .map(|batched_motifs_output_wrap| {
@@ -305,9 +307,9 @@ where
                                 ..
                         } = OOMHandler::new(
                             vec![
-                                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TEN, move |n| GlobalCtx::global().acquire_many(device_idx, n, out_id.clone())))),
+                                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, out_id.clone())))),
                                 Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                                Adjusters::Input(Box::new(SplitsAdjuster::<ClcResourcesMotifsDistInputDeviceWrapper, std::ops::Range<MonoMetrics<0, 1>>>::new(1000.into()))),
+                                Adjusters::Input(Box::new(SplitsAdjuster::<ClcResourcesMotifsDistInputDeviceWrapper, std::ops::Range<MonoMetrics<0, 1>>>::new(1.into()))),
                             ], None)
                             .run(
                                 &clc_stage,
@@ -315,7 +317,7 @@ where
                                 ctx_clone,
                                 Contexts::new(
                                     // NoopInputContext(None),
-                                    SplitsAdjusterContextImpl::new((t_1_batch_len as usize).into(), output_builder),
+                                    SplitsAdjusterContextImpl::new(t_1_batch_len.into(), output_builder),
                                     NoopRunnableContext {},
                                     PermitsAndDumpToCpuAdjustableContex::new(
                                         PermitsAdjustContextImpl::new(ctx_name),
@@ -366,6 +368,10 @@ where
                 .await?;
 
 
+
+            t_1_batch_dim_0_size = 0;;
+            t_1_batch.clear();
+            t_1_batch_resources.clear();
         }
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(0, self.run_configs[0].clone(), vec![]))))

@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::cmp::min;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
@@ -311,16 +312,21 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
 
     async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        S: Clone,
+        S: Clone + Debug + 'static,
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
-        let t_1_batch= self.batch.clone();
-        let batched_motifs_output = Arc::clone(&self.batched_motifs_output);
-        // let range = selector.start.dim_0() as usize..selector.end.dim_0() as usize;
 
-        // self.batched_motifs_output.
-        // let x = self.select(selector);
+        debug!("ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref: selector={selector:?}");
+
+        //FIXME
+        let (t_1_batch, batched_motifs_output) = if let Some(selector) = (&selector as &dyn Any).downcast_ref::<std::ops::Range<MonoMetrics<0, 1>>>() {
+            let s = self.subview(selector.clone())?;
+            (s.batch.clone(), s.batched_motifs_output)
+        } else {
+            (self.batch.clone(), self.batched_motifs_output.clone())
+        };
+      
 
         with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
             |
