@@ -33,6 +33,7 @@ pub trait ResourceStore {
         &self,
         group_descr: &str,
     ) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError>;
+
 }
 
 #[derive(Debug, Clone, DummyData)]

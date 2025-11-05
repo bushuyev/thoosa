@@ -423,8 +423,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         <O as Select<S>>::Output: Data + WithId + Send + Sync + CopyToDevice,
         S: Clone,
     {
-        let read_guard: RwLockReadGuard<'_, Option<O>> =
-            self.cached_data[to_device_idx].read().await;
+        let read_guard: RwLockReadGuard<'_, Option<O>> = self.cached_data[to_device_idx].read().await;
 
         if read_guard.is_some() {
             let data = read_guard
@@ -442,15 +441,11 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
                 continue;
             }
 
-            let source_read_guard: RwLockReadGuard<'_, Option<O>> =
-                op.read().await;
+            let source_read_guard: RwLockReadGuard<'_, Option<O>> = op.read().await;
 
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t = src.subview(selector.clone())?;
-                debug!(
-                    "DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",
-                    sub_t.size()
-                );
+                debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
                 let data = sub_t.copy_to_device(to_device_idx);
 
                 return do_run(data.await);

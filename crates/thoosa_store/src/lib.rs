@@ -1588,8 +1588,7 @@ impl Store for SqlStore {
         let channel_slices = {
             let mut stmt = t.prepare(
                 &[
-                    "SELECT m.channel_id, m.run_id, \
-                    r.id,  r.import_id, r.key, s.slice_idx \
+                    "SELECT m.channel_id, m.run_id, r.id,  r.import_id, r.key, s.slice_idx \
                     FROM motifs m \
                     LEFT JOIN slices s on s.motif_id=m.id \
                     LEFT JOIN resources r on s.resource_id=r.id \
