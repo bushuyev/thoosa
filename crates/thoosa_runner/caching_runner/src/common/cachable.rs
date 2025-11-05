@@ -529,7 +529,8 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     ) -> Result<(), ThoosaError> {
         //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
         //TODO add GlobalCtx::purge_lock just in case?
-        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",self.id, self.cached_data);
+        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx}",self.id);
+        trace!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx}  self.cached_data={:?}",self.id, self.cached_data);
 
         if to_device_idx != 0 {
             *self.on_cpu_since.write() = None;
@@ -769,8 +770,8 @@ pub trait WithDataRef: WithId + Debug {
         do_run: F,
     ) -> Result<R, ThoosaError>
     where
-        S: Clone,
-         Self::O<'o>: Select<S, Output=Self::O<'o>>,
+        S: Clone + Debug + 'static,
+        Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
 
 
@@ -793,12 +794,11 @@ impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap
 
     async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        S: Clone,
+        S: Clone + Debug+ 'static,
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
-        let read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> =
-            self.cached_data[to_device_idx].read().await;
+        let read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> = self.cached_data[to_device_idx].read().await;
 
         if read_guard.is_some() {
             let base: &Self::O<'_> = read_guard
@@ -816,8 +816,7 @@ impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap
                 continue;
             }
 
-            let source_read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> =
-                op.read().await;
+            let source_read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> = op.read().await;
 
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t: Self::O<'_> = src.subview(selector.clone())?;
@@ -851,10 +850,6 @@ impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap
         self.mem_size
     }
 }
-
-
-
-
 
 #[cfg(test)]
 mod tests {

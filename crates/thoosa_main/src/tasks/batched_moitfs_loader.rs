@@ -8,7 +8,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 use parking_lot::RwLock;
 use tch::Kind::Float;
-use tch::Tensor;
+use tch::{IndexOp, Tensor};
 use cached_derive::Cached;
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::{OutId, RunCtx};
@@ -239,7 +239,10 @@ where
                         "window is not same: find_motifs_run_config.window={} item.extra().window={}item.extra().window, motif_id={:?}", input.find_motifs_run_config.window, item.extra().window, item.data().id()
                     );
 
-                    acc[item.extra().channel as usize].push(item.data());
+                    if item.size().dim_0() < 1000 {
+
+                        acc[item.extra().channel as usize].push(item.data());
+                    }
                 acc
             });
 
