@@ -60,15 +60,14 @@ impl WithId for BatchedMotifsInput {
     }
 }
 
-
 #[derive(Debug)]
-pub struct BatchedMotifsOutput {
+pub struct StackedMotifsOutput {
     id:SimpleId,
     pub motifs: DataWithExtra<ThoTensor2<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Arc<SelectMotifsRunConfig>)>,
     pub motifs_avg_dists:ThoTensor2<ChannelsMotifsDists, SimpleId>
 }
 
-impl BatchedMotifsOutput {
+impl StackedMotifsOutput {
     pub fn new(id: SimpleId, motifs: DataWithExtra<ThoTensor2<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Arc<SelectMotifsRunConfig>)>, motifs_avg_dists: ThoTensor2<ChannelsMotifsDists, SimpleId>) -> Self {
         Self { id, motifs, motifs_avg_dists }
     }
@@ -77,9 +76,9 @@ impl BatchedMotifsOutput {
 }
 
 #[async_trait]
-impl CopyToDevice for BatchedMotifsOutput {
+impl CopyToDevice for StackedMotifsOutput {
     async fn copy_to_device(&self, dst_device: usize) -> Self {
-        BatchedMotifsOutput {
+        StackedMotifsOutput {
             id:self.id.clone(),
             motifs: self.motifs.copy_to_device(dst_device).await,
             motifs_avg_dists: self.motifs_avg_dists.copy_to_device(dst_device).await,
@@ -88,7 +87,7 @@ impl CopyToDevice for BatchedMotifsOutput {
     }
 }
 
-impl Data for BatchedMotifsOutput {
+impl Data for StackedMotifsOutput {
     type Metrics = MonoMetrics<1,3>;
 
     fn size(&self) -> Self::Metrics {
@@ -100,7 +99,7 @@ impl Data for BatchedMotifsOutput {
     }
 }
 
-impl WithId for BatchedMotifsOutput {
+impl WithId for StackedMotifsOutput {
     type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
@@ -108,7 +107,7 @@ impl WithId for BatchedMotifsOutput {
     }
 }
 
-impl Output for BatchedMotifsOutput {}
+impl Output for StackedMotifsOutput {}
 
 #[derive(Debug, Cached)]
 pub struct BatchedMotifsLoader<ML, C>
@@ -164,7 +163,7 @@ where
 {
     type Ctx = C;
     type In<'a> = BatchedMotifsInput;
-    type Out = BatchedMotifsOutput;
+    type Out = StackedMotifsOutput;
 }
 
 #[async_trait]
@@ -327,7 +326,7 @@ where
             trace!("SelectMotifsStage::run: channels_motifs_t=\n{channels_motifs_t}");
 
             let find_and_select_motifs_id = SimpleId(format!("{}_{}", input.find_motifs_run_config.id.expect("no id in find_motifs_run_config"), input.select_motifs_run_config.id.expect("no id in select_motifs_run_config")).leak());
-            Ok(Arc::new(DevicesWrap::wrap(BatchedMotifsOutput::new(
+            Ok(Arc::new(DevicesWrap::wrap(StackedMotifsOutput::new(
                 "".into(),
                 DataWithExtra::new(
                     ThoTensor2::new(

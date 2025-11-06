@@ -42,7 +42,7 @@ use thoosa_with_data::with_data;
 use torch_runner::data::ThoTensor2;
 use crate::cli::Commands::SelectMotifs;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
-use crate::tasks::batched_moitfs_loader::{BatchedMotifsInput, BatchedMotifsLoader, BatchedMotifsOutput};
+use crate::tasks::stacked_moitfs_loader::{BatchedMotifsInput, BatchedMotifsLoader, StackedMotifsOutput};
 use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;

@@ -2418,6 +2418,18 @@ impl Output for Box<TrainMotifsNetsRunConfigResult> {
     }
 }
 
+impl WithId for TrainMotifsNetsRunConfigResult {
+    type ID = RunId;
+
+    fn id(&self) -> &Self::ID {
+        self.run_config_values.id.as_ref().unwrap()
+    }
+}
+
+#[async_trait]
+impl Output for TrainMotifsNetsRunConfigResult {}
+
+
 impl SavableResult for TrainMotifsNetsRunConfigResult {
     fn value(&self) -> f32 {
         self.loss
