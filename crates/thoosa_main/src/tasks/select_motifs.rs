@@ -486,13 +486,16 @@ mod tests {
                 .with_list_motifs([
                     (find_motifs_run_id as RunId, Ok(channel_0_motifs_ids.clone()))
                 ])
-                .with_list_group_labeled_resources_sets([
-                    (resources_group, Ok(vec![
-                        ("Lable_0".to_string(), "resource_set_for_label_0".to_string()),
-                    ]))
-                ])
-                .with_list_resource_set_resources_by_descr([
-                    ("resource_set_for_label_0", Ok(vec![resource_a.clone()])),
+                // .with_list_group_labeled_resources_sets([
+                //     (resources_group, Ok(vec![
+                //         ("Lable_0".to_string(), "resource_set_for_label_0".to_string()),
+                //     ]))
+                // ])
+                // .with_list_resource_set_resources_by_descr([
+                //     ("resource_set_for_label_0", Ok(vec![resource_a.clone()])),
+                // ])
+                .with_list_resources_not_in_group([
+                    (resources_group, Ok(vec![resource_a.clone()])),
                 ])
                 .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))
                 .build()));
@@ -566,13 +569,16 @@ mod tests {
                 .with_list_motifs([
                     (find_motifs_run_id as RunId, Ok(channel_0_motifs_ids.clone()))
                 ])
-                .with_list_group_labeled_resources_sets([
-                    (resources_group, Ok(vec![
-                        ("Lable_0".to_string(), "resource_set_for_label_0".to_string()),
-                    ]))
-                ])
-                .with_list_resource_set_resources_by_descr([
-                    ("resource_set_for_label_0", Ok(vec![resource_a.clone(), resource_b.clone()])),
+                // .with_list_group_labeled_resources_sets([
+                //     (resources_group, Ok(vec![
+                //         ("Lable_0".to_string(), "resource_set_for_label_0".to_string()),
+                //     ]))
+                // ])
+                // .with_list_resource_set_resources_by_descr([
+                //     ("resource_set_for_label_0", Ok(vec![resource_a.clone(), resource_b.clone()])),
+                // ])
+                .with_list_resources_not_in_group([
+                    (resources_group, Ok(vec![resource_a.clone(), resource_b.clone()])),
                 ])
                 .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))
                 .build()));
@@ -648,13 +654,16 @@ mod tests {
                 .with_list_motifs([
                     (find_motifs_run_id as RunId, Ok(motifs_ids.clone()))
                 ])
-                .with_list_group_labeled_resources_sets([
-                    (resources_group, Ok(vec![
-                        ("Lable_0".to_string(), "resource_set_for_label_0".to_string()),
-                    ]))
-                ])
-                .with_list_resource_set_resources_by_descr([
-                    ("resource_set_for_label_0", Ok(vec![resource_a.clone()])),
+                // .with_list_group_labeled_resources_sets([
+                //     (resources_group, Ok(vec![
+                //         ("Lable_0".to_string(), "resource_set_for_label_0".to_string()),
+                //     ]))
+                // ])
+                // .with_list_resource_set_resources_by_descr([
+                //     ("resource_set_for_label_0", Ok(vec![resource_a.clone()])),
+                // ])
+                .with_list_resources_not_in_group([
+                    (resources_group, Ok(vec![resource_a.clone()])),
                 ])
                 .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &motifs_ids, &resources_channels_intervals))
                 .build()));
@@ -787,15 +796,8 @@ mod tests {
                         channel_1_motif_0 as usize
                     ]))
                 ])
-                .with_list_group_labeled_resources_sets([
-                    (resources_group, Ok(vec![
-                        ("Lable_0".to_string(), "resource_set_for_label_0".to_string()),
-                        ("Lable_1".to_string(), "resource_set_for_label_1".to_string())
-                    ]))
-                ])
-                .with_list_resource_set_resources_by_descr([
-                    ("resource_set_for_label_0", Ok(vec![resource_a.clone(), resource_b.clone()])),
-                    ("resource_set_for_label_1", Ok(vec![resource_c.clone()]))
+                .with_list_resources_not_in_group([
+                    (resources_group, Ok(vec![resource_a.clone(), resource_b.clone(), resource_c.clone()])),
                 ])
                 .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))
                 .build()));
