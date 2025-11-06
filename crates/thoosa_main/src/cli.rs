@@ -101,6 +101,7 @@ use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEucl
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
+use crate::tasks::train_motif_net::{TrainMotifNet, TrainMotifNetInput};
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -390,6 +391,7 @@ where
                     select_motifs_args.resource_config(),
                 )
             ));
+            //TODO move it into SelectMotifsStage
             let motif_loader = Arc::new(MotifLoader::new(
                 Arc::clone(&store),
                 Arc::clone(&loader_2)
@@ -416,32 +418,45 @@ where
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "select motifs"))),
             ).await?;
 
-            // let run_ids = run_all_grid_step(
-            //     Some(select_motifs_args.find_motifs_run_ids.clone()),
-            //     select_motifs_run_config_range_or_value,
-            //     &(),
-            //     &select_motifs_args.resource_config(),
-            //     select_motifs_for_label,
-            //     &ws,
-            //     &store,
-            //     &loader,
-            //     devices.clone(),
-            //     "SelectMotifs",
-            //     false,
-            // )?;
-            //
             info!("SelectMotifs done, run_ids={run_ids:?}");
         }
 
         Some(TrainMotifsNets(train_motif_nets_args)) => {
-            // debug!(
-            //     "TrainMotifsNets2: train_motif_nets_args.run_config_cnt={:?}",
-            //     train_motif_nets_args.run_config_cnt
-            // );
-            // let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue =
-            //     serde_json5::from_str(&train_motif_nets_args.run_config_cnt)
-            //         .expect("TrainMotifsNets2");
-            //
+            debug!("TrainMotifsNets2: train_motif_nets_args.run_config_cnt={:?}",train_motif_nets_args.run_config_cnt);
+            let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue =
+                serde_json5::from_str(&train_motif_nets_args.run_config_cnt)
+                    .expect("TrainMotifsNets2");
+
+            let train_motifs_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue =
+                serde_json5::from_str(&train_motif_nets_args.run_config_cnt).expect("SelectMotifs2");
+
+            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
+                // ResourcesConfigInput::new(
+                //     SimpleId::from("resources"),
+                //     train_motif_nets_args.resource_config(),
+                // )
+                TrainMotifNetInput::new(train_motif_nets_args.motif_selection_run_id.clone())
+            ));
+
+            let run_ids = run_opt::</*Labeled,*/ _, _, _, _, _>(
+                None,
+                train_motif_nets_run_config_range_or_value,
+                input_wrapper,
+                &ws,
+                &store,
+                true,
+                |run_configs| {
+
+                    Arc::new(TrainMotifNet::<_, RunCtx2>::new(
+                        loader_2,
+                        &ws,
+                        &store,
+                        run_configs,
+                        // select_motifs_args.find_motifs_run_ids.clone()
+                    ))
+                },
+                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "select motifs"))),
+            ).await?;
             // let run_ids = run_opt_step::<
             //     TrainMotifsNetsRunConfig,
             //     TrainMotifsNetsRunConfigRangeOrValue,
@@ -2381,26 +2396,19 @@ pub async fn run_grid</*ResConf, */RCRV, F, RC, ST, CtxF>(
     rcrv: RCRV,
     // fixed_config: FC,
     input: Arc<DevicesWrap<ST::In<'static>>>,
-    // ctx:Arc<parking_lot::RwLock<ST::Ctx>>,
-    // stage: Arc<ST>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
-    // loader: &Arc<RwLock<LoadRunner<Tensor>>>,
-    // devices: Vec<Device>,
-    // _descr: &str,
     presave: bool,
     f: F,
     ctx_f: CtxF,
 ) -> Result<Vec<RunId>, ThoosaError>
 where
-    // ResConf: ResourcesConfig<R = Vec<Resource>> + Debug,
     F: FnOnce(Vec<RC>) -> Arc<ST>,
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
         + thoosa_properties_map::ToHashmap,
     RCRV: GridRunConfigSource,
-    // ResConf: ResourcesConfig,
     for<'c> <ST as Stage>::In<'c>: Data + WithId + CopyToDevice + Send + Sync,
     <ST as Stage>::Out: Data + WithId + CopyToDevice + Send + Sync + SavableResult,
     CtxF: FnOnce() -> Arc<RwLock<<ST as Stage>::Ctx>>,
@@ -2429,6 +2437,47 @@ where
 
     Ok(run_ids)
 }
+
+pub async fn run_opt</*ResConf, */RCRV, F, RC, ST, CtxF>(
+
+    input_run_ids: Option<Vec<RunId>>,
+    rcrv: RCRV,
+    // fixed_config: FC,
+    input: Arc<DevicesWrap<ST::In<'static>>>,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
+    presave: bool,
+    f: F,
+    ctx_f: CtxF,
+) -> Result<Vec<RunId>, ThoosaError>
+where
+    F: FnOnce(Vec<RC>) -> Arc<ST>,
+    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
+    RC: RunConfig
+    + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
+    + thoosa_properties_map::ToHashmap,
+    RCRV: OptRunConfigSource,
+    for<'c> <ST as Stage>::In<'c>: Data + WithId + CopyToDevice + Send + Sync,
+    <ST as Stage>::Out: Data + WithId + CopyToDevice + Send + Sync + SavableResult,
+    CtxF: FnOnce() -> Arc<RwLock<<ST as Stage>::Ctx>>,
+{
+    let opt_run_configs = rcrv.opt_run_configs();
+    debug!("run_all_grid_step: grid_run_configs={opt_run_configs:?}");
+
+    let mut run_configs: Vec<RC> = opt_run_configs.to_run_configs();
+
+
+    let stage = f(run_configs);
+
+    let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
+
+    savable.save(store, ws)?;
+
+
+    Ok(vec![])
+
+}
+
 
 #[cfg(test)]
 mod cli_tests {

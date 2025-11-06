@@ -414,7 +414,7 @@ where
 
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::collections::{HashMap, HashSet};
     use std::path::Path;
     use std::sync::Arc;

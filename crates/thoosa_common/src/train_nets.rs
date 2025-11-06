@@ -45,6 +45,7 @@ use async_trait::async_trait;
 use futures_util::future::join_all;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
 
 use crate::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
@@ -1436,9 +1437,9 @@ pub struct TrainMotifsNetsRunConfig {
 }
 
 impl TrainMotifsNetsRunConfig {
-    pub fn new() -> Self {
+    pub fn new(id: Option<RunId>) -> Self {
         Self {
-            id: None,
+            id,
             common_training_args: CommonTrainingRunConfig::new(1, 1, 0.1, 0.1, 1, 1),
             num_layers: 1,
         }
@@ -2370,7 +2371,8 @@ impl TrainListener for PlotVecf32 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, DummyData)]
+#[dummy_data(no_clone)]
 pub struct TrainMotifsNetsRunConfigResult {
     loss: f32,
     channel: u32,
@@ -2403,6 +2405,7 @@ impl TrainMotifsNetsRunConfigResult {
     }
 }
 
+//TODO remove
 impl WithId for Box<TrainMotifsNetsRunConfigResult> {
     type ID = CachableId;
 
