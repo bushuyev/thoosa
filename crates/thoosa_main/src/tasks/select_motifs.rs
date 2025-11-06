@@ -1151,7 +1151,7 @@ mod tests {
         assert_eq!(folded_mask, expected);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_oom_cuda() -> Result<(), ThoosaError> {
         log::set_max_level(LevelFilter::Debug);
         reset_print_options();

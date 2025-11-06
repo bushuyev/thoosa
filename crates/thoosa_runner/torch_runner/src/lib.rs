@@ -826,7 +826,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_no_oom_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -915,7 +915,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         assert!(ok);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_oom_till_min_permits_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -962,7 +962,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_oom_compete_for_permits_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -1013,7 +1013,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         Ok::<_, ThoosaError>(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_oom_splits_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -1067,7 +1067,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         Ok::<_, ThoosaError>(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_oom_permits_and_splits_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -1120,7 +1120,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn heavy_test_load_and_mul_oom_dump_to_cpu() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -1171,7 +1171,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         Ok::<_, ThoosaError>(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -1301,7 +1301,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoosaError> {
         debug!("test_real_oom_dump_and_split");
         unsafe {

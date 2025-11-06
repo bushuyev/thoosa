@@ -245,7 +245,7 @@ where
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
-    S: Adjustable + Debug + Clone + Default+ 'static,
+    S: Adjustable + Debug + Clone + Default+ 'static,//S - for Select<Selector>, 'static is for Any in WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
     <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId,
