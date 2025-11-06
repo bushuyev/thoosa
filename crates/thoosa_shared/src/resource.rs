@@ -16,23 +16,33 @@ pub trait ResourceStore {
         &self,
         file_stems: &'a [&'a str],
     ) -> Result<Vec<Resource>, ThoosaError>;
+
     fn list_resource_set_resources_by_descr(
         &self,
         descr: &str,
     ) -> Result<Vec<Resource>, ThoosaError>;
+
     fn list_resource_set_group_sets(
         &self,
         group_descr: &str,
     ) -> Result<Vec<(usize, String)>, ThoosaError>;
+
     fn list_group_labeled_resources_sets(
         &self,
         group_decr: &str,
     ) -> Result<Vec<(String, String)>, ThoosaError>;
+
     fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoosaError>;
+
     fn list_resource_random_in_group(
         &self,
         group_descr: &str,
     ) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError>;
+
+    fn list_resources_not_in_group(
+        &self,
+        group_descr: &str,
+    ) -> Result<Vec<Resource>, ThoosaError>;
 
 }
 

@@ -64,7 +64,12 @@ impl ResourcesConfig for Simple {
                     })
                     .collect()
             }
-        })
+            ResourceType::NotInGroup(descr) => store
+                .read()
+                .list_resources_not_in_group(descr)
+                .expect("list_resource_set_resources"),
+
+            })
     }
 }
 
