@@ -551,6 +551,7 @@ mod tests {
             )
             .unwrap(),
             resources_input,
+            &ws,
             &store,
             true,
             |run_configs| {
