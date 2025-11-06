@@ -278,7 +278,7 @@ where
         let num_resources = resources.len(); //.iter().map(|label_resources|label_resources.1.len()).sum::<usize>();
 
 
-
+        let mut good_motif_ids = vec![];
         for (i_0, resource_0) in resources.iter()/*.flat_map(|label_resources|label_resources.1.iter())*/.enumerate() {
             debug!("SelectMotifsStage::run: on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
 
@@ -297,7 +297,7 @@ where
 
             let t_1_batch_len = t_1_batch.len();
 
-            let r = futures::stream::iter(batched_motifs.clone())
+            let expanded_motif_ids = futures::stream::iter(batched_motifs.clone())
                 .map(|batched_motifs_output_wrap| {
                     let t_1_batch = t_1_batch.clone(); //cones Arcs
 
@@ -357,6 +357,7 @@ where
                             .await?;
 
                         debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");
+                        let mut motif_ids = vec![];
                         for channel_mask_idsts_ids in channel_masks_dists_ids.into_iter().enumerate() {
                             if let (channel, Some(mask_idsts_ids)) = channel_mask_idsts_ids {
 
@@ -382,20 +383,22 @@ where
                                     }
 
                                     if !slices.is_empty(){
+                                        motif_ids.push(motif_id.clone());
                                         store.write().add_slices_to_motif(find_motifs_run_config_id, *motif_id, channel as i64, slices)?;
                                     }
                                 }
                             }
                         }
 
-                        Ok::<(), ThoosaError>(())
-                        // Err::<(), ThoosaError>("todo".into())
+                        Ok::<Vec<DataId>, ThoosaError>(motif_ids)
+
                     }
                 })
                 .buffer_unordered(10)
                 .try_collect::<Vec<_>>()
                 .await?;
 
+            good_motif_ids.extend(expanded_motif_ids.into_iter().flat_map(|v|v.into_iter()).map(|motif_id|(*motif_id, 1.0)));//TODO rate
 
 
             t_1_batch_dim_0_size = 0;;
@@ -403,7 +406,9 @@ where
             t_1_batch_resources.clear();
         }
 
-        Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(0, self.run_configs[0].clone(), vec![]))))
+        debug!("SelectMotifsStage::run: good_motif_ids={good_motif_ids:?}");
+
+        Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(0, self.run_configs[0].clone(), good_motif_ids))))
     }
 }
 

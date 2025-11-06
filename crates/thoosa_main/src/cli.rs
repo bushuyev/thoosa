@@ -358,6 +358,7 @@ where
                 None,
                 find_motifs_run_config_range_or_value,
                 input_wrapper,
+                &ws,
                 &store,
                 true,
                 |run_configs| {
@@ -398,6 +399,7 @@ where
                 None,
                 select_motifs_run_config_range_or_value,
                 input_wrapper,
+                &ws,
                 &store,
                 true,
                 |run_configs| {
@@ -2374,13 +2376,14 @@ where
 }
 
 pub async fn run_grid</*ResConf, */RCRV, F, RC, ST, CtxF>(
+
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     // fixed_config: FC,
     input: Arc<DevicesWrap<ST::In<'static>>>,
     // ctx:Arc<parking_lot::RwLock<ST::Ctx>>,
     // stage: Arc<ST>,
-    // ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
     // loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     // devices: Vec<Device>,
@@ -2399,7 +2402,7 @@ where
     RCRV: GridRunConfigSource,
     // ResConf: ResourcesConfig,
     for<'c> <ST as Stage>::In<'c>: Data + WithId + CopyToDevice + Send + Sync,
-    <ST as Stage>::Out: Data + WithId + CopyToDevice + Send + Sync,
+    <ST as Stage>::Out: Data + WithId + CopyToDevice + Send + Sync + SavableResult,
     CtxF: FnOnce() -> Arc<RwLock<<ST as Stage>::Ctx>>,
 {
     let grid_run_configs = rcrv.grid_run_configs();
@@ -2419,7 +2422,10 @@ where
 
     let stage = f(run_configs);
 
-    stage.run(input, ctx_f()).await?;
+    let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
+
+    savable.save(store, ws)?;
+
 
     Ok(run_ids)
 }
