@@ -2468,9 +2468,7 @@ impl SavableResult for TrainMotifsNetsRunConfigResult {
 pub async fn opt_train_2<P, R, F, N: Debug + Default>(
     opt_config: Arc<OptConfig>, //N node parameters
     train: F,
-    run_config_source: Arc<
-        OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>,
-    >,
+    run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
     device: Device,
     descr: &str,
 ) -> Result<(VarStore, N, R, f32), ThoosaError>
@@ -2634,7 +2632,7 @@ pub fn run_train_motif_net(
     motif_width: u32,
     run_config: &TrainMotifsNetsRunConfig,
     device: &Device,
-    mut batch: &mut TensorsDataBatch<SlicesData>,
+    mut batch: &mut dyn DataBatch<SlicesData>,
     vs: &VarStore,
     listener: &mut dyn TrainListener,
 ) -> Result<(f32, MotifNetParams), ThoosaError> {

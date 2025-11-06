@@ -6,19 +6,25 @@ use log::debug;
 use parking_lot::RwLock;
 use tch::Device::{Cpu, Cuda};
 use tch::nn::VarStore;
+use tch::Tensor;
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::dims::{Dims, ThoBatch};
 use thoosa_common::runs::Empty;
-use thoosa_common::train_nets::{MotifNetParams, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigResult};
+use thoosa_common::train_nets::{opt_train_2, run_train_motif_net, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigResult};
+use thoosa_common::utils::{DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_run_config_args::OptRunConfigSource;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::data_with_extra::DataWithExtra;
+use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Adjustable, DataId, SimpleId, WithId};
+use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use torch_runner::data::ThoTensor2;
@@ -33,7 +39,12 @@ where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
-    run_configs: Vec<TrainMotifsNetsRunConfig>,
+    run_configs: Arc<OptRunConfigs<
+        Vec<NamedVal<TrainMotifsNetsRunConfigFields>>,
+        Vec<NamedRange<TrainMotifsNetsRunConfigFields>>,
+        Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>,
+        TrainMotifsNetsRunConfigFields,
+    >>,
     motif_loader:Arc<MotifLoader<L,C>>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<RwLock<Box<dyn Store>>>,
@@ -45,13 +56,14 @@ where
 #[dummy_data(no_clone)]
 pub struct TrainMotifNetInput{
     id:SimpleId,
-    motif_selection_run_id: Vec<RunId>
+    motif_selection_run_id: Vec<RunId>,
+    opt_config:Arc<OptConfig>
 }
 
 impl Input for TrainMotifNetInput {}
 impl TrainMotifNetInput {
-    pub fn new(motif_selection_run_id: Vec<RunId>) -> Self {
-        Self { id: SimpleId("TrainMotifNetInput"), motif_selection_run_id }
+    pub fn new(motif_selection_run_id: Vec<RunId>, opt_config:Arc<OptConfig>) -> Self {
+        Self { id: SimpleId("TrainMotifNetInput"), motif_selection_run_id, opt_config }
     }
 }
 
@@ -81,8 +93,12 @@ where
         loader:Arc<L>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
-        run_configs: Vec<TrainMotifsNetsRunConfig>
-    ) -> Self {
+        run_configs:  OptRunConfigs<
+            Vec<NamedVal<TrainMotifsNetsRunConfigFields>>,
+            Vec<NamedRange<TrainMotifsNetsRunConfigFields>>,
+            Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>,
+            TrainMotifsNetsRunConfigFields,
+        >    ) -> Self {
         let motif_loader = Arc::new(MotifLoader::new(
             Arc::clone(&store),
             Arc::clone(&loader)
@@ -90,7 +106,7 @@ where
 
         Self {
             motif_loader,
-            run_configs,
+            run_configs: Arc::new(run_configs),
             ws: Arc::clone(&ws),
             store: Arc::clone(&store),
             pd: PhantomData
@@ -110,52 +126,96 @@ where
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
-        let input = input.with_data_ref(0, None, |input|{
-            Ok(input.motif_selection_run_id.clone())
+        let (motif_selection_run_ids, opt_config) = input.with_data_ref(0, None, |input|{
+            Ok((input.motif_selection_run_id.clone(), input.opt_config.clone()))
         }).await?;
 
         let channels = self.ws.read().channels();
 
-        let result = futures::stream::iter(
-            input.into_iter()
-                .flat_map(
-                    |motif_selection_run_id|
-                        self.store.read().list_selected_motifs(motif_selection_run_id, channels).into_iter()
-                        .flat_map(|channels_motifs|
-                            channels_motifs.into_iter()
-                                .flat_map(|v|v.into_iter())))
-        )
-        .map(|motif_id_rate|{
-            let motif_loader = Arc::clone(&self.motif_loader);
-            let ctx = Arc::clone(&ctx);
-            async move {
-                let motif = motif_loader.run(Arc::new(DevicesWrap::wrap_cpu(motif_id_rate.0.into())), ctx).await?;
-
-                with_data!(device_idx, motif; |motif:&DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>|{
-
-                    let motif_data = motif.data();
-
-                    debug!("TrainMotifNet::run: motif_data={motif_data:?}");
-
-                    Ok::<_, ThoosaError>(())
-                })?;
-
-                Ok::<_, ThoosaError>(())
-            }
-        })
-        .buffer_unordered(10)
-        .try_collect::<Vec<_>>()
-        .await?;
 
 
-        Ok(Arc::new(DevicesWrap::wrap_cpu(TrainMotifsNetsRunConfigResult::new(0.1, 0, 0, VarStore::new(Cpu), 0, MotifNetParams::new(1, 2), self.run_configs[0].clone()))))
+        for motif_selection_run_id in motif_selection_run_ids {
+
+            let x = self.store.read().list_selected_motifs(motif_selection_run_id, channels)?;
+
+            let result = futures::stream::iter(
+                x.into_iter()
+                    .flat_map(|channels_motifs|
+                        channels_motifs.into_iter())
+            )
+                .map(|motif_id_rate| {
+                    let motif_loader = Arc::clone(&self.motif_loader);
+                    let ctx = Arc::clone(&ctx);
+                    let opt_config = Arc::clone(&opt_config);
+                    let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
+                    async move {
+                        let motif = motif_loader.run(Arc::new(DevicesWrap::wrap_cpu(motif_id_rate.0.into())), ctx).await?;
+
+                        with_data!(device_idx, motif; |motif:&DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>|{
+
+                            let motif_data = motif.data();
+                            let motif_meta = motif.extra();
+
+                            debug!("TrainMotifNet::run: motif_data={motif_data:?}");
+
+                            Ok::<_, ThoosaError>(())
+                        })?;
+
+                        opt_train_2(
+                            opt_config,
+                            async move |vs: &VarStore, run_config: TrainMotifsNetsRunConfig, _listener| {
+                                //TODO batch size
+                                // let all_slices_0_cl = all_slices_0_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
+                                // let all_slices_1_cl = all_slices_1_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
+
+                                let mut batch = AugmentationsBatch::new();
+
+                                run_train_motif_net(1000, &run_config, &Cuda(0), &mut batch, vs, &mut DummyListener/*, listener*/)
+                            },
+                            train_motifs_nodes_run_configs,
+                            Cuda(0),
+                            "motifs"
+                        ).await.map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)| {
+                            // Arc::new(Box::new(TrainMotifsNetsRunConfigResult::new(min_loss, input.channel, input.motif_id, var_store, input.find_motifs_run_config.id.unwrap()/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)))
+                            ()
+                        }).expect("TODO opt_train failed");
+
+
+                        Ok::<_, ThoosaError>(())
+                    }
+                })
+                .buffer_unordered(10)
+                .try_collect::<Vec<_>>()
+                .await?;
+
+        }
+
+        Ok(Arc::new(DevicesWrap::wrap_cpu(TrainMotifsNetsRunConfigResult::new(0.1, 0, 0, VarStore::new(Cpu), 0, MotifNetParams::new(1, 2), TrainMotifsNetsRunConfig::new(Some(0))))))
     }
 
 }
 
-fn run_train() {
+#[derive(Debug)]
+struct AugmentationsBatch {
 
 }
+
+impl AugmentationsBatch {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl<D: Dims> DataBatch<D> for AugmentationsBatch {
+    fn train_batch(&self) -> (ThoBatch<D>, Tensor) {
+        todo!()
+    }
+
+    fn valid_batch(&self) -> (ThoBatch<D>, Tensor) {
+        todo!()
+    }
+}
+
 
 // impl SyncStage
 
@@ -172,13 +232,14 @@ mod tests {
     use caching_runner::common::runnable::AsyncStage;
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
-    use thoosa_common::train_nets::TrainMotifsNetsRunConfig;
+    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, OptConfig, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields};
     use thoosa_common::utils::reset_print_options;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_store::MockStoreBuilder;
     use crate::tasks::select_motifs::tests::resource_tensor;
     use crate::tasks::tensor_loader::mock_tensor_loader;
@@ -244,7 +305,22 @@ mod tests {
                 // .with_add_slices_to_motif(crate::tasks::select_motifs::tests::resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))
                 .build()));
 
-        let run_configs = vec![TrainMotifsNetsRunConfig::new(Some(1))];
+        let run_configs =         thoosa_shared::run_configs::OptRunConfigs::new(
+            thoosa_shared::run_configs::GridRunConfigs::new(
+                thoosa_shared::run_configs::ConstConfigs::new(vec![
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(3)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(10)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.1)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MaxLoss), Val::Real(0.01)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptMaxEvals), Val::Int(10)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptNInit), Val::Int(10)),
+                ]),
+                vec![
+                    NamedRange::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
+                ],
+            ),
+            vec![],
+        );
 
 
 
@@ -265,7 +341,7 @@ mod tests {
             run_configs
         ));
 
-        let input = Arc::new(DevicesWrap::wrap_cpu(TrainMotifNetInput::new(vec![select_motifs_run_id])));
+        let input = Arc::new(DevicesWrap::wrap_cpu(TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(100, 3)))));
 
         let r = train_motif_net.run(input, Arc::new(RwLock::new(mock_run_ctx::default(0)))).await?;
 

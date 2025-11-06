@@ -435,10 +435,10 @@ where
                 //     SimpleId::from("resources"),
                 //     train_motif_nets_args.resource_config(),
                 // )
-                TrainMotifNetInput::new(train_motif_nets_args.motif_selection_run_id.clone())
+                TrainMotifNetInput::new(train_motif_nets_args.motif_selection_run_id.clone(), Arc::new(train_motif_nets_args.fixed_config.clone()))
             ));
 
-            let run_ids = run_opt::</*Labeled,*/ _, _, _, _, _>(
+            let run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
                 None,
                 train_motif_nets_run_config_range_or_value,
                 input_wrapper,
@@ -2451,7 +2451,12 @@ pub async fn run_opt</*ResConf, */RCRV, F, RC, ST, CtxF>(
     ctx_f: CtxF,
 ) -> Result<Vec<RunId>, ThoosaError>
 where
-    F: FnOnce(Vec<RC>) -> Arc<ST>,
+    F: FnOnce(OptRunConfigs<
+        Vec<NamedVal<<RCRV as OptRunConfigSource>::P>>,
+        Vec<NamedRange<<RCRV as OptRunConfigSource>::P>>,
+        Vec<Hyperparameter<<RCRV as OptRunConfigSource>::P>>,
+        <RCRV as OptRunConfigSource>::P,
+    >) -> Arc<ST>,
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
     + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
@@ -2464,10 +2469,10 @@ where
     let opt_run_configs = rcrv.opt_run_configs();
     debug!("run_all_grid_step: grid_run_configs={opt_run_configs:?}");
 
-    let mut run_configs: Vec<RC> = opt_run_configs.to_run_configs();
+    // let mut run_configs: Vec<RC> = opt_run_configs.to_run_configs();
 
 
-    let stage = f(run_configs);
+    let stage = f(opt_run_configs);
 
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
 
