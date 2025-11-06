@@ -45,6 +45,7 @@ use async_trait::async_trait;
 use futures_util::future::join_all;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
 
 use crate::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
@@ -1436,9 +1437,9 @@ pub struct TrainMotifsNetsRunConfig {
 }
 
 impl TrainMotifsNetsRunConfig {
-    pub fn new() -> Self {
+    pub fn new(id: Option<RunId>) -> Self {
         Self {
-            id: None,
+            id,
             common_training_args: CommonTrainingRunConfig::new(1, 1, 0.1, 0.1, 1, 1),
             num_layers: 1,
         }
@@ -2370,7 +2371,8 @@ impl TrainListener for PlotVecf32 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, DummyData)]
+#[dummy_data(no_clone)]
 pub struct TrainMotifsNetsRunConfigResult {
     loss: f32,
     channel: u32,
@@ -2403,6 +2405,7 @@ impl TrainMotifsNetsRunConfigResult {
     }
 }
 
+//TODO remove
 impl WithId for Box<TrainMotifsNetsRunConfigResult> {
     type ID = CachableId;
 
@@ -2465,9 +2468,7 @@ impl SavableResult for TrainMotifsNetsRunConfigResult {
 pub async fn opt_train_2<P, R, F, N: Debug + Default>(
     opt_config: Arc<OptConfig>, //N node parameters
     train: F,
-    run_config_source: Arc<
-        OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>,
-    >,
+    run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
     device: Device,
     descr: &str,
 ) -> Result<(VarStore, N, R, f32), ThoosaError>
@@ -2631,7 +2632,7 @@ pub fn run_train_motif_net(
     motif_width: u32,
     run_config: &TrainMotifsNetsRunConfig,
     device: &Device,
-    mut batch: &mut TensorsDataBatch<SlicesData>,
+    mut batch: &mut dyn DataBatch<SlicesData>,
     vs: &VarStore,
     listener: &mut dyn TrainListener,
 ) -> Result<(f32, MotifNetParams), ThoosaError> {
