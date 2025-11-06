@@ -4714,6 +4714,7 @@ dependencies = [
  "simplelog",
  "statrs",
  "tch",
+ "thoosa_dummy_data_derive",
  "thoosa_properties_map",
  "thoosa_properties_map_derive",
  "thoosa_run_config_args",

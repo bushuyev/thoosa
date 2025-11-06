@@ -73,6 +73,7 @@ impl ResourcesConfig for Simple {
     }
 }
 
+#[derive(Debug)]
 pub struct Empty {}
 
 impl ResourcesConfig for Empty {

@@ -200,11 +200,8 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     ) -> Result<RunId, ThoosaError>;
     fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError>; //corr_run_id, run_id, label
     fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<usize>, ThoosaError>; //corr_run_id, run_id, label
-    fn list_selected_motifs(
-        &self,
-        motif_selection_id: RunId,
-        channels: u32,
-    ) -> Result<Vec<Vec<(u32, f64)>>, ThoosaError>;
+    fn list_selected_motifs(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoosaError>;
+
     fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoosaError>;
     fn conn(&self) -> &parking_lot::Mutex<Connection>; //parking_lot:: for mockall
 }
@@ -1609,7 +1606,7 @@ impl Store for SqlStore {
         &self,
         motif_id: u32,
         limit: Option<u32>,
-        all_but_in_run_id: Option<(RunId, u32)>,
+        all_but_in_run_id: Option<(RunId, u32/*channel*/)>,//TODO RunId not used, channel can be removed
     ) -> Result<
         (
             i64,
@@ -3331,6 +3328,19 @@ impl MockStoreBuilder {
             }
         );
 
+        self
+    }
+
+    pub fn with_list_selected_motifs<R:Into<HashMap<RunId, Result<Vec<Vec<(u32, f64)>>, ThoosaError>>>>(
+        mut self,
+        results: R
+    ) -> Self {
+        let map = results.into();
+        self.store.expect_list_selected_motifs().returning(
+            move |run_id, channels|{
+                map.get(&run_id).cloned().expect(&format!("mock is not configured to return selected motifs for run id {run_id}"))
+            }
+        );
         self
     }
 
