@@ -12,7 +12,7 @@ use caching_runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Named, SimpleId};
 use torch_runner::TorchPermsCtx;
-use crate::tasks::batched_moitfs_loader::BatchedMotifsLoader;
+use crate::tasks::stacked_moitfs_loader::BatchedMotifsLoader;
 use crate::tasks::motif_loader::MotifLoader;
 use crate::tasks::tensor_loader::RawTensorLoader;
 
