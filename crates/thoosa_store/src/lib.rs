@@ -1634,7 +1634,7 @@ impl Store for SqlStore {
                     if all_but_in_run_id.is_none() {
                         "=? AND ? IS NOT NULL "
                     } else {
-                        "!=? AND m.channel_id=?"
+                        "!=? AND m.channel_id=? ORDER BY RANDOM()"
                     },
                     &limit
                         .map(|limit| format!("LIMIT {}", limit))

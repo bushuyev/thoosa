@@ -1,6 +1,6 @@
 use crate::dims::{
     Batch, ChannelsMotifsData, ChannelsSlicesData, Dims, LabelProbability, MotifData,
-    MotifsNetsSelectionDims, SlicesData,
+    MotifsNetsSelectionDims, Slice,
 };
 use crate::find_motifs_run_config::FindMotifsRunConfig;
 use crate::train_nets::{
@@ -233,7 +233,7 @@ impl Workspace for FsWorkspace {
         channel: u32,
         motif_id: u32,
         device: &'a Device,
-    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>, ThoosaError> {
+    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifData>)>, ThoosaError> {
         debug!("load_motif_models_ws: channel={channel} motif_id={motif_id}");
 
         let channel_motif_models_paths = self.motif_models(channel, motif_id)?;
@@ -487,7 +487,7 @@ pub trait Workspace: Sync + Send + Debug {
         channel: u32,
         motif_id: u32,
         device: &'a Device,
-    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>, ThoosaError>;
+    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifData>)>, ThoosaError>;
     fn load_label_nets<'a>(
         &self,
         train_label_nodes_run_ids: Option<&'a [RunId]>,
@@ -580,7 +580,7 @@ impl WsMockBuilder {
         channels_motif_nets: Vec<
             Vec<(
                 Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>,
-                Box<dyn Fn() -> ThoModuleWithStore<SlicesData, MotifData> + Sync + Send + 'static>,
+                Box<dyn Fn() -> ThoModuleWithStore<Slice, MotifData> + Sync + Send + 'static>,
             )>,
         >,
     ) -> Self {

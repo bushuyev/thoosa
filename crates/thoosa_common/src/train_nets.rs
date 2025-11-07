@@ -53,7 +53,7 @@ use crate::batches::AsyncDataBatch;
 use crate::dims::{
     AnyDims, AnyMetrics, AnySub, Batch, ChannelsData, ChannelsMotifsData,
     ChannelsMotifsFlattenedData, Dims, Final, LabelNetInputTensorDims, LabelNetsProbabilities,
-    LabelProbability, LabelsProbabilities, MotifData, MotifsNetsSelectionDims, SlicesData, TCD,
+    LabelProbability, LabelsProbabilities, MotifData, MotifsNetsSelectionDims, Slice, TCD,
     TCSD, ThoBatch,
 };
 use crate::find_motifs_run_config::*;
@@ -2632,7 +2632,7 @@ pub fn run_train_motif_net(
     motif_width: u32,
     run_config: &TrainMotifsNetsRunConfig,
     device: &Device,
-    batch: &mut dyn DataBatch<SlicesData>,
+    batch: &mut dyn DataBatch<Slice>,
     vs: &VarStore,
     listener: &mut dyn TrainListener,
 ) -> Result<(f32, MotifNetParams), ThoosaError> {
@@ -2643,7 +2643,7 @@ pub fn run_train_motif_net(
         &device,
         batch,
         &motif_node(&node_params)
-            .build_tch_module::<Batch<SlicesData>, Batch<MotifData>>(&vs.root())
+            .build_tch_module::<Batch<Slice>, Batch<MotifData>>(&vs.root())
             .unwrap(),
         |pred: &Tensor, target: &Tensor| {
             let pred_y = pred.i((.., 0));
@@ -2670,7 +2670,7 @@ pub fn run_train_motif_net_2(
     motif_width: u32,
     run_config: &TrainMotifsNetsRunConfig,
     device: &Device,
-    batch: &mut dyn DataBatch<SlicesData>,
+    batch: &mut dyn DataBatch<Slice>,
     vs: &VarStore,
     listener: &mut dyn TrainListener,
 ) -> Result<(f32, MotifNetParams), ThoosaError> {
@@ -2681,7 +2681,7 @@ pub fn run_train_motif_net_2(
         &device,
         batch,
         &motif_node(&node_params)
-            .build_tch_module::<Batch<SlicesData>, Batch<MotifData>>(&vs.root())
+            .build_tch_module::<Batch<Slice>, Batch<MotifData>>(&vs.root())
             .unwrap(),
         |pred: &Tensor, target: &Tensor| {
             let pred_y = pred.i((.., 0));
@@ -2933,13 +2933,13 @@ impl Input for LoadMotifNetInput {
 #[derive(Debug)]
 pub struct LoadMotifNetOutput {
     channel: u32,
-    nets: Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>, //single motif's nets (of different types)
+    nets: Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifData>)>, //single motif's nets (of different types)
 }
 
 impl LoadMotifNetOutput {
     pub fn new(
         channel: u32,
-        nets: Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>,
+        nets: Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifData>)>,
     ) -> Self {
         Self { channel, nets }
     }
@@ -3591,7 +3591,7 @@ mod train_tests {
     use crate::applicables::ThoRunner;
     use crate::builder::SeqBuilder;
     use crate::dims::{
-        AnyDims, Batch, Dims, LabelProbability, MotifData, MotifsNetsSelectionDims, SlicesData,
+        AnyDims, Batch, Dims, LabelProbability, MotifData, MotifsNetsSelectionDims, Slice,
         ThoBatch,
     };
     use crate::find_motifs_run_config::FindMotifsRunConfig;
@@ -4244,7 +4244,7 @@ mod train_tests {
         device: Device,
     ) -> (
         Box<dyn Fn() -> MotifNetParams + Sync + Send>,
-        Box<dyn Fn() -> ThoModuleWithStore<SlicesData, MotifData> + Sync + Send>,
+        Box<dyn Fn() -> ThoModuleWithStore<Slice, MotifData> + Sync + Send>,
     ) {
         (
             Box::new(move || MotifNetParams::new(motif_width, 1)),
