@@ -24,7 +24,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::traits::{Data, Named, SimpleId, WithId};
 use thoosa_store::Store;
-use torch_runner::data::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor2;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_dummy_data_derive::DummyData;
 
@@ -572,7 +572,7 @@ mod tests {
     use thoosa_store::{MockStore, MockStoreBuilder, SqlStore};
     use tokio::task::yield_now;
     use tokio::time::sleep;
-    use torch_runner::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
 
     #[ctor::ctor]
     fn init() {

@@ -99,7 +99,7 @@ where
         for <'i> <R::In<'i> as Data>::Metrics: PartialOrd<i64>,
         for<'a, 'b> &'a <R::In<'a> as Data>::Metrics: Add<&'b <R::In<'b> as Data>::Metrics, Output = StageInMetrics<R>>,
         for <'i> <R::In<'i> as Data>::Metrics: PartialOrd,
-        <R as Stage>::In<'static>: Select<std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>, Output=<R as Stage>::In<'static>>
+        <R as Stage>::In<'static>: Select<S, Output=<R as Stage>::In<'static>>
     {
         let (device_idx, ctx_name) = {
             let guard = ctx.read();

@@ -5,7 +5,7 @@ use tch::{IndexOp, Tensor};
 use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_shared::{MyError, ThoosaError};
 use thoosa_shared::traits::{DataId, Select, SimpleId};
-use torch_runner::data::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor2;
 use thoosa_shared::traits::MonoMetrics;
 
 #[derive(Clone, Debug)]
