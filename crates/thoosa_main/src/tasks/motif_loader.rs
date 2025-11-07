@@ -21,7 +21,7 @@ use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{Data, DataId, Select, SimpleId, WithId};
 use thoosa_store::Store;
-use torch_runner::data::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor2;
 use thoosa_shared::traits::MonoMetrics;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, MotifSlices};
 use crate::tasks::load_motif_and_clc_dist::{MotifSlicesSelector};
@@ -229,7 +229,7 @@ pub mod mock_motif_loader {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{DataId, Named, SimpleId};
     use thoosa_shared::traits::WithId;
-    use torch_runner::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
     use dashmap::DashMap;
     use parking_lot::RwLock;
     use tch::kind::FLOAT_CPU;
@@ -337,7 +337,7 @@ mod tests {
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::{mock_tensor_loader};
     use crate::tasks::cross_dims::MotifSlices;
-    use torch_runner::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn load_motifs() -> Result<(), ThoosaError> {

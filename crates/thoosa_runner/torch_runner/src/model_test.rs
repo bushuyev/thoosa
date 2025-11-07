@@ -26,7 +26,7 @@ mod tests {
     use futures_util::future::BoxFuture;
     use caching_runner::test_utils::parse_numeric_part;
 
-    use crate::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
     use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select};
     use crate::tests::TorchRunCtx;
     use dashmap::DashMap as DMap;
@@ -187,15 +187,22 @@ mod tests {
         type Metrics = ABMetrics;
 
     }
-    // impl Adjustable for ThoTensor2<ABData, SimpleId> {}
 
-    impl Select<std::ops::Range<ABMetrics>> for ThoTensor2<ABData, SimpleId> {
+    #[derive(Debug, Clone, Default)]
+    // impl Adjustable for ThoTensor2<ABData, SimpleId> {}
+    struct ABRange {
+        range:std::ops::Range<ABMetrics>
+    }
+
+    impl Adjustable for ABRange {}
+
+    impl Select<ABRange> for ThoTensor2<ABData, SimpleId> {
         type Output = ThoTensor2<ABData, SimpleId>;
 
-        fn subview(&self, selector: std::ops::Range<ABMetrics>) -> Result<Self::Output, ThoosaError> {
+        fn subview(&self, selector: ABRange) -> Result<Self::Output, ThoosaError> {
             use std::cmp::min;
             let size = ABMetrics::from(self.t_ref().size());
-            let d0 = selector.start.dim_0..min(size.dim_0, selector.end.dim_0);
+            let d0 = selector.range.start.dim_0..min(size.dim_0, selector.range.end.dim_0);
 
             Ok(ThoTensor2::new(self.id().clone(), self.t_ref().i((d0, ..))))
         }
@@ -878,50 +885,59 @@ mod tests {
                 dim_0: 32,
                 dim_1: 0,
             };
-            let result = OOMHandler::new(
-                vec![
-                    Adjusters::RunContext(Box::new(PermitsAdjuster::new(
-                        MAX_PERMITS,
-                        *PermitStep::TEN,
-                        move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
-                    ))),
-                    Adjusters::Input(Box::new(
-                        SplitsAdjuster::<ThoTensor2<ABData, SimpleId>, Range<ABMetrics>>::new(min_split_len),
-                    )),
-                ],
-                None,
-            )
-            .run(
-                &self.clf,
-                batched,
-                Arc::clone(&ctx),
-                Contexts::new(
-                    SplitsAdjusterContextImpl::new(
-                        size,
-                        Box::new(SingleDimTensorOutputBuilder::<ClsOut>::new(
-                            out_id,
-                            1,
-                            &[1, 1],
-                            (Kind::Float, ThoDevice::from(device_idx).deref().clone()),
-                            BuildAs::Sum,
-                        )),
-                    ),
-                    NoopRunnableContext {},
-                    PermitsAdjustContextImpl::new(ctx_name),
-                ),
-            )
-            .await?;
 
-            let (final_device_idx, cache_area) = {
-                let guard = ctx.read();
-                (guard.device_idx(), guard.cache_area())
-            };
-            let num_devices = GlobalCtx::global().device_count();
+            //**********************
+            //overflow evaluating the requirement `&Simd<_, _>: Add<&Simd<_, _>>`
+            // Adjusters::Input(Box::new(
+            //     SplitsAdjuster::<ThoTensor2<ABData, SimpleId>, ABRange>::new(min_split_len),
+            // ));
+            //**********************
 
-            Ok(Arc::new(DevicesWrap::wrap(
-                result,
-                cache_area,
-            )))
+//             let result = OOMHandler::new(
+//                 vec![
+//                     Adjusters::RunContext(Box::new(PermitsAdjuster::new(
+//                         MAX_PERMITS,
+//                         *PermitStep::TEN,
+//                         move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
+//                     ))),
+//                     Adjusters::Input(Box::new(
+//                         SplitsAdjuster::<ThoTensor2<ABData, SimpleId>, ABRange>::new(min_split_len),
+//                     )),
+//                 ],
+//                 None,
+//             )
+//             .run(
+//                 &self.clf,
+//                 batched,
+//                 Arc::clone(&ctx),
+//                 Contexts::new(
+//                     SplitsAdjusterContextImpl::new(
+//                         size,
+//                         Box::new(SingleDimTensorOutputBuilder::<ClsOut>::new(
+//                             out_id,
+//                             1,
+//                             &[1, 1],
+//                             (Kind::Float, ThoDevice::from(device_idx).deref().clone()),
+//                             BuildAs::Sum,
+//                         )),
+//                     ),
+//                     NoopRunnableContext {},
+//                     PermitsAdjustContextImpl::new(ctx_name),
+//                 ),
+//             )
+//             .await?;
+//
+//             let (final_device_idx, cache_area) = {
+//                 let guard = ctx.read();
+//                 (guard.device_idx(), guard.cache_area())
+//             };
+//             let num_devices = GlobalCtx::global().device_count();
+//
+//             Ok(Arc::new(DevicesWrap::wrap(
+//                 result,
+//                 cache_area,
+//             )))
+            todo!()
         }
     }
 
@@ -1092,4 +1108,5 @@ mod tests {
 
         Ok(())
     }
+
 }

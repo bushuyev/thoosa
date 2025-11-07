@@ -18,7 +18,7 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
-use torch_runner::data::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor2;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 // use crate::tasks::stages_seq::StagesSeq;
 
@@ -130,7 +130,7 @@ pub(crate) mod mock_tensor_loader {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{Named, SimpleId};
     use thoosa_shared::traits::WithId;
-    use torch_runner::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
     use crate::tasks::cross_dims::ChannelsData2;
     use dashmap::DashMap;
     use parking_lot::RwLock;
@@ -231,7 +231,7 @@ mod tests {
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::SimpleId;
-    use torch_runner::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
 
     #[tokio::test]
     async fn test_load() -> Result<(), ThoosaError> {

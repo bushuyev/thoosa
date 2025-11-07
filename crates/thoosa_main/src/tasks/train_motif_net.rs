@@ -12,6 +12,7 @@ use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::dims::{Dims, ThoBatch};
 use thoosa_common::runs::Empty;
+use thoosa_common::tho_tensor::{DataBatch2, ThoTensor2};
 use thoosa_common::train_nets::{opt_train_2, run_train_motif_net, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
@@ -27,7 +28,6 @@ use thoosa_shared::traits::{Adjustable, DataId, SimpleId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
-use torch_runner::data::{DataBatch2, ThoTensor2};
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
@@ -216,7 +216,7 @@ impl<D: Dims> DataBatch<D> for AugmentationsBatch {
     }
 }
 
-/*
+
 impl DataBatch2<MotifSlices, DataId> for AugmentationsBatch {
     fn train_batch(&self) -> (ThoTensor2<MotifSlices, DataId>, ThoTensor2<MotifSlices, ()>) {
         todo!()
@@ -227,7 +227,7 @@ impl DataBatch2<MotifSlices, DataId> for AugmentationsBatch {
     }
 }
 
- */
+
 
 
 // impl SyncStage
@@ -245,7 +245,7 @@ mod tests {
     use caching_runner::common::runnable::AsyncStage;
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
-    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, OptConfig, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields};
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, OptConfig, TrainMotifsNetsRunConfigFields};
     use thoosa_common::utils::reset_print_options;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;

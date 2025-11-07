@@ -16,7 +16,7 @@ use thoosa_common::find_motifs_run_config::InputFilter;
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{SimpleId, WithId};
-use torch_runner::data::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor2;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 
@@ -154,7 +154,7 @@ mod tests {
     use thoosa_common::find_motifs_run_config::InputFilter;
     use thoosa_common::transforms::filters::BandPassFilterParams;
     use thoosa_shared::ThoosaError;
-    use torch_runner::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::transforms::freq_filter::FreqFilter;
 

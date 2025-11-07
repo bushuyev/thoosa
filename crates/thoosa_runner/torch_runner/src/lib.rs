@@ -14,7 +14,7 @@ use caching_runner::common::{DropIf, PermitsCtx};
 use caching_runner::common::cachable::WithDataRef;
 use caching_runner::permits::{MAX_PERMITS, NumPermits, RunnerPerm};
 // test-only imports live under cfg(test)
-use data::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor2;
 use log::debug;
 use std::fmt::Debug;
 use tch::{Kind, Tensor};
@@ -95,7 +95,7 @@ impl PermitsCtx for TorchPermsCtx {
 #[cfg(test)]
 mod tests {
     use super::output_builders::SingleDimTensorOutputBuilder;
-    use crate::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
     use thoosa_shared::traits::{Data, MonoMetrics, Select};
     use crate::output_builders::BuildAs;
     use async_trait::async_trait;
@@ -293,8 +293,8 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Clone)]
-    struct LoadedTensor;
+#[derive(Debug, Clone)]
+struct LoadedTensor;
 impl Dims for LoadedTensor {
     type Metrics = MonoMetrics<1, 2>;
 
@@ -303,11 +303,17 @@ impl LoadedTensor {}
 
 // impl Adjustable for ThoTensor2<LoadedTensor, SimpleId> {}
 
-impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, SimpleId> {
+#[derive(Debug, Clone, Default)]
+struct  LoadedRange {
+    range:std::ops::Range<MonoMetrics<1, 2>>
+}
+impl Adjustable for LoadedRange {}
+
+impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
     type Output = ThoTensor2<LoadedTensor, SimpleId>;
 
-    fn subview(&self, selector: std::ops::Range<MonoMetrics<1, 2>>) -> Result<Self::Output, ThoosaError> {
-        let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.start, &selector.end)?;//TODO unwrap
+    fn subview(&self, selector: LoadedRange) -> Result<Self::Output, ThoosaError> {
+        let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.range.start, &selector.range.end)?;//TODO unwrap
 
         let sub_tensor = self.t_ref().i((ranges[0].clone(), ranges[1].clone()));
 
@@ -436,11 +442,6 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
     impl Adjustable for ClcTask {}
 
-    impl ThoTensor2<ClcTaskOutput, SimpleId> {
-        pub fn newc_clc_output() -> ThoTensor2<ClcTaskOutput, SimpleId> {
-            ThoTensor2::new("asdf".into(), Tensor::empty(&[0], FLOAT_CPU))
-        }
-    }
 
 
     impl OutId for ClcTask {
@@ -622,7 +623,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
         loader: Arc<TestTensorLoader>,
         clc_task: Arc<ClcTask>,
-        clc_oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<MonoMetrics<1, 2>>>,
+        clc_oom_runner: ClcOOMRunner<ClcTask, LoadedRange>,
     }
 
     impl Stage for LoadAndClcTask {
@@ -713,7 +714,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
             k: impl Into<Scalar>,
             fail_until: Vec<FailUntil>,
             dim: MonoMetrics<1, 2>,
-            oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<MonoMetrics<1, 2>>>,
+            oom_runner: ClcOOMRunner<ClcTask, LoadedRange>,
             kind: Kind,
             device: Device,
             use_matmul: bool,

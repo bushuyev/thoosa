@@ -1,4 +1,4 @@
-use crate::data::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor2;
 use caching_runner::adjusters::splits::OutputBuilder;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -78,7 +78,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
     use crate::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use caching_runner::adjusters::splits::OutputBuilder;
     use log::debug;

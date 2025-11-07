@@ -20,7 +20,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{SimpleId, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
-use torch_runner::data::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor2;
 
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
@@ -289,7 +289,7 @@ mod tests {
     use thoosa_common::utils::lin_t;
     use thoosa_shared::ThoosaError;
     use thoosa_shared::resource::Resource;
-    use torch_runner::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
 
     #[test]
     fn test_cross_batch_clc() -> Result<(), ThoosaError> {

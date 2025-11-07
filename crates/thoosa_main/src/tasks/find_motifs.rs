@@ -40,7 +40,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use crate::tasks::average_euclidean_distance::AverageDistanceValue;
 use crate::tasks::motif_loader::MotifMeta;
 use thoosa_shims::stream::{ThoStreamGuard, ThoCudaStream};
-use torch_runner::data::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor2;
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
@@ -376,7 +376,7 @@ mod tests {
         cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoosaError,
     };
     use thoosa_store::SqlStore;
-    use torch_runner::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
     use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
     use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
     use crate::tasks::motif_loader::{MotifLoader, MotifMeta};

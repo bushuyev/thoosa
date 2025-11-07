@@ -16,7 +16,7 @@ use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::Adjustable;
 use thoosa_shared::traits::{DataId, SimpleId, WithId};
-use torch_runner::data::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor2;
 
 pub struct AverageEuclideanDistanceStage<C>
 where
@@ -148,7 +148,7 @@ pub mod mock_average_stage {
     use thoosa_shared::{CopyToDevice, MyError, ThoosaError};
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
-    use torch_runner::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
 
     mock! {
         #[derive(Debug)]

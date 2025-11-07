@@ -32,7 +32,7 @@ use thoosa_shared::traits::{SimpleId, WithId};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_store::fs_store::FileMotifTrackerStore;
 use thoosa_store::{SqlMotifTrackerStore, Store};
-use torch_runner::data::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor2;
 
 #[derive(Debug)]
 pub struct DistsMask {

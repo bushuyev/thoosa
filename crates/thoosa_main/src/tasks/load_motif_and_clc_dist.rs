@@ -25,7 +25,7 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Select, SimpleId, WithId};
 use thoosa_shared::{CopyToDevice, ThoosaError};
-use torch_runner::data::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor2;
 
 
 #[derive(Cached)]
@@ -277,7 +277,7 @@ mod tests {
     use thoosa_shared::ThoosaError;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::traits::{DataId, SimpleId, WithId};
-    use torch_runner::data::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor2;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_and_clc_average_euclidean_distance() -> Result<(), ThoosaError> {
