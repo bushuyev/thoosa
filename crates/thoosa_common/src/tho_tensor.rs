@@ -409,7 +409,7 @@ impl<D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
 
 
 
-// impl <D:Dims, Id:Named + Clone + Send> Adjustable for ThoTensor<D, Id> {}
+impl <D:Dims, Id:Named + Clone + Send> Adjustable for ThoTensor<D, Id> {}
 
 impl<D: Dims, Id: Named + Clone> Data for ThoTensor<D, Id> {
     type Metrics = D::Metrics;

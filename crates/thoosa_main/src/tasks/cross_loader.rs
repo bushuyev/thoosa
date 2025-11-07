@@ -560,6 +560,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, Once};
     use std::time::Duration;
+    use futures_util::sink::With;
     use tch::{Device, Tensor};
     use thoosa_common::applicables::ThoDevice;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
@@ -752,7 +753,7 @@ mod tests {
             mock_cross_loader_clc::build::<TestBatchOutput, MockRunCtx>()
                 .with_run_batch_fn(move |input, _ctx| {
                     let observation = Observation {
-                        tensor_ids: input.tensors().iter().map(|t| t.id().0).collect(),
+                        tensor_ids: input.tensors().iter().map(|t| WithId::id(t).0).collect(),
                         batch_0_ids: input.batch_0().iter().map(|r| r.as_ref().id()).collect(),
                         batch_1_ids: input.batch_1().iter().map(|r| r.as_ref().id()).collect(),
                     };
