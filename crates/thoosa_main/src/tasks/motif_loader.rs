@@ -30,6 +30,7 @@ use crate::tasks::tensor_loader::{RawTensorLoader};
 use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::traits::Adjustable;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
@@ -112,107 +113,180 @@ where
             .with_data_ref(0, None, |id: &DataId| Ok(id.clone()))
             .await?;
 
-        let motif_id_value = motif_id.clone().0;
-        let (channel, find_motifs_run_id, slices, resources_map) =
-            self.store
-                .read()
-                .list_motif_slices(motif_id_value, None, None)?;
+        let (channel, find_motifs_run_id, window, cache_area, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), None, None, &ctx).await?;
 
-        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(
-            find_motifs_run_id,
-            &self.store.read().list_run_config_values(find_motifs_run_id)?,
-        )?;
 
-        let resource_ids_slices = slices
-            .iter()
-            .fold(HashMap::new(), |mut a, slice| {
+        Ok(Arc::new(DevicesWrap::wrap(
+            DataWithExtra::new(
+                motif,
+                MotifMeta{channel, run_id: find_motifs_run_id, window },
+            ),
+            cache_area,
+        )))
+    }
+}
+///To load slices not belonging to a motif
+#[derive(Debug)]
+pub struct SlicesLoader<L, C>
+where
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx = C> + Cached + OutId + 'static,
+    C: RunCtx + 'static,
+{
+    store: Arc<RwLock<Box<dyn Store>>>,
+    loader: Arc<L>,
+    pd: PhantomData<C>,
+}
+
+#[derive(Debug, Clone, DummyData)]
+pub struct SlicesLoaderInput {
+    motif_id:DataId,
+    limit:u32
+}
+
+impl WithId for SlicesLoaderInput {
+    type ID = DataId;
+
+    fn id(&self) -> &Self::ID {
+        &self.motif_id
+    }
+}
+
+impl Input for SlicesLoaderInput {}
+impl<L, C> Stage for SlicesLoader<L, C>
+where
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx = C> + Cached + OutId + 'static,
+    C: RunCtx + 'static,
+{
+    type In<'a> = SlicesLoaderInput;
+    type Out = ThoTensor<MotifSlices, DataId>;
+
+    type Ctx = C;
+}
+
+
+#[async_trait]
+impl<L, C> AsyncStage for SlicesLoader<L, C>
+where
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx = C> + Cached + OutId + 'static,
+    C: RunCtx + 'static,
+{
+
+    async fn run(
+        self: Arc<Self>,
+        input: Arc<DevicesWrap<SlicesLoaderInput>>,
+        ctx: Arc<RwLock<Self::Ctx>>,
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>
+    where
+            for<'a> Self::In<'a>: Send + Sync,
+    {
+        let SlicesLoaderInput { motif_id, limit } = input.clone_from_cpu().await?;
+
+        let (channel, find_motifs_run_id, window, cache_area, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), Some(limit), Some((0, 0)), &ctx).await?;
+
+
+        Ok(Arc::new(DevicesWrap::wrap(
+            motif,
+            cache_area,
+        )))
+    }
+}
+
+async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &Arc<RwLock<C>>) -> Result<(i64, RunId, u32, u64, ThoTensor<MotifSlices, DataId>), ThoosaError>
+where
+    C: 'static + RunCtx,
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C>,
+{
+    let motif_id_value = motif_id.clone().0;
+    let (channel, find_motifs_run_id, slices, resources_map) =
+        store
+            .read()
+            .list_motif_slices(motif_id_value, limit, all_but_in_run_id)?;
+
+    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(
+        find_motifs_run_id,
+        &store.read().list_run_config_values(find_motifs_run_id)?,
+    )?;
+
+    let resource_ids_slices = slices
+        .iter()
+        .fold(HashMap::new(), |mut a, slice| {
             a.entry(slice.0.clone()) //TODO clone
                 .or_insert_with(|| vec![])
                 .push(slice.1);
             a
         });
 
-        let window = find_motifs_run_config.window;
-        let (device_idx, cache_area) = {
-            let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area())
-        };
-        let num_devices = GlobalCtx::global().device_count();
+    let window = find_motifs_run_config.window;
+    let (device_idx, cache_area) = {
+        let guard = ctx.read();
+        (guard.device_idx(), guard.cache_area())
+    };
+    let num_devices = GlobalCtx::global().device_count();
 
-        debug!("MotifLoader::run: find_motifs_run_id={find_motifs_run_id} window={window:?} device_idx={device_idx}");
+    debug!("MotifLoader::run: find_motifs_run_id={find_motifs_run_id} window={window:?} device_idx={device_idx}");
 
-        let tmp_cache:TmpCached<ThoTensor<ChannelsData2, SimpleId>> = TmpCached::new("motifs", cache_area).await;
+    let tmp_cache: TmpCached<ThoTensor<ChannelsData2, SimpleId>> = TmpCached::new("motifs", cache_area).await;
 
-        let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config);
+    let configurable_loader = config_to_stage(&loader, &find_motifs_run_config);
 
-        for (resource_id, slices) in resource_ids_slices {
-            let resource = resources_map
-                .get(&resource_id)
-                .cloned()
-                .expect(&format!("no resource with id={resource_id}"));
-            let resource_cache = Arc::new(DevicesWrap::wrap_cpu(resource));
+    for (resource_id, slices) in resource_ids_slices {
+        let resource = resources_map
+            .get(&resource_id)
+            .cloned()
+            .expect(&format!("no resource with id={resource_id}"));
+        let resource_cache = Arc::new(DevicesWrap::wrap_cpu(resource));
 
-            let raw_tensor = Arc::clone(&configurable_loader)
-                .run_cached(resource_cache, Arc::clone(&ctx))
-                .await?;
+        let raw_tensor = Arc::clone(&configurable_loader)
+            .run_cached(resource_cache, Arc::clone(&ctx))
+            .await?;
 
-            let size = raw_tensor.size();
+        let size = raw_tensor.size();
 
-            let selector = ChannelsDataVec {
-                ranges: slices
-                    .into_iter()
-                    .filter(|slice| {
-                        let r = MonoMetrics::from([channel + 1, (slice + window) as i64])  <  *size;
-                        if !r {
-                            warn!("MotifLoader::run: slice={slice:?} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id}");
-                        }
-                        r
-                    })
-                    .map(|slice| {
-                        MonoMetrics::from([channel, slice as i64])..MonoMetrics::from([channel + 1, (slice + window) as i64])
-                    })
-                    .collect(),
-            };
-
-            if !selector.ranges.is_empty() {
-                raw_tensor.with_selected_data(device_idx, selector, |tt| {
-                    trace!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t_ref());
-                    if tt.size() == &[0] {
-                        warn!("MotifLoader::run/with_data:  resource_id={resource_id}  got empty motif for motif_id={motif_id}");
-                    } else {
-                        tmp_cache.insert(tt);
+        let selector = ChannelsDataVec {
+            ranges: slices
+                .into_iter()
+                .filter(|slice| {
+                    let r = MonoMetrics::from([channel + 1, (slice + window) as i64]) < *size;
+                    if !r {
+                        warn!("MotifLoader::run: slice={slice:?} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id}");
                     }
+                    r
+                })
+                .map(|slice| {
+                    MonoMetrics::from([channel, slice as i64])..MonoMetrics::from([channel + 1, (slice + window) as i64])
+                })
+                .collect(),
+        };
 
-                    Ok(())
-                }).await?;
-            } else {
-                warn!("Empty selector for resource_id={resource_id}  got empty motif for motif_id={motif_id}");
-            }
+        if !selector.ranges.is_empty() {
+            raw_tensor.with_selected_data(device_idx, selector, |tt| {
+                trace!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t_ref());
+                if tt.size() == &[0] {
+                    warn!("MotifLoader::run/with_data:  resource_id={resource_id}  got empty motif for motif_id={motif_id}");
+                } else {
+                    tmp_cache.insert(tt);
+                }
 
+                Ok(())
+            }).await?;
+        } else {
+            warn!("Empty selector for resource_id={resource_id}  got empty motif for motif_id={motif_id}");
         }
-
-        let tensors: Vec<Tensor> = tmp_cache
-            .take_all(device_idx)
-            .await
-            .into_iter()
-            .map(|tt| tt.t())
-            .collect();
-
-        let output = DataWithExtra::new(
-            ThoTensor::new(
-                motif_id,
-                Tensor::cat(tensors.as_slice(), 0),
-            ),
-            MotifMeta{channel, run_id: find_motifs_run_id, window },
-        );
-
-        Ok(Arc::new(DevicesWrap::wrap(
-            output,
-            cache_area,
-        )))
     }
-}
 
+    let tensors: Vec<Tensor> = tmp_cache
+        .take_all(device_idx)
+        .await
+        .into_iter()
+        .map(|tt| tt.t())
+        .collect();
+
+    let motif = ThoTensor::new(
+        motif_id,
+        Tensor::cat(tensors.as_slice(), 0),
+    );
+    Ok((channel, find_motifs_run_id, window, cache_area, motif))
+}
 
 
 #[cfg(test)]
@@ -396,6 +470,7 @@ mod tests {
         }).await?;
 
         assert_eq!(r, true);
+        //TODO check data
 
         Ok(())
     }

@@ -101,54 +101,60 @@ struct TreeStructuredParzenEstimator {
 
 impl TreeStructuredParzenEstimator {
     pub fn new<T: FieldName>(cs: &ConfigurationSpace<T>) -> Self {
+        debug!("TreeStructuredParzenEstimator::new: cs={cs:?}");
+
+        let esitmators:Vec<_> = cs
+            .iter()
+            .map(|hp| match hp {
+                Hyperparameter::UniformFloat { name, lower, upper } => {
+                    Box::new(NumericalParzenEstimator::new(
+                        Some(name.to_string()),
+                        // Tensor::zeros(1, FLOAT_CPU),
+                        *lower,
+                        *upper,
+                        BandwidthFactor::default(),
+                        true,
+                        None,
+                    )) as Box<dyn ParzenEstimator>
+                }
+                Hyperparameter::UniformInt { name, lower, upper } => {
+                    Box::new(NumericalParzenEstimator::new(
+                        Some(name.to_string()),
+                        // Tensor::zeros(1, FLOAT_CPU),
+                        *lower as f64, //TODO
+                        *upper as f64,
+                        BandwidthFactor::default(),
+                        true,
+                        Some(1), //TODO step
+                    )) as Box<dyn ParzenEstimator>
+                }
+
+                Hyperparameter::Categorical { name, values } => Box::new(
+                    CategoricalParzenEstimator::new(Some(name.to_string()), values.len(), true),
+                )
+                    as Box<dyn ParzenEstimator>,
+            })
+            .collect();
+        assert!(!esitmators.is_empty(), "estimators are empty");
+
+
         Self {
             observations: BinaryHeap::new(),
             mvpe_lower: None,
             mvpe_upper: None,
             percentile: 0.,
-            esitmators: cs
-                .iter()
-                .map(|hp| match hp {
-                    Hyperparameter::UniformFloat { name, lower, upper } => {
-                        Box::new(NumericalParzenEstimator::new(
-                            Some(name.to_string()),
-                            // Tensor::zeros(1, FLOAT_CPU),
-                            *lower,
-                            *upper,
-                            BandwidthFactor::default(),
-                            true,
-                            None,
-                        )) as Box<dyn ParzenEstimator>
-                    }
-                    Hyperparameter::UniformInt { name, lower, upper } => {
-                        Box::new(NumericalParzenEstimator::new(
-                            Some(name.to_string()),
-                            // Tensor::zeros(1, FLOAT_CPU),
-                            *lower as f64, //TODO
-                            *upper as f64,
-                            BandwidthFactor::default(),
-                            true,
-                            Some(1), //TODO step
-                        )) as Box<dyn ParzenEstimator>
-                    }
-
-                    Hyperparameter::Categorical { name, values } => Box::new(
-                        CategoricalParzenEstimator::new(Some(name.to_string()), values.len(), true),
-                    )
-                        as Box<dyn ParzenEstimator>,
-                })
-                .collect(),
+            esitmators,
         }
     }
 
     pub fn update_observations(&mut self, loss: f32, eval_config: &Vec<Val>) {
-        self.observations
-            .push(Reverse(RunResult::new(loss, eval_config.clone()))); //TODO clone
+
+        self.observations.push(Reverse(RunResult::new(loss, eval_config.clone()))); //TODO clone
 
         let n_lower = Self::percentile(self.observations.len()) as usize;
 
-        debug!("n_lower={n_lower}");
-        trace!("self.observations={:?}", self.observations);
+        debug!("TreeStructuredParzenEstimator::update_observations: n_lower={n_lower}");
+        trace!("TreeStructuredParzenEstimator::update_observations: self.observations={:?}", self.observations);
 
         self.percentile = n_lower as f32 / self.observations.len() as f32; //[self._metric_name].size
 
@@ -168,13 +174,11 @@ impl TreeStructuredParzenEstimator {
             },
         );
 
-        self.mvpe_lower
-            .replace(MultiVariateParzenEstimator::new(lower_esitmators));
-        self.mvpe_upper
-            .replace(MultiVariateParzenEstimator::new(upper_esitmators));
+        self.mvpe_lower.replace(MultiVariateParzenEstimator::new(lower_esitmators));
+        self.mvpe_upper.replace(MultiVariateParzenEstimator::new(upper_esitmators));
 
-        trace!("self.mvpe_lower={:?}", self.mvpe_lower);
-        trace!("self.self.mvpe_upper={:?}", self.mvpe_upper);
+        trace!("TreeStructuredParzenEstimator::update_observations: self.mvpe_lower={:?}", self.mvpe_lower);
+        trace!("TreeStructuredParzenEstimator::update_observations: self.self.mvpe_upper={:?}", self.mvpe_upper);
     }
 
     fn pop_observations(&mut self, n_lower: usize) -> (Vec<Vec<Val>>, Vec<Vec<Val>>) {
@@ -456,6 +460,7 @@ where
         let mut best_config: Option<Vec<Val>> = None;
 
         (0..self.max_evals).for_each(|i| {
+
             let eval_config = if i < self.n_init {
                 debug!("TPEOptimizer::optimize: i={i} random sample");
                 self.cs.random_sample()
@@ -480,10 +485,8 @@ where
                 best_loss = loss;
                 best_config.replace(eval_config.clone());
             }
-            debug!(
-                "TPEOptimizer::optimize: i={i} eval_config={:?} loss={loss}",
-                eval_config
-            );
+
+            debug!("TPEOptimizer::optimize: i={i} eval_config={:?} loss={loss}",eval_config);
 
             for (_key, tpe) in &mut self.tpe_samplers {
                 tpe.update_observations(loss, &eval_config)

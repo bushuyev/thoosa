@@ -1,3 +1,4 @@
+use log::debug;
 use crate::parzen::npe;
 use crate::parzen::optimizer::Distribution;
 use tch::Tensor;
@@ -10,6 +11,8 @@ pub struct MultiVariateParzenEstimator {
 
 impl MultiVariateParzenEstimator {
     pub fn new(parzen_estimators: Vec<Box<dyn Distribution>>) -> Self {
+        debug!("MultiVariateParzenEstimator::new: parzen_estimators={parzen_estimators:?}");
+        assert!(!parzen_estimators.is_empty());
         Self { parzen_estimators }
     }
 
