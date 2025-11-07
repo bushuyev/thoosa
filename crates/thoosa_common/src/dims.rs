@@ -4,7 +4,7 @@ use std::fmt::{Debug, Display};
 use std::pin::Pin;
 use thoosa_shared::applicables_runner::CachableId;
 use thoosa_shared::CopyToDevice;
-use thoosa_shared::traits::Metrics;
+use thoosa_shared::traits::{Metrics, MonoMetrics};
 
 pub trait Dims: Send + Sync + Clone + Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default + TryFrom<Vec<i64>>;
@@ -30,10 +30,12 @@ impl Dims for ChannelsSlicesData {
 }
 
 #[derive(Clone, Debug)]
-pub struct SlicesData; //sliced data [slices, slice_width]
-impl Dims for SlicesData {
-    type Metrics = AnyMetrics;
+pub struct Slice; //sliced data [slices, slice_width]
+impl Dims for Slice {
+    type Metrics = MonoMetrics<0, 1>;
 }
+
+
 
 #[derive(Clone, Debug)]
 pub struct MotifData; //motif net applied to sliced data [slices, slice_width] - distances between motif and a slice

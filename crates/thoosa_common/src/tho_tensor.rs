@@ -31,6 +31,7 @@ impl<D: Dims, Id: Named + Clone> Dimensional for ThoTensor<D, Id> {
     type Dimensions = D;
 }
 
+//TODO remove, it should be in DevicesWrap between async
 unsafe impl<D: Dims, Id: Named + Clone> Sync for ThoTensor<D, Id> {}
 
 // impl<D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
@@ -698,11 +699,4 @@ pub struct Labels;
 impl Dims for Labels {
     type Metrics = MonoMetrics<0, 1>;
 
-}
-
-//TODO move to batches
-pub trait DataBatch2<D: Dims, Id: Named + Clone> {
-    /// returns (inputs, labels)
-    fn train_batch(&self) -> (ThoTensor<D, Id>, ThoTensor<D, ()>);
-    fn valid_batch(&self) -> (ThoTensor<D, Id>, ThoTensor<D, ()>);
 }
