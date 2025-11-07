@@ -57,7 +57,7 @@ use crate::dims::{
     TCSD, ThoBatch,
 };
 use crate::find_motifs_run_config::*;
-use crate::tho_tensor::{DataBatch2, ThoTensor};
+use crate::tho_tensor::{ThoTensor};
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -2648,8 +2648,10 @@ pub fn run_train_motif_net(
         |pred: &Tensor, target: &Tensor| {
             let pred_y = pred.i((.., 0));
 
+            debug!("run_train_motif_net: pred_y ={pred_y} target={target}");
+
             let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
-            debug!("run_train_motif_net: pred_y ={pred_y} target={target} loss={loss}");
+            debug!("run_train_motif_net: loss={loss}");
 
             loss
         },

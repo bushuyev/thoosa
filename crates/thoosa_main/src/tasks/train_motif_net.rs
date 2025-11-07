@@ -5,6 +5,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::RwLock;
 use tch::Device::{Cpu, Cuda};
+use tch::kind::FLOAT_CUDA;
 use tch::nn::VarStore;
 use tch::Tensor;
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
@@ -12,7 +13,7 @@ use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::dims::{Dims, ThoBatch};
 use thoosa_common::runs::Empty;
-use thoosa_common::tho_tensor::{DataBatch2, ThoTensor};
+use thoosa_common::tho_tensor::{ThoTensor};
 use thoosa_common::train_nets::{opt_train_2, run_train_motif_net, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
@@ -162,14 +163,12 @@ where
                                     // let motif_data = motif.data();
                                     // let motif_meta = motif.extra();
 
-
-
-                                    Ok::<_, ThoosaError>(AugmentationsBatch::new(motif))
+                                    Ok::<_, ThoosaError>(AugmentationsBatch::new(motif, run_config.common_training_args.batch_size))
                                 })?;
 
                                  // AugmentationsBatch::new();
 
-                                run_train_motif_net(1000, &run_config, &Cuda(0), &mut batch, vs, &mut DummyListener/*, listener*/)
+                                run_train_motif_net(batch.motif_meta.window, &run_config, &Cuda(0), &mut batch, vs, &mut DummyListener/*, listener*/)
                             },
                             train_motifs_nodes_run_configs,
                             Cuda(0),
@@ -196,38 +195,36 @@ where
 
 #[derive(Debug)]
 pub struct AugmentationsBatch {
-
+    batch_size: u32,
+    motif_meta: MotifMeta
 }
 
 impl AugmentationsBatch {
-    pub fn new(motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>) -> Self {
+    pub fn new(motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, batch_size: u32) -> Self {
         debug!("TrainMotifNet::run: motif={motif:?}");
-        Self {}
+
+        Self {
+            batch_size,
+            motif_meta: motif.extra().clone()
+        }
     }
 }
 
 impl<D: Dims> DataBatch<D> for AugmentationsBatch {
     fn train_batch(&self) -> (ThoBatch<D>, Tensor) {
-        todo!()
+        (
+            Tensor::rand(&[self.batch_size as i64, self.motif_meta.window as i64], FLOAT_CUDA).into(),
+            Tensor::rand(&[self.batch_size as i64], FLOAT_CUDA).le(0.5)
+        )
     }
 
     fn valid_batch(&self) -> (ThoBatch<D>, Tensor) {
-        todo!()
+        (
+            Tensor::rand(&[self.batch_size as i64, self.motif_meta.window as i64], FLOAT_CUDA).into(),
+            Tensor::rand(&[self.batch_size as i64], FLOAT_CUDA).le(0.5)
+        )
     }
 }
-
-
-impl DataBatch2<MotifSlices, DataId> for AugmentationsBatch {
-    fn train_batch(&self) -> (ThoTensor<MotifSlices, DataId>, ThoTensor<MotifSlices, ()>) {
-        todo!()
-    }
-
-    fn valid_batch(&self) -> (ThoTensor<MotifSlices, DataId>, ThoTensor<MotifSlices, ()>) {
-        todo!()
-    }
-}
-
-
 
 
 // impl SyncStage
@@ -252,6 +249,7 @@ mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_store::MockStoreBuilder;
     use crate::tasks::select_motifs::tests::resource_tensor;
@@ -259,7 +257,7 @@ mod tests {
     use crate::tasks::train_motif_net::{TrainMotifNet, TrainMotifNetInput};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_0() -> Result<(), ThoosaError>{
+    async fn test_num_layers_opt() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp/test_single_label_one_motif");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
@@ -322,17 +320,19 @@ mod tests {
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(3)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(10)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(11)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.1)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MaxLoss), Val::Real(0.01)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptMaxEvals), Val::Int(10)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptNInit), Val::Int(10)),
                 ]),
                 vec![
-                    NamedRange::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
+                    // NamedRange::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
                 ],
             ),
-            vec![],
+            vec![
+                Hyperparameter::UniformInt{name: TrainMotifsNetsRunConfigFields::NumLayers, lower: 3, upper: 4}
+            ],
         );
 
 
