@@ -30,7 +30,7 @@ use tch::Kind::Float;
 use tch::{Device, Kind, TchError, Tensor};
 use thoosa_shared::{gauss_i, panic_to_err, panic_to_err_async, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
 use torch_sys::cuda::atc_cuda_device_count;
-
+use thoosa_shared::traits::Named;
 use crate::my_tch::{LossFp, ThoModule};
 
 use crate::batches::AsyncDataBatch;
@@ -1711,6 +1711,7 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
 }
 
 use crate::dims::ThoBatch;
+use crate::tho_tensor::{DataBatch2, ThoTensor, ThoTensor2};
 
 pub trait DataBatch<D: Dims> {
     /// returns (inputs, labels)
@@ -1839,27 +1840,19 @@ where
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI>,
 {
     debug!("train: device={:?} cycles={}", device, cycles);
-    debug!(
-        "train: opt={opt:?} optimizer_size={}",
-        optimizer_mem_size(&opt)
-    );
+    debug!("train: opt={opt:?} optimizer_size={}",optimizer_mem_size(&opt));
 
     let mut last_valid_loss = [0f32; 3];
 
     for idx in 1..cycles {
         debug!("train:  cuda_mem={:?}", cuda_mem());
         let (x_t_0, expected_y) = data.train_batch();
-        debug!("train: device={:?} x_t_0.size()={:?}", device, x_t_0.size());
+        debug!("train: device={:?} x_t_0.size={:?} expected_y.size={:?}", device, x_t_0.size(), expected_y.size());
         debug!("train: 0. cuda_mem={:?}", cuda_mem());
 
         let x_t = x_f(x_t_0);
 
-        debug!(
-            "train: device={:?}  x_t.size()={:?} y_t.size()={:?}",
-            device,
-            x_t.size(),
-            expected_y.size()
-        );
+        debug!("train: device={:?}  x_t.size={:?}",device,x_t.size());
 
         let predicted_y = net.tho_forward(&x_t, true);
         debug!("train: 1. cuda_mem={:?}", cuda_mem());
@@ -1870,10 +1863,8 @@ where
         let loss = loss_fn(predicted_y.as_ref(), &expected_y);
 
         debug!("train: 2. cuda_mem={:?}", cuda_mem());
-        trace!(
-            "train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",
-            optimizer_mem_size(&opt)
-        );
+        trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
+
         predicted_y.drop();
         drop(expected_y);
         debug!("train: 2.1 cuda_mem={:?}", cuda_mem());
@@ -1931,6 +1922,8 @@ where
     );
     Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
 }
+
+
 
 pub fn two_sigs(n: u32) -> (Tensor, Tensor) {
     let sig_1 = Tensor::from_slice(

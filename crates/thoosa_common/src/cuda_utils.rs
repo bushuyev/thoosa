@@ -402,6 +402,8 @@ pub async fn copy_h2d_from_ptr(
 
     dst_t
 }
+
+//TODO Result< + OOM handling
 pub fn pack_bits_bool(b: &Tensor) -> Tensor {
     assert_eq!(b.kind(), Kind::Bool, "pack_bits_bool expects Bool");
     let dev = b.device();

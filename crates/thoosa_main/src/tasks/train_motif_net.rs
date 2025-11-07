@@ -12,6 +12,7 @@ use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::dims::{Dims, ThoBatch};
 use thoosa_common::runs::Empty;
+use thoosa_common::tho_tensor::{DataBatch2, ThoTensor2};
 use thoosa_common::train_nets::{opt_train_2, run_train_motif_net, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
@@ -27,7 +28,6 @@ use thoosa_shared::traits::{Adjustable, DataId, SimpleId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
-use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
@@ -151,24 +151,23 @@ where
                     async move {
                         let motif = motif_loader.run(Arc::new(DevicesWrap::wrap_cpu(motif_id_rate.0.into())), ctx).await?;
 
-                        with_data!(device_idx, motif; |motif:&DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>|{
-
-                            let motif_data = motif.data();
-                            let motif_meta = motif.extra();
-
-                            debug!("TrainMotifNet::run: motif_data={motif_data:?}");
-
-                            Ok::<_, ThoosaError>(())
-                        })?;
-
                         opt_train_2(
                             opt_config,
                             async move |vs: &VarStore, run_config: TrainMotifsNetsRunConfig, _listener| {
                                 //TODO batch size
                                 // let all_slices_0_cl = all_slices_0_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
                                 // let all_slices_1_cl = all_slices_1_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
+                                let mut batch = with_data!(device_idx, motif; |motif:&DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>|{
 
-                                let mut batch = AugmentationsBatch::new();
+                                    // let motif_data = motif.data();
+                                    // let motif_meta = motif.extra();
+
+
+
+                                    Ok::<_, ThoosaError>(AugmentationsBatch::new(motif))
+                                })?;
+
+                                 // AugmentationsBatch::new();
 
                                 run_train_motif_net(1000, &run_config, &Cuda(0), &mut batch, vs, &mut DummyListener/*, listener*/)
                             },
@@ -196,12 +195,13 @@ where
 }
 
 #[derive(Debug)]
-struct AugmentationsBatch {
+pub struct AugmentationsBatch {
 
 }
 
 impl AugmentationsBatch {
-    pub fn new() -> Self {
+    pub fn new(motif:&DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>) -> Self {
+        debug!("TrainMotifNet::run: motif={motif:?}");
         Self {}
     }
 }
@@ -215,6 +215,19 @@ impl<D: Dims> DataBatch<D> for AugmentationsBatch {
         todo!()
     }
 }
+
+
+impl DataBatch2<MotifSlices, DataId> for AugmentationsBatch {
+    fn train_batch(&self) -> (ThoTensor2<MotifSlices, DataId>, ThoTensor2<MotifSlices, ()>) {
+        todo!()
+    }
+
+    fn valid_batch(&self) -> (ThoTensor2<MotifSlices, DataId>, ThoTensor2<MotifSlices, ()>) {
+        todo!()
+    }
+}
+
+
 
 
 // impl SyncStage
@@ -232,7 +245,7 @@ mod tests {
     use caching_runner::common::runnable::AsyncStage;
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
-    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, OptConfig, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields};
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, OptConfig, TrainMotifsNetsRunConfigFields};
     use thoosa_common::utils::reset_print_options;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
