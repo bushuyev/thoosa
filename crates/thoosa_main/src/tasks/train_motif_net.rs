@@ -12,7 +12,7 @@ use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::dims::{Dims, ThoBatch};
 use thoosa_common::runs::Empty;
-use thoosa_common::tho_tensor::{DataBatch2, ThoTensor2};
+use thoosa_common::tho_tensor::{DataBatch2, ThoTensor};
 use thoosa_common::train_nets::{opt_train_2, run_train_motif_net, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
@@ -36,7 +36,7 @@ use crate::tasks::run_ctx_2::MotifsCtx;
 #[derive(Debug)]
 pub struct TrainMotifNet<L, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     run_configs: Arc<OptRunConfigs<
@@ -76,7 +76,7 @@ impl WithId for TrainMotifNetInput {
 }
 impl <L, C> Stage for TrainMotifNet<L, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     type Ctx = C;
@@ -87,7 +87,7 @@ where
 impl <L, C> TrainMotifNet<L, C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
 {
     pub fn new(
         loader:Arc<L>,
@@ -118,7 +118,7 @@ where
 impl <L, C> AsyncStage for TrainMotifNet<L, C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
         let (device_idx, cache_area, ctx_name) = {
@@ -157,7 +157,7 @@ where
                                 //TODO batch size
                                 // let all_slices_0_cl = all_slices_0_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
                                 // let all_slices_1_cl = all_slices_1_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
-                                let mut batch = with_data!(device_idx, motif; |motif:&DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>|{
+                                let mut batch = with_data!(device_idx, motif; |motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
 
                                     // let motif_data = motif.data();
                                     // let motif_meta = motif.extra();
@@ -200,7 +200,7 @@ pub struct AugmentationsBatch {
 }
 
 impl AugmentationsBatch {
-    pub fn new(motif:&DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>) -> Self {
+    pub fn new(motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>) -> Self {
         debug!("TrainMotifNet::run: motif={motif:?}");
         Self {}
     }
@@ -218,11 +218,11 @@ impl<D: Dims> DataBatch<D> for AugmentationsBatch {
 
 
 impl DataBatch2<MotifSlices, DataId> for AugmentationsBatch {
-    fn train_batch(&self) -> (ThoTensor2<MotifSlices, DataId>, ThoTensor2<MotifSlices, ()>) {
+    fn train_batch(&self) -> (ThoTensor<MotifSlices, DataId>, ThoTensor<MotifSlices, ()>) {
         todo!()
     }
 
-    fn valid_batch(&self) -> (ThoTensor2<MotifSlices, DataId>, ThoTensor2<MotifSlices, ()>) {
+    fn valid_batch(&self) -> (ThoTensor<MotifSlices, DataId>, ThoTensor<MotifSlices, ()>) {
         todo!()
     }
 }

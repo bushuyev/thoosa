@@ -14,7 +14,7 @@ use caching_runner::common::{DropIf, PermitsCtx};
 use caching_runner::common::cachable::WithDataRef;
 use caching_runner::permits::{MAX_PERMITS, NumPermits, RunnerPerm};
 // test-only imports live under cfg(test)
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 use log::debug;
 use std::fmt::Debug;
 use tch::{Kind, Tensor};
@@ -23,7 +23,7 @@ use thoosa_shared::traits::Named;
 
 pub struct ThoTensorView<'a, D: Dims, Id: Named + Clone> {
     t: Tensor,
-    _owner: &'a ThoTensor2<D, Id>,
+    _owner: &'a ThoTensor<D, Id>,
 }
 unsafe impl<'a, D: Dims, Id: Named + Clone> Sync for ThoTensorView<'a, D, Id> {}
 unsafe impl<'a, D: Dims, Id: Named + Clone> Send for ThoTensorView<'a, D, Id> {}
@@ -35,8 +35,8 @@ impl<'a, D: Dims, Id: Named + Clone> ThoTensorView<'a, D, Id> {
             ..self
         }
     }
-    pub fn sum(self, k: Kind) -> ThoTensor2<D, Id> {
-        ThoTensor2::new(self._owner.id().clone(), self.t.sum(k))
+    pub fn sum(self, k: Kind) -> ThoTensor<D, Id> {
+        ThoTensor::new(self._owner.id().clone(), self.t.sum(k))
     }
 }
 
@@ -95,7 +95,7 @@ impl PermitsCtx for TorchPermsCtx {
 #[cfg(test)]
 mod tests {
     use super::output_builders::SingleDimTensorOutputBuilder;
-    use thoosa_common::tho_tensor::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::traits::{Data, MonoMetrics, Select};
     use crate::output_builders::BuildAs;
     use async_trait::async_trait;
@@ -309,8 +309,8 @@ struct  LoadedRange {
 }
 impl Adjustable for LoadedRange {}
 
-impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
-    type Output = ThoTensor2<LoadedTensor, SimpleId>;
+impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
+    type Output = ThoTensor<LoadedTensor, SimpleId>;
 
     fn subview(&self, selector: LoadedRange) -> Result<Self::Output, ThoosaError> {
         let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.range.start, &selector.range.end)?;//TODO unwrap
@@ -321,7 +321,7 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
 
         debug!("Select for ThoTensor2<LoadedTensor, SimpleId>: ranges={ranges:?} sub_tensor={sub_tensor:?}");
 
-        Ok(ThoTensor2::new(new_id, sub_tensor))
+        Ok(ThoTensor::new(new_id, sub_tensor))
     }
 }
 
@@ -350,7 +350,7 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
 
     impl Stage for TestTensorLoader {
         type In<'a> = LoaderInput;
-        type Out = ThoTensor2<LoadedTensor, SimpleId>;
+        type Out = ThoTensor<LoadedTensor, SimpleId>;
         type Ctx = TorchRunCtx;
     }
 
@@ -370,7 +370,7 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
 
             let num_devices = GlobalCtx::global().device_count();
 
-            let tensor = ThoTensor2::new(
+            let tensor = ThoTensor::new(
                 self.out_id(WithId::id(input.as_ref())),
                 lin_for_size(
                     k,
@@ -411,7 +411,7 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
     #[cache_name = "MulTaskOutputId"]
     struct ClcTask {
         id: SimpleId,
-        k: ThoTensor2<MulK, SimpleId>,
+        k: ThoTensor<MulK, SimpleId>,
         fail_until: Vec<FailUntil>,
         use_matmul: bool,
     }
@@ -428,7 +428,7 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
         ) -> Self {
             Self {
                 id,
-                k: ThoTensor2::new(
+                k: ThoTensor::new(
                     SimpleId::from("mul_k"),
                     Tensor::ones([dim], (kind, device))
                         .f_mul_scalar_(k)
@@ -462,9 +462,9 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
     impl LoadedTensor {
         fn clc_hadamard(
             id: SimpleId,
-            loaded: &ThoTensor2<LoadedTensor, SimpleId>,
-            k: &ThoTensor2<MulK, SimpleId>,
-        ) -> Result<ThoTensor2<ClcTaskOutput, SimpleId>, ThoosaError> {
+            loaded: &ThoTensor<LoadedTensor, SimpleId>,
+            k: &ThoTensor<MulK, SimpleId>,
+        ) -> Result<ThoTensor<ClcTaskOutput, SimpleId>, ThoosaError> {
             loaded.run_inner_with_params(
                 id,
                 &|t: &Tensor, params: &[&Tensor]| Ok(t.multiply(&params[0])),
@@ -474,9 +474,9 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
 
         fn clc_sum(
             id: SimpleId,
-            loaded: &ThoTensor2<LoadedTensor, SimpleId>,
-            k: &ThoTensor2<MulK, SimpleId>,
-        ) -> Result<ThoTensor2<ClcTaskOutput, SimpleId>, ThoosaError> {
+            loaded: &ThoTensor<LoadedTensor, SimpleId>,
+            k: &ThoTensor<MulK, SimpleId>,
+        ) -> Result<ThoTensor<ClcTaskOutput, SimpleId>, ThoosaError> {
             debug!(
                 "LoadedTensor::clc_sum: loaded.t.size={:?} loaded=\n{}",
                 loaded.size(),
@@ -496,8 +496,8 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
     }
 
     impl Stage for ClcTask {
-        type In<'a> = ThoTensor2<LoadedTensor, SimpleId>;
-        type Out = ThoTensor2<ClcTaskOutput, SimpleId>;
+        type In<'a> = ThoTensor<LoadedTensor, SimpleId>;
+        type Out = ThoTensor<ClcTaskOutput, SimpleId>;
         type Ctx = TorchRunCtx;
     }
 
@@ -587,7 +587,7 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
             let ctx_for_run = Arc::clone(&ctx);
 
             let output = input
-                .with_data_ref(device_idx, None, move |tensor: &ThoTensor2<LoadedTensor, SimpleId>| {
+                .with_data_ref(device_idx, None, move |tensor: &ThoTensor<LoadedTensor, SimpleId>| {
                     Arc::clone(&stage).do_run(tensor, Arc::clone(&ctx_for_run))
                 })
                 .await?;
@@ -628,7 +628,7 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
 
     impl Stage for LoadAndClcTask {
         type In<'a> = LoaderInput;
-        type Out = ThoTensor2<ClcTaskOutput, SimpleId>;
+        type Out = ThoTensor<ClcTaskOutput, SimpleId>;
         type Ctx = TorchRunCtx;
     }
 
@@ -789,7 +789,7 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
         debug!("loaded_tensor_0_0={loaded_tensor_0_0:?}");
 
             let tensor_data_0_0 = loaded_tensor_0_0
-            .with_data_ref(load_to_device, None, |tensor_data_0_0: &ThoTensor2<LoadedTensor, SimpleId>| {
+            .with_data_ref(load_to_device, None, |tensor_data_0_0: &ThoTensor<LoadedTensor, SimpleId>| {
                 debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
 
                 assert!(
@@ -815,7 +815,7 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
             .await?;
 
         loaded_tensor_0_0
-            .with_data_ref(load_to_device, None, |tensor_data_0_1: &ThoTensor2<LoadedTensor, SimpleId>| {
+            .with_data_ref(load_to_device, None, |tensor_data_0_1: &ThoTensor<LoadedTensor, SimpleId>| {
                 // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
                 assert_eq!(&tensor_data_0_0, tensor_data_0_1.t_ref());
@@ -878,7 +878,7 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
         mul_k: f64,
         size: MonoMetrics<1, 2>,
         res: &str,
-        result: &ThoTensor2<ClcTaskOutput, SimpleId>,
+        result: &ThoTensor<ClcTaskOutput, SimpleId>,
         rtol: f64,
         atol: f64,
     ) {
@@ -890,7 +890,7 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
     fn mul_check_with_exp_f<F>(
         mul_k: f64,
         res: &str,
-        result: &ThoTensor2<ClcTaskOutput, SimpleId>,
+        result: &ThoTensor<ClcTaskOutput, SimpleId>,
         rtol: f64,
         atol: f64,
         exp_f: F,
@@ -1362,7 +1362,7 @@ impl Select<LoadedRange> for ThoTensor2<LoadedTensor, SimpleId> {
         debug!("multed={multed:?}");
 
         multed
-            .with_data_ref(1, None, |r: &ThoTensor2<ClcTaskOutput, SimpleId>| {
+            .with_data_ref(1, None, |r: &ThoTensor<ClcTaskOutput, SimpleId>| {
                 mul_check_with_exp_f(MUL_K as f64, "resource_1", r, 0.01, 0.01, |k, t| {
                     lin_for_size(k, size, t.kind(), &t.device())
                         .sum_dim_intlist(1, false, t.kind())

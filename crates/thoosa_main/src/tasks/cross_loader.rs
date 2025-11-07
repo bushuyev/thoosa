@@ -24,7 +24,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::traits::{Data, Named, SimpleId, WithId};
 use thoosa_store::Store;
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_dummy_data_derive::DummyData;
 
@@ -36,7 +36,7 @@ where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: for<'i> Cached<
         In<'i> = Resource,
-        Out = ThoTensor2<ChannelsData2, SimpleId>,
+        Out = ThoTensor<ChannelsData2, SimpleId>,
         Ctx=C
     > + OutId + 'static,
 
@@ -68,7 +68,7 @@ impl<ResC, L, CLC, RSV, R, C> Debug for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -83,7 +83,7 @@ impl<ResC, L, CLC, RSV, R, C> CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -119,7 +119,7 @@ impl<ResC, L, CLC, RSV, R, C> OutId for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: Debug + Send + Sync + 'static,
@@ -189,7 +189,7 @@ impl<ResC, L, CLC, RSV, R, C> Stage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: Debug + Send + Sync + 'static,
@@ -210,7 +210,7 @@ where
     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
     Self::Out: Data + WithId + Send + Sync,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: Debug + Send + Sync + 'static,
@@ -572,7 +572,7 @@ mod tests {
     use thoosa_store::{MockStore, MockStoreBuilder, SqlStore};
     use tokio::task::yield_now;
     use tokio::time::sleep;
-    use thoosa_common::tho_tensor::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor;
 
     #[ctor::ctor]
     fn init() {
@@ -649,7 +649,7 @@ mod tests {
                     .collect::<Vec<f32>>();
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
-                ThoTensor2::new(
+                ThoTensor::new(
                     Input::id(key).clone(),
                     Tensor::from_slice(v.as_slice()).view((1, 10)),
                 )

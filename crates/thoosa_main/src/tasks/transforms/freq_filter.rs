@@ -16,7 +16,7 @@ use thoosa_common::find_motifs_run_config::InputFilter;
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{SimpleId, WithId};
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 
@@ -33,7 +33,7 @@ where
     C: RunCtx + 'static,
 {
     // filters:Vec<> TODO
-    band_pass_tensor: Option<ThoTensor2<BandPassDims, SimpleId>>,
+    band_pass_tensor: Option<ThoTensor<BandPassDims, SimpleId>>,
     _ctx: PhantomData<C>,
 }
 
@@ -56,7 +56,7 @@ where
                     1e-6
                 ).repeat([20, 1, 1]).to_device(Cuda(0));
 
-                Some(ThoTensor2::new(
+                Some(ThoTensor::new(
                     format!("{}-{}", band_pass_config.low_hz, high_hz).into(),
                     kernel
                 ))
@@ -84,8 +84,8 @@ where
     C: RunCtx + 'static,
 {
     type Ctx = C;
-    type In<'a> = ThoTensor2<ChannelsData2, SimpleId>;
-    type Out = ThoTensor2<ChannelsData2, SimpleId>;
+    type In<'a> = ThoTensor<ChannelsData2, SimpleId>;
+    type Out = ThoTensor<ChannelsData2, SimpleId>;
 }
 
 #[async_trait]
@@ -107,7 +107,7 @@ where
         let num_devices = GlobalCtx::global().device_count();
 
         let filtered = input
-            .with_data_ref(device_idx, None, |tensor: &ThoTensor2<ChannelsData2, SimpleId>| {
+            .with_data_ref(device_idx, None, |tensor: &ThoTensor<ChannelsData2, SimpleId>| {
 
                 let t = notch_band_rfft(tensor.t_ref(), 200., 58., 62.)?;//TODO params
 
@@ -123,10 +123,10 @@ where
                         Ok(output)
                     })?;
 
-                    Ok(ThoTensor2::new(self.out_id(tensor.id()), t))
+                    Ok(ThoTensor::new(self.out_id(tensor.id()), t))
 
                 } else {
-                    Ok(ThoTensor2::new(self.out_id(tensor.id()), t))
+                    Ok(ThoTensor::new(self.out_id(tensor.id()), t))
                 }
 
 
@@ -154,7 +154,7 @@ mod tests {
     use thoosa_common::find_motifs_run_config::InputFilter;
     use thoosa_common::transforms::filters::BandPassFilterParams;
     use thoosa_shared::ThoosaError;
-    use thoosa_common::tho_tensor::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::transforms::freq_filter::FreqFilter;
 
@@ -174,7 +174,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(RunCtx2::new(1, 1, "test")));
 
         let r = Arc::new(bf).run(
-            Arc::new(DevicesWrap::wrap(ThoTensor2::new("test".into(), Tensor::rand(&[20, 100], FLOAT_CPU)), 0)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::new("test".into(), Tensor::rand(&[20, 100], FLOAT_CPU)), 0)),
             ctx.clone()
         ).await?;
 

@@ -26,7 +26,7 @@ mod tests {
     use futures_util::future::BoxFuture;
     use caching_runner::test_utils::parse_numeric_part;
 
-    use thoosa_common::tho_tensor::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select};
     use crate::tests::TorchRunCtx;
     use dashmap::DashMap as DMap;
@@ -196,15 +196,15 @@ mod tests {
 
     impl Adjustable for ABRange {}
 
-    impl Select<ABRange> for ThoTensor2<ABData, SimpleId> {
-        type Output = ThoTensor2<ABData, SimpleId>;
+    impl Select<ABRange> for ThoTensor<ABData, SimpleId> {
+        type Output = ThoTensor<ABData, SimpleId>;
 
         fn subview(&self, selector: ABRange) -> Result<Self::Output, ThoosaError> {
             use std::cmp::min;
             let size = ABMetrics::from(self.t_ref().size());
             let d0 = selector.range.start.dim_0..min(size.dim_0, selector.range.end.dim_0);
 
-            Ok(ThoTensor2::new(self.id().clone(), self.t_ref().i((d0, ..))))
+            Ok(ThoTensor::new(self.id().clone(), self.t_ref().i((d0, ..))))
         }
     }
 
@@ -330,7 +330,7 @@ mod tests {
 
     impl Stage for ABLoader {
         type In<'a> = FileInput;
-        type Out = ThoTensor2<ABData, SimpleId>;
+        type Out = ThoTensor<ABData, SimpleId>;
         type Ctx = TorchRunCtx;
     }
 
@@ -354,7 +354,7 @@ mod tests {
             let num_devices = GlobalCtx::global().device_count();
 
             Ok(Arc::new(DevicesWrap::wrap(
-                ThoTensor2::new(id, x),
+                ThoTensor::new(id, x),
                 cache_area,
             )))
         }
@@ -439,7 +439,7 @@ mod tests {
 
     impl Stage for BatchBuilder {
         type In<'a> = FileListInput;
-        type Out = ThoTensor2<ABData, SimpleId>;
+        type Out = ThoTensor<ABData, SimpleId>;
         type Ctx = TorchRunCtx;
     }
 
@@ -493,7 +493,7 @@ mod tests {
 
             // Load features for all files in the list via cached loader
             let mut label_vec: Vec<f64> = Vec::with_capacity(self.batch_size);
-            let mut feats: Vec<Arc<DevicesWrap<ThoTensor2<ABData, SimpleId>>>> =
+            let mut feats: Vec<Arc<DevicesWrap<ThoTensor<ABData, SimpleId>>>> =
                 Vec::with_capacity(self.batch_size);
 
             let (loader_device_idx, loader_cache_area) = {
@@ -623,7 +623,7 @@ mod tests {
     }
 
     impl ClsOut {
-        fn accuracy(t: &ThoTensor2<ClsOut, SimpleId>) -> f64 {
+        fn accuracy(t: &ThoTensor<ClsOut, SimpleId>) -> f64 {
             t.double_value(&[0])
         }
     }
@@ -667,8 +667,8 @@ mod tests {
     }
 
     impl Stage for Classifier {
-        type In<'a> = ThoTensor2<ABData, SimpleId>;
-        type Out = ThoTensor2<ClsOut, SimpleId>;
+        type In<'a> = ThoTensor<ABData, SimpleId>;
+        type Out = ThoTensor<ClsOut, SimpleId>;
         type Ctx = TorchRunCtx;
     }
 
@@ -688,8 +688,8 @@ mod tests {
 
             let out_id = self.out_id(input.id());
             Ok(
-                      ThoTensor2::new(out_id, input.run_inner(//TODO id
-                        |t: &Tensor| {
+                      ThoTensor::new(out_id, input.run_inner( //TODO id
+                                                              |t: &Tensor| {
                             debug!("t.size()={:?}", t.size());
                         // Simulate OOM conditions based on batch size t.size()[0]
                         for fail_until in fails {
@@ -854,7 +854,7 @@ mod tests {
 
     impl Stage for JoinAndClassifyTask {
         type In<'a> = FileListInput;
-        type Out = ThoTensor2<ClsOut, SimpleId>;
+        type Out = ThoTensor<ClsOut, SimpleId>;
         type Ctx = TorchRunCtx;
     }
 
@@ -982,7 +982,7 @@ mod tests {
 
         debug!("acc={acc:?}");
 
-        acc.with_data_ref(0, None, |acc_t: &ThoTensor2<ClsOut, SimpleId>| {
+        acc.with_data_ref(0, None, |acc_t: &ThoTensor<ClsOut, SimpleId>| {
             debug!("acc_t={acc_t:?} t=\n{}", acc_t.t_ref());
 
             // Dim impls are to define domain-specific operations on tensors
@@ -1037,7 +1037,7 @@ mod tests {
             .run_cached(input_cache, Arc::clone(&ctx))
             .await?;
 
-        acc.with_data_ref(1, None, |acc: &ThoTensor2<ClsOut, SimpleId>| {
+        acc.with_data_ref(1, None, |acc: &ThoTensor<ClsOut, SimpleId>| {
             let v = ClsOut::accuracy(acc);
             assert!(v > 0.9, "training accuracy too low (4 files): {v}");
             Ok(())
@@ -1097,7 +1097,7 @@ mod tests {
             .run_cached(input_cache, Arc::clone(&ctx))
             .await?;
 
-        acc.with_data_ref(1, None, |acc: &ThoTensor2<ClsOut, SimpleId>| {
+        acc.with_data_ref(1, None, |acc: &ThoTensor<ClsOut, SimpleId>| {
             debug!("acc={}", acc.t_ref());
 
             let v = ClsOut::accuracy(acc);

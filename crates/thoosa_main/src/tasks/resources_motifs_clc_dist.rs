@@ -29,7 +29,7 @@ use crate::tasks::cross_batch_clc::{unfold_and_cat, UnfoldParams};
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::slices_iter::SlicesIter;
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 
 pub struct ClcRresourcesMotifsDist<C>
 where
@@ -208,7 +208,7 @@ where
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistInputDeviceWrapper {
     id: SimpleId,
-    batch: Vec<Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>,
+    batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>,
     resource_ids: Vec<ResourceId>,
     batched_motifs_output: Arc<DevicesWrap<StackedMotifsOutput>>,
 }
@@ -273,7 +273,7 @@ impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 impl ClcResourcesMotifsDistInputDeviceWrapper {
-    pub fn new(id: SimpleId, batch: Vec<Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>, resource_ids: Vec<ResourceId>, batched_motifs_output: Arc<DevicesWrap<StackedMotifsOutput>>) -> Self {
+    pub fn new(id: SimpleId, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>, resource_ids: Vec<ResourceId>, batched_motifs_output: Arc<DevicesWrap<StackedMotifsOutput>>) -> Self {
         Self { id, batch, resource_ids, batched_motifs_output }
     }
 }
@@ -297,7 +297,7 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
         let batched_motifs_output = Arc::clone(&self.batched_motifs_output);
         with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
             |
-             batch_v:&[&ThoTensor2<ChannelsData2, SimpleId>],
+             batch_v:&[&ThoTensor<ChannelsData2, SimpleId>],
              batched_motifs_output:&StackedMotifsOutput
             |{
 
@@ -330,7 +330,7 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
 
         with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
             |
-             batch_v:&[&ThoTensor2<ChannelsData2, SimpleId>],
+             batch_v:&[&ThoTensor<ChannelsData2, SimpleId>],
              batched_motifs_output:&StackedMotifsOutput
             |{
                 let inpt = ClcResourcesMotifsDistInput::new(
@@ -350,7 +350,7 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
 // #[dummy_data(no_clone)]
 pub struct ClcResourcesMotifsDistInput<'a> {
     id: SimpleId,
-    batch: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
+    batch: &'a [&'a ThoTensor<ChannelsData2, SimpleId>],
     resource_ids: Vec<ResourceId>,
     batched_motifs_output: &'a StackedMotifsOutput,
 }
@@ -358,7 +358,7 @@ pub struct ClcResourcesMotifsDistInput<'a> {
 
 impl<'a> ClcResourcesMotifsDistInput<'a> {
     pub fn new(
-        batch: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
+        batch: &'a [&'a ThoTensor<ChannelsData2, SimpleId>],
         resource_ids: Vec<ResourceId>,
         batched_motifs_output: &'a StackedMotifsOutput,
     ) -> ClcResourcesMotifsDistInput<'a> {

@@ -5,7 +5,7 @@ use tch::{IndexOp, Tensor};
 use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_shared::{MyError, ThoosaError};
 use thoosa_shared::traits::{DataId, Select, SimpleId};
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 
 #[derive(Clone, Debug)]
@@ -22,8 +22,8 @@ pub struct ChannelsDataVec {
     pub ranges:Vec<Range<MonoMetrics<1, 2>>>
 }
 
-impl Select<ChannelsDataVec> for ThoTensor2<ChannelsData2, SimpleId> {
-    type Output = ThoTensor2<ChannelsData2, SimpleId>;
+impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SimpleId> {
+    type Output = ThoTensor<ChannelsData2, SimpleId>;
 
     fn subview(&self, selector: ChannelsDataVec) -> Result<Self::Output, ThoosaError> {
         let ChannelsDataVec { ranges } = selector;
@@ -46,7 +46,7 @@ impl Select<ChannelsDataVec> for ThoTensor2<ChannelsData2, SimpleId> {
             Tensor::vstack(subs.as_slice())
         };
 
-        let sub = ThoTensor2::new(
+        let sub = ThoTensor::new(
             SimpleId::from(format!("{}:{ranges:?}", self.id().0)),
             stacked,
         );
@@ -59,7 +59,7 @@ impl Select<ChannelsDataVec> for ThoTensor2<ChannelsData2, SimpleId> {
 
 
 impl ChannelsData2 {
-    fn sub_single(t: &ThoTensor2<ChannelsData2, SimpleId>, range: &Range<MonoMetrics<1, 2>>, size: &MonoMetrics<1, 2>) -> Tensor {
+    fn sub_single(t: &ThoTensor<ChannelsData2, SimpleId>, range: &Range<MonoMetrics<1, 2>>, size: &MonoMetrics<1, 2>) -> Tensor {
         let channel_range = range.start.dim_0()..min(size.dim_0(), range.end.dim_0());
         let data_range = range.start.dim_1()..min(size.dim_1(), range.end.dim_1());
 
