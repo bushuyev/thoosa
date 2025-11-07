@@ -1,4 +1,4 @@
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 use caching_runner::adjusters::splits::OutputBuilder;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -21,7 +21,7 @@ pub struct SingleDimTensorOutputBuilder<D>
 where
     D: Dims,
 {
-    output: ThoTensor2<D, SimpleId>,
+    output: ThoTensor<D, SimpleId>,
     added_partial_output_len: i64,
     add: BuildAs,
     dim: i64
@@ -30,14 +30,14 @@ where
 impl<D: Dims> SingleDimTensorOutputBuilder<D> {
     #[allow(dead_code)]
     pub fn new(
-        id: <ThoTensor2<D, SimpleId> as WithId>::ID,
+        id: <ThoTensor<D, SimpleId> as WithId>::ID,
         dim: i64,
         size: &[i64],
         options: (Kind, Device),
         add: BuildAs,
     ) -> Self {
         Self {
-            output: ThoTensor2::zeros(id, size, options),
+            output: ThoTensor::zeros(id, size, options),
             added_partial_output_len: 0,
             add,
             dim
@@ -49,7 +49,7 @@ impl<D> OutputBuilder for SingleDimTensorOutputBuilder<D>
 where
     D: Dims,
 {
-    type O = ThoTensor2<D, SimpleId>;
+    type O = ThoTensor<D, SimpleId>;
 
     fn add_partial_output(&mut self, partial: Self::O) {
         let partial_size = partial.size();
@@ -78,7 +78,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use thoosa_common::tho_tensor::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor;
     use crate::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use caching_runner::adjusters::splits::OutputBuilder;
     use log::debug;
@@ -100,10 +100,10 @@ mod tests {
             SingleDimTensorOutputBuilder::new("test".into(), 0, &[10], FLOAT_CPU, BuildAs::Append),
         );
 
-        builder.add_partial_output(ThoTensor2::new("1".into(), Tensor::from_slice(&[0, 1, 2])));
-        builder.add_partial_output(ThoTensor2::new("1".into(), Tensor::from_slice(&[3, 4, 5])));
-        builder.add_partial_output(ThoTensor2::new("1".into(), Tensor::from_slice(&[6, 7, 8])));
-        builder.add_partial_output(ThoTensor2::new("1".into(), Tensor::from_slice(&[9])));
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[0, 1, 2])));
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5])));
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8])));
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[9])));
 
         let out = builder.build();
 
@@ -123,9 +123,9 @@ mod tests {
             SingleDimTensorOutputBuilder::new("test".into(), 0, &[3], FLOAT_CPU, BuildAs::Sum),
         );
 
-        builder.add_partial_output(ThoTensor2::new("1".into(), Tensor::from_slice(&[0, 1, 2])));
-        builder.add_partial_output(ThoTensor2::new("1".into(), Tensor::from_slice(&[3, 4, 5])));
-        builder.add_partial_output(ThoTensor2::new("1".into(), Tensor::from_slice(&[6, 7, 8])));
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[0, 1, 2])));
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5])));
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8])));
 
         let out = builder.build();
 
