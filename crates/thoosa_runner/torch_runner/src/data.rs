@@ -9,7 +9,7 @@ use tch::{Device, Kind, Tensor};
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::tensor_mem_size;
-use thoosa_common::dims::Dims;
+use thoosa_common::dims::{Dims, ThoBatch};
 use thoosa_shared::panic_to_err;
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoosaError;
@@ -53,6 +53,8 @@ impl<D: Dims, Id: Named + Clone> Data for ThoTensor2<D, Id> {
         self.size().iter().fold(1u64, | a, v| (a * (*v as u64))) * self.t.kind().elt_size_in_bytes() as u64
     }
 }
+
+
 
 impl<D: Dims, Id: Named + Clone> Debug for ThoTensor2<D, Id> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -332,4 +334,24 @@ impl<'a, D: Dims, Id: Named + Clone> ThoTensorMut<'a, D, Id> {
     pub fn resize_(&mut self, new_shape: &[i64]) {
         let _ = self.t.resize_(new_shape);
     }
+}
+
+
+
+
+
+
+#[derive(Clone, Debug)]
+pub struct Labels;
+
+impl Dims for Labels {
+    type Metrics = MonoMetrics<0, 1>;
+
+}
+
+//TODO move to batches
+pub trait DataBatch2<D: Dims, Id: Named + Clone> {
+    /// returns (inputs, labels)
+    fn train_batch(&self) -> (ThoTensor2<D, Id>, ThoTensor2<D, ()>);
+    fn valid_batch(&self) -> (ThoTensor2<D, Id>, ThoTensor2<D, ()>);
 }

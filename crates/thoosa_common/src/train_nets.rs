@@ -2632,24 +2632,24 @@ pub fn run_train_motif_net(
     motif_width: u32,
     run_config: &TrainMotifsNetsRunConfig,
     device: &Device,
-    mut batch: &mut dyn DataBatch<SlicesData>,
+    batch: &mut dyn DataBatch<SlicesData>,
     vs: &VarStore,
     listener: &mut dyn TrainListener,
 ) -> Result<(f32, MotifNetParams), ThoosaError> {
     let node_params = MotifNetParams::new(motif_width, run_config.num_layers);
+    debug!("run_train_motif_net: node_params={node_params:?}");
 
     let loss = train(
         &device,
-        batch as &mut dyn DataBatch<SlicesData>,
+        batch,
         &motif_node(&node_params)
             .build_tch_module::<Batch<SlicesData>, Batch<MotifData>>(&vs.root())
             .unwrap(),
         |pred: &Tensor, target: &Tensor| {
             let pred_y = pred.i((.., 0));
 
-            let loss =
-                pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
-            debug!("train_on_motif: pred_y ={pred_y} target={target} loss={loss}");
+            let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
+            debug!("run_train_motif_net: pred_y ={pred_y} target={target} loss={loss}");
 
             loss
         },
@@ -2663,6 +2663,43 @@ pub fn run_train_motif_net(
 
     Ok((loss, node_params))
 }
+
+// pub fn run_train_motif_net_2(
+//     motif_width: u32,
+//     run_config: &TrainMotifsNetsRunConfig,
+//     device: &Device,
+//     batch: &mut dyn DataBatch2<SlicesData>,
+//     vs: &VarStore,
+//     listener: &mut dyn TrainListener,
+// ) -> Result<(f32, MotifNetParams), ThoosaError> {
+//     let node_params = MotifNetParams::new(motif_width, run_config.num_layers);
+//     debug!("run_train_motif_net: node_params={node_params:?}");
+//
+//     let loss = train(
+//         &device,
+//         batch,
+//         &motif_node(&node_params)
+//             .build_tch_module::<Batch<SlicesData>, Batch<MotifData>>(&vs.root())
+//             .unwrap(),
+//         |pred: &Tensor, target: &Tensor| {
+//             let pred_y = pred.i((.., 0));
+//
+//             let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
+//             debug!("run_train_motif_net: pred_y ={pred_y} target={target} loss={loss}");
+//
+//             loss
+//         },
+//         run_config.common_training_args.cycles as usize,
+//         AdamW::default()
+//             .build(&vs, run_config.common_training_args.lr)
+//             .unwrap(),
+//         |t| t,
+//         Some(listener),
+//     )?;
+//
+//     Ok((loss, node_params))
+// }
+
 
 pub fn slices_in_all_resources<ResourceId>(slices: Vec<(ResourceId, Vec<Tensor>)>) -> Vec<Tensor> {
     slices
