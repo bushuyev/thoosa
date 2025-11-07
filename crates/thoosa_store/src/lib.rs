@@ -135,71 +135,44 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         label: &str,
         limit: i64,
     ) -> Result<Vec<Resource>, ThoosaError>;
-    fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoosaError>;
-    fn list_labels(&self) -> Result<Vec<String>, ThoosaError>;
-    fn save_params_value<'a>(
-        &mut self,
-        params: HashMap<String, Val>,
-        run_id: RunId,
-        label: Option<&'a str>,
-    ) -> Result<(), ThoosaError>;
-    fn save_slices(
-        &mut self,
-        run_id: RunId,
-        channel: i64,
-        slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>,
-    ) -> Result<(), ThoosaError>;
-    fn save_groups_as_motifs_with_slices_matches(
-        &mut self,
-        run_id: RunId,
-        channel: i64,
-        groups: HashMap<u16, HashSet<IdSlice>>,
-        as_ref: &dyn AsRef<Path>,
-    ) -> Result<(), ThoosaError>;
-    fn save_groups_as_motifs(
-        &mut self,
-        run_id: RunId,
-        channel: i64,
-        groups: HashMap<u16, HashSet<IdSlice>>,
-    ) -> Result<(), ThoosaError>;
 
-    fn add_slices_to_motif(
-        &mut self,
-        run_id: RunId,
-        motif_id: u32,
-        channel: i64,
-        slices: HashSet<IdSlice>,
-    ) -> Result<(), ThoosaError>;
+    fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoosaError>;
+
+    fn list_labels(&self) -> Result<Vec<String>, ThoosaError>;
+
+    fn save_params_value<'a>(&mut self, params: HashMap<String, Val>, run_id: RunId, label: Option<&'a str>) -> Result<(), ThoosaError>;
+    fn save_slices(&mut self, run_id: RunId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> Result<(), ThoosaError>;
+
+    fn save_groups_as_motifs_with_slices_matches(&mut self, run_id: RunId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, as_ref: &dyn AsRef<Path>) -> Result<(), ThoosaError>;
+
+    fn save_groups_as_motifs(&mut self, run_id: RunId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> Result<(), ThoosaError>;
+
+    fn add_slices_to_motif(&mut self, run_id: RunId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> Result<(), ThoosaError>;
 
     fn list_motifs(&self, run_id: RunId) -> Result<Vec<usize>, ThoosaError>;
     fn list_motifs_slices(
         &self,
         run_id: RunId,
     ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
-    fn list_motif_slices(
-        &self,
-        motif_id: u32,
-        limit: Option<u32>,
-        all_but_in_run_id: Option<(RunId, u32)>,
-    ) -> Result<
-        (
-            i64,
-            RunId,
-            Vec<TensorIdSliceIdx>,
-            HashMap<ResourceId, Resource>,
-        ),
-        ThoosaError,
-    >;
+
+    fn list_motif_slices(&self, motif_id: u32, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>) ->
+    Result<(
+        i64,
+        RunId,
+        Vec<TensorIdSliceIdx>,
+        HashMap<ResourceId, Resource>,
+    ), ThoosaError>;
 
     fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoosaError>;
+
     fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoosaError>;
-    fn save_selected_motifs(
-        &mut self,
-        run_id: RunId,
-        selected_motifs: Vec<(u32, f64)>,
-    ) -> Result<RunId, ThoosaError>;
+
+    fn save_selected_motifs(&mut self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoosaError>;
+
     fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError>; //corr_run_id, run_id, label
+
     fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<usize>, ThoosaError>; //corr_run_id, run_id, label
+
     fn list_selected_motifs(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoosaError>;
 
     fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoosaError>;
@@ -1599,14 +1572,12 @@ impl Store for SqlStore {
         Ok(resources_motifs)
     }
 
-    /**
-    returns channel, find_motifs_run_id, slices
-    */
+    ///returns channel, find_motifs_run_id, slices, resources map
     fn list_motif_slices(
         &self,
         motif_id: u32,
         limit: Option<u32>,
-        all_but_in_run_id: Option<(RunId, u32/*channel*/)>,//TODO RunId not used, channel can be removed
+        all_but_in_run_id: Option<(RunId, u32/*channel*/)>,//TODO remove - load random slices from same channel/resources
     ) -> Result<
         (
             i64,
@@ -1634,7 +1605,7 @@ impl Store for SqlStore {
                     if all_but_in_run_id.is_none() {
                         "=? AND ? IS NOT NULL "
                     } else {
-                        "!=? AND m.channel_id=? ORDER BY RANDOM()"
+                        "!=? AND m.channel_id=(SELECT channel_id FROM motifs WHERE id=?) ORDER BY RANDOM()"
                     },
                     &limit
                         .map(|limit| format!("LIMIT {}", limit))
@@ -1644,7 +1615,7 @@ impl Store for SqlStore {
             )?;
 
             let params = match all_but_in_run_id {
-                Some((_run_id, channel_id)) => [motif_id, channel_id],
+                Some((_run_id, channel_id)) => [motif_id, motif_id],
                 None => [motif_id, 1],
             };
             debug!("list_motif_slices: params={params:?}");
@@ -3018,10 +2989,22 @@ mod store_tests {
         assert_eq!(7, channel);
         assert_eq!(find_motifs_run_id, run_id_);
 
+        let (channel, run_id_, mut slices, resources_map) =
+            store
+                .read()
+                .list_motif_slices(motif_slices_1111[0].motif_id, Some(1), None)?;
+        slices.sort();
+
 
         let resources = store.read().list_resources_not_in_group("pure group 10");
-
         debug!("resources={resources:?}");
+
+        let (channel, run_id_, mut slices, resources_map) =
+            store
+                .read()
+                .list_motif_slices(motif_slices_1111[0].motif_id, Some(3), Some((0, 0)))?;
+
+        debug!("random slices={slices:?}");
         //
         // // let (_channel, _run_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_id, channel as usize)))?;
         // //
