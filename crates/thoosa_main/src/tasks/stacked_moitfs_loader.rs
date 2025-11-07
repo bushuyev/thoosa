@@ -26,7 +26,7 @@ use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::cross_dims::{ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
@@ -63,12 +63,12 @@ impl WithId for BatchedMotifsInput {
 #[derive(Debug)]
 pub struct StackedMotifsOutput {
     id:SimpleId,
-    pub motifs: DataWithExtra<ThoTensor2<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Arc<SelectMotifsRunConfig>)>,
-    pub motifs_avg_dists:ThoTensor2<ChannelsMotifsDists, SimpleId>
+    pub motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Arc<SelectMotifsRunConfig>)>,
+    pub motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SimpleId>
 }
 
 impl StackedMotifsOutput {
-    pub fn new(id: SimpleId, motifs: DataWithExtra<ThoTensor2<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Arc<SelectMotifsRunConfig>)>, motifs_avg_dists: ThoTensor2<ChannelsMotifsDists, SimpleId>) -> Self {
+    pub fn new(id: SimpleId, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Arc<SelectMotifsRunConfig>)>, motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SimpleId>) -> Self {
         Self { id, motifs, motifs_avg_dists }
     }
 
@@ -112,7 +112,7 @@ impl Output for StackedMotifsOutput {}
 #[derive(Debug, Cached)]
 pub struct BatchedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     motif_loader:Arc<ML>,
@@ -125,7 +125,7 @@ where
 
 impl <ML, C> OutId for BatchedMotifsLoader<ML, C>
 where
-ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
 C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -135,7 +135,7 @@ C: RunCtx + MotifsCtx + Adjustable + 'static
 
 impl <ML, C> BatchedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     pub fn new(
@@ -157,7 +157,7 @@ where
 
 impl <ML, C> Stage for BatchedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 
 {
@@ -169,7 +169,7 @@ where
 #[async_trait]
 impl <ML, C> AsyncStage for BatchedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 
 {
@@ -225,7 +225,7 @@ where
         .try_collect::<Vec<_>>()
         .await?;
 
-        with_data!(device_idx, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>]|{
+        with_data!(device_idx, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
 
             let channels_motifs = data.into_iter().fold(
 
@@ -329,13 +329,13 @@ where
             Ok(Arc::new(DevicesWrap::wrap(StackedMotifsOutput::new(
                 "".into(),
                 DataWithExtra::new(
-                    ThoTensor2::new(
+                    ThoTensor::new(
                         find_and_select_motifs_id.clone(),
                         channels_motifs_t
                     ),
                     (channels_motif_ids, Arc::clone(&input.find_motifs_run_config), Arc::clone(&input.select_motifs_run_config))
                 ),
-                 ThoTensor2::new(
+                 ThoTensor::new(
                     find_and_select_motifs_id,
                     channels_motif_avg_dists_t
                 )

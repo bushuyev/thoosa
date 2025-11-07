@@ -20,25 +20,25 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{SimpleId, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
-    tensors: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
+    tensors: &'a [&'a ThoTensor<ChannelsData2, SimpleId>],
     resources_0: &'a [R],
     resources_1: &'a [R],
 }
 
 impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
     pub fn new(
-        tensors: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
+        tensors: &'a [&'a ThoTensor<ChannelsData2, SimpleId>],
         b_0: &'a [R],
         b_1: &'a [R],
     ) -> Self {
         Self { tensors, resources_0: b_0, resources_1: b_1 }
     }
 
-    pub fn tensors(&self) -> &'a [&'a ThoTensor2<ChannelsData2, SimpleId>] {
+    pub fn tensors(&self) -> &'a [&'a ThoTensor<ChannelsData2, SimpleId>] {
         self.tensors
     }
 
@@ -242,7 +242,7 @@ where
 }
 
 
-pub fn unfold_and_cat(input: &[&ThoTensor2<ChannelsData2, SimpleId>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoosaError> {
+pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SimpleId>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoosaError> {
     let mut batch_0_sizes = vec![];
 
     let batch_0_tensors = input
@@ -289,7 +289,7 @@ mod tests {
     use thoosa_common::utils::lin_t;
     use thoosa_shared::ThoosaError;
     use thoosa_shared::resource::Resource;
-    use thoosa_common::tho_tensor::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor;
 
     #[test]
     fn test_cross_batch_clc() -> Result<(), ThoosaError> {
@@ -327,18 +327,18 @@ mod tests {
             UnfoldParams::new(1, 2, 1),
         ));
 
-        let tensor_00 = ThoTensor2::new("1".into(), Tensor::from_slice(&[
+        let tensor_00 = ThoTensor::new("1".into(), Tensor::from_slice(&[
             0.00, 0.01, 0.02,
             0.10, 0.11, 0.12,
             0.20, 0.21, 0.22,
         ]).view((3,3)));
-        let tensor_01 = ThoTensor2::new("1".into(), Tensor::from_slice(&[
+        let tensor_01 = ThoTensor::new("1".into(), Tensor::from_slice(&[
             1.00, 1.01, 1.02, 1.03,
             1.10, 1.11, 1.12, 1.13,
             1.20, 1.21, 1.22, 1.23,
         ]).view((3,4)));
 
-        let tensor_1 = ThoTensor2::new("2".into(), Tensor::from_slice(&[
+        let tensor_1 = ThoTensor::new("2".into(), Tensor::from_slice(&[
             2.00, 2.01,
             2.10, 2.11,
             2.20, 2.21,

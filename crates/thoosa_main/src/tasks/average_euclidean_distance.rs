@@ -16,7 +16,7 @@ use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::Adjustable;
 use thoosa_shared::traits::{DataId, SimpleId, WithId};
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 
 pub struct AverageEuclideanDistanceStage<C>
 where
@@ -100,7 +100,7 @@ where
     C: RunCtx + 'static,
 {
     type Ctx = C;
-    type In<'a> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>;
+    type In<'a> = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>;
     type Out = AverageDistanceValue;
 }
 impl<C> SyncStage for AverageEuclideanDistanceStage<C>
@@ -148,7 +148,7 @@ pub mod mock_average_stage {
     use thoosa_shared::{CopyToDevice, MyError, ThoosaError};
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
-    use thoosa_common::tho_tensor::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor;
 
     mock! {
         #[derive(Debug)]
@@ -156,7 +156,7 @@ pub mod mock_average_stage {
 
         impl Stage for AverageEuclideanDistanceStage {
             type Ctx = MockRunCtx;
-            type In<'a> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>;
+            type In<'a> = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>;
             type Out = AverageDistanceValue;
         }
 

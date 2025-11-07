@@ -50,7 +50,6 @@ use thoosa_common::find_motifs_run_config::{
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
-use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{
     CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs,
@@ -89,7 +88,7 @@ use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{ResourceType, ThoosaError, cdt, cdt_for_dir};
 use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Runtime;
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::RunCtx;
@@ -286,7 +285,7 @@ where
 
     let loader_2 = Arc::new(RawTensorLoader::<RunCtx2>::new(
         move |key, _| {
-            ThoTensor2::new(
+            ThoTensor::new(
                 Input::id(key).clone(),
                 Tensor::load(tensors_path_2.join(format!(
                     "{}_{}.pt",
@@ -1793,7 +1792,7 @@ async fn plot_motif(
         .with_data_ref(0, None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
         .await?;
 
-    let r = motif.with_data_ref(0, None, |motif: &DataWithExtra<ThoTensor2<_, DataId>, MotifMeta>| {
+    let r = motif.with_data_ref(0, None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>| {
         let run_id = motif.extra().run_id;
         let channel = motif.extra().channel;
 

@@ -25,7 +25,7 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Select, SimpleId, WithId};
 use thoosa_shared::{CopyToDevice, ThoosaError};
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 
 
 #[derive(Cached)]
@@ -34,12 +34,12 @@ where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
             In<'i> = DataId,
-            Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
 
     for<'i> CLC: SyncStage<
-            In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            In<'i> = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
         > + Adjustable + OutId + Sync + Send + 'static,
@@ -55,12 +55,12 @@ where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
             In<'i> = DataId,
-            Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
 
     for<'i> CLC: SyncStage<
-            In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            In<'i> = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
         > + Adjustable + OutId + Sync + Send + 'static,
@@ -75,12 +75,12 @@ where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
             In<'i> = DataId,
-            Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
 
     for<'i> CLC: SyncStage<
-            In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            In<'i> = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
         > + Adjustable + OutId + Sync + Send + 'static,
@@ -97,12 +97,12 @@ where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
             In<'i> = DataId,
-            Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
 
     for<'i> CLC: SyncStage<
-            In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            In<'i> = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
         > + Adjustable + OutId + Sync + Send + 'static,
@@ -123,12 +123,12 @@ where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
             In<'i> = DataId,
-            Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
 
     for<'i> CLC: SyncStage<
-            In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            In<'i> = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
         > + Adjustable + OutId + Sync + Send + 'static,
@@ -143,12 +143,12 @@ where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
             In<'i> = DataId,
-            Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
 
     for<'i> CLC: SyncStage<
-            In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            In<'i> = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
         > + Adjustable + OutId + Sync + Send + 'static,
@@ -165,12 +165,12 @@ where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
             In<'i> = DataId,
-            Out = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
 
     for<'i> CLC: SyncStage<
-            In<'i> = DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>,
+            In<'i> = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Out = AverageDistanceValue,
             Ctx = C,
         > + Adjustable + OutId + Sync + Send + 'static,
@@ -193,7 +193,7 @@ where
 
         let dist = OOMHandler::new(
             vec![
-                Adjusters::Input(Box::new(SplitsAdjuster::<DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>, MotifSlicesSelector>::new([2, -1].into())))
+                Adjusters::Input(Box::new(SplitsAdjuster::<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, MotifSlicesSelector>::new([2, -1].into())))
             ], None)
             .run(
                 &self.clc_dist,
@@ -221,8 +221,8 @@ impl From<Range<MonoMetrics<0, 2>>> for MotifSlicesSelector {
 
 impl Adjustable for MotifSlicesSelector {}
 
-impl Select<MotifSlicesSelector> for ThoTensor2<MotifSlices, DataId> {
-    type Output = ThoTensor2<MotifSlices, DataId>;
+impl Select<MotifSlicesSelector> for ThoTensor<MotifSlices, DataId> {
+    type Output = ThoTensor<MotifSlices, DataId>;
 
     fn subview(&self, selector: MotifSlicesSelector) -> Result<Self::Output, ThoosaError> {
         let size: MonoMetrics<0, 2> = self.size().try_into()?;
@@ -231,7 +231,7 @@ impl Select<MotifSlicesSelector> for ThoTensor2<MotifSlices, DataId> {
 
         let sub_tensor = self.t_ref().f_i((ranges[0].clone(), ranges[1].clone()))?;
 
-        Ok(ThoTensor2::new(self.id().clone(), sub_tensor))
+        Ok(ThoTensor::new(self.id().clone(), sub_tensor))
     }
 }
 
@@ -277,7 +277,7 @@ mod tests {
     use thoosa_shared::ThoosaError;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::traits::{DataId, SimpleId, WithId};
-    use thoosa_common::tho_tensor::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_and_clc_average_euclidean_distance() -> Result<(), ThoosaError> {

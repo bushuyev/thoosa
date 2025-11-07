@@ -18,11 +18,11 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 // use crate::tasks::stages_seq::StagesSeq;
 
-type LoadFn = dyn Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send;
+type LoadFn = dyn Fn(&Resource, &Device) -> ThoTensor<ChannelsData2, SimpleId> + Sync + Send;
 
 #[derive(cached_derive::Cached)]
 #[cache_name = "LoadedTensorId"]
@@ -52,7 +52,7 @@ where
     C: RunCtx + MotifsCtx + 'static,
 {
     type In<'a> = Resource;
-    type Out = ThoTensor2<ChannelsData2, SimpleId>;
+    type Out = ThoTensor<ChannelsData2, SimpleId>;
     type Ctx = C;
 }
 
@@ -106,7 +106,7 @@ where
 {
     pub fn new<F>(loader_fn: F, device: ThoDevice) -> Self
     where
-        F: Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send + 'static,
+        F: Fn(&Resource, &Device) -> ThoTensor<ChannelsData2, SimpleId> + Sync + Send + 'static,
     {
         Self {
             device,
@@ -130,7 +130,7 @@ pub(crate) mod mock_tensor_loader {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{Named, SimpleId};
     use thoosa_shared::traits::WithId;
-    use thoosa_common::tho_tensor::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor;
     use crate::tasks::cross_dims::ChannelsData2;
     use dashmap::DashMap;
     use parking_lot::RwLock;
@@ -149,7 +149,7 @@ pub(crate) mod mock_tensor_loader {
 
             type In<'a>  = Resource;
 
-            type Out = ThoTensor2<ChannelsData2, SimpleId>;
+            type Out = ThoTensor<ChannelsData2, SimpleId>;
         }
 
         impl OutId for TensorLoader {
@@ -162,7 +162,7 @@ pub(crate) mod mock_tensor_loader {
         #[async_trait]
         impl Cached for TensorLoader {
 
-            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError>>>>;
+            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>, ThoosaError>>>>;
             async fn run_cached(
                     self: Arc<Self>,
                     input: Arc<DevicesWrap<<MockTensorLoader as Stage>::In<'static>>>,
@@ -188,9 +188,9 @@ pub(crate) mod mock_tensor_loader {
         where
             H: IntoIterator<Item=(Resource, Tensor)> ,
         {
-            let data_map: Arc<HashMap<Resource, Arc<DevicesWrap<ThoTensor2<ChannelsData2, SimpleId>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
+            let data_map: Arc<HashMap<Resource, Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
                 let id = format!("{}", k.file_stem());
-                (k, Arc::new(DevicesWrap::wrap(ThoTensor2::new(id.into(), v), 0)))
+                (k, Arc::new(DevicesWrap::wrap(ThoTensor::new(id.into(), v), 0)))
             }).collect());
 
             self.mock.expect_run_cached().returning(move |input, ctx|{
@@ -231,7 +231,7 @@ mod tests {
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::SimpleId;
-    use thoosa_common::tho_tensor::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor;
 
     #[tokio::test]
     async fn test_load() -> Result<(), ThoosaError> {
@@ -243,7 +243,7 @@ mod tests {
 
         let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
-                ThoTensor2::new(
+                ThoTensor::new(
                     Input::id(key).clone(),
                     Tensor::from_slice(&data_0).view((-1, 1)),
                 )
@@ -259,7 +259,7 @@ mod tests {
             .map_err(|e| ThoosaError::new("zzz"))?;
 
         let result = loaded
-            .with_data_ref(0, None, |v: &ThoTensor2<ChannelsData2, SimpleId>| {
+            .with_data_ref(0, None, |v: &ThoTensor<ChannelsData2, SimpleId>| {
                 println!("loaded: v={v:?}");
                 v.run_inner(|t| {
                     Ok(Tensor::from_slice(&data)

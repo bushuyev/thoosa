@@ -40,7 +40,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use crate::tasks::average_euclidean_distance::AverageDistanceValue;
 use crate::tasks::motif_loader::MotifMeta;
 use thoosa_shims::stream::{ThoStreamGuard, ThoCudaStream};
-use thoosa_common::tho_tensor::ThoTensor2;
+use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
@@ -53,7 +53,7 @@ pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>
 struct FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C>  + OutId + 'static,
+    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C>  + OutId + 'static,
     C: RunCtx + 'static,
 {
     run_config: FindMotifsRunConfig,
@@ -70,7 +70,7 @@ where
 impl<RC, L, C> FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C>  + OutId + 'static,
+    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C>  + OutId + 'static,
     C: RunCtx + 'static,
 {
     pub fn new(
@@ -112,7 +112,7 @@ impl MeanDistsCtx {
 pub struct FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + 'static,
 {
     run_config_stages: Vec<FindMotifsStages<RC, LoaderStageChoice<L, C>, C>>,
@@ -122,7 +122,7 @@ where
 impl<RC, L, C> FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + 'static,
 {
     pub fn new(
@@ -248,8 +248,8 @@ where
 impl<RC, L, C> Stage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + 'static,
     C: RunCtx + 'static,
 {
     type Ctx = C;
@@ -264,8 +264,8 @@ where
 impl<RC, L, C> AsyncStage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C> +  'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> +  'static,
     C: RunCtx + 'static,
 {
 
@@ -319,7 +319,7 @@ where
 pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig) -> Arc<LoaderStageChoice<L, C>>
 where
     C: 'static + RunCtx,
-    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=C>
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C>
 {
     let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.filter.as_ref() {
         None => {
@@ -376,7 +376,7 @@ mod tests {
         cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoosaError,
     };
     use thoosa_store::SqlStore;
-    use thoosa_common::tho_tensor::ThoTensor2;
+    use thoosa_common::tho_tensor::ThoTensor;
     use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
     use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
     use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
@@ -516,7 +516,7 @@ mod tests {
 
         let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
-                ThoTensor2::new(
+                ThoTensor::new(
                     Input::id(key).clone(),
                     Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem()))).unwrap(),
                 )
@@ -593,7 +593,7 @@ mod tests {
             .await?;
 
             motif
-                .with_data_ref(1, None, |t: &DataWithExtra<ThoTensor2<MotifSlices, DataId>, MotifMeta>| {
+                .with_data_ref(1, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
                     debug!("motif_id={motif_id_raw} slices={:?}", t.data());
 
                     Ok(())
