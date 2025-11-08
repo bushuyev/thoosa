@@ -36,6 +36,7 @@ use thoosa_shared::run_configs::RunId;
 use thoosa_shared::val::Val;
 use thoosa_shared::val::Val::UInt;
 use thoosa_shared::*;
+use thoosa_shared::traits::DataId;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -150,6 +151,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     fn add_slices_to_motif(&mut self, run_id: RunId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> Result<(), ThoosaError>;
 
     fn list_motifs(&self, run_id: RunId) -> Result<Vec<usize>, ThoosaError>;
+    fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoosaError>;
     fn list_motifs_slices(
         &self,
         run_id: RunId,
@@ -171,6 +173,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     ) -> Result<
         (
             i64,
+            RunId,
             Vec<TensorIdSliceIdx>,
             HashMap<ResourceId, Resource>,
         ),
@@ -291,6 +294,9 @@ mock! {
             &self,
             run_id: RunId,
         ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
+
+        fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoosaError>;
+
         fn list_motif_slices(
             &self,
             motif_id: u32,
@@ -313,6 +319,7 @@ mock! {
         ) -> Result<
             (
                 i64,
+                RunId,
                 Vec<TensorIdSliceIdx>,
                 HashMap<ResourceId, Resource>,
             ),
@@ -1482,6 +1489,16 @@ impl Store for SqlStore {
         Ok(())
     }
 
+    fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoosaError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        let (channel, run_id) = Self::_motif_meta(motif_id, &t)?;
+
+        t.commit()?;
+        Ok((channel as usize, run_id))
+    }
+
     fn list_motifs(&self, run_id: RunId) -> Result<Vec<usize>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
@@ -1733,7 +1750,7 @@ impl Store for SqlStore {
         min_distance: Option<u32>,
     ) -> Result<
         (
-            i64,
+            i64, RunId,
             Vec<TensorIdSliceIdx>,
             HashMap<ResourceId, Resource>,
         ),
@@ -1781,11 +1798,7 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
         // Pre-load the motif metadata to identify its channel and run.
-        let (channel_id, run_id): (i64, RunId) = t.query_row(
-            "SELECT channel_id, run_id FROM motifs WHERE id=?",
-            [motif_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
+        let (channel, run_id) = Self::_motif_meta(motif_id, &t)?;
 
         let mut target_positions: HashMap<ResourceId, Vec<i64>> = HashMap::new();
         let mut target_resources: HashMap<ResourceId, Resource> = HashMap::new();
@@ -1830,7 +1843,7 @@ impl Store for SqlStore {
 
         if desired_count == 0 {
             t.commit()?;
-            return Ok((channel_id, vec![], HashMap::new()));
+            return Ok((channel, run_id, vec![], HashMap::new()));
         }
 
         // Build per-resource contexts to control spacing and resource metadata.
@@ -1842,7 +1855,7 @@ impl Store for SqlStore {
                  WHERE s.channel_id=? AND s.run_id=?",
             )?;
 
-            stmt.query_map(params![channel_id, run_id as i64], |row| {
+            stmt.query_map(params![channel, run_id as i64], |row| {
                 Ok((
                     row.get::<usize, ResourceId>(0)?,
                     row.get::<usize, u32>(1)?,
@@ -1885,7 +1898,7 @@ impl Store for SqlStore {
 
         if contexts.is_empty() {
             return Err(ThoosaError::new(format!(
-                "no resources found for channel {channel_id}"
+                "no resources found for channel {channel}"
             )));
         }
 
@@ -1969,7 +1982,7 @@ impl Store for SqlStore {
 
         t.commit()?;
 
-        Ok((channel_id, generated, resources_map))
+        Ok((channel, run_id, generated, resources_map))
     }
 
     fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoosaError> {
@@ -2697,6 +2710,16 @@ impl SqlStore {
             error!("Failed to prepare PRAGMA foreign_key_check statement");
         }
         e
+    }
+
+    fn _motif_meta(motif_id: u32, t: &Transaction) -> Result<(i64, RunId), ThoosaError> {
+        // Pre-load the motif metadata to identify its channel and run.
+        let (channel, run_id): (i64, RunId) = t.query_row(
+            "SELECT channel_id, run_id FROM motifs WHERE id=?",
+            [motif_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok((channel, run_id))
     }
 }
 
@@ -3550,7 +3573,7 @@ mod store_tests {
         )?;
 
         const WIDTH: u32 = 40;
-        let (channel, random_slices, resources_map) =
+        let (channel, run_id, random_slices, resources_map) =
             store.list_random_slices(motif_id, WIDTH, None)?;
 
         assert_eq!(channel_id, channel);
@@ -3606,7 +3629,7 @@ mod store_tests {
 
         const WIDTH: u32 = 50;
         const MIN_DISTANCE: u32 = 300;
-        let (channel, random_slices, resources_map) =
+        let (channel, run_id, random_slices, resources_map) =
             store.list_random_slices(motif_id, WIDTH, Some(MIN_DISTANCE))?;
 
         assert_eq!(channel_id, channel);
@@ -3727,6 +3750,16 @@ impl MockStoreBuilder {
         self
     }
 
+    pub fn with_get_motif_meta<R:Into<HashMap<u32, Result<(usize, RunId), ThoosaError>>>>(mut self, results: R)-> Self {
+        let map = results.into();
+        self.store.expect_get_motif_meta().returning(
+            move |motif_id|{
+                map.get(&motif_id).cloned().expect(&format!("mock is not configured to return motif meta for motif_id {motif_id}"))
+            }
+        );
+        self
+    }
+
     pub fn with_list_motifs<R:Into<HashMap<RunId, Result<Vec<usize>, ThoosaError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_motifs().returning(
@@ -3764,7 +3797,8 @@ impl MockStoreBuilder {
         mut self,
         motif_id: u32,
         motif_width: u32,
-        min_distance: Option<u32>, r: Result<(i64, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError>
+        min_distance: Option<u32>,
+        r: Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError>
     ) -> Self {
         self.store.expect_list_random_slices().returning(
             move |p_motif_id, p_width, p_min_distance| {
