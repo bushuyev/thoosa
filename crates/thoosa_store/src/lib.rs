@@ -1644,12 +1644,12 @@ impl Store for SqlStore {
                     >,
                      v: Result<
                         (
-                            i64,
-                            RunId, //channel_id, run_id
-                            u32,
-                            u32,
-                            String,
-                            u32, //resource_id, import_id, key, slice_idx
+                            i64,//channel_id
+                            RunId, //, run_id
+                            u32,//resource_id
+                            u32,//import_id
+                            String,//key
+                            u32, // slice_idx
                         ),
                         Error,
                     >| {
