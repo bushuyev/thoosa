@@ -1,4 +1,4 @@
-use crate::{filter_groups_by_slices_count, IdSlice, MotifTrackerStore, SlicesMatch, Store};
+use crate::{IdSlice, MotifTrackerStore, SlicesMatch, Store, filter_groups_by_slices_count};
 use bytemuck::{AnyBitPattern, Pod};
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
@@ -13,7 +13,7 @@ use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{group_slices, ThoosaError};
+use thoosa_shared::{ThoosaError, group_slices};
 use zstd::stream::write::Encoder;
 
 const FILE_MAGIC: [u8; 8] = *b"THOSCHNK";
@@ -41,20 +41,14 @@ impl ChunkedWriter {
             let mut magic = [0u8; FILE_MAGIC.len()];
             file.read_exact(&mut magic)?;
             if magic != FILE_MAGIC {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "unexpected slice store header",
-                ));
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected slice store header"));
             }
 
             let mut version_bytes = [0u8; 4];
             file.read_exact(&mut version_bytes)?;
             let version = u32::from_le_bytes(version_bytes);
             if version != FILE_VERSION {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("unsupported slice store version: {version}"),
-                ));
+                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported slice store version: {version}")));
             }
 
             let mut reserved = [0u8; 4];
@@ -117,33 +111,17 @@ pub struct FileMotifTrackerStore {
 
 impl Debug for FileMotifTrackerStore {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FileMotifTrackerStore")
-            .field("run_id", &self.run_id)
-            .field("channel", &self.channel)
-            .field("path", &self.path)
-            .finish()
+        f.debug_struct("FileMotifTrackerStore").field("run_id", &self.run_id).field("channel", &self.channel).field("path", &self.path).finish()
     }
 }
 
 impl FileMotifTrackerStore {
-    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(
-        path: P,
-        run_id: RunId,
-        channel: u32,
-    ) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
-        let file_path = path
-            .as_ref()
-            .join(format!("{run_id}_{channel}_slices.zstd").as_str());
+    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: RunId, channel: u32) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
+        let file_path = path.as_ref().join(format!("{run_id}_{channel}_slices.zstd").as_str());
 
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(&file_path)?;
+        let file = std::fs::OpenOptions::new().create(true).read(true).write(true).open(&file_path)?;
 
-        debug!(
-            "FileMotifTrackerStore::new: path={path:?} run_id={run_id} channel={channel} file_path={file_path:?}"
-        );
+        debug!("FileMotifTrackerStore::new: path={path:?} run_id={run_id} channel={channel} file_path={file_path:?}");
 
         let writer = ChunkedWriter::new(file, 3)?;
 
@@ -158,10 +136,7 @@ impl FileMotifTrackerStore {
 
 impl MotifTrackerStore for FileMotifTrackerStore {
     fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> Result<(), ThoosaError> {
-        trace!(
-            "MotifTrackerStore::save_slices: slices_pairs.len()={}",
-            slices_pairs.len()
-        );
+        trace!("MotifTrackerStore::save_slices: slices_pairs.len()={}", slices_pairs.len());
 
         self.writer.write_items(&slices_pairs)?;
         self.writer.flush()?;
@@ -175,32 +150,14 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         self.writer.shutdown()?;
         let mut slice_id = 0;
 
-        let groups: HashMap<u16, HashSet<IdSlice>> = group_slices(
-            ChunkedSlicesReader::new(
-                &self
-                    .path
-                    .join(format!("{}_{}_slices.zstd", self.run_id, self.channel).as_str()),
-            )?
-            .flat_map(|slices| {
-                slices.unwrap().into_iter().map(move |slices: SlicesMatch| {
-                    slice_id += 1;
-                    (
-                        IdSlice(slice_id, slices.0 .0, slices.0 .1),
-                        IdSlice(slice_id, slices.1 .0, slices.1 .1),
-                    )
-                })
-            }),
-        );
-        info!(
-            "inserting {} groups {} slices",
-            groups.len(),
-            groups.values().map(|s| s.len()).sum::<usize>()
-        );
-        store.write().save_groups_as_motifs(
-            self.run_id,
-            self.channel as i64,
-            filter_groups_by_slices_count(max_slices_counts, groups),
-        )
+        let groups: HashMap<u16, HashSet<IdSlice>> = group_slices(ChunkedSlicesReader::new(&self.path.join(format!("{}_{}_slices.zstd", self.run_id, self.channel).as_str()))?.flat_map(|slices| {
+            slices.unwrap().into_iter().map(move |slices: SlicesMatch| {
+                slice_id += 1;
+                (IdSlice(slice_id, slices.0.0, slices.0.1), IdSlice(slice_id, slices.1.0, slices.1.1))
+            })
+        }));
+        info!("inserting {} groups {} slices", groups.len(), groups.values().map(|s| s.len()).sum::<usize>());
+        store.write().save_groups_as_motifs(self.run_id, self.channel as i64, filter_groups_by_slices_count(max_slices_counts, groups))
     }
 
     fn run_id(&self) -> RunId {
@@ -229,20 +186,14 @@ impl<T: AnyBitPattern> ChunkedSlicesReader<T> {
         let mut magic = [0u8; FILE_MAGIC.len()];
         file.read_exact(&mut magic)?;
         if magic != FILE_MAGIC {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "unexpected slice store header",
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected slice store header"));
         }
 
         let mut version_bytes = [0u8; 4];
         file.read_exact(&mut version_bytes)?;
         let version = u32::from_le_bytes(version_bytes);
         if version != FILE_VERSION {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unsupported slice store version: {version}"),
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported slice store version: {version}")));
         }
 
         let mut reserved = [0u8; 4];
@@ -267,10 +218,7 @@ impl<T: AnyBitPattern> Iterator for ChunkedSlicesReader<T> {
             match self.reader.read(&mut header[read..]) {
                 Ok(0) if read == 0 => return None,
                 Ok(0) => {
-                    return Some(Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "truncated chunk header",
-                    )));
+                    return Some(Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated chunk header")));
                 }
                 Ok(n) => read += n,
                 Err(e) => return Some(Err(e)),
@@ -283,10 +231,7 @@ impl<T: AnyBitPattern> Iterator for ChunkedSlicesReader<T> {
 
         let mut compressed = vec![0u8; compressed_len];
         if let Err(e) = self.reader.read_exact(&mut compressed) {
-            return Some(Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                format!("truncated chunk payload: {e}"),
-            )));
+            return Some(Err(io::Error::new(io::ErrorKind::UnexpectedEof, format!("truncated chunk payload: {e}"))));
         }
 
         let decompressed = match zstd::decode_all(&compressed[..]) {
@@ -295,45 +240,23 @@ impl<T: AnyBitPattern> Iterator for ChunkedSlicesReader<T> {
         };
 
         if decompressed.len() != decompressed_len {
-            return Some(Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "unexpected decompressed length: expected {decompressed_len}, got {}",
-                    decompressed.len()
-                ),
-            )));
+            return Some(Err(io::Error::new(io::ErrorKind::InvalidData, format!("unexpected decompressed length: expected {decompressed_len}, got {}", decompressed.len()))));
         }
 
         let element_size = size_of::<T>();
         if decompressed.len() % element_size != 0 {
-            return Some(Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "decompressed buffer size {} not aligned to element size {}",
-                    decompressed.len(),
-                    element_size
-                ),
-            )));
+            return Some(Err(io::Error::new(io::ErrorKind::InvalidData, format!("decompressed buffer size {} not aligned to element size {}", decompressed.len(), element_size))));
         }
 
         let actual_item_count = (decompressed.len() / element_size) as u64;
         if actual_item_count != item_count {
-            warn!(
-                "ChunkedSlicesReader: item_count mismatch: header={item_count}, calculated={actual_item_count} file_path={:?}",
-                self.file_path
-            );
+            warn!("ChunkedSlicesReader: item_count mismatch: header={item_count}, calculated={actual_item_count} file_path={:?}", self.file_path);
         }
 
         let result = match bytemuck::try_cast_slice(&decompressed) {
             Ok(slice) => slice.to_vec(),
             Err(e) => {
-                return Some(Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "ChunkedSlicesReader: file_path={:?} cast error: {e:?}",
-                        self.file_path
-                    ),
-                )));
+                return Some(Err(io::Error::new(io::ErrorKind::InvalidData, format!("ChunkedSlicesReader: file_path={:?} cast error: {e:?}", self.file_path))));
             }
         };
 
@@ -344,7 +267,7 @@ impl<T: AnyBitPattern> Iterator for ChunkedSlicesReader<T> {
 #[cfg(test)]
 mod tests {
     use crate::fs_store::{ChunkedSlicesReader, FileMotifTrackerStore, SlicesMatch};
-    use crate::{filter_groups_by_slices_count, IdSlice, SqlStore};
+    use crate::{IdSlice, SqlStore, filter_groups_by_slices_count};
     use log::LevelFilter::Trace;
     use log::{debug, error};
     use parking_lot::{Mutex, RwLock};
@@ -353,7 +276,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use thoosa_shared::test_utils::init_test_logging;
-    use thoosa_shared::{cdt_for_dir, group_slices, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::{TensorIdSliceIdx, ThoosaError, cdt_for_dir, group_slices};
 
     #[test]
     fn test_single_part() -> Result<(), ThoosaError> {
@@ -361,40 +284,19 @@ mod tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(
-            test_dir.join("main_store.db3"),
-        )?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
 
         let resource_ids = crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id =
-            store
-                .write()
-                .save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
+        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
         file_store.save_slices(vec![
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[0], 100),
-                TensorIdSliceIdx(resource_ids[0], 200),
-                0.1,
-            ),
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[0], 200),
-                TensorIdSliceIdx(resource_ids[0], 300),
-                0.2,
-            ),
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[0], 100),
-                TensorIdSliceIdx(resource_ids[0], 700),
-                0.3,
-            ),
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[0], 700),
-                TensorIdSliceIdx(resource_ids[0], 800),
-                0.4,
-            ),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[0], 200), 0.1),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 200), TensorIdSliceIdx(resource_ids[0], 300), 0.2),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[0], 700), 0.3),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 700), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
         file_store.load_slices_into_groups(&store, None)?;
@@ -403,10 +305,7 @@ mod tests {
         let map = store.read().list_motifs_slices(run_id)?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
-        let mut slise_idxs = motifs_slices
-            .into_iter()
-            .map(|s| s.slice_idx)
-            .collect::<Vec<_>>();
+        let mut slise_idxs = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
         slise_idxs.sort();
 
         assert_eq!(vec![100, 200, 300, 700, 800], slise_idxs);
@@ -420,40 +319,19 @@ mod tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(
-            test_dir.join("main_store.db3"),
-        )?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
 
         let resource_ids = crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id =
-            store
-                .write()
-                .save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
+        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
         file_store.save_slices(vec![
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[0], 100),
-                TensorIdSliceIdx(resource_ids[1], 200),
-                0.1,
-            ),
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[1], 200),
-                TensorIdSliceIdx(resource_ids[1], 700),
-                0.3,
-            ),
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[0], 300),
-                TensorIdSliceIdx(resource_ids[1], 400),
-                0.2,
-            ),
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[1], 400),
-                TensorIdSliceIdx(resource_ids[0], 800),
-                0.4,
-            ),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[1], 200), 0.1),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[1], 200), TensorIdSliceIdx(resource_ids[1], 700), 0.3),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 300), TensorIdSliceIdx(resource_ids[1], 400), 0.2),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[1], 400), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
         file_store.load_slices_into_groups(&store, None)?;
@@ -462,29 +340,17 @@ mod tests {
         let map = store.read().list_motifs_slices(run_id)?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
-        let resoruce_0_motifs = motifs_slices
-            .iter()
-            .map(|ms| ms.motif_id)
-            .collect::<HashSet<_>>();
+        let resoruce_0_motifs = motifs_slices.iter().map(|ms| ms.motif_id).collect::<HashSet<_>>();
         assert_eq!(resoruce_0_motifs.len(), 2);
-        let mut slise_idxs = motifs_slices
-            .into_iter()
-            .map(|s| s.slice_idx)
-            .collect::<Vec<_>>();
+        let mut slise_idxs = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
         slise_idxs.sort();
 
         assert_eq!(vec![100, 300, 800], slise_idxs);
 
         let motifs_slices = map.get(&resources[1]).expect("resource 0");
-        let resoruce_1_motifs = motifs_slices
-            .iter()
-            .map(|ms| ms.motif_id)
-            .collect::<HashSet<_>>();
+        let resoruce_1_motifs = motifs_slices.iter().map(|ms| ms.motif_id).collect::<HashSet<_>>();
         assert_eq!(resoruce_1_motifs.len(), 2);
-        let mut slise_idxs = motifs_slices
-            .into_iter()
-            .map(|s| s.slice_idx)
-            .collect::<Vec<_>>();
+        let mut slise_idxs = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
         slise_idxs.sort();
 
         assert_eq!(vec![200, 400, 700], slise_idxs);
@@ -498,40 +364,19 @@ mod tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(
-            test_dir.join("main_store.db3"),
-        )?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
 
         let resource_ids = crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id =
-            store
-                .write()
-                .save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
+        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
         file_store.save_slices(vec![
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[0], 100),
-                TensorIdSliceIdx(resource_ids[1], 200),
-                0.1,
-            ),
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[1], 200),
-                TensorIdSliceIdx(resource_ids[0], 300),
-                0.2,
-            ),
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[0], 100),
-                TensorIdSliceIdx(resource_ids[1], 700),
-                0.3,
-            ),
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[1], 700),
-                TensorIdSliceIdx(resource_ids[0], 800),
-                0.4,
-            ),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[1], 200), 0.1),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[1], 200), TensorIdSliceIdx(resource_ids[0], 300), 0.2),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[1], 700), 0.3),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[1], 700), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
         file_store.load_slices_into_groups(&store, None)?;
@@ -540,19 +385,13 @@ mod tests {
         let map = store.read().list_motifs_slices(run_id)?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
-        let mut slise_idxs_0 = motifs_slices
-            .into_iter()
-            .map(|s| s.slice_idx)
-            .collect::<Vec<_>>();
+        let mut slise_idxs_0 = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
         slise_idxs_0.sort();
 
         assert_eq!(vec![100, 300, 800], slise_idxs_0);
 
         let motifs_slices = map.get(&resources[1]).expect("resource 0");
-        let mut slise_idxs_1 = motifs_slices
-            .into_iter()
-            .map(|s| s.slice_idx)
-            .collect::<Vec<_>>();
+        let mut slise_idxs_1 = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
         slise_idxs_1.sort();
 
         assert_eq!(vec![200, 700], slise_idxs_1);
@@ -567,43 +406,22 @@ mod tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(
-            test_dir.join("main_store.db3"),
-        )?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
 
         let resource_ids = crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id =
-            store
-                .write()
-                .save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
+        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
         file_store.save_slices(vec![
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[0], 100),
-                TensorIdSliceIdx(resource_ids[0], 200),
-                0.1,
-            ),
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[0], 200),
-                TensorIdSliceIdx(resource_ids[0], 300),
-                0.2,
-            ),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[0], 200), 0.1),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 200), TensorIdSliceIdx(resource_ids[0], 300), 0.2),
         ])?;
 
         file_store.save_slices(vec![
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[0], 100),
-                TensorIdSliceIdx(resource_ids[0], 700),
-                0.3,
-            ),
-            SlicesMatch(
-                TensorIdSliceIdx(resource_ids[0], 700),
-                TensorIdSliceIdx(resource_ids[0], 800),
-                0.4,
-            ),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[0], 700), 0.3),
+            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 700), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
         file_store.load_slices_into_groups(&store, None)?;
@@ -612,10 +430,7 @@ mod tests {
         let map = store.read().list_motifs_slices(run_id)?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
-        let mut slise_idxs = motifs_slices
-            .into_iter()
-            .map(|s| s.slice_idx)
-            .collect::<Vec<_>>();
+        let mut slise_idxs = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
         slise_idxs.sort();
 
         assert_eq!(vec![100, 200, 300, 700, 800], slise_idxs);
@@ -630,16 +445,11 @@ mod tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(
-            test_dir.join("main_store.db3"),
-        )?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
 
         let resource_ids = crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id =
-            store
-                .write()
-                .save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
+        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 

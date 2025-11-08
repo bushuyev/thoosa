@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+## Important Agent Rules
+- **Never run `cargo fmt` or any other bulk formatter.** Make only the minimal manual edits required for the task at hand.
+- **Do not touch unrelated files or code paths.** If a change is not strictly required to implement the current request, leave it untouched.
+
 ## Project Structure & Module Organization
 The Rust workspace lives under `crates/`, with `Cargo.toml` wiring all subcrates. `thoosa_main` hosts the primary binaries and scheduled tasks, while `thoosa_common`, `thoosa_shared`, and `thoosa_store` provide shared math, concurrency, and persistence utilities. CUDA and Torch integration is isolated in `thoosa_runner/torch_runner`, and project-specific entry points sit in `thoosa_projects/`. Most crates keep unit tests alongside source modules; broader stress tests reside in `thoosa_runner/caching_runner_test`. Exploratory Python notebooks and scripts are under `python/` and stay optional for Rust builds.
 

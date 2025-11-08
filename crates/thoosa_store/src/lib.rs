@@ -163,6 +163,20 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         HashMap<ResourceId, Resource>,
     ), ThoosaError>;
 
+    fn list_random_slices(
+        &self,
+        motif_id: u32,
+        motif_width: u32,
+        min_distance: Option<u32>,
+    ) -> Result<
+        (
+            i64,
+            Vec<TensorIdSliceIdx>,
+            HashMap<ResourceId, Resource>,
+        ),
+        ThoosaError,
+    >;
+
     fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoosaError>;
 
     fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoosaError>;
@@ -286,6 +300,19 @@ mock! {
             (
                 i64,
                 RunId,
+                Vec<TensorIdSliceIdx>,
+                HashMap<ResourceId, Resource>,
+            ),
+            ThoosaError,
+        >;
+        fn list_random_slices(
+            &self,
+            motif_id: u32,
+            motif_width: u32,
+            min_distance: Option<u32>,
+        ) -> Result<
+            (
+                i64,
                 Vec<TensorIdSliceIdx>,
                 HashMap<ResourceId, Resource>,
             ),
@@ -1699,6 +1726,252 @@ impl Store for SqlStore {
         Ok(channel_slices)
     }
 
+    fn list_random_slices(
+        &self,
+        motif_id: u32,
+        motif_width: u32,
+        min_distance: Option<u32>,
+    ) -> Result<
+        (
+            i64,
+            Vec<TensorIdSliceIdx>,
+            HashMap<ResourceId, Resource>,
+        ),
+        ThoosaError,
+    > {
+        debug!("list_random_slices: motif_id={motif_id} motif_width={motif_width} min_distance={min_distance:?}");
+
+        if motif_width == 0 {
+            return Err(ThoosaError::new("motif_width must be greater than zero"));
+        }
+
+        // Keep helpers local to minimize surface area.
+        fn respects_spacing(candidate: i64, guard_width: i64, sorted: &[i64]) -> bool {
+            if sorted.is_empty() {
+                return true;
+            }
+
+            let idx = sorted.partition_point(|&pos| pos < candidate);
+
+            if idx > 0 && sorted[idx - 1] + guard_width >= candidate {
+                return false;
+            }
+
+            if idx < sorted.len() && candidate + guard_width >= sorted[idx] {
+                return false;
+            }
+
+            true
+        }
+
+        fn insert_sorted(vec: &mut Vec<i64>, value: i64) {
+            let idx = vec.partition_point(|&pos| pos < value);
+            vec.insert(idx, value);
+        }
+
+        struct RandomResourceCtx {
+            resource: Resource,
+            target_positions: Vec<i64>,
+            generated_positions: Vec<i64>,
+            length: i64,
+        }
+
+        // Everything here runs inside a short-lived transaction.
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        // Pre-load the motif metadata to identify its channel and run.
+        let (channel_id, run_id): (i64, RunId) = t.query_row(
+            "SELECT channel_id, run_id FROM motifs WHERE id=?",
+            [motif_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        let mut target_positions: HashMap<ResourceId, Vec<i64>> = HashMap::new();
+        let mut target_resources: HashMap<ResourceId, Resource> = HashMap::new();
+        let mut desired_count = 0usize;
+
+        {
+            // Collect all slice positions for the motif so we can avoid them later.
+            let mut stmt = t.prepare(
+                "SELECT s.resource_id, s.slice_idx, r.import_id, r.key, r.length \
+                 FROM slices s \
+                 JOIN resources r ON r.id=s.resource_id \
+                 WHERE s.motif_id=? \
+                 ORDER BY s.resource_id, s.slice_idx",
+            )?;
+
+            stmt.query_map([motif_id], |row| {
+                Ok((
+                    row.get::<usize, ResourceId>(0)?,
+                    row.get::<usize, i64>(1)?,
+                    row.get::<usize, u32>(2)?,
+                    row.get::<usize, String>(3)?,
+                    row.get::<usize, u32>(4)?,
+                ))
+            })?
+            .try_for_each(|row| -> Result<(), ThoosaError> {
+                let (resource_id, slice_idx, import_id, key, length) = row?;
+                target_positions
+                    .entry(resource_id)
+                    .or_default()
+                    .push(slice_idx);
+                target_resources
+                    .entry(resource_id)
+                    .or_insert_with(|| Resource::new(resource_id, import_id, key.clone(), length));
+                desired_count += 1;
+                Ok(())
+            })?;
+        }
+
+        for positions in target_positions.values_mut() {
+            positions.sort_unstable();
+        }
+
+        if desired_count == 0 {
+            t.commit()?;
+            return Ok((channel_id, vec![], HashMap::new()));
+        }
+
+        // Build per-resource contexts to control spacing and resource metadata.
+        let mut contexts: Vec<RandomResourceCtx> = {
+            let mut stmt = t.prepare(
+                "SELECT DISTINCT r.id, r.import_id, r.key, r.length \
+                 FROM slices s \
+                 JOIN resources r ON r.id=s.resource_id \
+                 WHERE s.channel_id=? AND s.run_id=?",
+            )?;
+
+            stmt.query_map(params![channel_id, run_id as i64], |row| {
+                Ok((
+                    row.get::<usize, ResourceId>(0)?,
+                    row.get::<usize, u32>(1)?,
+                    row.get::<usize, String>(2)?,
+                    row.get::<usize, u32>(3)?,
+                ))
+            })?
+            .map(|row| {
+                let (resource_id, import_id, key, length) = row?;
+                let positions = target_positions
+                    .remove(&resource_id)
+                    .unwrap_or_default();
+                Ok(RandomResourceCtx {
+                    resource: Resource::new(resource_id, import_id, key, length),
+                    target_positions: positions,
+                    generated_positions: Vec::new(),
+                    length: length as i64,
+                })
+            })
+            .collect::<Result<Vec<_>, ThoosaError>>()?
+        };
+
+        if !target_positions.is_empty() {
+            for (resource_id, positions) in target_positions.into_iter() {
+                let resource = target_resources
+                    .remove(&resource_id)
+                    .ok_or_else(|| {
+                        ThoosaError::new(format!(
+                            "no resource metadata for target motif resource {resource_id}"
+                        ))
+                    })?;
+                contexts.push(RandomResourceCtx {
+                    length: resource.length() as i64,
+                    resource,
+                    target_positions: positions,
+                    generated_positions: Vec::new(),
+                });
+            }
+        }
+
+        if contexts.is_empty() {
+            return Err(ThoosaError::new(format!(
+                "no resources found for channel {channel_id}"
+            )));
+        }
+
+        let width_i64 = motif_width as i64;
+        let generated_spacing = max(min_distance.unwrap_or(motif_width), motif_width) as i64;
+
+        let mut rng = rand::rng();
+        let mut generated = Vec::with_capacity(desired_count);
+        let mut resources_map = HashMap::new();
+
+        let target_indices = contexts
+            .iter()
+            .enumerate()
+            .filter(|(_, ctx)| !ctx.target_positions.is_empty())
+            .map(|(idx, _)| idx)
+            .collect::<Vec<usize>>();
+
+        let max_attempts = desired_count * 500 + 1000;
+        let mut attempts = 0usize;
+
+        // Heuristically explore candidate windows until we gather enough slices.
+        while generated.len() < desired_count && attempts < max_attempts {
+            attempts += 1;
+
+            let ctx_index = if !target_indices.is_empty() && rng.random_range(0..10) < 7 {
+                let pick = rng.random_range(0..target_indices.len());
+                target_indices[pick]
+            } else {
+                rng.random_range(0..contexts.len())
+            };
+
+            let ctx = &mut contexts[ctx_index];
+
+            if ctx.length <= width_i64 + 1 {
+                continue;
+            }
+
+            let start_min = 1;
+            let start_max = ctx.length - width_i64 - 1;
+
+            if start_max < start_min {
+                continue;
+            }
+
+            let candidate = if !ctx.target_positions.is_empty() && rng.random_range(0..10) < 6 {
+                let anchor = ctx.target_positions[rng.random_range(0..ctx.target_positions.len())];
+                let band = generated_spacing.max(width_i64) * 2;
+                let local_min = max(start_min, anchor - band);
+                let local_max = min(start_max, anchor + band);
+
+                if local_min <= local_max {
+                    rng.random_range(local_min..=local_max)
+                } else {
+                    rng.random_range(start_min..=start_max)
+                }
+            } else {
+                rng.random_range(start_min..=start_max)
+            };
+
+            if !respects_spacing(candidate, width_i64, &ctx.target_positions) {
+                continue;
+            }
+
+            if !respects_spacing(candidate, generated_spacing, &ctx.generated_positions) {
+                continue;
+            }
+
+            insert_sorted(&mut ctx.generated_positions, candidate);
+            resources_map
+                .entry(ctx.resource.id())
+                .or_insert_with(|| ctx.resource.clone());
+            generated.push(TensorIdSliceIdx(ctx.resource.id(), candidate as u32));
+        }
+
+        if generated.len() < desired_count {
+            return Err(ThoosaError::new(format!(
+                "list_random_slices: unable to build {desired_count} slices for motif {motif_id}, produced {} candidates",
+                generated.len()
+            )));
+        }
+
+        t.commit()?;
+
+        Ok((channel_id, generated, resources_map))
+    }
+
     fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
@@ -2611,8 +2884,10 @@ mod store_tests {
     use std::time::Instant;
 
     use log::debug;
+    use rusqlite::params;
     use parking_lot::{Mutex, RawMutex, RwLock};
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
+    use thoosa_shared::run_configs::RunId;
     use thoosa_shared::val::Val;
     use thoosa_shared::{TensorIdSliceIdx, cdt, cdt_for_dir};
 
@@ -3246,6 +3521,177 @@ mod store_tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_list_random_slices_respects_constraints() -> Result<(), ThoosaError> {
+        let mut store = SqlStore::in_mem()?;
+
+        create_resources(&store, &[("res_a", 2048), ("res_b", 2048)])?;
+
+        let run_id = store.save_run_config(None, &"find_motifs", "random test", "", HashMap::new())?;
+        let channel_id = 3i64;
+
+        let res_a = fetch_resource_id(&store, "res_a")?;
+        let res_b = fetch_resource_id(&store, "res_b")?;
+
+        let motif_id = insert_motif_with_slices(
+            &store,
+            run_id,
+            channel_id,
+            0,
+            &[(res_a, 100), (res_a, 320)],
+        )?;
+        insert_motif_with_slices(
+            &store,
+            run_id,
+            channel_id,
+            1,
+            &[(res_b, 50), (res_b, 400)],
+        )?;
+
+        const WIDTH: u32 = 40;
+        let (channel, random_slices, resources_map) =
+            store.list_random_slices(motif_id, WIDTH, None)?;
+
+        assert_eq!(channel_id, channel);
+        assert_eq!(random_slices.len(), 2);
+
+        let mut per_resource: HashMap<ResourceId, Vec<u32>> = HashMap::new();
+        for slice in &random_slices {
+            let resource = resources_map
+                .get(&slice.0)
+                .expect("resource metadata missing");
+            assert!(slice.1 > 0);
+            assert!(slice.1 + WIDTH < resource.length());
+            per_resource.entry(slice.0).or_default().push(slice.1);
+        }
+
+        let target_positions = HashMap::from([(res_a, vec![100u32, 320u32])]);
+        for (resource_id, mut positions) in per_resource {
+            positions.sort_unstable();
+            for window in positions.windows(2) {
+                assert!(window[0] + WIDTH < window[1]);
+            }
+
+            if let Some(targets) = target_positions.get(&resource_id) {
+                for pos in &positions {
+                    for target in targets {
+                        assert!(*pos + WIDTH < *target || *target + WIDTH < *pos);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_random_slices_respects_min_distance() -> Result<(), ThoosaError> {
+        let mut store = SqlStore::in_mem()?;
+
+        create_resources(&store, &[("res_main", 4096)])?;
+
+        let run_id =
+            store.save_run_config(None, &"find_motifs", "random spacing", "", HashMap::new())?;
+        let channel_id = 5i64;
+        let res_main = fetch_resource_id(&store, "res_main")?;
+
+        let motif_id = insert_motif_with_slices(
+            &store,
+            run_id,
+            channel_id,
+            0,
+            &[(res_main, 200), (res_main, 1200)],
+        )?;
+
+        const WIDTH: u32 = 50;
+        const MIN_DISTANCE: u32 = 300;
+        let (channel, random_slices, resources_map) =
+            store.list_random_slices(motif_id, WIDTH, Some(MIN_DISTANCE))?;
+
+        assert_eq!(channel_id, channel);
+        assert_eq!(random_slices.len(), 2);
+
+        let mut positions = random_slices
+            .iter()
+            .filter(|slice| slice.0 == res_main)
+            .map(|slice| slice.1)
+            .collect::<Vec<u32>>();
+        positions.sort_unstable();
+
+        assert_eq!(positions.len(), 2);
+        assert!(positions[0] + MIN_DISTANCE < positions[1]);
+
+        let resource = resources_map.get(&res_main).expect("resource missing");
+        for pos in positions {
+            assert!(pos > 0);
+            assert!(pos + WIDTH < resource.length());
+        }
+
+        Ok(())
+    }
+
+    fn create_resources(store: &Box<dyn Store>, specs: &[(&str, u32)]) -> Result<(), ThoosaError> {
+        let mut guard = store.conn().lock();
+        let t = guard.transaction()?;
+
+        let import_id = store.save_import("test resources".into(), &t)?;
+
+        let resources = specs.iter().fold(
+            HashMap::new(),
+            |mut acc: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, (name, length)| {
+                acc.insert(
+                    (*name).to_string(),
+                    (ResourceStats::new(vec![1, *length]), vec![]),
+                );
+                acc
+            },
+        );
+
+        store.save_resources_labels(&resources, import_id, &t)?;
+        t.commit()?;
+
+        Ok(())
+    }
+
+    fn fetch_resource_id(store: &Box<dyn Store>, key: &str) -> Result<ResourceId, ThoosaError> {
+        let guard = store.conn().lock();
+        let id = guard.query_row("SELECT id FROM resources WHERE key=?", [key], |row| {
+            row.get::<usize, ResourceId>(0)
+        })?;
+        Ok(id)
+    }
+
+    fn insert_motif_with_slices(
+        store: &Box<dyn Store>,
+        run_id: RunId,
+        channel_id: i64,
+        group_ord: i64,
+        slices: &[(ResourceId, i64)],
+    ) -> Result<u32, ThoosaError> {
+        let mut guard = store.conn().lock();
+        let t = guard.transaction()?;
+
+        t.execute(
+            "INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)",
+            params![group_ord, run_id as i64, channel_id],
+        )?;
+
+        let motif_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
+            row.get::<usize, u32>(0)
+        })?;
+
+        for (resource_id, slice_idx) in slices {
+            t.execute(
+                "INSERT INTO slices (run_id, channel_id, motif_id, resource_id, slice_idx) VALUES (?, ?, ?, ?, ?)",
+                params![run_id as i64, channel_id, motif_id as i64, *resource_id as i64, *slice_idx],
+            )?;
+        }
+
+        t.commit()?;
+
+        Ok(motif_id)
+    }
 }
 
 pub  struct MockStoreBuilder {
@@ -3308,6 +3754,25 @@ impl MockStoreBuilder {
                     Err(ThoosaError::new("Not found"))
                 }
 
+            }
+        );
+
+        self
+    }
+
+    pub fn with_list_random_slices(
+        mut self,
+        motif_id: u32,
+        motif_width: u32,
+        min_distance: Option<u32>, r: Result<(i64, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError>
+    ) -> Self {
+        self.store.expect_list_random_slices().returning(
+            move |p_motif_id, p_width, p_min_distance| {
+                if p_motif_id == motif_id && p_width == motif_width && p_min_distance == min_distance {
+                    r.clone()
+                } else {
+                    Err(ThoosaError::new("Not found"))
+                }
             }
         );
 
