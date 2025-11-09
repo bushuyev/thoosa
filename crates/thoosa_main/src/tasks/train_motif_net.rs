@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
-use log::debug;
+use log::{debug, trace};
 use parking_lot::RwLock;
 use tch::Device::{Cpu, Cuda};
 use tch::kind::FLOAT_CUDA;
@@ -11,10 +11,11 @@ use tch::Tensor;
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::batches::AsyncDataBatch;
 use thoosa_common::dims::{Dims, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{ThoTensor};
-use thoosa_common::train_nets::{opt_train_2, run_train_motif_net, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigResult};
+use thoosa_common::train_nets::{opt_train_2, run_train_motif_net, run_train_motif_net_2, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -159,13 +160,14 @@ where
                                 //TODO batch size
                                 // let all_slices_0_cl = all_slices_0_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
                                 // let all_slices_1_cl = all_slices_1_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
-                                with_data!(device_idx, motif; |motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
-
-                                    // let motif_data = motif.data();
-                                    // let motif_meta = motif.extra();
-                                    let mut batch = AugmentationsBatch::new(motif.data(), motif.extra(), run_config.common_training_args.batch_size);
-                                    run_train_motif_net(batch.motif_meta.window, &run_config, &Cuda(0), &mut batch, vs, &mut DummyListener/*, listener*/)
-                                })
+                                // with_data!(device_idx, motif; |motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
+                                //
+                                //
+                                //     let mut batch = MotifsBatch::new(motif.data(), motif.extra(), run_config.common_training_args.batch_size, true);
+                                //
+                                // })
+                                let mut batch = MotifsBatch::new(Arc::clone(&motif), run_config.common_training_args.batch_size, true);
+                                run_train_motif_net_2(1000/*batch.motif_meta.window*/, &run_config, &Cuda(0), &mut batch, vs, &mut DummyListener).await
 
                             },
                             train_motifs_nodes_run_configs,
@@ -192,37 +194,48 @@ where
 }
 
 #[derive(Debug)]
-pub struct AugmentationsBatch<'a> {
+pub struct MotifsBatch {
     batch_size: u32,
-    motif_meta: &'a MotifMeta,
-    motif:&'a ThoTensor<MotifSlices, DataId>
+    motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>,
 }
 
-impl <'a> AugmentationsBatch<'a> {
-    pub fn new(motif:&'a ThoTensor<MotifSlices, DataId>, motif_meta:&'a MotifMeta, batch_size: u32) -> Self {
+impl MotifsBatch {
+    pub fn new(motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>, batch_size: u32, with_augmentation: bool) -> Self {
         debug!("TrainMotifNet::run: motif={motif:?}");
 
         Self {
             batch_size,
-            motif_meta,
             motif
         }
     }
 }
 
-impl<'a> DataBatch<Slice> for AugmentationsBatch<'a> {
-    fn train_batch(&self) -> (ThoBatch<Slice>, Tensor) {
-        (
-            Tensor::rand(&[self.batch_size as i64, self.motif_meta.window as i64], FLOAT_CUDA).into(),
+#[async_trait]
+impl AsyncDataBatch<Slice> for MotifsBatch {
+    async fn train_batch(&self) -> Result<(ThoBatch<Slice>, Tensor), ThoosaError> {
+        debug!("MotifsBatch::train_batch");
+        // let device = 1;
+        let train_x:ThoBatch<Slice> = with_data!(1, self.motif; |motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
+
+
+            // let mut batch = MotifsBatch::new(motif.data(), motif.extra(), run_config.common_training_args.batch_size, true);
+            Ok::<_, ThoosaError>(ThoBatch::new(SimpleId(""), Tensor::rand(&[self.batch_size as i64, 1000/*self.motif_meta.window*/ as i64], FLOAT_CUDA)))
+        })?;
+
+        debug!("MotifsBatch::train_batch: train_x.size={:?}", train_x.size());
+        trace!("MotifsBatch::train_batch: train_x:\n{train_x}");
+
+        Ok((
+            train_x,
             Tensor::rand(&[self.batch_size as i64], FLOAT_CUDA).le(0.5)
-        )
+        ))
     }
 
-    fn valid_batch(&self) -> (ThoBatch<Slice>, Tensor) {
-        (
-            Tensor::rand(&[self.batch_size as i64, self.motif_meta.window as i64], FLOAT_CUDA).into(),
+    async fn valid_batch(&self) -> Result<(ThoBatch<Slice>, Tensor), ThoosaError> {
+        Ok((
+            Tensor::rand(&[self.batch_size as i64, 1000/*self.motif_meta.window */as i64], FLOAT_CUDA).into(),
             Tensor::rand(&[self.batch_size as i64], FLOAT_CUDA).le(0.5)
-        )
+        ))
     }
 }
 
@@ -268,16 +281,17 @@ mod tests {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
         let find_motifs_run_id:RunId = 1;
         let select_motifs_run_id:RunId = 2;
+        let motif_width = 100;
         let resource_a: Resource = Resource::new(1, 1, "resource_a", 900);
         let resource_b: Resource = Resource::new(1, 1, "resource_b", 900);
         let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, &[
-            vec![(3, 100, MotifKind::Pulse)],
-            vec![(3, 100, MotifKind::Sin)],
+            vec![(3, motif_width, MotifKind::Pulse)],
+            vec![(3, motif_width, MotifKind::Sin)],
             vec![]
         ], 100)?;
         let (resource_b_t, resource_a_intervals) = resource_tensor(resource_b.length() as usize, &[
-            vec![(3, 100, MotifKind::Pulse)],
-            vec![(3, 100, MotifKind::Sin)],
+            vec![(3, motif_width, MotifKind::Pulse)],
+            vec![(3, motif_width, MotifKind::Sin)],
             vec![]
         ], 100)?;
 
@@ -296,6 +310,15 @@ mod tests {
                     (1, resource_a.clone()),
                     (2, resource_b.clone())
                 ]))))
+                .with_list_random_slices(motif_id, motif_width as u32, None, Ok((0i64, find_motifs_run_id, vec![
+                    TensorIdSliceIdx(1, 100),
+                    TensorIdSliceIdx(1, 200),
+                    TensorIdSliceIdx(2, 100)
+                ], HashMap::from([
+                    (1, resource_a.clone()),
+                    (2, resource_b.clone())
+                ]))))
+
                 .with_list_selected_motifs([
                     (select_motifs_run_id, Ok(vec![vec![(motif_id, 1.0f64)]]))
                 ])

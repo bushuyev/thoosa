@@ -446,6 +446,7 @@ mod tests {
     use crate::tasks::tensor_loader::{mock_tensor_loader};
     use crate::tasks::cross_dims::MotifSlices;
     use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_motifs::distance::average_euclidean_distance;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_motifs() -> Result<(), ThoosaError> {
@@ -560,13 +561,13 @@ mod tests {
             .run(Arc::clone(&input), Arc::clone(&ctx))
             .await?;
 
-        // let r = slices.with_data_ref(0, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
-        //     let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
-        //
-        //     trace!("motif.t={} dist={dist}", t.data().t_ref());
-        //
-        //     Ok(true)
-        // }).await?;
+        let r = slices.with_data_ref(0, None, |t: &ThoTensor<MotifSlices, DataId>|{
+            let dist = average_euclidean_distance(t.t_ref()).unwrap();
+
+            trace!("random slices: \t{} dist={dist}", t.t_ref());
+
+            Ok(true)
+        }).await?;
         // assert_eq!(r, true);
         //TODO check data
 

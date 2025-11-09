@@ -20,12 +20,13 @@ use tch::Kind::Float;
 use tch::{Device, Tensor};
 use thoosa_shared::applicables_runner::CachableId;
 use thoosa_shared::resource::Resource;
+use thoosa_shared::ThoosaError;
 
 #[async_trait]
 pub trait AsyncDataBatch<D: Dims>: Send + Sync {
     /// returns (inputs, labels)
-    async fn train_batch(&self) -> (ThoBatch<D>, Tensor);
-    async fn valid_batch(&self) -> (ThoBatch<D>, Tensor);
+    async fn train_batch(&self) -> Result<(ThoBatch<D>, Tensor), ThoosaError>;
+    async fn valid_batch(&self) -> Result<(ThoBatch<D>, Tensor), ThoosaError>;
 }
 
 /**
@@ -282,7 +283,7 @@ impl<
     F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync,
 > AsyncDataBatch<DO> for AsyncLoadingTensorsDataBatch<DI, DO, F>
 {
-    async fn train_batch(&self) -> (ThoBatch<DO>, Tensor) {
+    async fn train_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
         let next_ctx = self.runner.next_ctx();
         let batch = tch::no_grad(|| {
             Self::choose_for_batch(
@@ -301,10 +302,10 @@ impl<
             .purge_all_gpu_caches(Arc::into_inner(next_ctx).unwrap().into_inner(), self.device)
             .await;
 
-        batch
+        Ok(batch)
     }
 
-    async fn valid_batch(&self) -> (ThoBatch<DO>, Tensor) {
+    async fn valid_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
         let next_ctx = self.runner.next_ctx();
         let batch = tch::no_grad(|| {
             let batch = Self::choose_for_batch(
@@ -325,7 +326,7 @@ impl<
             .purge_all_gpu_caches(Arc::into_inner(next_ctx).unwrap().into_inner(), self.device)
             .await;
 
-        batch
+        Ok(batch)
     }
 }
 
@@ -430,7 +431,7 @@ impl<
     DO: Dims + Send + Sync, /*, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/
 > AsyncDataBatch<DO> for AsyncClassTensorsLoaderData<DI, DO /*, F*/>
 {
-    async fn train_batch(&self) -> (ThoBatch<DO>, Tensor) {
+    async fn train_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
         let next_ctx = self.runner.next_ctx();
         let batch = tch::no_grad(|| {
             Self::choose_for_batch(
@@ -448,10 +449,10 @@ impl<
             .purge_all_gpu_caches(Arc::into_inner(next_ctx).unwrap().into_inner(), self.device)
             .await;
 
-        batch
+        Ok(batch)
     }
 
-    async fn valid_batch(&self) -> (ThoBatch<DO>, Tensor) {
+    async fn valid_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
         let next_ctx = self.runner.next_ctx();
 
         let batch = tch::no_grad(|| {
@@ -470,7 +471,7 @@ impl<
             .purge_all_gpu_caches(Arc::into_inner(next_ctx).unwrap().into_inner(), self.device)
             .await;
 
-        batch
+        Ok(batch)
     }
 }
 
@@ -617,14 +618,14 @@ where
     B: AsyncDataBatch<DI> + Debug,
     F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
-    async fn train_batch(&self) -> (ThoBatch<DO>, Tensor) {
-        let (inputs, labels) = self.inner.train_batch().await;
-        (self.transform_fn.write()(inputs), labels)
+    async fn train_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
+        let (inputs, labels) = self.inner.train_batch().await?;
+        Ok((self.transform_fn.write()(inputs), labels))
     }
 
-    async fn valid_batch(&self) -> (ThoBatch<DO>, Tensor) {
-        let (inputs, labels) = self.inner.valid_batch().await;
-        (self.transform_fn.write()(inputs), labels)
+    async fn valid_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
+        let (inputs, labels) = self.inner.valid_batch().await?;
+        Ok((self.transform_fn.write()(inputs), labels))
     }
 }
 
