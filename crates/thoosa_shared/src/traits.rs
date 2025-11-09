@@ -501,7 +501,7 @@ pub trait Data: Debug + CopyToDevice {
 }
 
 
-#[async_trait]
+#[async_trait(?Send)]
 impl CopyToDevice for MockData {
     async fn copy_to_device(&self, _dst_device: usize) -> Self {
         MockData::new()
@@ -515,10 +515,10 @@ pub trait Select<S> {
     fn subview(&self, selector: S) -> Result<Self::Output, ThoosaError>;
 }
 
-pub trait Adjustable: Send + Sync {}
+pub trait Adjustable: Send /*+ Sync */{}
 
 impl Adjustable for (){}
 
-impl<A> Adjustable for Arc<RwLock<A>> where A: Adjustable {}
+// impl<A> Adjustable for Arc<RwLock<A>> where A: Adjustable {}
 
 impl<T: Send + Sync> Adjustable for std::ops::Range<T> {}

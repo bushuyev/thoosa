@@ -145,15 +145,16 @@ impl FindMotifsApplicable {
     }
 
     pub fn unfold(&self, input: &TCDF) -> TCSD {
-        let input_length = input.size()[1];
-        input
-            .t
-            .unfold(
-                1,
-                self.run_config.window as i64,
-                self.run_config.step as i64,
-            )
-            .into()
+        // let input_length = input.size()[1];
+        // input
+        //     .t
+        //     .unfold(
+        //         1,
+        //         self.run_config.window as i64,
+        //         self.run_config.step as i64,
+        //     )
+        //     .into()
+        todo!()
     }
 }
 
@@ -167,67 +168,68 @@ impl Runnable<TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable {
     type R = ThoRunner;
 
     fn run(&self, input: TCD, options: FindMotifsRunConfigOptions) -> Result<TCSD, ThoosaError> {
-        debug!(
-            "Applicable for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}",
-            self.kernel,
-            input.size()
-        );
-
-        let t = match self.kernel.as_ref() {
-            None => input.as_ref().to_device(self.device).shallow_clone(),
-            Some(kernel) => input.as_ref().to_device(self.device).conv1d(
-                &kernel,
-                None::<Tensor>,
-                1,
-                0,
-                1,
-                self.groups,
-            ),
-        };
-
-        match options {
-            FindMotifsRunConfigOptions::Filter => Ok(t.into()),
-            FindMotifsRunConfigOptions::FilterUnfold => {
-                let input_length = t.size()[1];
-
-                if input_length >= self.run_config.window as i64 {
-                    let unfolded = t.unfold(
-                        1,
-                        self.run_config.window as i64,
-                        self.run_config.step as i64,
-                    );
-
-                    debug!(
-                        "Applicable for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}",
-                        t.size(),
-                        unfolded.size()
-                    );
-
-                    Ok(unfolded.into())
-                } else {
-                    Err(ThoosaError::new(format!(
-                        "can't unfold tensor - length ({}) is less than window ({})",
-                        input_length, self.run_config.window
-                    )))
-                }
-            }
-        }
-    }
-
-    async fn async_run(
-        self: Arc<Self>,
-        input: Arc<TCD>,
-        runner: Arc<Self::R>,
-        ctx: Option<
-            Arc<
-                RwLock<
-                    <<Self as Runnable<TCD, TCSD, FindMotifsRunConfigOptions>>::R as Runner>::Ctx,
-                >,
-            >,
-        >,
-    ) -> Arc<TCSD> {
+        // debug!(
+        //     "Applicable for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}",
+        //     self.kernel,
+        //     input.size()
+        // );
+        //
+        // let t = match self.kernel.as_ref() {
+        //     None => input.as_ref().to_device(self.device).shallow_clone(),
+        //     Some(kernel) => input.as_ref().to_device(self.device).conv1d(
+        //         &kernel,
+        //         None::<Tensor>,
+        //         1,
+        //         0,
+        //         1,
+        //         self.groups,
+        //     ),
+        // };
+        //
+        // match options {
+        //     FindMotifsRunConfigOptions::Filter => Ok(t.into()),
+        //     FindMotifsRunConfigOptions::FilterUnfold => {
+        //         let input_length = t.size()[1];
+        //
+        //         if input_length >= self.run_config.window as i64 {
+        //             let unfolded = t.unfold(
+        //                 1,
+        //                 self.run_config.window as i64,
+        //                 self.run_config.step as i64,
+        //             );
+        //
+        //             debug!(
+        //                 "Applicable for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}",
+        //                 t.size(),
+        //                 unfolded.size()
+        //             );
+        //
+        //             Ok(unfolded.into())
+        //         } else {
+        //             Err(ThoosaError::new(format!(
+        //                 "can't unfold tensor - length ({}) is less than window ({})",
+        //                 input_length, self.run_config.window
+        //             )))
+        //         }
+        //     }
+        // }
         todo!()
     }
+
+    // async fn async_run(
+    //     self: Arc<Self>,
+    //     input: Arc<TCD>,
+    //     runner: Arc<Self::R>,
+    //     ctx: Option<
+    //         Arc<
+    //             RwLock<
+    //                 <<Self as Runnable<TCD, TCSD, FindMotifsRunConfigOptions>>::R as Runner>::Ctx,
+    //             >,
+    //         >,
+    //     >,
+    // ) -> Arc<TCSD> {
+    //     todo!()
+    // }
     fn device(&self) -> impl ToOrdinal {
         ThoDevice::from(self.device)
     }
@@ -256,54 +258,55 @@ impl Runnable<TCD, TCDF, ()> for FindMotifsApplicable {
         todo!()
     }
 
-    async fn async_run(
-        self: Arc<Self>,
-        input: Arc<TCD>,
-        runner: Arc<Self::R>,
-        ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, TCDF, ()>>::R as Runner>::Ctx>>>,
-    ) -> Arc<TCDF> {
-        debug!(
-            "Applicable<TCD, TCSD, ()> for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}",
-            self.kernel,
-            input.size()
-        );
-
-        let t = match self.kernel.as_ref() {
-            None => input.t.to_device(self.device).shallow_clone(),
-            Some(kernel) => {
-                input
-                    .t
-                    .to_device(self.device)
-                    .conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
-            }
-        };
-
-        // match options {
-        //     FindMotifsRunConfigOptions::Filter => {
-        //         Ok(t.into())
-        //     }
-        //     FindMotifsRunConfigOptions::FilterUnfold => {
-        let input_length = t.size()[1];
-
-        if input_length >= self.run_config.window as i64 {
-            // let unfolded = t.unfold(1, self.run_config.window as i64, self.run_config.step as i64);
-
-            // debug!("Applicable<TCD, TCD, ()> for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
-
-            Arc::new(ThoTensor::<ChannelsDataFiltered, CachableId>::new(
-                <FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(
-                    &self,
-                    Input::id(input.as_ref()),
-                ),
-                t,
-            ))
-        } else {
-            // Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
-            panic!("todo")
-        }
-        // }
-        // }
-    }
+    // async fn async_run(
+    //     self: Arc<Self>,
+    //     input: Arc<TCD>,
+    //     runner: Arc<Self::R>,
+    //     ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, TCDF, ()>>::R as Runner>::Ctx>>>,
+    // ) -> Arc<TCDF> {
+    //     debug!(
+    //         "Applicable<TCD, TCSD, ()> for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}",
+    //         self.kernel,
+    //         input.size()
+    //     );
+    //     
+    //     let t = match self.kernel.as_ref() {
+    //         None => input.t.to_device(self.device).shallow_clone(),
+    //         Some(kernel) => {
+    //             input
+    //                 .t
+    //                 .to_device(self.device)
+    //                 .conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
+    //         }
+    //     };
+    //     
+    //     // match options {
+    //     //     FindMotifsRunConfigOptions::Filter => {
+    //     //         Ok(t.into())
+    //     //     }
+    //     //     FindMotifsRunConfigOptions::FilterUnfold => {
+    //     let input_length = t.size()[1];
+    //     
+    //     if input_length >= self.run_config.window as i64 {
+    //         // let unfolded = t.unfold(1, self.run_config.window as i64, self.run_config.step as i64);
+    //     
+    //         // debug!("Applicable<TCD, TCD, ()> for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
+    //     
+    //         Arc::new(ThoTensor::<ChannelsDataFiltered, CachableId>::new(
+    //             <FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(
+    //                 &self,
+    //                 Input::id(input.as_ref()),
+    //             ),
+    //             t,
+    //         ))
+    //     } else {
+    //         // Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
+    //         panic!("todo")
+    //     }
+    //     // }
+    //     // }
+    //     todo!()
+    // }
 
     fn device(&self) -> impl ToOrdinal {
         ThoDevice::from(self.device)
@@ -408,64 +411,65 @@ impl Runnable<FindMotifsApplicableInput, FindMotifsApplicableOutput, ()> for Fin
         tensors_chunk: FindMotifsApplicableInput,
         options: (),
     ) -> Result<FindMotifsApplicableOutput, ThoosaError> {
-        let mut slices = Vec::with_capacity(tensors_chunk.0.len());
-        let mut slice_sizes = Vec::with_capacity(tensors_chunk.0.len());
-        if log_enabled!(DebugLevel) {
-            debug!(
-                "Applicable for FindMotifsRunConfigApplicable::apply tensors_chunk.sizes={:?}",
-                tensors_chunk.0.iter().map(|t| t.size()).collect::<Vec<_>>()
-            );
-        }
-
-        for tensor_wrapped in tensors_chunk.0.iter() {
-            // let tcd:TCD = ThoTensor::<ChannelsData>::from(tensor_wrapped.deref());
-            match self.run(
-                tensor_wrapped.deref().into(),
-                FindMotifsRunConfigOptions::FilterUnfold,
-            ) {
-                Ok(t) => {
-                    slice_sizes.push(t.size()[1]);
-                    slices.push(t.as_ref().shallow_clone());
-                }
-                Err(e) => {
-                    warn!(
-                        "Applicable for FindMotifsRunConfigApplicable::apply: skipping tensor, e={e:?}"
-                    );
-                }
-            };
-        }
-
-        let tensor = if slices.is_empty() {
-            //channels
-            Tensor::zeros(
-                &[
-                    0,
-                    tensors_chunk.0[0].size()[0],
-                    self.run_config.window as i64,
-                ],
-                (Float, Cpu),
-            )
-        } else {
-            //channels x slices x window
-            Tensor::cat(&slices, 1) //cat along slices
-        };
-
-        Ok(
-            FindMotifsApplicableOutput {
-                t: tensor.into(),
-                sizes: slice_sizes,
-            }, //num slices in each tensor,
-        )
-    }
-
-    async fn async_run(
-        self: Arc<Self>,
-        input: Arc<FindMotifsApplicableInput>,
-        runner: Arc<Self::R>,
-        ctx: Option<Arc<RwLock<<<Self as Runnable<FindMotifsApplicableInput, FindMotifsApplicableOutput, ()>>::R as Runner>::Ctx>>>,
-    ) -> Arc<FindMotifsApplicableOutput> {
+        // let mut slices = Vec::with_capacity(tensors_chunk.0.len());
+        // let mut slice_sizes = Vec::with_capacity(tensors_chunk.0.len());
+        // if log_enabled!(DebugLevel) {
+        //     debug!(
+        //         "Applicable for FindMotifsRunConfigApplicable::apply tensors_chunk.sizes={:?}",
+        //         tensors_chunk.0.iter().map(|t| t.size()).collect::<Vec<_>>()
+        //     );
+        // }
+        //
+        // for tensor_wrapped in tensors_chunk.0.iter() {
+        //     // let tcd:TCD = ThoTensor::<ChannelsData>::from(tensor_wrapped.deref());
+        //     match self.run(
+        //         tensor_wrapped.deref().into(),
+        //         FindMotifsRunConfigOptions::FilterUnfold,
+        //     ) {
+        //         Ok(t) => {
+        //             slice_sizes.push(t.size()[1]);
+        //             slices.push(t.as_ref().shallow_clone());
+        //         }
+        //         Err(e) => {
+        //             warn!(
+        //                 "Applicable for FindMotifsRunConfigApplicable::apply: skipping tensor, e={e:?}"
+        //             );
+        //         }
+        //     };
+        // }
+        //
+        // let tensor = if slices.is_empty() {
+        //     //channels
+        //     Tensor::zeros(
+        //         &[
+        //             0,
+        //             tensors_chunk.0[0].size()[0],
+        //             self.run_config.window as i64,
+        //         ],
+        //         (Float, Cpu),
+        //     )
+        // } else {
+        //     //channels x slices x window
+        //     Tensor::cat(&slices, 1) //cat along slices
+        // };
+        //
+        // Ok(
+        //     FindMotifsApplicableOutput {
+        //         t: tensor.into(),
+        //         sizes: slice_sizes,
+        //     }, //num slices in each tensor,
+        // )
         todo!()
     }
+
+    // async fn async_run(
+    //     self: Arc<Self>,
+    //     input: Arc<FindMotifsApplicableInput>,
+    //     runner: Arc<Self::R>,
+    //     ctx: Option<Arc<RwLock<<<Self as Runnable<FindMotifsApplicableInput, FindMotifsApplicableOutput, ()>>::R as Runner>::Ctx>>>,
+    // ) -> Arc<FindMotifsApplicableOutput> {
+    //     todo!()
+    // }
 
     fn device(&self) -> impl ToOrdinal {
         ThoDevice::from(self.device)

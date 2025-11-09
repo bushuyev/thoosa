@@ -236,7 +236,7 @@ impl Select<std::ops::Range<MonoMetrics<0, 1>>> for ClcResourcesMotifsDistInputD
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl CopyToDevice for ClcResourcesMotifsDistInputDeviceWrapper {
     async fn copy_to_device(&self, dst_device: usize) -> Self {
         let batch = futures::stream::iter(&self.batch)
@@ -372,7 +372,7 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
 
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl <'a> CopyToDevice for ClcResourcesMotifsDistInput<'a> {
     async fn copy_to_device(&self, dst_device: usize) -> Self{
         !unimplemented!()

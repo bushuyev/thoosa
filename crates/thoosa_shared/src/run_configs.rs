@@ -133,8 +133,8 @@ pub trait RunConfig: Debug {
 #[async_trait]
 pub trait Runnable<In, Out, P>: Debug + Sync + Send
 where
-    In: Send + Sync,
-    Out: Send + Sync,
+    In: Send, //+ Sync,
+    Out: Send //+ Sync,
 {
     type R: Runner + Sync + Send;
 
@@ -147,7 +147,15 @@ where
         input: Arc<In>,
         runner: Arc<Self::R>,
         ctx: Option<Arc<RwLock<<<Self as Runnable<In, Out, P>>::R as Runner>::Ctx>>>,
-    ) -> Arc<Out>;
+    ) -> Arc<Out>
+    where
+        In:Send + Sync+'static,
+        Out:Send + Sync +'static,
+        Self::R: 'static,
+        <<Self as Runnable<In, Out, P>>::R as Runner>::Ctx: 'static
+    {
+        todo!()
+    }
 
     fn device(&self) -> impl ToOrdinal;
 }
@@ -155,8 +163,8 @@ where
 #[async_trait]
 pub trait Cachable<In, Out, P>: Runnable<In, Out, P> + Debug + Sync + Send
 where
-    In: Input + Send + Sync,
-    Out: Output + Send + Sync,
+    In: Input + Send, //+ Sync,
+    Out: Output + Send// + Sync,
 {
     fn format_id(&self, input_id: &CachableId) -> CachableId {
         format!("{}:{}_{}", input_id, self.name(), self.run_id()).into()

@@ -25,7 +25,7 @@ impl<D:Data+WithId, E:Clone+Debug> DataWithExtra<D, E> {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl <D:Data+WithId + Sync, E:Clone+Debug+Sync> CopyToDevice for DataWithExtra<D, E> {
     async fn copy_to_device(&self, dst_device: usize) -> Self{
         DataWithExtra {

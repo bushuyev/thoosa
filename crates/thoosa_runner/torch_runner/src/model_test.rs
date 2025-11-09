@@ -150,7 +150,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl CopyToDevice for FileInput {
         async fn copy_to_device(&self, _dst_device: usize) -> Self {
             self.clone()
@@ -793,7 +793,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl CopyToDevice for FileListInput {
         async fn copy_to_device(&self, _dst_device: usize) -> Self {
             Self {

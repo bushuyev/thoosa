@@ -1,4 +1,4 @@
-use crate::tho_tensor::{ThoTensor};
+use crate::tho_tensor::{SyncThoTensor, ThoTensor};
 use async_trait::async_trait;
 use std::fmt::{Debug, Display};
 use std::pin::Pin;
@@ -102,9 +102,9 @@ pub trait Dimensional {
     type Dimensions: Dims;
 }
 
-pub type TCD = ThoTensor<ChannelsData, CachableId>;
-pub type TCDF = ThoTensor<ChannelsDataFiltered, CachableId>;
-pub type TCSD = ThoTensor<ChannelsSlicesData, CachableId>;
+pub type TCD = SyncThoTensor<ChannelsData, CachableId>;
+pub type TCDF = SyncThoTensor<ChannelsDataFiltered, CachableId>;
+pub type TCSD = SyncThoTensor<ChannelsSlicesData, CachableId>;
 pub type ThoBatch<D> = ThoTensor<Batch<D>, CachableId>;
 
 #[derive(Clone, Debug)]
@@ -115,7 +115,7 @@ impl Dims for AnyDims {
 
 pub struct AnySub {}
 
-#[async_trait]
+#[async_trait(?Send)]
 impl CopyToDevice for AnySub {
     async fn copy_to_device(&self, dst_device: usize) -> Self {
         todo!()

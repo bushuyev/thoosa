@@ -32,7 +32,7 @@ impl<D: Dims, Id: Named + Clone> Dimensional for ThoTensor<D, Id> {
 }
 
 //TODO remove, it should be in DevicesWrap between async
-unsafe impl<D: Dims, Id: Named + Clone> Sync for ThoTensor<D, Id> {}
+// unsafe impl<D: Dims, Id: Named + Clone> Sync for ThoTensor<D, Id> {}
 
 // impl<D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
 //     fn from(tensor: Tensor) -> Self {
@@ -372,6 +372,23 @@ pub struct ThoTensor<D: Dims, Id: Named + Clone> {
     pd: PhantomData<D>,
 }
 
+#[derive(Debug)]
+pub struct SyncThoTensor<D: Dims + Debug, Id: Named + Clone + Debug> {
+    pd: PhantomData<(D, Id)>,
+}
+
+unsafe impl<D: Dims + Debug, Id: Named + Clone + Debug> Sync for SyncThoTensor<D, Id> {}
+
+impl  <D: Dims + Debug, Id: Named + Clone + Debug> Input for SyncThoTensor<D, Id> {}
+impl  <D: Dims + Debug, Id: Named + Clone + Debug> WithId for SyncThoTensor<D, Id> {
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+impl  <D: Dims + Debug, Id: Named + Clone + Debug> Output for SyncThoTensor<D, Id> {}
+
 // impl<D: Dims> WithId for &ThoTensor<D, CachableId> {
 //     type ID = CachableId;
 //
@@ -410,9 +427,9 @@ impl<D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
 
 
 
-impl <D:Dims, Id:Named + Clone + Send> Adjustable for ThoTensor<D, Id> {}
+impl <D:Dims, Id:Named + Clone + Send + Sync> Adjustable for ThoTensor<D, Id> {}
 
-impl<D: Dims, Id: Named + Clone> Data for ThoTensor<D, Id> {
+impl<D: Dims, Id: Named + Clone + Sync> Data for ThoTensor<D, Id> {
     type Metrics = D::Metrics;
 
 
@@ -612,13 +629,13 @@ where
 // {
 // }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl<D: Dims, Id> CopyToDevice for ThoTensor<D, Id>
 where
-    Id: Named + Clone, //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
+    Id: Named + Clone + Sync, //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
 {
     async fn copy_to_device(&self, dst_device: usize) -> Self {
-        let copy =
+       /* let copy =
             if tensor_mem_size(self.t.kind(), &self.t.size()) < CopyCtx::instance().buf_size() {
                 self.t
                     .to_device(ThoDevice::from(dst_device).deref().clone())
@@ -636,7 +653,8 @@ where
 
         // debug!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
 
-        ThoTensor::new(self.id.clone(), copy)
+        ThoTensor::new(self.id.clone(), copy)*/
+        todo!()
     }
 }
 

@@ -201,42 +201,43 @@ where
     {
         debug!("DataInDevices: new input={input:?} device_ordinal={device_ordinal}  ");
 
-        let statistics_clone = statistics.clone();
-        /*
-        let mut i =0;
-        while !can_run(i, device) {
-            rayon::yield_now();
-            i+=1
-        }
-        */
-        let t_0 = Instant::now();
-        let ctx_for_future = ctx.as_ref().map(|c| Arc::clone(c));
-
-        let fut = async move {
-            let r = applicable
-                .async_run(input.clone(), runner, ctx_for_future)
-                .await;
-            debug!("run_cached_task: done input={input:?}  ");
-            statistics_clone.on_new_load_done(t_0.elapsed().as_millis() as u64);
-            r
-        }
-        .boxed()
-        .shared();
-
-        let mut device_futures = vec![const { None }; num_devices].into_boxed_slice();
-        let mut device_cache_areas = vec![0; num_devices].into_boxed_slice();
-
-        device_futures[device_ordinal] = Some(fut.clone());
-        device_cache_areas[device_ordinal] = ctx.map(|v| v.read().cache_area()).unwrap_or(0);
-
-        (
-            Self {
-                device_futures,
-                device_cache_areas,
-                in_cpu_since: None,
-            },
-            fut,
-        )
+        // let statistics_clone = statistics.clone();
+        // /*
+        // let mut i =0;
+        // while !can_run(i, device) {
+        //     rayon::yield_now();
+        //     i+=1
+        // }
+        // */
+        // let t_0 = Instant::now();
+        // let ctx_for_future = ctx.as_ref().map(|c| Arc::clone(c));
+        //
+        // let fut = async move {
+        //     let r = applicable
+        //         .async_run(input.clone(), runner, ctx_for_future)
+        //         .await;
+        //     debug!("run_cached_task: done input={input:?}  ");
+        //     statistics_clone.on_new_load_done(t_0.elapsed().as_millis() as u64);
+        //     r
+        // }
+        // .boxed()
+        // .shared();
+        //
+        // let mut device_futures = vec![const { None }; num_devices].into_boxed_slice();
+        // let mut device_cache_areas = vec![0; num_devices].into_boxed_slice();
+        //
+        // device_futures[device_ordinal] = Some(fut.clone());
+        // device_cache_areas[device_ordinal] = ctx.map(|v| v.read().cache_area()).unwrap_or(0);
+        //
+        // (
+        //     Self {
+        //         device_futures,
+        //         device_cache_areas,
+        //         in_cpu_since: None,
+        //     },
+        //     fut,
+        // )
+        todo!()
     }
 
     fn get_from_any_device<R: RunCtx>(
@@ -1010,35 +1011,35 @@ mod tests {
     impl Runnable<LoaderInputId, LoaderOutput, ()> for TestLoader {
         type R = MyRunner;
 
-        async fn async_run(
-            self: Arc<Self>,
-            input: Arc<LoaderInputId>,
-            runner: Arc<MyRunner>,
-            ctx: Option<Arc<RwLock<MyRunCtx>>>,
-        ) -> Arc<LoaderOutput> {
-            debug!("Loader::async_apply: input={input:?} ");
-            // thread::sleep(Duration::new(0, 1000));
-            dummy_load(
-                &runner.futures_runner.statistics,
-                &Arc::new(Input::id(input.as_ref()).clone()),
-            )
-            .await;
-
-            for step in 0..self.steps {
-                // yield_n(1).await;
-                dummy_load(
-                    &runner.futures_runner.statistics,
-                    &Arc::new(Input::id(input.as_ref()).clone()),
-                )
-                .await;
-            }
-
-            Arc::new(LoaderOutput(DataResource::new(
-                Input::id(input.as_ref()).0.to_string(),
-                self.device,
-                vec![0.1, 0.2, 0.3, 0.4],
-            )))
-        }
+        // async fn async_run(
+        //     self: Arc<Self>,
+        //     input: Arc<LoaderInputId>,
+        //     runner: Arc<MyRunner>,
+        //     ctx: Option<Arc<RwLock<MyRunCtx>>>,
+        // ) -> Arc<LoaderOutput> {
+        //     debug!("Loader::async_apply: input={input:?} ");
+        //     // thread::sleep(Duration::new(0, 1000));
+        //     dummy_load(
+        //         &runner.futures_runner.statistics,
+        //         &Arc::new(Input::id(input.as_ref()).clone()),
+        //     )
+        //     .await;
+        //
+        //     for step in 0..self.steps {
+        //         // yield_n(1).await;
+        //         dummy_load(
+        //             &runner.futures_runner.statistics,
+        //             &Arc::new(Input::id(input.as_ref()).clone()),
+        //         )
+        //         .await;
+        //     }
+        //
+        //     Arc::new(LoaderOutput(DataResource::new(
+        //         Input::id(input.as_ref()).0.to_string(),
+        //         self.device,
+        //         vec![0.1, 0.2, 0.3, 0.4],
+        //     )))
+        // }
 
         fn device(&self) -> impl ToOrdinal {
             self.device.clone()
@@ -1106,27 +1107,27 @@ mod tests {
     impl Runnable<LoaderInputId, ApplicableAOutput, ()> for ApplicableA {
         type R = MyRunner;
 
-        async fn async_run(
-            self: Arc<Self>,
-            input: Arc<LoaderInputId>,
-            runner: Arc<MyRunner>,
-            ctx: Option<Arc<RwLock<MyRunCtx>>>,
-        ) -> Arc<ApplicableAOutput> {
-            let resource_0 = runner.clone().run_loader(&input, &self.loader, ctx).await;
-            // debug!("ApplicableA::apply: input={input:?}");
-
-            dummy_load(
-                &runner.futures_runner.statistics,
-                &Arc::new(Input::id(input.as_ref()).clone()),
-            )
-            .await;
-
-            Arc::new(ApplicableAOutput(DataResource::new(
-                self.applied_id(Input::id(input.as_ref())).to_string(),
-                self.device,
-                [vec![0.1, 0.2, 0.3, 0.4], resource_0.0.data.clone()].concat(),
-            )))
-        }
+        // async fn async_run(
+        //     self: Arc<Self>,
+        //     input: Arc<LoaderInputId>,
+        //     runner: Arc<MyRunner>,
+        //     ctx: Option<Arc<RwLock<MyRunCtx>>>,
+        // ) -> Arc<ApplicableAOutput> {
+        //     let resource_0 = runner.clone().run_loader(&input, &self.loader, ctx).await;
+        //     // debug!("ApplicableA::apply: input={input:?}");
+        //
+        //     dummy_load(
+        //         &runner.futures_runner.statistics,
+        //         &Arc::new(Input::id(input.as_ref()).clone()),
+        //     )
+        //     .await;
+        //
+        //     Arc::new(ApplicableAOutput(DataResource::new(
+        //         self.applied_id(Input::id(input.as_ref())).to_string(),
+        //         self.device,
+        //         [vec![0.1, 0.2, 0.3, 0.4], resource_0.0.data.clone()].concat(),
+        //     )))
+        // }
 
         fn device(&self) -> impl ToOrdinal {
             self.device.clone()
@@ -1203,30 +1204,30 @@ mod tests {
     impl Runnable<LoaderInputId, ApplicableBOutput, ()> for ApplicableB {
         type R = MyRunner;
 
-        async fn async_run(
-            self: Arc<Self>,
-            input: Arc<LoaderInputId>,
-            runner: Arc<MyRunner>,
-            ctx: Option<Arc<RwLock<MyRunCtx>>>,
-        ) -> Arc<ApplicableBOutput> {
-            let resource_a = runner
-                .clone()
-                .run_applicable_a(&input, &self.applicable_a, ctx)
-                .await;
-            debug!("ApplicableB::apply: input={input:?}");
-
-            dummy_load(
-                &runner.futures_runner.statistics,
-                &Arc::new(Input::id(input.as_ref()).clone()),
-            )
-            .await;
-
-            Arc::new(ApplicableBOutput(DataResource::new(
-                self.applied_id(Input::id(input.as_ref())).to_string(),
-                self.device,
-                [vec![0.1, 0.2, 0.3, 0.4], resource_a.0.data.clone()].concat(),
-            )))
-        }
+        // async fn async_run(
+        //     self: Arc<Self>,
+        //     input: Arc<LoaderInputId>,
+        //     runner: Arc<MyRunner>,
+        //     ctx: Option<Arc<RwLock<MyRunCtx>>>,
+        // ) -> Arc<ApplicableBOutput> {
+        //     let resource_a = runner
+        //         .clone()
+        //         .run_applicable_a(&input, &self.applicable_a, ctx)
+        //         .await;
+        //     debug!("ApplicableB::apply: input={input:?}");
+        //
+        //     dummy_load(
+        //         &runner.futures_runner.statistics,
+        //         &Arc::new(Input::id(input.as_ref()).clone()),
+        //     )
+        //     .await;
+        //
+        //     Arc::new(ApplicableBOutput(DataResource::new(
+        //         self.applied_id(Input::id(input.as_ref())).to_string(),
+        //         self.device,
+        //         [vec![0.1, 0.2, 0.3, 0.4], resource_a.0.data.clone()].concat(),
+        //     )))
+        // }
 
         fn device(&self) -> impl ToOrdinal {
             self.device.clone()

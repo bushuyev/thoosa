@@ -139,14 +139,15 @@ impl Debug for TCDLoader {
 impl Runnable<Resource, TCD, ()> for TCDLoader {
     type R = ThoRunner;
 
-    async fn async_run(
-        self: Arc<Self>,
-        input: Arc<Resource>,
-        runner: Arc<ThoRunner>,
-        ctx: Option<Arc<RwLock<ThoRunCtx>>>,
-    ) -> Arc<TCD> {
-        Arc::new((self.loader_fn)(&input, &*self.device))
-    }
+    // async fn async_run(
+    //     self: Arc<Self>,
+    //     input: Arc<Resource>,
+    //     runner: Arc<ThoRunner>,
+    //     ctx: Option<Arc<RwLock<ThoRunCtx>>>,
+    // ) -> Arc<TCD> {
+    //     // Arc::new((self.loader_fn)(&input, &*self.device))
+    //     todo!()
+    // }
     fn device(&self) -> impl ToOrdinal {
         self.device.clone()
     }
@@ -183,11 +184,11 @@ impl ToOrdinal for ThoDevice {
 pub struct ThoRunner {
     futures_runner: Arc<FuturesRunner>,
 
-    loader_cache_fut: MapWithThread<TCD>,
-    find_motifs_cache_fut: MapWithThread<TCDF>,
-    motif_nets_cache_fut: MapWithThread<LoadMotifNetOutput>,
+    // loader_cache_fut: MapWithThread<TCD>,
+    // find_motifs_cache_fut: MapWithThread<TCDF>,
+    // motif_nets_cache_fut: MapWithThread<LoadMotifNetOutput>,
 
-    tcd_loaders: Vec<Arc<TCDLoader>>,
+    // tcd_loaders: Vec<Arc<TCDLoader>>,
 }
 
 impl Runner for ThoRunner {
@@ -215,12 +216,12 @@ impl ThoRunner {
         Self {
             futures_runner: Arc::new(FuturesRunner::new(&devices_threads)), //TODO config
 
-            loader_cache_fut: MapWithThread::new("loader_cache"),
-
-            find_motifs_cache_fut: MapWithThread::new("find_motifs_cache"),
-
-            motif_nets_cache_fut: MapWithThread::new("motif_nets_cache_fut"),
-            tcd_loaders,
+            // loader_cache_fut: MapWithThread::new("loader_cache"),
+            //
+            // find_motifs_cache_fut: MapWithThread::new("find_motifs_cache"),
+            //
+            // motif_nets_cache_fut: MapWithThread::new("motif_nets_cache_fut"),
+            // tcd_loaders,
         }
     }
 
@@ -242,21 +243,22 @@ impl ThoRunner {
         on_device: &Device,
         ctx: Option<Arc<RwLock<ThoRunCtx>>>,
     ) -> Shared<BoxFuture<'static, Arc<TCD>>> {
-        let applicable = &self.tcd_loaders[ThoDevice::from(*on_device).ordinal()];
-
-        if let Some(ctx) = ctx.as_ref() {
-            ctx.write()
-                .loaded
-                .push(applicable.applied_id(Input::id(input)));
-        }
-
-        self.futures_runner.run_cached_task(
-            &self.loader_cache_fut,
-            Arc::new(input.clone()),
-            applicable,
-            self,
-            ctx,
-        )
+        // let applicable = &self.tcd_loaders[ThoDevice::from(*on_device).ordinal()];
+        //
+        // if let Some(ctx) = ctx.as_ref() {
+        //     ctx.write()
+        //         .loaded
+        //         .push(applicable.applied_id(Input::id(input)));
+        // }
+        //
+        // self.futures_runner.run_cached_task(
+        //     &self.loader_cache_fut,
+        //     Arc::new(input.clone()),
+        //     applicable,
+        //     self,
+        //     ctx,
+        // )
+        todo!()
     }
 
     pub fn run_find_motifs_applicable(
@@ -265,22 +267,23 @@ impl ThoRunner {
         applicable: &Arc<FindMotifsApplicable>,
         ctx: Option<Arc<RwLock<ThoRunCtx>>>,
     ) -> Shared<BoxFuture<'static, Arc<TCDF>>> {
-        if let Some(ctx) = ctx.as_ref() {
-            ctx.write().loaded.push(
-                <FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(
-                    applicable,
-                    Input::id(input.as_ref()),
-                ),
-            );
-        }
-
-        self.futures_runner.run_cached_task(
-            &self.find_motifs_cache_fut,
-            Arc::clone(&input),
-            applicable,
-            self,
-            ctx,
-        )
+        // if let Some(ctx) = ctx.as_ref() {
+        //     ctx.write().loaded.push(
+        //         <FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(
+        //             applicable,
+        //             Input::id(input.as_ref()),
+        //         ),
+        //     );
+        // }
+        //
+        // self.futures_runner.run_cached_task(
+        //     &self.find_motifs_cache_fut,
+        //     Arc::clone(&input),
+        //     applicable,
+        //     self,
+        //     ctx,
+        // )
+        todo!()
     }
 
     pub fn run_load_motif(
@@ -289,31 +292,32 @@ impl ThoRunner {
         applicable: &Arc<LoadMotifNetCachable>,
         ctx: Option<Arc<RwLock<ThoRunCtx>>>,
     ) -> Shared<BoxFuture<'static, Arc<LoadMotifNetOutput>>> {
-        if let Some(ctx) = ctx.as_ref() {
-            ctx.write()
-                .motif_nets
-                .push(<LoadMotifNetCachable as Cachable<
-                    LoadMotifNetInput,
-                    LoadMotifNetOutput,
-                    (),
-                >>::applied_id(
-                    applicable, Input::id(input.as_ref())
-                ));
-        }
-
-        self.futures_runner.run_cached_task(
-            &self.motif_nets_cache_fut,
-            Arc::clone(&input),
-            applicable,
-            self,
-            ctx,
-        )
+        // if let Some(ctx) = ctx.as_ref() {
+        //     ctx.write()
+        //         .motif_nets
+        //         .push(<LoadMotifNetCachable as Cachable<
+        //             LoadMotifNetInput,
+        //             LoadMotifNetOutput,
+        //             (),
+        //         >>::applied_id(
+        //             applicable, Input::id(input.as_ref())
+        //         ));
+        // }
+        //
+        // self.futures_runner.run_cached_task(
+        //     &self.motif_nets_cache_fut,
+        //     Arc::clone(&input),
+        //     applicable,
+        //     self,
+        //     ctx,
+        // )
+        todo!()
     }
 
     pub(crate) fn to_futs_iter(&self) -> impl Iterator<Item = &dyn FuturesRunnerMap> {
         [
-            &self.loader_cache_fut as &dyn FuturesRunnerMap,
-            &self.find_motifs_cache_fut as &dyn FuturesRunnerMap,
+            // &self.loader_cache_fut as &dyn FuturesRunnerMap,
+            // &self.find_motifs_cache_fut as &dyn FuturesRunnerMap,
         ]
         .into_iter()
     }
@@ -335,11 +339,13 @@ impl ThoRunner {
     }
 
     pub fn loader_keys(&self) -> Vec<String> {
-        self.loader_cache_fut.keys()
+        // self.loader_cache_fut.keys()
+        todo!()
     }
 
     pub fn find_motif_keys(&self) -> Vec<String> {
-        self.find_motifs_cache_fut.keys()
+        // self.find_motifs_cache_fut.keys()
+        todo!()
     }
 }
 
@@ -355,24 +361,24 @@ mod tests {
     use tch::{Device, Tensor};
     use thoosa_shared::resource::Resource;
 
-    #[test]
-    fn test_loader() {
-        let t_0 = Instant::now();
-
-        let runner = Arc::new(ThoRunner::new(&[10, 2, 2], |key, device| {
-            debug!("loader_fn: thread={:?}", std::thread::current().name());
-            Tensor::rand(&[1000], (Float, *device)).into()
-        }));
-
-        let res: Arc<TCD> = block_on(runner.clone().run_loader(
-            &Resource::new(0, 1, "aaa".to_string(), 1000),
-            &Device::Cpu,
-            None,
-        ));
-
-        debug!("loader_cache keys:{:?}", runner.loader_cache_fut.keys());
-        debug!("got res={res:?} in {:?}", t_0.elapsed());
-
-        assert_eq!(res.size(), [1000]);
-    }
+    // #[test]
+    // fn test_loader() {
+    //     let t_0 = Instant::now();
+    //
+    //     let runner = Arc::new(ThoRunner::new(&[10, 2, 2], |key, device| {
+    //         debug!("loader_fn: thread={:?}", std::thread::current().name());
+    //         Tensor::rand(&[1000], (Float, *device)).into()
+    //     }));
+    //
+    //     let res: Arc<TCD> = block_on(runner.clone().run_loader(
+    //         &Resource::new(0, 1, "aaa".to_string(), 1000),
+    //         &Device::Cpu,
+    //         None,
+    //     ));
+    //
+    //     // debug!("loader_cache keys:{:?}", runner.loader_cache_fut.keys());
+    //     // debug!("got res={res:?} in {:?}", t_0.elapsed());
+    //
+    //     assert_eq!(res.size(), [1000]);
+    // }
 }

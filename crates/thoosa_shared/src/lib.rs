@@ -1810,7 +1810,7 @@ pub fn replace_extension<'a>(path: &'a PathBuf, new_extension: &'a str) -> (&'a 
     (file_stem, json)
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 #[delegatable_trait]
 #[automock]
 pub trait CopyToDevice {

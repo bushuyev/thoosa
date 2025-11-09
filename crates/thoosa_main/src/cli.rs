@@ -759,62 +759,62 @@ impl Runnable<TrainFinalNetInput, Box<TrainFinalNetsRunConfigResult>, ()>
 {
     type R = ThoRunner;
 
-    async fn async_run(
-        self: Arc<Self>,
-        input: Arc<TrainFinalNetInput>,
-        runner: Arc<Self::R>,
-        _ctx: Option<
-            Arc<
-                RwLock<
-                    <<Self as Runnable<
-                        TrainFinalNetInput,
-                        Box<TrainFinalNetsRunConfigResult>,
-                        (),
-                    >>::R as Runner>::Ctx,
-                >,
-            >,
-        >,
-    ) -> Arc<Box<TrainFinalNetsRunConfigResult>> {
-        let device = self.device.clone();
-
-        let input_for_train = Arc::clone(&input);
-
-        let label_nets_applicable = Arc::clone(&self.label_nets_applicable);
-        opt_train_2(
-            Arc::clone(&input.fixed_config),
-            async move |vs:&VarStore, run_config_values:TrainFinalNetRunConfig, _listener|{
-
-
-                let  batch = Arc::new(Box::new(AsyncClassTensorsLoaderData::<ChannelsData, ChannelsData>::new(
-                    Arc::clone(&input_for_train.train_resources),
-                    Arc::clone(&input_for_train.valid_resources),
-                    run_config_values.common_training_args.batch_size as usize,
-                    Arc::clone(&runner),
-                    device.clone(),
-                    // None,
-                )));
-
-                train_final_net_2(
-                    &run_config_values,
-                    label_nets_applicable.label_nets_num(),
-                    label_nets_applicable.labels_num(),
-                    &mut AsyncBatchTransform::new(Arc::clone(&batch), |t:ThoBatch<ChannelsData>|{
-                        label_nets_applicable.run(t.as_ref().into(), ()).expect("label_nets_applicable.apply failed")
-                    }),
-                    vs,
-                    &device
-                ).await
-                // Ok((0.0, FinalNetParams::new(0, 0, 0)))
-            },
-            Arc::clone(&input.run_configs),
-            device,
-            "final"
-        ).await.map(|(var_store, final_node_params, train_final_nodes_values, min_loss)| {
-            debug!("run_opt_train_final: done, min_loss={min_loss} final_node_params={final_node_params:?}");
-
-            Arc::new(Box::new(TrainFinalNetsRunConfigResult::new(input.train_label_nodes_run_ids.as_ref(), min_loss, var_store, final_node_params, train_final_nodes_values.clone())))
-        }).expect("TODO")
-    }
+    // async fn async_run(
+    //     self: Arc<Self>,
+    //     input: Arc<TrainFinalNetInput>,
+    //     runner: Arc<Self::R>,
+    //     _ctx: Option<
+    //         Arc<
+    //             RwLock<
+    //                 <<Self as Runnable<
+    //                     TrainFinalNetInput,
+    //                     Box<TrainFinalNetsRunConfigResult>,
+    //                     (),
+    //                 >>::R as Runner>::Ctx,
+    //             >,
+    //         >,
+    //     >,
+    // ) -> Arc<Box<TrainFinalNetsRunConfigResult>> {
+    //     let device = self.device.clone();
+    // 
+    //     let input_for_train = Arc::clone(&input);
+    // 
+    //     let label_nets_applicable = Arc::clone(&self.label_nets_applicable);
+    //     opt_train_2(
+    //         Arc::clone(&input.fixed_config),
+    //         async move |vs:&VarStore, run_config_values:TrainFinalNetRunConfig, _listener|{
+    // 
+    // 
+    //             let  batch = Arc::new(Box::new(AsyncClassTensorsLoaderData::<ChannelsData, ChannelsData>::new(
+    //                 Arc::clone(&input_for_train.train_resources),
+    //                 Arc::clone(&input_for_train.valid_resources),
+    //                 run_config_values.common_training_args.batch_size as usize,
+    //                 Arc::clone(&runner),
+    //                 device.clone(),
+    //                 // None,
+    //             )));
+    // 
+    //             train_final_net_2(
+    //                 &run_config_values,
+    //                 label_nets_applicable.label_nets_num(),
+    //                 label_nets_applicable.labels_num(),
+    //                 &mut AsyncBatchTransform::new(Arc::clone(&batch), |t:ThoBatch<ChannelsData>|{
+    //                     label_nets_applicable.run(t.as_ref().into(), ()).expect("label_nets_applicable.apply failed")
+    //                 }),
+    //                 vs,
+    //                 &device
+    //             ).await
+    //             // Ok((0.0, FinalNetParams::new(0, 0, 0)))
+    //         },
+    //         Arc::clone(&input.run_configs),
+    //         device,
+    //         "final"
+    //     ).await.map(|(var_store, final_node_params, train_final_nodes_values, min_loss)| {
+    //         debug!("run_opt_train_final: done, min_loss={min_loss} final_node_params={final_node_params:?}");
+    // 
+    //         Arc::new(Box::new(TrainFinalNetsRunConfigResult::new(input.train_label_nodes_run_ids.as_ref(), min_loss, var_store, final_node_params, train_final_nodes_values.clone())))
+    //     }).expect("TODO")
+    // }
 
     fn device(&self) -> impl ToOrdinal {
         ThoDevice::from(self.device)
@@ -1019,70 +1019,70 @@ impl Runnable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()>
 {
     type R = ThoRunner;
 
-    async fn async_run(
-        self: Arc<Self>,
-        input: Arc<TrainLabelNetInput>,
-        runner: Arc<Self::R>,
-        _ctx: Option<
-            Arc<
-                RwLock<
-                    <<Self as Runnable<
-                        TrainLabelNetInput,
-                        Box<TrainLabelNetsRunConfigResult>,
-                        (),
-                    >>::R as Runner>::Ctx,
-                >,
-            >,
-        >,
-    ) -> Arc<Box<TrainLabelNetsRunConfigResult>> {
-        let input_for_train = Arc::clone(&input);
-        let device_for_train = self.device.clone();
-        //TODO use run_split_on_oom_2
-        opt_train_2(
-            Arc::clone(&input.fixed_config),
-            async move |vs: &VarStore, run_config: TrainLabelNetsRunConfig, _listener| { //TODO add _listener to train_label_nodes_2
-                debug!("run_opt_train_label_nodes:MaxPadding run_config={run_config:?}  ");
-
-                let applicable_and_net_enum = LabelNetApplicableAndNetE::new(
-                    &run_config.net, &input_for_train.motifs_nets_selection_applicable_arc, &input_for_train.ws
-                );
-
-                let mut batch = AsyncLoadingTensorsDataBatch::<ChannelsData, LabelNetInputTensors, _>::new(
-                    Arc::clone(&input_for_train.train_labels_resources),
-                    Arc::clone(&input_for_train.valid_labels_resources),
-                    run_config.common_training_args.batch_size as usize,
-                    Arc::clone(&runner),
-                    device_for_train,
-                    Some(Box::new(|t: TCD| {
-                        debug!("Runnable for TrainLabelNetApplicable t={t:?}");
-                        applicable_and_net_enum.apply(&t).expect("applicable_and_net_enum.apply failed")
-                    }))
-                );
-
-                let result = train_label_net_2(&applicable_and_net_enum.module(vs).unwrap(), &run_config, &mut batch, vs, &device_for_train).await
-                    .map(|v| (v,
-                          match &applicable_and_net_enum {
-                    LabelNetApplicableAndNetE::MaxPadding { applicable: _, params } => {
-                                  debug!("run_opt_train_label_nodes:MaxPadding bet params={params:?}  ");
-
-                                  params.clone()
-                              }
-                    LabelNetApplicableAndNetE::FixedNumSlices { applicable: _, params } => {
-                                  debug!("run_opt_train_label_nodes:FixedNumSlices bet params={params:?}  ");
-
-                                  params.clone()
-                              }
-                          }
-                    ));
-                Ok(result.expect("no result from train_label_nodes"))
-            },
-            Arc::clone(&input.run_configs),
-            self.device.clone(),
-            "label",
-        ).await.map(|(var_store, label_node_params, run_config, min_loss)| {
-            Arc::new(Box::new(TrainLabelNetsRunConfigResult::new(input.motifs_nets_selection_applicable_arc.motif_selection_run_id, input.label.clone(), min_loss, label_node_params, run_config, var_store)))
-        }).expect("TODO")
-    }
+    // async fn async_run(
+    //     self: Arc<Self>,
+    //     input: Arc<TrainLabelNetInput>,
+    //     runner: Arc<Self::R>,
+    //     _ctx: Option<
+    //         Arc<
+    //             RwLock<
+    //                 <<Self as Runnable<
+    //                     TrainLabelNetInput,
+    //                     Box<TrainLabelNetsRunConfigResult>,
+    //                     (),
+    //                 >>::R as Runner>::Ctx,
+    //             >,
+    //         >,
+    //     >,
+    // ) -> Arc<Box<TrainLabelNetsRunConfigResult>> {
+    //     let input_for_train = Arc::clone(&input);
+    //     let device_for_train = self.device.clone();
+    //     //TODO use run_split_on_oom_2
+    //     opt_train_2(
+    //         Arc::clone(&input.fixed_config),
+    //         async move |vs: &VarStore, run_config: TrainLabelNetsRunConfig, _listener| { //TODO add _listener to train_label_nodes_2
+    //             debug!("run_opt_train_label_nodes:MaxPadding run_config={run_config:?}  ");
+    // 
+    //             let applicable_and_net_enum = LabelNetApplicableAndNetE::new(
+    //                 &run_config.net, &input_for_train.motifs_nets_selection_applicable_arc, &input_for_train.ws
+    //             );
+    // 
+    //             let mut batch = AsyncLoadingTensorsDataBatch::<ChannelsData, LabelNetInputTensors, _>::new(
+    //                 Arc::clone(&input_for_train.train_labels_resources),
+    //                 Arc::clone(&input_for_train.valid_labels_resources),
+    //                 run_config.common_training_args.batch_size as usize,
+    //                 Arc::clone(&runner),
+    //                 device_for_train,
+    //                 Some(Box::new(|t: TCD| {
+    //                     debug!("Runnable for TrainLabelNetApplicable t={t:?}");
+    //                     applicable_and_net_enum.apply(&t).expect("applicable_and_net_enum.apply failed")
+    //                 }))
+    //             );
+    // 
+    //             let result = train_label_net_2(&applicable_and_net_enum.module(vs).unwrap(), &run_config, &mut batch, vs, &device_for_train).await
+    //                 .map(|v| (v,
+    //                       match &applicable_and_net_enum {
+    //                 LabelNetApplicableAndNetE::MaxPadding { applicable: _, params } => {
+    //                               debug!("run_opt_train_label_nodes:MaxPadding bet params={params:?}  ");
+    // 
+    //                               params.clone()
+    //                           }
+    //                 LabelNetApplicableAndNetE::FixedNumSlices { applicable: _, params } => {
+    //                               debug!("run_opt_train_label_nodes:FixedNumSlices bet params={params:?}  ");
+    // 
+    //                               params.clone()
+    //                           }
+    //                       }
+    //                 ));
+    //             Ok(result.expect("no result from train_label_nodes"))
+    //         },
+    //         Arc::clone(&input.run_configs),
+    //         self.device.clone(),
+    //         "label",
+    //     ).await.map(|(var_store, label_node_params, run_config, min_loss)| {
+    //         Arc::new(Box::new(TrainLabelNetsRunConfigResult::new(input.motifs_nets_selection_applicable_arc.motif_selection_run_id, input.label.clone(), min_loss, label_node_params, run_config, var_store)))
+    //     }).expect("TODO")
+    // }
     fn device(&self) -> impl ToOrdinal {
         ThoDevice::from(self.device)
     }
@@ -2053,54 +2053,54 @@ impl Runnable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>,
 {
     type R = ThoRunner;
 
-    async fn async_run(
-        self: Arc<Self>,
-        input: Arc<TrainMotifNetApplicableInput>,
-        _runner: Arc<Self::R>,
-        _ctx: Option<
-            Arc<
-                RwLock<
-                    <<Self as Runnable<
-                        TrainMotifNetApplicableInput,
-                        Box<TrainMotifsNetsRunConfigResult>,
-                        (),
-                    >>::R as Runner>::Ctx,
-                >,
-            >,
-        >,
-    ) -> Arc<Box<TrainMotifsNetsRunConfigResult>> {
-        let train_motifs_nodes_run_configs = Arc::clone(&input.train_motifs_nodes_run_configs);
-        let all_slices_0_cl = Arc::clone(&input.all_slices_0);
-        let all_slices_1_cl = Arc::clone(&input.all_slices_1);
-        let window = input.find_motifs_run_config.window();
-        let device = self.device;
-
-        opt_train_2(
-            Arc::clone(&input.fixed_config),
-            async move |vs: &VarStore, run_config: TrainMotifsNetsRunConfig, _listener| {
-                //TODO batch size
-                let all_slices_0_cl = all_slices_0_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
-                let all_slices_1_cl = all_slices_1_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
-
-                let mut batch = TensorsDataBatch::new(
-                    vec![
-                        all_slices_0_cl,
-                        all_slices_1_cl
-                    ],
-                    run_config.common_training_args.batch_size,
-                    0.8, //TODO config
-                    device
-                );
-
-                run_train_motif_net(window, &run_config, &self.device, &mut batch, vs, &mut DummyListener/*, listener*/)
-            },
-            train_motifs_nodes_run_configs,
-            device,
-            "motifs"
-        ).await.map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)| {
-            Arc::new(Box::new(TrainMotifsNetsRunConfigResult::new(min_loss, input.channel, input.motif_id, var_store, input.find_motifs_run_config.id.unwrap()/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)))
-        }).expect("TODO opt_train failed")
-    }
+    // async fn async_run(
+    //     self: Arc<Self>,
+    //     input: Arc<TrainMotifNetApplicableInput>,
+    //     _runner: Arc<Self::R>,
+    //     _ctx: Option<
+    //         Arc<
+    //             RwLock<
+    //                 <<Self as Runnable<
+    //                     TrainMotifNetApplicableInput,
+    //                     Box<TrainMotifsNetsRunConfigResult>,
+    //                     (),
+    //                 >>::R as Runner>::Ctx,
+    //             >,
+    //         >,
+    //     >,
+    // ) -> Arc<Box<TrainMotifsNetsRunConfigResult>> {
+    //     let train_motifs_nodes_run_configs = Arc::clone(&input.train_motifs_nodes_run_configs);
+    //     let all_slices_0_cl = Arc::clone(&input.all_slices_0);
+    //     let all_slices_1_cl = Arc::clone(&input.all_slices_1);
+    //     let window = input.find_motifs_run_config.window();
+    //     let device = self.device;
+    // 
+    //     opt_train_2(
+    //         Arc::clone(&input.fixed_config),
+    //         async move |vs: &VarStore, run_config: TrainMotifsNetsRunConfig, _listener| {
+    //             //TODO batch size
+    //             let all_slices_0_cl = all_slices_0_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
+    //             let all_slices_1_cl = all_slices_1_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
+    // 
+    //             let mut batch = TensorsDataBatch::new(
+    //                 vec![
+    //                     all_slices_0_cl,
+    //                     all_slices_1_cl
+    //                 ],
+    //                 run_config.common_training_args.batch_size,
+    //                 0.8, //TODO config
+    //                 device
+    //             );
+    // 
+    //             run_train_motif_net(window, &run_config, &self.device, &mut batch, vs, &mut DummyListener/*, listener*/)
+    //         },
+    //         train_motifs_nodes_run_configs,
+    //         device,
+    //         "motifs"
+    //     ).await.map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)| {
+    //         Arc::new(Box::new(TrainMotifsNetsRunConfigResult::new(min_loss, input.channel, input.motif_id, var_store, input.find_motifs_run_config.id.unwrap()/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)))
+    //     }).expect("TODO opt_train failed")
+    // }
     fn device(&self) -> impl ToOrdinal {
         ThoDevice::from(self.device)
     }

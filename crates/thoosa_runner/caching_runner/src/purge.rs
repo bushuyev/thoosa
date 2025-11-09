@@ -115,7 +115,7 @@ mod tests {
         max_purge: Arc<AtomicUsize>,
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl CopyToDevice for DummyOutput {
         async fn copy_to_device(&self, _dst_device: usize) -> Self {
             let cur = self.purge_active.fetch_add(1, Ordering::SeqCst) + 1;

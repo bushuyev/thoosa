@@ -313,29 +313,6 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         }
     }
 
-    pub async fn with_another<A, B, WA, WB, R>
-    (
-     aw: &'static WA,
-     bw: &'static WB,
-     to_device_idx: usize,
-     _trace_ctx: Option<&'static str>,
-     do_run: impl FnOnce(&A, &B) -> Result<R, ThoosaError>,
-    ) -> Result<R, ThoosaError>
-    where
-        A:Data + WithId + Send + Sync + CopyToDevice + 'static,
-        B:Data + WithId + Send + Sync + CopyToDevice + 'static,
-        WA:AsRef<DevicesWrap<A>> + Debug + 'static,
-        WB:AsRef<DevicesWrap<B>> + Debug + 'static,
-    {
-        let (me, other) = tokio::try_join!(
-            tokio::spawn(aw.as_ref().load_from_any_device_(to_device_idx)),
-            tokio::spawn(bw.as_ref().load_from_any_device_(to_device_idx))
-        )?;
-        let me = me?;
-        let other = other?;
-
-        do_run(&me, &other)
-    }
 
     pub async fn with_data_array<W: AsRef<DevicesWrap<O>> + Debug, R>(
         other: &[W],

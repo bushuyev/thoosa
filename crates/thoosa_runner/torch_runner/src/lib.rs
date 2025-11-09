@@ -252,7 +252,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl CopyToDevice for LoaderInput {
         async fn copy_to_device(&self, _dst_device: usize) -> Self {
             self.clone()

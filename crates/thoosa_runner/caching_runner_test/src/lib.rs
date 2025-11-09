@@ -539,7 +539,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl CopyToDevice for DLoadedTensor {
         async fn copy_to_device(&self, dst_device: usize) -> Self {
             DLoadedTensor {
@@ -591,7 +591,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl CopyToDevice for DLoaderInput {
         async fn copy_to_device(&self, dst_device: usize) -> Self {
            self.clone()
@@ -777,7 +777,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl CopyToDevice for DMulTaskOutput {
         async fn copy_to_device(&self, _dst_device: usize) -> Self {
             DMulTaskOutput {

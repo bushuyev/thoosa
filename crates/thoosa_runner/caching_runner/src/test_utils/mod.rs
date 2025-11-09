@@ -18,7 +18,7 @@ impl From<Vec<f32>> for DummyTensor {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl CopyToDevice for DummyTensor {
     async fn copy_to_device(&self, _dst_device: usize) -> Self {
         self.clone()
@@ -121,7 +121,7 @@ impl Data for MockDataWithId {
 }
 
 #[cfg(test)]
-#[async_trait]
+#[async_trait(?Send)]
 impl CopyToDevice for MockDataWithId {
     async fn copy_to_device(&self, dst_device: usize) -> Self {
         MockDataWithId::for_device_and_id(dst_device, self.id().0)

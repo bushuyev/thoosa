@@ -261,19 +261,20 @@ pub async fn load_tensor<
         "AsyncLoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area:?} "
     );
 
-    let t = if let Some(transform) = transform_fn {
-        transform.read()(t.shallow_clone().into()) //TODO move load_tensor into Batch args to return correct DO
-    } else {
-        t.shallow_clone().into()
-    };
-    debug!(
-        "AsyncLoadingTensorsDataBatch::load_tensor: 3 resource_id={resource_id_debug:?} area={area:?} "
-    );
-    // x_y_acc_in_exec.push((t.into(), class));
-    debug!(
-        "AsyncLoadingTensorsDataBatch::load_tensor: 4 resource_id={resource_id_debug:?} area={area:?} "
-    );
-    t
+    // let t = if let Some(transform) = transform_fn {
+    //     transform.read()(t.shallow_clone().into()) //TODO move load_tensor into Batch args to return correct DO
+    // } else {
+    //     t.shallow_clone().into()
+    // };
+    // debug!(
+    //     "AsyncLoadingTensorsDataBatch::load_tensor: 3 resource_id={resource_id_debug:?} area={area:?} "
+    // );
+    // // x_y_acc_in_exec.push((t.into(), class));
+    // debug!(
+    //     "AsyncLoadingTensorsDataBatch::load_tensor: 4 resource_id={resource_id_debug:?} area={area:?} "
+    // );
+    // t
+    todo!()
 }
 
 #[async_trait]
@@ -284,49 +285,51 @@ impl<
 > AsyncDataBatch<DO> for AsyncLoadingTensorsDataBatch<DI, DO, F>
 {
     async fn train_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
-        let next_ctx = self.runner.next_ctx();
-        let batch = tch::no_grad(|| {
-            Self::choose_for_batch(
-                &self.train_resources,
-                self.batch_size,
-                Arc::clone(&self.runner),
-                &self.device,
-                self.transform_fn.clone(),
-                Some(Arc::clone(&next_ctx)),
-            )
-        })
-        .await;
-
-        //TODO keep list of ctx and purge one in n
-        Arc::clone(&self.runner)
-            .purge_all_gpu_caches(Arc::into_inner(next_ctx).unwrap().into_inner(), self.device)
-            .await;
-
-        Ok(batch)
+        // let next_ctx = self.runner.next_ctx();
+        // let batch = tch::no_grad(|| {
+        //     Self::choose_for_batch(
+        //         &self.train_resources,
+        //         self.batch_size,
+        //         Arc::clone(&self.runner),
+        //         &self.device,
+        //         self.transform_fn.clone(),
+        //         Some(Arc::clone(&next_ctx)),
+        //     )
+        // })
+        // .await;
+        //
+        // //TODO keep list of ctx and purge one in n
+        // Arc::clone(&self.runner)
+        //     .purge_all_gpu_caches(Arc::into_inner(next_ctx).unwrap().into_inner(), self.device)
+        //     .await;
+        //
+        // Ok(batch)
+        todo!()
     }
 
     async fn valid_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
-        let next_ctx = self.runner.next_ctx();
-        let batch = tch::no_grad(|| {
-            let batch = Self::choose_for_batch(
-                &self.valid_resources,
-                self.batch_size,
-                Arc::clone(&self.runner),
-                &self.device,
-                self.transform_fn.clone(),
-                Some(Arc::clone(&next_ctx)),
-            );
-
-            batch
-        })
-        .await;
-
-        //TODO keep list of ctx and purge one in n
-        Arc::clone(&self.runner)
-            .purge_all_gpu_caches(Arc::into_inner(next_ctx).unwrap().into_inner(), self.device)
-            .await;
-
-        Ok(batch)
+        // let next_ctx = self.runner.next_ctx();
+        // let batch = tch::no_grad(|| {
+        //     let batch = Self::choose_for_batch(
+        //         &self.valid_resources,
+        //         self.batch_size,
+        //         Arc::clone(&self.runner),
+        //         &self.device,
+        //         self.transform_fn.clone(),
+        //         Some(Arc::clone(&next_ctx)),
+        //     );
+        //
+        //     batch
+        // })
+        // .await;
+        //
+        // //TODO keep list of ctx and purge one in n
+        // Arc::clone(&self.runner)
+        //     .purge_all_gpu_caches(Arc::into_inner(next_ctx).unwrap().into_inner(), self.device)
+        //     .await;
+        //
+        // Ok(batch)
+        todo!()
     }
 }
 
@@ -428,50 +431,52 @@ impl<DI: Dims, DO: Dims /*F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/>
 #[async_trait]
 impl<
     DI: Dims + Sync,
-    DO: Dims + Send + Sync, /*, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/
+    DO: Dims + Send //+ Sync, /*, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/
 > AsyncDataBatch<DO> for AsyncClassTensorsLoaderData<DI, DO /*, F*/>
 {
     async fn train_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
-        let next_ctx = self.runner.next_ctx();
-        let batch = tch::no_grad(|| {
-            Self::choose_for_batch(
-                &self.train_resources,
-                self.batch_size,
-                Arc::clone(&self.runner),
-                &self.device,
-                None,
-            ) //self.transform_fn.as_ref())
-        })
-        .await;
-
-        //TODO keep list of ctx and purge one in n
-        Arc::clone(&self.runner)
-            .purge_all_gpu_caches(Arc::into_inner(next_ctx).unwrap().into_inner(), self.device)
-            .await;
-
-        Ok(batch)
+        // let next_ctx = self.runner.next_ctx();
+        // let batch = tch::no_grad(|| {
+        //     Self::choose_for_batch(
+        //         &self.train_resources,
+        //         self.batch_size,
+        //         Arc::clone(&self.runner),
+        //         &self.device,
+        //         None,
+        //     ) //self.transform_fn.as_ref())
+        // })
+        // .await;
+        //
+        // //TODO keep list of ctx and purge one in n
+        // Arc::clone(&self.runner)
+        //     .purge_all_gpu_caches(Arc::into_inner(next_ctx).unwrap().into_inner(), self.device)
+        //     .await;
+        //
+        // Ok(batch)
+        todo!()
     }
 
     async fn valid_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
-        let next_ctx = self.runner.next_ctx();
-
-        let batch = tch::no_grad(|| {
-            Self::choose_for_batch(
-                &self.valid_resources,
-                self.batch_size,
-                Arc::clone(&self.runner),
-                &self.device,
-                None,
-            ) //, self.transform_fn.as_ref())
-        })
-        .await;
-
-        //TODO keep list of ctx and purge one in n
-        Arc::clone(&self.runner)
-            .purge_all_gpu_caches(Arc::into_inner(next_ctx).unwrap().into_inner(), self.device)
-            .await;
-
-        Ok(batch)
+        // let next_ctx = self.runner.next_ctx();
+        //
+        // let batch = tch::no_grad(|| {
+        //     Self::choose_for_batch(
+        //         &self.valid_resources,
+        //         self.batch_size,
+        //         Arc::clone(&self.runner),
+        //         &self.device,
+        //         None,
+        //     ) //, self.transform_fn.as_ref())
+        // })
+        // .await;
+        //
+        // //TODO keep list of ctx and purge one in n
+        // Arc::clone(&self.runner)
+        //     .purge_all_gpu_caches(Arc::into_inner(next_ctx).unwrap().into_inner(), self.device)
+        //     .await;
+        //
+        // Ok(batch)
+        todo!()
     }
 }
 
@@ -535,32 +540,33 @@ impl<DI: Dims, DO: Dims /* F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/>
             guard.0.drain(..).collect::<Vec<_>>()
         };*/
 
-        let mut inputs = guard
-            .0
-            .drain(..)
-            .map(|tt| tt.t.shallow_clone())
-            .collect::<Vec<Tensor>>(); //TODO remove shallow clone
-
-        drop(guard);
-        drop(x_y_vecs_mx);
-
-        assert_eq!(labels.len(), inputs.len(), "classes.len() != inputs.len()");
-
-        (inputs.len()..batch_size).for_each(|i| {
-            let idx = i - inputs.len();
-            let tensor_x = inputs[idx].shallow_clone();
-            let tensor_y = labels[idx].shallow_clone();
-            inputs.push(tensor_x);
-            labels.push(tensor_y);
-        });
-
-        (
-            Tensor::stack(inputs.as_slice(), 0)
-                .to_device(*device)
-                .set_requires_grad(true)
-                .into(),
-            Tensor::stack(labels.as_slice(), 0).to_device(*device),
-        )
+        // let mut inputs = guard
+        //     .0
+        //     .drain(..)
+        //     .map(|tt| tt.t.shallow_clone())
+        //     .collect::<Vec<Tensor>>(); //TODO remove shallow clone
+        //
+        // drop(guard);
+        // drop(x_y_vecs_mx);
+        //
+        // assert_eq!(labels.len(), inputs.len(), "classes.len() != inputs.len()");
+        //
+        // (inputs.len()..batch_size).for_each(|i| {
+        //     let idx = i - inputs.len();
+        //     let tensor_x = inputs[idx].shallow_clone();
+        //     let tensor_y = labels[idx].shallow_clone();
+        //     inputs.push(tensor_x);
+        //     labels.push(tensor_y);
+        // });
+        //
+        // (
+        //     Tensor::stack(inputs.as_slice(), 0)
+        //         .to_device(*device)
+        //         .set_requires_grad(true)
+        //         .into(),
+        //     Tensor::stack(labels.as_slice(), 0).to_device(*device),
+        // )
+        todo!()
     }
 }
 

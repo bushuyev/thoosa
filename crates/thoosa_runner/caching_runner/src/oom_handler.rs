@@ -519,7 +519,7 @@ pub(crate) mod test_types {
         }
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl CopyToDevice for TestInput {
         async fn copy_to_device(&self, _dst_device: usize) -> Self {
             TestInput {
@@ -584,14 +584,14 @@ pub(crate) mod test_types {
         }
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl CopyToDevice for TestData {
         async fn copy_to_device(&self, _dst_device: usize) -> Self {
             *self
         }
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl CopyToDevice for TestOutput {
         async fn copy_to_device(&self, _dst_device: usize) -> Self {
             TestOutput {

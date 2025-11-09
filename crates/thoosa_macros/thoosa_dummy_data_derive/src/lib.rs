@@ -33,7 +33,7 @@ pub fn derive_dummy_data(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         #[automatically_derived]
-        #[async_trait::async_trait]
+        #[async_trait::async_trait(?Send)]
         impl #impl_generics ::thoosa_shared::CopyToDevice for #ident #ty_generics #where_clause {
             async fn copy_to_device(&self, _dst_device: usize) -> Self {
                 #copy_body

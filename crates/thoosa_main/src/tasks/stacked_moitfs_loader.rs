@@ -71,11 +71,9 @@ impl StackedMotifsOutput {
     pub fn new(id: SimpleId, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Arc<SelectMotifsRunConfig>)>, motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SimpleId>) -> Self {
         Self { id, motifs, motifs_avg_dists }
     }
-
-
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl CopyToDevice for StackedMotifsOutput {
     async fn copy_to_device(&self, dst_device: usize) -> Self {
         StackedMotifsOutput {
@@ -83,7 +81,6 @@ impl CopyToDevice for StackedMotifsOutput {
             motifs: self.motifs.copy_to_device(dst_device).await,
             motifs_avg_dists: self.motifs_avg_dists.copy_to_device(dst_device).await,
         }
-
     }
 }
 
