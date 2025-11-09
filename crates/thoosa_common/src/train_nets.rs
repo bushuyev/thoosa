@@ -2666,18 +2666,18 @@ pub fn run_train_motif_net(
     Ok((loss, node_params))
 }
 
-pub fn run_train_motif_net_2(
+pub async fn run_train_motif_net_2(
     motif_width: u32,
     run_config: &TrainMotifsNetsRunConfig,
     device: &Device,
-    batch: &mut dyn DataBatch<Slice>,
+    batch: &mut dyn AsyncDataBatch<Slice>,
     vs: &VarStore,
     listener: &mut dyn TrainListener,
 ) -> Result<(f32, MotifNetParams), ThoosaError> {
     let node_params = MotifNetParams::new(motif_width, run_config.num_layers);
     debug!("run_train_motif_net: node_params={node_params:?}");
 
-    let loss = train(
+    let loss = train_2(
         &device,
         batch,
         &motif_node(&node_params)
@@ -2697,7 +2697,7 @@ pub fn run_train_motif_net_2(
             .unwrap(),
         |t| t,
         Some(listener),
-    )?;
+    ).await?;
 
     Ok((loss, node_params))
 }
