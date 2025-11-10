@@ -65,7 +65,7 @@ use thoosa_shared::applicables_runner::{CachableId, Input, Output, Runner, ToOrd
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{Cachable, RunConfig, Runnable};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::traits::{DataId, WithId};
+use thoosa_shared::traits::{DataId, SimpleId, WithId};
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -1406,7 +1406,7 @@ pub fn load_final_model(
 #[derive(Args, Debug, Clone)]
 pub struct TrainMotifsNetsArgs {
     #[arg(long)]
-    pub motif_selection_run_id: Vec<RunId>,
+    pub motif_selection_run_ids: Vec<RunId>,
 
     #[command(flatten)]
     pub fixed_config: OptConfig,
@@ -2371,9 +2371,8 @@ impl TrainListener for PlotVecf32 {
     }
 }
 
-#[derive(Debug, DummyData)]
-#[dummy_data(no_clone)]
-pub struct TrainMotifsNetsRunConfigResult {
+#[derive(Debug)]
+pub struct TrainMotifsNetResult {
     loss: f32,
     channel: u32,
     motif_id: u32,
@@ -2383,7 +2382,7 @@ pub struct TrainMotifsNetsRunConfigResult {
     find_motifs_run_id: RunId,
 }
 
-impl TrainMotifsNetsRunConfigResult {
+impl TrainMotifsNetResult {
     pub fn new(
         loss: f32,
         channel: u32,
@@ -2403,37 +2402,65 @@ impl TrainMotifsNetsRunConfigResult {
             find_motifs_run_id,
         }
     }
+
+}
+
+#[derive(Debug, DummyData)]
+#[dummy_data(no_clone)]
+pub struct TrainMotifsNetsResult {
+    id:RunId,
+    train_motif_nets_results:Vec<TrainMotifsNetResult>
+}
+
+impl TrainMotifsNetsResult {
+    pub fn new(id: RunId, train_motif_nets_results: Vec<TrainMotifsNetResult>) -> Self {
+        Self { id, train_motif_nets_results }
+    }
+}
+
+impl SavableResult for TrainMotifsNetsResult {
+    fn value(&self) -> f32 {
+        0.0
+    }
+
+    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+        for r in self.train_motif_nets_results.iter_mut() {
+            r.save(store, ws)?;
+        }
+
+        Ok(0)
+    }
 }
 
 //TODO remove
-impl WithId for Box<TrainMotifsNetsRunConfigResult> {
-    type ID = CachableId;
+impl WithId for Box<TrainMotifsNetsResult> {
+    type ID = RunId;
 
     fn id(&self) -> &Self::ID {
-        todo!()
+        &self.id
     }
 }
 
 #[async_trait]
-impl Output for Box<TrainMotifsNetsRunConfigResult> {
+impl Output for Box<TrainMotifsNetsResult> {
     async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
         todo!() //TODO not needed for not cachable Outputs
     }
 }
 
-impl WithId for TrainMotifsNetsRunConfigResult {
+impl WithId for TrainMotifsNetsResult {
     type ID = RunId;
 
     fn id(&self) -> &Self::ID {
-        self.run_config_values.id.as_ref().unwrap()
+        &self.id
     }
 }
 
 #[async_trait]
-impl Output for TrainMotifsNetsRunConfigResult {}
+impl Output for TrainMotifsNetsResult {}
 
 
-impl SavableResult for TrainMotifsNetsRunConfigResult {
+impl SavableResult for TrainMotifsNetResult {
     fn value(&self) -> f32 {
         self.loss
     }
@@ -2486,7 +2513,8 @@ where
         .grid_run_config_source()
         .const_params()
         .clone();
-    let mut min_loss = f32::MAX;
+    let min_loss = Arc::new(RwLock::new(f32::MAX));
+
     let min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
 
     info!("opt_train_2: running opt train {descr} ");
@@ -2497,6 +2525,7 @@ where
         let mut train_clone = train.clone();
 
         let min_var_store_clone = Arc::clone(&min_var_store);
+        let min_loss_moved = Arc::clone(&min_loss);
 
         let mut opt = AsyncTPEOptimizer::new(
             async move |opt_vals| {
@@ -2531,11 +2560,12 @@ where
                 listener.plot();
 
                 debug!("opt_train: run_config_values={run_config:?} loss={loss} "); //descr={descr}
-                if loss < min_loss {
-                    min_loss = loss;
+                let min_loss_val = *min_loss_moved.read();
+                if loss < min_loss_val {
+                    *min_loss_moved.write() = loss;
                     min_var_store_clone
                         .write()
-                        .replace((vs, node_params, run_config, min_loss));
+                        .replace((vs, node_params, run_config, loss));
                 }
                 print!(".");
                 loss
@@ -2549,9 +2579,7 @@ where
 
         debug!("best_config={:?}", best_config);
         trace!("done opt {descr}");
-        info!(
-            "opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={min_loss} min_var_store={min_var_store:?}"
-        );
+        info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={} min_var_store={min_var_store:?}", min_loss.read());
     }
     Arc::into_inner(min_var_store)
         .unwrap()
@@ -2670,7 +2698,7 @@ pub async fn run_train_motif_net_2(
     motif_width: u32,
     run_config: &TrainMotifsNetsRunConfig,
     device: &Device,
-    batch: &mut dyn AsyncDataBatch<Slice>,
+    batch: &dyn AsyncDataBatch<Slice>,
     vs: &VarStore,
     listener: &mut dyn TrainListener,
 ) -> Result<(f32, MotifNetParams), ThoosaError> {
@@ -2684,9 +2712,9 @@ pub async fn run_train_motif_net_2(
             .build_tch_module::<Batch<Slice>, Batch<MotifData>>(&vs.root())
             .unwrap(),
         |pred: &Tensor, target: &Tensor| {
-            let pred_y = pred.i((.., 0));
+            let pred_y = pred; //.i((.., 0));
 
-            let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
+            let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean).set_requires_grad(true);
             debug!("run_train_motif_net: pred_y ={pred_y} target={target} loss={loss}");
 
             loss

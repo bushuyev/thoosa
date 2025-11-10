@@ -79,7 +79,7 @@ where
 #[derive(Debug, Clone)]
 pub struct MotifMeta {
     pub channel:i64,
-    pub run_id: RunId,
+    pub find_motifs_run_id: RunId,
     pub window:u32
 }
 
@@ -130,7 +130,7 @@ where
         Ok(Arc::new(DevicesWrap::wrap(
             DataWithExtra::new(
                 motif,
-                MotifMeta{channel, run_id: find_motifs_run_id, window },
+                MotifMeta{channel, find_motifs_run_id: find_motifs_run_id, window },
             ),
             cache_area,
         )))
@@ -162,6 +162,12 @@ where
 pub struct SlicesLoaderInput {
     motif_id:DataId,
     limit:u32
+}
+
+impl SlicesLoaderInput {
+    pub fn new(motif_id: DataId, limit: u32) -> Self {
+        Self { motif_id, limit }
+    }
 }
 
 impl WithId for SlicesLoaderInput {

@@ -15,3 +15,4 @@ pub mod select_motifs;
 pub mod stacked_moitfs_loader;
 pub mod resources_motifs_clc_dist;
 pub mod train_motif_net;
+mod motifs_batch_builder;
