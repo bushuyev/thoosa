@@ -290,8 +290,9 @@ where
             let result = GlobalCtx::global()
                 .acquire_many(device_idx, 1, out_key.clone())
                 .await?;
-            run_context.write().add_permit(result);
+            run_context.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped 
         }
+
 
         debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}   acquired_permits={:?}", os_thread_id(), run_context.read().acquired_permits());
 
