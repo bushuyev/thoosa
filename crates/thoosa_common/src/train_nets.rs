@@ -2513,7 +2513,8 @@ where
         .grid_run_config_source()
         .const_params()
         .clone();
-    let mut min_loss = f32::MAX;
+    let min_loss = Arc::new(RwLock::new(f32::MAX));
+
     let min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
 
     info!("opt_train_2: running opt train {descr} ");
@@ -2524,6 +2525,7 @@ where
         let mut train_clone = train.clone();
 
         let min_var_store_clone = Arc::clone(&min_var_store);
+        let min_loss_moved = Arc::clone(&min_loss);
 
         let mut opt = AsyncTPEOptimizer::new(
             async move |opt_vals| {
@@ -2558,11 +2560,12 @@ where
                 listener.plot();
 
                 debug!("opt_train: run_config_values={run_config:?} loss={loss} "); //descr={descr}
-                if loss < min_loss {
-                    min_loss = loss;
+                let min_loss_val = *min_loss_moved.read();
+                if loss < min_loss_val {
+                    *min_loss_moved.write() = loss;
                     min_var_store_clone
                         .write()
-                        .replace((vs, node_params, run_config, min_loss));
+                        .replace((vs, node_params, run_config, loss));
                 }
                 print!(".");
                 loss
@@ -2576,7 +2579,7 @@ where
 
         debug!("best_config={:?}", best_config);
         trace!("done opt {descr}");
-        info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={min_loss} min_var_store={min_var_store:?}");
+        info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={} min_var_store={min_var_store:?}", min_loss.read());
     }
     Arc::into_inner(min_var_store)
         .unwrap()
@@ -2711,7 +2714,7 @@ pub async fn run_train_motif_net_2(
         |pred: &Tensor, target: &Tensor| {
             let pred_y = pred; //.i((.., 0));
 
-            let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
+            let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean).set_requires_grad(true);
             debug!("run_train_motif_net: pred_y ={pred_y} target={target} loss={loss}");
 
             loss
