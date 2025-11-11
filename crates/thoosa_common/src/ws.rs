@@ -24,7 +24,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
-use tch::nn::VarStore;
+use tch::nn::{self, VarStore};
 use tch::{Device, TchError, Tensor};
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunId;
@@ -244,7 +244,12 @@ impl Workspace for FsWorkspace {
             debug!("load_motif_models_ws: model={model:?} config={config:?} motif_node_params={motif_node_params:?}");
 
             //TODO ChannelsMotifsFlattenData
-            let module = ThoModuleWithStore::load(motif_node(&motif_node_params), model, device.clone())?;
+            let params_for_builder = motif_node_params.clone();
+            let module = ThoModuleWithStore::load(
+                move |path: &nn::Path| motif_node(&params_for_builder).build_tch_module(path),
+                model,
+                device.clone(),
+            )?;
 
             Ok((motif_node_params, module))
         }).collect()
@@ -292,7 +297,13 @@ impl Workspace for FsWorkspace {
 
                 //TODO ChannelsMotifsFlattenData
                 // let module = LabelModule::ChannelsMotifsData(ThoModuleWithStore::load(LabelNetParams::label_net(&label_node_params), model_path.clone(), *device).expect(format!("can't load {model_path:?}").as_str()));
-                let module = ThoModuleWithStore::load(LabelNetParams::label_net(&label_node_params), model_path.clone(), *device).expect(format!("can't load {model_path:?}").as_str());
+                let params_for_builder = label_node_params.clone();
+                let module = ThoModuleWithStore::load(
+                    move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
+                    model_path.clone(),
+                    *device,
+                )
+                .expect(format!("can't load {model_path:?}").as_str());
 
                 debug!("load_all_label_models_ws: model={model_path:?} run_id={run_id} loaded");
                 // vs.load(&model_path).expect(format!("no {model_path:?}").as_str());
