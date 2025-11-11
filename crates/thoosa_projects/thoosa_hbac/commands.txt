@@ -61,3 +61,13 @@ select run_id, label_id, sl.motif_id, count(*) from slices sl left join labeled_
 
 
 insert into selected_motifs (motif_id, run_id, rate) select motif_id, 0, 0.0 from (select motif_id, count(*) cnt from slices group by motif_id having cnt < 100 and cnt > 10);
+
+consider following case:
+
+ time series data is given in tensors of [cannels x seq len] size. Number of channels is fixes, seq len is verying.
+ we've found repeating patterns in the data and built DNNs (can be cnn or some other) which can detect patterns. Let's call such DNNs "Motif Nets".
+ Motifs Nets takes data in form [ n x window_len] and produce probabilites of each window belonging to the motif.
+ Numer of Motif Nets found for each channel is varying and Motif Nets have different window_lens.
+
+ What would be optimal approach to build classification DNN for original series data utilizing such Motif Nets?
+ I.e. such classification DNN should consumer output of Motif DNNs ran on input series data.

@@ -1016,12 +1016,7 @@ pub async fn train_label_net_2<
         |pred: &Tensor, target: &Tensor| {
             debug!("train_label_net: pred.size={:?}", pred.size());
             let pred_y = pred.squeeze();
-            debug!(
-                "train_label_net: pred_y={:?} target={:?} kind={:?}",
-                pred_y.size(),
-                target.size(),
-                target.kind()
-            );
+            debug!("train_label_net: pred_y={:?} target={:?} kind={:?}",pred_y.size(),target.size(),target.kind());
             pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
         },
         run_config.common_training_args.cycles as usize,
@@ -5849,6 +5844,9 @@ mod train_tests {
         let a_rc = Rc::new(A);
 
         func(&a_rc);
+
+        let t = Tensor::rand(&[0], FLOAT_CPU);
+        // t.interpolate
 
         //     struct Outer {
         //         inn:RwLock<Inner>

@@ -211,12 +211,9 @@ impl Workspace for FsWorkspace {
         let channel_models = self.motifs_nets_path.join(format!("{}", channel));
         fs::create_dir_all(&channel_models)?;
 
-        let vs_path =
-            channel_models.join(format!("{motif_id}_{motif_node_params_run_id}.safetensors"));
+        let vs_path = channel_models.join(format!("{motif_id}_{motif_node_params_run_id}.safetensors"));
 
-        info!(
-            "train_on_motif:  motif_id={motif_id} motif_model_run_id={motif_node_params_run_id} saved to {vs_path:?}"
-        );
+        info!("train_on_motif:  motif_id={motif_id} motif_model_run_id={motif_node_params_run_id} saved to {vs_path:?}");
 
         vs.save(vs_path)?;
 
