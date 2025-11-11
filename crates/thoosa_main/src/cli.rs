@@ -51,19 +51,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{
-    CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs,
-    LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetParams, LabelNetsApplicable,
-    MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch,
-    ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields,
-    TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs,
-    TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue,
-    TrainLabelNetsRunConfigResult, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig,
-    TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue,
-    TrainMotifsNetsRunConfigResult, load_channels_motifs, load_final_model, opt_train, opt_train_2,
-    run_opt_train_label_nets, run_train_motif_net, train_final_net, train_final_net_2,
-    train_label_net_2,
-};
+use thoosa_common::train_nets::{CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetParams, LabelNetsApplicable, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsResult, load_channels_motifs, load_final_model, opt_train, opt_train_2, run_opt_train_label_nets, run_train_motif_net, train_final_net, train_final_net_2, train_label_net_2, TrainMotifsNetResult};
 use thoosa_common::utils::{DummyListener, TrainListener, cuda_mem, from, list_devices, lin_t, plot_series, reset_print_options};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
@@ -434,7 +422,7 @@ where
                 //     SimpleId::from("resources"),
                 //     train_motif_nets_args.resource_config(),
                 // )
-                TrainMotifNetInput::new(train_motif_nets_args.motif_selection_run_id.clone(), Arc::new(train_motif_nets_args.fixed_config.clone()))
+                TrainMotifNetInput::new(train_motif_nets_args.motif_selection_run_ids.clone(), Arc::new(train_motif_nets_args.fixed_config.clone()))
             ));
 
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
@@ -1793,7 +1781,7 @@ async fn plot_motif(
         .await?;
 
     let r = motif.with_data_ref(0, None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>| {
-        let run_id = motif.extra().run_id;
+        let run_id = motif.extra().find_motifs_run_id;
         let channel = motif.extra().channel;
 
         trace!("motif.t={} dist={dist}", motif.data().t_ref());
@@ -2015,7 +2003,7 @@ fn run_train_motif_nets(
             device,
             "motifs"
         ).map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)|{
-            Box::new(TrainMotifsNetsRunConfigResult::new(min_loss, channel as u32, *motif_id, var_store, find_motifs_run_id/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)) as Box<dyn SavableResult>
+            Box::new(TrainMotifsNetResult::new(min_loss, channel as u32, *motif_id, var_store, find_motifs_run_id/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)) as Box<dyn SavableResult>
 
         })
 
@@ -2048,7 +2036,7 @@ struct TrainMotifNetApplicableInput {
 }
 
 #[async_trait]
-impl Runnable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>, ()>
+impl Runnable<TrainMotifNetApplicableInput, Box<TrainMotifsNetResult>, ()>
     for TrainMotifNetApplicable
 {
     type R = ThoRunner;
@@ -2062,13 +2050,13 @@ impl Runnable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>,
                 RwLock<
                     <<Self as Runnable<
                         TrainMotifNetApplicableInput,
-                        Box<TrainMotifsNetsRunConfigResult>,
+                        Box<TrainMotifsNetResult>,
                         (),
                     >>::R as Runner>::Ctx,
                 >,
             >,
         >,
-    ) -> Arc<Box<TrainMotifsNetsRunConfigResult>> {
+    ) -> Arc<Box<TrainMotifsNetResult>> {
         let train_motifs_nodes_run_configs = Arc::clone(&input.train_motifs_nodes_run_configs);
         let all_slices_0_cl = Arc::clone(&input.all_slices_0);
         let all_slices_1_cl = Arc::clone(&input.all_slices_1);
@@ -2098,7 +2086,7 @@ impl Runnable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>,
             device,
             "motifs"
         ).await.map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)| {
-            Arc::new(Box::new(TrainMotifsNetsRunConfigResult::new(min_loss, input.channel, input.motif_id, var_store, input.find_motifs_run_config.id.unwrap()/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)))
+            Arc::new(Box::new(TrainMotifsNetResult::new(min_loss, input.channel, input.motif_id, var_store, input.find_motifs_run_config.id.unwrap()/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)))
         }).expect("TODO opt_train failed")
     }
     fn device(&self) -> impl ToOrdinal {
