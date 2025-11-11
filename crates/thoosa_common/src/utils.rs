@@ -23,18 +23,19 @@ use parking_lot::lock_api::{RawRwLock, RwLock};
 use std::sync::Arc;
 use tch::display::PrinterOptions;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-use tch::nn::Optimizer;
+use tch::nn::{LinearConfig, Optimizer};
 use tch::nn::VarStore;
 use tch::Device::Cuda;
 use tch::Kind::Float;
-use tch::{Device, Kind, TchError, Tensor};
+use tch::{nn, Device, Kind, TchError, Tensor};
 use thoosa_shared::{gauss_i, panic_to_err, panic_to_err_async, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
 use torch_sys::cuda::atc_cuda_device_count;
 use thoosa_shared::traits::Named;
 use crate::my_tch::{LossFp, ThoModule};
 
 use crate::batches::AsyncDataBatch;
-use crate::dims::{Batch, Dims};
+use crate::builder::SeqBuilder;
+use crate::dims::{Batch, Dims, MotifData, Slice};
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -1752,7 +1753,8 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
 }
 
 use crate::dims::ThoBatch;
-use crate::tho_tensor::{ThoTensor};
+use crate::tho_tensor::ThoTensor;
+use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
 
 pub trait DataBatch<D: Dims> {
     /// returns (inputs, labels)
@@ -2183,4 +2185,44 @@ pub fn os_thread_id() -> u64 {
         // Works even if glibc doesn’t export gettid: call the syscall directly.
         unsafe { libc::syscall(libc::SYS_gettid) as u64 }
     }
+}
+
+///sums and multiplies inputs by k
+pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
+    num_features: u32,
+    k: f64,
+    device: Device,
+    descr: &str,
+) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> {
+    let vs = VarStore::new(device);
+
+    SeqBuilder::new(num_features, None)
+        .linear_s_with_conf(
+            1,
+            LinearConfig {
+                ws_init: nn::Init::Const(k), //conflicts with ctor's init
+                bs_init: None,
+                bias: false,
+            },
+            #[cfg(debug_assertions)]
+            descr.to_string(),
+        )
+        .end_seq()
+        .build_tch_module(&vs.root())
+}
+
+pub fn motif_test_net(
+    motif_width: u32,
+    k: f64,
+    device: Device,
+) -> (
+    Box<dyn Fn() -> MotifNetParams + Sync + Send>,
+    Box<dyn Fn() -> ThoModuleWithStore<Slice, MotifData> + Sync + Send>,
+) {
+    (
+        Box::new(move || MotifNetParams::new(motif_width, 1)),
+        Box::new(move || {
+            ThoModuleWithStore::new(test_net(motif_width, k, device, "test_motif_net").unwrap())
+        }),
+    )
 }
