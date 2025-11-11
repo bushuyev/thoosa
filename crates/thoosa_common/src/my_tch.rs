@@ -2,7 +2,7 @@ use core::fmt;
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-
+use std::sync::Arc;
 use log::{debug, error};
 use tch::Tensor;
 
@@ -543,7 +543,7 @@ fn add_node_output_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, mot
 
 #[cfg(test)]
 mod tch_tests {
-
+    use std::sync::Arc;
     use log::LevelFilter::Info;
     use log::{debug, set_max_level};
 

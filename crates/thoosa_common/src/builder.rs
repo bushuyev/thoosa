@@ -1,5 +1,5 @@
 use std::fmt::{Debug, Formatter};
-
+use std::sync::Arc;
 use log::debug;
 use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, Module};
 use tch::{Tensor, nn};
