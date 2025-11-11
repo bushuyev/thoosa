@@ -32,8 +32,8 @@ pub enum Node {
     },
     Par {
         elts: Vec<Node>,
-        split: Box<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
-        join: Box<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
     },
     Conv1d {
         kernel: u32,
@@ -74,6 +74,30 @@ pub enum Node {
     Closure {
         cl: Box<dyn Fn(&Tensor) -> Tensor + Send + Sync>,
     },
+}
+
+impl Clone for Node {
+    fn clone(&self) -> Self {
+        match self {
+            Node::Seq { elts, split_input } => {
+                Node::Seq {
+                    elts: elts.clone(),
+                    split_input: split_input.clone(),
+                }
+            }
+            Node::Par { elts, split, join } => {
+                Node::Par {
+                    elts: elts.clone(),
+                    split: Arc::clone(split),
+                    join: Arc::clone(join),
+                }
+            }
+            _=> {
+                todo!()
+            }
+
+        }
+    }
 }
 
 impl Debug for Node {
@@ -253,7 +277,11 @@ impl SeqBuilder {
         split: Box<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
         join: Box<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
     ) -> &mut Self {
-        self.elts.push(Node::Par { elts, split, join });
+        self.elts.push(Node::Par {
+            elts,
+            split: Arc::from(split),
+            join: Arc::from(join),
+        });
 
         self
     }
