@@ -2,6 +2,7 @@ use core::fmt;
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use log::{debug, error};
 use tch::Tensor;
@@ -140,8 +141,8 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
 
 pub struct MyParallel<DI: Dims, DO: Dims> {
     layers: Vec<Box<dyn ThoModule<DI, DO>>>,
-    split: Box<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
-    join: Box<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+    split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
+    join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
 }
 
 impl<DI: Dims, DO: Dims> Debug for MyParallel<DI, DO> {
@@ -153,8 +154,8 @@ impl<DI: Dims, DO: Dims> Debug for MyParallel<DI, DO> {
 impl<DI: Dims, DO: Dims> MyParallel<DI, DO> {
     pub fn new(
         layers: Vec<Box<dyn ThoModule<DI, DO>>>,
-        split: Box<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
-        join: Box<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
     ) -> Self {
         assert!(layers.len() > 0, "layers len == 0");
 
@@ -853,8 +854,11 @@ mod tch_tests {
 
         vs_0.save("/tmp/test.safetensors")?;
 
-        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> =
-            ThoModuleWithStore::load(test_node(), "/tmp/test.safetensors".into(), Cpu)?;
+        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(
+            |path: &nn::Path| test_node().build_tch_module(path),
+            "/tmp/test.safetensors".into(),
+            Cpu,
+        )?;
 
         debug!(
             "loaded variables={:?}",
