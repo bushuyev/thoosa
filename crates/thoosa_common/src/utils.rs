@@ -769,7 +769,7 @@ impl TrainListener for DummyListener {
 pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor, TrainListener};
+    use crate::utils::{hist_1_dim, mix_ab_with_labels, CompositeReducer, Splittable, SplittableTensor, TrainListener};
     use clap::{arg, command, Args, Parser, Subcommand};
 
     use log::debug;
@@ -783,7 +783,7 @@ pub mod tests {
     use tch::nn::VarStore;
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::Tensor;
+    use tch::{Device, Kind, Tensor};
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
@@ -1609,6 +1609,47 @@ pub mod tests {
             TestTopStruct::from_properties_map(None, &props).unwrap()
         );
     }
+
+    #[test]
+    fn mix_basic_shapes_and_labels() {
+        let m = 4i64;
+        let n = 3i64;
+
+        // Build A with values [0..m*n), B with values [1000..1000+m*n)
+        let va: Vec<f32> = (0..(m * n)).map(|x| x as f32).collect();
+        let vb: Vec<f32> = (0..(m * n)).map(|x| 1000.0 + x as f32).collect();
+
+        let a = Tensor::from_slice(&va).reshape(&[m, n]);
+        let b = Tensor::from_slice(&vb).reshape(&[m, n]);
+
+        let (x, y) = mix_ab_with_labels(&a, &b);
+        debug!("mix_basic_shapes_and_labels: x=\n{x} y=\n{y}");
+
+        // Shapes
+        assert_eq!(x.size(), [2 * m, n], "X must be [2m, n]");
+        assert_eq!(y.size(), [2 * m, 1], "Y must be [2m, 1]");
+
+        // Label counts: expect m ones and m zeros
+        let y_i64 = y.to_kind(Kind::Int64);
+        let ones = y_i64.sum(Kind::Int64).int64_value(&[]);
+        assert_eq!(ones, m, "There must be exactly m ones in Y");
+        let zeros = 2 * m - ones;
+        assert_eq!(zeros, m, "There must be exactly m zeros in Y");
+
+        // Row-by-row sanity: since A rows start < 1000 and B rows >= 1000,
+        // the first element of each row tells us the source deterministically.
+        let x_cpu = x.to_device(Device::Cpu);
+        let y_cpu = y_i64.to_device(Device::Cpu);
+        for i in 0..(2 * m) {
+            let first_val = x_cpu.double_value(&[i, 0]);
+            let label = y_cpu.int64_value(&[i, 0]);
+            if first_val >= 1000.0 {
+                assert_eq!(label, 0, "Row {i} came from B, expected label 0");
+            } else {
+                assert_eq!(label, 1, "Row {i} came from A, expected label 1");
+            }
+        }
+    }
 }
 
 pub fn z_norm(t: &Tensor, dim: i64) -> Tensor {
@@ -1735,95 +1776,99 @@ pub enum ListenerResponse {
 }
 
 pub async fn train_2<F, DI: Dims, DO: Dims>(
-    _device: &Device,
-    _data: &mut dyn AsyncDataBatch<DI>,
-    _net: &Box<dyn ThoModule<Batch<DI>, DO>>,
-    _loss_fn: LossFp,
-    _cycles: usize,
-    _opt: Optimizer,
-    _x_f: F,
-    _listener: Option<&mut dyn TrainListener>,
+    device: &Device,
+    data: &dyn AsyncDataBatch<DI>,
+    net: &Box<dyn ThoModule<Batch<DI>, DO>>,
+    loss_fn: LossFp,
+    cycles: usize,
+    mut opt: Optimizer,
+    x_f: F,
+    mut listener: Option<&mut dyn TrainListener>,
 ) -> Result<f32, ThoosaError>
 where
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI>,
 {
-    todo!()
-    // debug!("train: device={:?} cycles={}", device, cycles);
-    // debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
-    //
-    // let mut last_valid_loss = [0f32;3];
-    //
-    // for idx in 1..cycles {
-    //     debug!("train:  cuda_mem={:?} before train_batch thread name={:?}", cuda_mem(), thread::current().name());
-    //     let (x_t_0, expected_y) = data.train_batch().await;
-    //     debug!("train: device={:?} x_t_0.size()={:?}", device, x_t_0.size());
-    //     debug!("train: 0. cuda_mem={:?} after train_batch thread name={:?}", cuda_mem(), thread::current().name());
-    //
-    //     let x_t = x_f(x_t_0);
-    //
-    //     debug!("train: device={:?}  x_t.size()={:?} y_t.size()={:?}", device, x_t.size(), expected_y.size());
-    //
-    //     let predicted_y = net.tho_forward(&x_t, true);
-    //     debug!("train: 1. cuda_mem={:?}",  cuda_mem());
-    //     trace!("train: x_t=\n{x_t}");
-    //     x_t.drop();
-    //     // unsafe { at_autocast_clear_cache(); }
-    //
-    //     let loss = loss_fn(predicted_y.as_ref(), &expected_y);
-    //
-    //     debug!("train: 2. cuda_mem={:?}",  cuda_mem());
-    //     trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}", optimizer_mem_size(&opt));
-    //     predicted_y.drop();
-    //     drop(expected_y);
-    //     debug!("train: 2.1 cuda_mem={:?}",  cuda_mem());
-    //     let t1 = Instant::now();
-    //
-    //     opt.backward_step(&loss);
-    //
-    //     debug!("train: 3. cuda_mem={:?}  optimizer_size={}", cuda_mem(),  optimizer_mem_size(&opt));
-    //     debug!("train: device={:?}  backward_step done in {}", device, t1.elapsed().as_millis());
-    //
-    //
-    //     if idx % 10 == 0 {
-    //
-    //         debug!("train:  cuda_mem={:?} before valid_batch thread name={:?}", cuda_mem(), thread::current().name());
-    //         let (x_t_0, y_t) = data.valid_batch().await;
-    //         debug!("train:  cuda_mem={:?} after valid_batch thread name={:?}", cuda_mem(), thread::current().name());
-    //         // debug!("train: x_t_0.size={:?}", x_t_0.size());
-    //
-    //         let rs = tch::no_grad(|| {
-    //             let x_t = x_f(x_t_0);
-    //
-    //
-    //             let pred_y = net.tho_forward(&x_t, true);
-    //
-    //             let valid_loss = loss_fn(&pred_y.as_ref(), &y_t);
-    //             let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
-    //
-    //             last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
-    //             debug!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
-    //
-    //             listener.as_mut().map(|l| l.on_valid_cycle(idx, valid_loss_f32))
-    //         });
-    //
-    //         if let Some(rs) = rs {
-    //             match rs {
-    //                 ListenerResponse::Stop => {
-    //                     break;
-    //                 }
-    //                 ListenerResponse::UpdateLR(lr) => {
-    //                     opt.set_lr(lr);
-    //                 }
-    //                 ListenerResponse::Nope => {}
-    //             }
-    //         }
-    //     }
-    //
-    //     debug!("train: idx={} loss={:?}", idx, loss);
-    //     std::io::stdout().flush()?;
-    // }
-    // debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",  last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
-    // Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
+    debug!("train: device={:?} cycles={}", device, cycles);
+    debug!("train: opt={opt:?} optimizer_size={}",optimizer_mem_size(&opt));
+
+    let mut last_valid_loss = [0f32; 3];
+
+    for idx in 1..cycles {
+        debug!("train:  cuda_mem={:?}", cuda_mem());
+        let (x_t_0, expected_y) = data.train_batch().await?;
+        debug!("train: device={:?} x_t_0.size={:?} expected_y.size={:?}", device, x_t_0.size(), expected_y.size());
+        debug!("train: 0. cuda_mem={:?}", cuda_mem());
+
+        let x_t = x_f(x_t_0);
+
+        debug!("train: device={:?}  x_t.size={:?}",device,x_t.size());
+
+        let predicted_y = net.tho_forward(&x_t, true);
+        debug!("train: 1. cuda_mem={:?}", cuda_mem());
+        trace!("train: x_t=\n{x_t}");
+        x_t.drop();
+        // unsafe { at_autocast_clear_cache(); }
+
+        let loss = loss_fn(predicted_y.as_ref(), &expected_y.as_ref());
+
+        debug!("train: 2. cuda_mem={:?}", cuda_mem());
+        trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
+
+        predicted_y.drop();
+        drop(expected_y);
+        debug!("train: 2.1 cuda_mem={:?}", cuda_mem());
+        let t1 = Instant::now();
+
+        opt.backward_step(&loss);
+
+        debug!(
+            "train: 3. cuda_mem={:?}  optimizer_size={}",
+            cuda_mem(),
+            optimizer_mem_size(&opt)
+        );
+        debug!(
+            "train: device={:?}  backward_step done in {}",
+            device,
+            t1.elapsed().as_millis()
+        );
+
+        if idx % 10 == 0 {
+            let (x_t_0, y_t) = data.valid_batch().await?;
+
+            if let Some(rs) = tch::no_grad(||{
+                // debug!("train: x_t_0.size={:?}", x_t_0.size());
+
+                let x_t = x_f(x_t_0);
+
+                let pred_y = net.tho_forward(&x_t, true);
+
+                let valid_loss = loss_fn(&pred_y.as_ref(), &y_t.as_ref());
+                let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
+
+                last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
+                debug!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+
+                listener.as_mut().map(|l|l.on_valid_cycle(idx, valid_loss_f32))
+
+            }).take() {
+                match rs {
+                    ListenerResponse::Stop => {
+                        break;
+                    }
+                    ListenerResponse::UpdateLR(lr) => {
+                        opt.set_lr(lr);
+                    }
+                    ListenerResponse::Nope => {}
+                }
+            }
+        }
+
+        debug!("train: idx={} loss={:?}", idx, loss);
+        std::io::stdout().flush()?;
+    }
+    debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+
+    Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
 }
 
 pub fn train<F, DI: Dims, DO: Dims>(
@@ -2092,6 +2137,43 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
         }
     }
 }
+
+pub fn mix_ab_with_labels(a: &Tensor, b: &Tensor) -> (Tensor, Tensor) {
+    let (ma, na) = a.size2().expect("A must be 2D [m, n]");
+    let (mb, nb) = b.size2().expect("B must be 2D [m, n]");
+    assert_eq!((na, nb), (na, na), "A and B must have same n");
+    assert_eq!(ma, mb, "A and B must have same m");
+    assert_eq!(a.device(), b.device(), "A and B must be on the same device");
+
+    let device = a.device();
+    let two_m = ma * 2;
+
+    // X0 = [A; B]
+    let x0 = Tensor::cat(&[a, b], 0);
+
+    // Choose a reasonable dtype for Y (float if A is floating, else Float)
+    let y_kind = match a.kind() {
+        Kind::Double | Kind::Float | Kind::Half | Kind::BFloat16 => a.kind(),
+        _ => Kind::Float,
+    };
+
+    // Y0 = [ones(m,1); zeros(m,1)]
+    let y0 = Tensor::cat(
+        &[
+            Tensor::ones(&[ma, 1], (y_kind, device)),
+            Tensor::zeros(&[mb, 1], (y_kind, device)),
+        ],
+        0,
+    );
+
+    // Single random permutation applied to both X and Y
+    let perm = Tensor::randperm(two_m, (Kind::Int64, device));
+    let x = x0.index_select(0, &perm);
+    let y = y0.index_select(0, &perm);
+
+    (x, y)
+}
+
 
 
 #[inline]
