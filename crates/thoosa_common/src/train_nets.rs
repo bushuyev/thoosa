@@ -3,10 +3,10 @@ use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace, TPEOptimizer};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
-use crate::utils::{DataBatch, ListenerResponse, TrainListener, pad_to, plot_series, train};
+use crate::utils::{pad_to, plot_series, train, DataBatch, ListenerResponse, TrainListener};
 use crate::utils::{
-    DummyListener, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor,
-    cuda_mem, run_split_on_oom, tensor_mem_size, train_2,
+    cuda_mem, run_split_on_oom, tensor_mem_size, train_2, DummyListener, Reducer,
+    SplitQueue, Splittable, SplittableDataBatch, SplittableTensor,
 };
 use crate::ws::Workspace;
 use thoosa_shared::{panic_to_err, panic_to_err_async};
@@ -15,7 +15,7 @@ use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
 use std::cell::RefCell;
 
-use log::{Log, debug, info, trace, warn};
+use log::{debug, info, trace, warn, Log};
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
 use rand::seq::{IndexedRandom, SliceRandom};
@@ -30,16 +30,16 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use tch::Device::Cpu;
+use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
-use tch::{Device, IndexOp, Reduction, Tensor, nn};
+use tch::{nn, Device, IndexOp, Reduction, Tensor};
 
 use thoosa_shared::{clc_step, slices_len};
 
 use thoosa_shared::resource::Resource;
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::{RangeOrValue, ThoosaError, make_combos};
+use thoosa_shared::{make_combos, RangeOrValue, ThoosaError};
 
 use async_trait::async_trait;
 use futures_util::future::join_all;
@@ -53,11 +53,11 @@ use crate::batches::AsyncDataBatch;
 use crate::dims::{
     AnyDims, AnyMetrics, AnySub, Batch, ChannelsData, ChannelsMotifsData,
     ChannelsMotifsFlattenedData, Dims, Final, LabelNetInputTensorDims, LabelNetsProbabilities,
-    LabelProbability, LabelsProbabilities, MotifData, MotifsNetsSelectionDims, Slice, TCD,
-    TCSD, ThoBatch,
+    LabelProbability, LabelsProbabilities, MotifData, MotifsNetsSelectionDims, Slice, ThoBatch,
+    TCD, TCSD,
 };
 use crate::find_motifs_run_config::*;
-use crate::tho_tensor::{ThoTensor};
+use crate::tho_tensor::ThoTensor;
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -1351,6 +1351,15 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     }
 
     pub fn copy_to_device(&self, device: Device) -> Self {
+        // let mut vs = VarStore::new(device.clone());
+        // // let module = node.build_tch_module(&vs.root())?;
+        // vs.copy(&self.var_store).expect("copy");
+        // vs.freeze();
+        //
+        // Self {
+        //     module: self.module.clone(),
+        //     var_store: vs,
+        // }
         todo!()
     }
 
@@ -3622,30 +3631,30 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets;
+    use crate::{train_nets, utils};
     use crate::train_nets::{
-        BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig,
-        CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams,
-        FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, FixedNumSlicesNetParams,
-        InputFilterRangeOrValue, LabelNetApplicable, LabelNetApplicableAndNetE,
-        LabelNetInputTensors, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams,
-        LabelNetsApplicable, LoadMotifNetOutput, LoadingTensorsDataBatch, MaxPaddingNetArgs,
-        MaxPaddingNetArgsRangeOrValue, MaxPaddingNetParams, MotifsNetsSelectionApplicable,
-        NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig,
-        TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, load_channels_motifs,
-        opt_train,
+        load_channels_motifs, opt_train, BatchTransform,
+        ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue,
+        FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue,
+        FixedNumSlicesNetArgs, FixedNumSlicesNetParams, InputFilterRangeOrValue,
+        LabelNetApplicable, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetTypeArgs,
+        LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LabelNetsApplicable, LoadMotifNetOutput,
+        LoadingTensorsDataBatch, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue,
+        MaxPaddingNetParams, MotifsNetsSelectionApplicable, NetsPadding, OptConfig, PlotVecf32,
+        RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig,
+        TrainLabelNetsRunConfigRangeOrValue,
     };
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore,
     };
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use crate::utils::{
-        DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor, lin_t, pad_to,
-        reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size,
+        lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch,
+        Reducer, SplitQueue, Splittable, SplittableTensor,
     };
     use crate::utils::{
-        SplittableDataBatch, TrainListener, cuda_mem, from, optimizer_mem_size,
-        set_requires_grad_in_subpath, train, vs_mem_size,
+        cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train,
+        vs_mem_size, SplittableDataBatch, TrainListener,
     };
     use crate::ws::mock_ws_simp;
     use crate::ws::{FsWorkspace, Workspace, WsMockBuilder};
@@ -3669,8 +3678,8 @@ mod train_tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Float, Half};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-    use tch::nn::{AdamW, BatchNormConfig, LinearConfig, Module, OptimizerConfig, VarStore, init};
-    use tch::{Device, Tensor, nn};
+    use tch::nn::{init, AdamW, BatchNormConfig, LinearConfig, Module, OptimizerConfig, VarStore};
+    use tch::{nn, Device, Tensor};
     use tch::{IndexOp, Kind, Reduction};
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::OptRunConfigSource;
@@ -3681,9 +3690,9 @@ mod train_tests {
     use thoosa_shared::test_utils::set_panic_hook;
     use thoosa_shared::val::Val;
     use thoosa_shared::{
-        ThoosaError, batch_windows, cdt_for_dir, clc_num_batches, pulse_in_rand, sin_v, slices_len,
+        batch_windows, cdt_for_dir, clc_num_batches, pulse_in_rand, sin_v, slices_len, ThoosaError,
     };
-    use thoosa_store::{MockStore, SqlStore, mock_store_with_find_motifs_run_config};
+    use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
     use torch_sys::at_autocast_clear_cache;
 
     #[ctor::ctor]
@@ -3757,30 +3766,6 @@ mod train_tests {
     }
 
     ///sums and multiplies inputs by k
-    pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
-        num_features: u32,
-        k: f64,
-        device: Device,
-        descr: &str,
-    ) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> {
-        let vs = VarStore::new(device);
-
-        SeqBuilder::new(num_features, None)
-            .linear_s_with_conf(
-                1,
-                LinearConfig {
-                    ws_init: init::Init::Const(k), //conflicts with ctor's init
-                    bs_init: None,
-                    bias: false,
-                },
-                #[cfg(debug_assertions)]
-                descr.to_string(),
-            )
-            .end_seq()
-            .build_tch_module(&vs.root())
-    }
-
-    ///sums and multiplies inputs by k
     pub fn test_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
         num_features: u32,
         k: f64,
@@ -3832,13 +3817,13 @@ mod train_tests {
 
         //sums and multiplies by k
         let r_0: ThoTensor<AnyDims, CachableId> =
-            test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, true);
+            utils::test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, true);
         debug!("r_0.size={:?}", r_0.size());
 
         assert_eq!(Tensor::from_slice(&[4950.]), r_0.as_ref().i((0, 0, ..)));
         assert_eq!(
             Tensor::from_slice(&[9900.]),
-            test_net::<AnyDims, AnyDims>(100, 2., Cpu, "test_net")?
+            utils::test_net::<AnyDims, AnyDims>(100, 2., Cpu, "test_net")?
                 .tho_forward(&t, true)
                 .as_ref()
                 .i((0, 0, ..))
@@ -3877,12 +3862,12 @@ mod train_tests {
                 .with_motif_nets(vec![
                     vec![
                         //channel 0
-                        motif_test_net(motif_width, 1., Cpu),
-                        motif_test_net(motif_width, 2., Cpu),
+                        utils::motif_test_net(motif_width, 1., Cpu),
+                        utils::motif_test_net(motif_width, 2., Cpu),
                     ],
                     vec![
                         //channel 1
-                        motif_test_net(motif_width, 10., Cpu),
+                        utils::motif_test_net(motif_width, 10., Cpu),
                     ],
                 ])
                 .build(),
@@ -4021,14 +4006,14 @@ mod train_tests {
                 .with_motif_nets(vec![
                     vec![
                         //channel 0
-                        motif_test_net(motif_width, 1., Cpu),
-                        motif_test_net(motif_width, 2., Cpu),
+                        utils::motif_test_net(motif_width, 1., Cpu),
+                        utils::motif_test_net(motif_width, 2., Cpu),
                     ],
                     vec![
                         //channel 1
-                        motif_test_net(motif_width, 0., Cpu), //dummy
-                        motif_test_net(motif_width, 0., Cpu), //dummy
-                        motif_test_net(motif_width, 10., Cpu), //taken in with_label_nets by motif_id as index
+                        utils::motif_test_net(motif_width, 0., Cpu), //dummy
+                        utils::motif_test_net(motif_width, 0., Cpu), //dummy
+                        utils::motif_test_net(motif_width, 10., Cpu), //taken in with_label_nets by motif_id as index
                     ],
                 ])
                 .build(),
@@ -4109,14 +4094,14 @@ mod train_tests {
                     .with_motif_nets(vec![
                         vec![
                             //channel 0
-                            motif_test_net(motif_width, 1., Cpu),
-                            motif_test_net(motif_width, 2., Cpu),
+                            utils::motif_test_net(motif_width, 1., Cpu),
+                            utils::motif_test_net(motif_width, 2., Cpu),
                         ],
                         vec![
                             //channel 1
-                            motif_test_net(motif_width, 0., Cpu), //dummy
-                            motif_test_net(motif_width, 0., Cpu), //dummy
-                            motif_test_net(motif_width, 10., Cpu), //taken in with_label_nets by motif_id as index
+                            utils::motif_test_net(motif_width, 0., Cpu), //dummy
+                            utils::motif_test_net(motif_width, 0., Cpu), //dummy
+                            utils::motif_test_net(motif_width, 10., Cpu), //taken in with_label_nets by motif_id as index
                         ],
                     ])
                     .with_label_nets(HashMap::from([
@@ -4201,14 +4186,14 @@ mod train_tests {
                     .with_motif_nets(vec![
                         vec![
                             //channel 0
-                            motif_test_net(motif_width, 1., Cpu),
-                            motif_test_net(motif_width, 2., Cpu),
+                            utils::motif_test_net(motif_width, 1., Cpu),
+                            utils::motif_test_net(motif_width, 2., Cpu),
                         ],
                         vec![
                             //channel 1
-                            motif_test_net(motif_width, 0., Cpu), //dummy
-                            motif_test_net(motif_width, 0., Cpu), //dummy
-                            motif_test_net(motif_width, 10., Cpu), //taken in with_label_nets by motif_id as index
+                            utils::motif_test_net(motif_width, 0., Cpu), //dummy
+                            utils::motif_test_net(motif_width, 0., Cpu), //dummy
+                            utils::motif_test_net(motif_width, 10., Cpu), //taken in with_label_nets by motif_id as index
                         ],
                     ])
                     .with_label_nets(HashMap::from([
@@ -4259,22 +4244,6 @@ mod train_tests {
         ));
 
         Ok(())
-    }
-
-    fn motif_test_net(
-        motif_width: u32,
-        k: f64,
-        device: Device,
-    ) -> (
-        Box<dyn Fn() -> MotifNetParams + Sync + Send>,
-        Box<dyn Fn() -> ThoModuleWithStore<Slice, MotifData> + Sync + Send>,
-    ) {
-        (
-            Box::new(move || MotifNetParams::new(motif_width, 1)),
-            Box::new(move || {
-                ThoModuleWithStore::new(test_net(motif_width, k, device, "test_motif_net").unwrap())
-            }),
-        )
     }
 
     fn label_test_nets(
@@ -4341,7 +4310,7 @@ mod train_tests {
             WsMockBuilder::new(None, 5, 100, input_n as u32)
                 .with_motif_nets(vec![vec![
                     //channel 0
-                    motif_test_net(motif_width, 1., Cuda(0)),
+                    utils::motif_test_net(motif_width, 1., Cuda(0)),
                 ]])
                 .build(),
         ));
@@ -4396,14 +4365,14 @@ mod train_tests {
                 .with_motif_nets(vec![
                     vec![
                         //channel 0
-                        motif_test_net(motif_width, 1., Cpu),
-                        motif_test_net(motif_width, 1., Cpu),
+                        utils::motif_test_net(motif_width, 1., Cpu),
+                        utils::motif_test_net(motif_width, 1., Cpu),
                     ],
                     vec![
                         //channel 1
-                        motif_test_net(motif_width, 0., Cpu),
-                        motif_test_net(motif_width, 0., Cpu),
-                        motif_test_net(motif_width, 10., Cpu),
+                        utils::motif_test_net(motif_width, 0., Cpu),
+                        utils::motif_test_net(motif_width, 0., Cpu),
+                        utils::motif_test_net(motif_width, 10., Cpu),
                     ],
                     vec![],
                 ])
@@ -4493,6 +4462,10 @@ mod train_tests {
         assert!(vs_0.variables().len() > 0);
         assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
 
+
+        let cuda_module = loaded_module.copy_to_device(Cuda(0));
+        cuda_module.tho_forward(&Tensor::rand([11, 3 * 19, 100], FLOAT_CUDA).into(), false);
+
         Ok(())
     }
 
@@ -4581,17 +4554,17 @@ mod train_tests {
                 .with_motif_nets(vec![
                     vec![
                         //channel 0
-                        motif_test_net(100, 1., Cpu),
-                        motif_test_net(100, 1., Cpu),
-                        motif_test_net(100, 1., Cpu),
-                        motif_test_net(100, 1., Cpu),
-                        motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
                     ],
                     vec![
                         //channel 0
-                        motif_test_net(100, 1., Cpu),
-                        motif_test_net(100, 1., Cpu),
-                        motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
                     ],
                 ])
                 .build(),
@@ -5111,17 +5084,17 @@ mod train_tests {
                 .with_motif_nets(vec![
                     vec![
                         //channel 0
-                        motif_test_net(100, 1., Cpu),
-                        motif_test_net(100, 1., Cpu),
-                        motif_test_net(100, 1., Cpu),
-                        motif_test_net(100, 1., Cpu),
-                        motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
                     ],
                     vec![
                         //channel 0
-                        motif_test_net(100, 1., Cpu),
-                        motif_test_net(100, 1., Cpu),
-                        motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
+                        utils::motif_test_net(100, 1., Cpu),
                     ],
                 ])
                 .build(),

@@ -14,5 +14,7 @@ pub mod stages_seq;
 pub mod select_motifs;
 pub mod stacked_moitfs_loader;
 pub mod resources_motifs_clc_dist;
-pub mod train_motif_net;
+pub mod train_motif_nets;
 mod motifs_batch_builder;
+mod apply_motif_nets;
+mod load_motif_net;

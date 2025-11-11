@@ -41,9 +41,10 @@ use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
 use crate::tasks::motifs_batch_builder::{make_batch_with, MixupJitterCfg};
 use crate::tasks::run_ctx_2::MotifsCtx;
+use crate::tasks::tensor_loader::RawTensorLoader;
 
 #[derive(Debug)]
-pub struct TrainMotifNet<L, C>
+pub struct TrainMotifNets<L, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
@@ -63,7 +64,7 @@ where
 }
 
 
-impl <L, C> OutId for TrainMotifNet<L, C>
+impl <L, C> OutId for TrainMotifNets<L, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
@@ -96,7 +97,7 @@ impl WithId for TrainMotifNetInput {
         &self.id
     }
 }
-impl <L, C> Stage for TrainMotifNet<L, C>
+impl <L, C> Stage for TrainMotifNets<L, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
@@ -106,7 +107,7 @@ where
     type Out = TrainMotifsNetsResult;
 }
 
-impl <L, C> TrainMotifNet<L, C>
+impl <L, C> TrainMotifNets<L, C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
@@ -143,7 +144,7 @@ where
 
 }
 #[async_trait]
-impl <L, C> AsyncStage for TrainMotifNet<L, C>
+impl <L, C> AsyncStage for TrainMotifNets<L, C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
@@ -383,7 +384,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use log::debug;
-    use log::LevelFilter::Trace;
+    use log::LevelFilter::{Debug, Trace};
     use parking_lot::RwLock;
     use tokio::fs;
     use caching_runner::common::cachable::DevicesWrap;
@@ -404,14 +405,14 @@ mod tests {
     use thoosa_with_data::with_data;
     use crate::tasks::select_motifs::tests::resource_tensor;
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::train_motif_net::{TrainMotifNet, TrainMotifNetInput};
+    use crate::tasks::train_motif_nets::{TrainMotifNets, TrainMotifNetInput};
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_num_layers_opt() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp/test_single_label_one_motif");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
-        log::set_max_level(Trace);
+        log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
 
@@ -504,7 +505,7 @@ mod tests {
         );
 
 
-        let train_motif_net = Arc::new(TrainMotifNet::new(
+        let train_motif_net = Arc::new(TrainMotifNets::new(
             loader,
             &ws,
             &store,

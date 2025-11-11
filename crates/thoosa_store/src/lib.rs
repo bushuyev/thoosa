@@ -731,10 +731,7 @@ impl Store for SqlStore {
         run_id: RunId,
         input_type: Option<&dyn Display>,
     ) -> Result<Vec<RunId>, ThoosaError> {
-        debug!(
-            "get_input_run_ids: run_id={run_id} input_type={:?}",
-            input_type.map(|v| v.to_string())
-        );
+        debug!("get_input_run_ids: run_id={run_id} input_type={:?}",input_type.map(|v| v.to_string()));
 
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
@@ -3755,6 +3752,16 @@ impl MockStoreBuilder {
         self.store.expect_get_motif_meta().returning(
             move |motif_id|{
                 map.get(&motif_id).cloned().expect(&format!("mock is not configured to return motif meta for motif_id {motif_id}"))
+            }
+        );
+        self
+    }
+
+    pub fn with_get_input_run_ids<R:Into<HashMap<RunId, Result<Vec<RunId>, ThoosaError>>>>(mut self, results: R)-> Self{
+        let map = results.into();
+        self.store.expect_get_input_run_ids().returning(
+            move |run_id, input_type|{
+                map.get(&run_id).cloned().expect(&format!("mock is not configured to return input_run_ids for run_id {run_id}"))
             }
         );
         self
