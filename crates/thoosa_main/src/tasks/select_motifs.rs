@@ -520,7 +520,7 @@ pub mod tests {
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (channel_0_motifs_ids[0] as u32, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_t)),
+            (channel_0_motifs_ids[0] as u32, (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
         ]).finish());
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
@@ -605,7 +605,7 @@ pub mod tests {
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (channel_0_motifs_ids[0] as u32, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_t)),
+            (channel_0_motifs_ids[0] as u32, (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
         ]).finish());
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
@@ -690,8 +690,8 @@ pub mod tests {
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (motifs_ids[0] as u32, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_0_t)),
-            (motifs_ids[1] as u32, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motif_1_t)),
+            (motifs_ids[0] as u32, (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_0_t)),
+            (motifs_ids[1] as u32, (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_1_t)),
         ]).finish());
 
 
@@ -820,9 +820,9 @@ pub mod tests {
         );
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (channel_0_motif_0 as u32, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))),
-            (channel_0_motif_1 as u32, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 2, MotifKind::Triangle))),
-            (channel_1_motif_0 as u32, (MotifMeta { channel: 1, run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 4, MotifKind::Sin))),
+            (channel_0_motif_0 as u32, (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))),
+            (channel_0_motif_1 as u32, (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 2, MotifKind::Triangle))),
+            (channel_1_motif_0 as u32, (MotifMeta { channel: 1, find_motifs_run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 4, MotifKind::Sin))),
         ]).finish());
 
 
@@ -1220,7 +1220,7 @@ pub mod tests {
         );
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached(
-            motif_ids.iter().map(|m|(*m as u32, (MotifMeta { channel: 0, run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))))
+            motif_ids.iter().map(|m|(*m as u32, (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))))
         ).finish());
 
 

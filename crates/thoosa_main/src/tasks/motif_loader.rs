@@ -18,7 +18,7 @@ use thoosa_common::dims::Dims;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::{CopyToDevice, TensorIdSliceIdx, ThoosaError};
 use thoosa_shared::traits::{Data, DataId, Select, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -33,7 +33,7 @@ use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::traits::Adjustable;
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::resource::Resource;
+use thoosa_shared::resource::{Resource, ResourceId};
 use crate::tasks::find_motifs::{config_to_stage, FilteredLoaderStage, LoaderStageChoice};
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use crate::tasks::transforms::freq_filter::FreqFilter;
@@ -79,7 +79,7 @@ where
 #[derive(Debug, Clone)]
 pub struct MotifMeta {
     pub channel:i64,
-    pub run_id: RunId,
+    pub find_motifs_run_id: RunId,
     pub window:u32
 }
 
@@ -109,17 +109,28 @@ where
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
+        let (device_idx, cache_area) = {
+            let guard = ctx.read();
+            (guard.device_idx(), guard.cache_area())
+        };
+
         let motif_id = input
             .with_data_ref(0, None, |id: &DataId| Ok(id.clone()))
             .await?;
 
-        let (channel, find_motifs_run_id, window, cache_area, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), None, None, &ctx).await?;
+        let motif_id_value = motif_id.clone().0;
+        let (channel, find_motifs_run_id, slices, resources_map) =
+            self.store
+                .read()
+                .list_motif_slices(motif_id_value, None, None)?;
+
+        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), None, None, &ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area).await?;
 
 
         Ok(Arc::new(DevicesWrap::wrap(
             DataWithExtra::new(
                 motif,
-                MotifMeta{channel, run_id: find_motifs_run_id, window },
+                MotifMeta{channel, find_motifs_run_id: find_motifs_run_id, window },
             ),
             cache_area,
         )))
@@ -127,7 +138,7 @@ where
 }
 ///To load slices not belonging to a motif
 #[derive(Debug)]
-pub struct SlicesLoader<L, C>
+pub struct RandomSlicesLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
@@ -137,10 +148,26 @@ where
     pd: PhantomData<C>,
 }
 
+impl <L,C> RandomSlicesLoader<L, C>
+where
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx = C> + Cached + OutId + 'static,
+    C: RunCtx + 'static,
+{
+    pub fn new(store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>) -> Self {
+        Self { store, loader, pd: PhantomData::default() }
+    }
+}
+
 #[derive(Debug, Clone, DummyData)]
 pub struct SlicesLoaderInput {
     motif_id:DataId,
     limit:u32
+}
+
+impl SlicesLoaderInput {
+    pub fn new(motif_id: DataId, limit: u32) -> Self {
+        Self { motif_id, limit }
+    }
 }
 
 impl WithId for SlicesLoaderInput {
@@ -152,7 +179,7 @@ impl WithId for SlicesLoaderInput {
 }
 
 impl Input for SlicesLoaderInput {}
-impl<L, C> Stage for SlicesLoader<L, C>
+impl<L, C> Stage for RandomSlicesLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
@@ -165,7 +192,7 @@ where
 
 
 #[async_trait]
-impl<L, C> AsyncStage for SlicesLoader<L, C>
+impl<L, C> AsyncStage for RandomSlicesLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
@@ -179,9 +206,28 @@ where
     where
             for<'a> Self::In<'a>: Send + Sync,
     {
+        let (device_idx, cache_area) = {
+            let guard = ctx.read();
+            (guard.device_idx(), guard.cache_area())
+        };
         let SlicesLoaderInput { motif_id, limit } = input.clone_from_cpu().await?;
 
-        let (channel, find_motifs_run_id, window, cache_area, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), Some(limit), Some((0, 0)), &ctx).await?;
+        let (channel, find_motifs_run_id) = self.store.read().get_motif_meta(*motif_id)?;
+
+        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(
+            find_motifs_run_id,
+            &self.store.read().list_run_config_values(find_motifs_run_id)?,
+        )?;
+
+        debug!("RandomSlicesLoader::run: motif_id={motif_id} channel={channel} find_motifs_run_config={find_motifs_run_config:?}");
+
+        let motif_id_value = motif_id.clone().0;
+        let (channel, find_motifs_run_id, slices, resources_map) =
+            self.store
+                .read()
+                .list_random_slices(motif_id_value, find_motifs_run_config.window, None)?;
+
+        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), Some(limit), Some((0, 0)), &ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area).await?;
 
 
         Ok(Arc::new(DevicesWrap::wrap(
@@ -191,16 +237,12 @@ where
     }
 }
 
-async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &Arc<RwLock<C>>) -> Result<(i64, RunId, u32, u64, ThoTensor<MotifSlices, DataId>), ThoosaError>
+async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &Arc<RwLock<C>>, find_motifs_run_id: u32, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, channel: i64, device_idx: usize, cache_area: u64) -> Result<( u32, ThoTensor<MotifSlices, DataId>), ThoosaError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C>,
 {
-    let motif_id_value = motif_id.clone().0;
-    let (channel, find_motifs_run_id, slices, resources_map) =
-        store
-            .read()
-            .list_motif_slices(motif_id_value, limit, all_but_in_run_id)?;
+
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(
         find_motifs_run_id,
@@ -217,10 +259,7 @@ where
         });
 
     let window = find_motifs_run_config.window;
-    let (device_idx, cache_area) = {
-        let guard = ctx.read();
-        (guard.device_idx(), guard.cache_area())
-    };
+
     let num_devices = GlobalCtx::global().device_count();
 
     debug!("MotifLoader::run: find_motifs_run_id={find_motifs_run_id} window={window:?} device_idx={device_idx}");
@@ -285,7 +324,7 @@ where
         motif_id,
         Tensor::cat(tensors.as_slice(), 0),
     );
-    Ok((channel, find_motifs_run_id, window, cache_area, motif))
+    Ok((window, motif))
 }
 
 
@@ -398,6 +437,7 @@ mod tests {
     use tch::Tensor;
     use caching_runner::common::{mock_run_ctx, RunCtx};
     use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use caching_runner::common::runnable::AsyncStage;
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::utils::lin_t;
@@ -407,14 +447,15 @@ mod tests {
     use thoosa_shared::traits::DataId;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_store::MockStoreBuilder;
-    use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
+    use crate::tasks::motif_loader::{MotifLoader, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::{mock_tensor_loader};
     use crate::tasks::cross_dims::MotifSlices;
     use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_motifs::distance::average_euclidean_distance;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn load_motifs() -> Result<(), ThoosaError> {
+    async fn test_load_motifs() -> Result<(), ThoosaError> {
         set_max_level(Trace);
         GlobalCtx::init_devices(2);
 
@@ -474,4 +515,69 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_load_random_slices() -> Result<(), ThoosaError> {
+        set_max_level(Trace);
+        GlobalCtx::init_devices(2);
+
+        let run_id = 1;
+        let motif_id = 10u32;
+        let motif_width = 100;
+
+        let resource_a = Resource::new(1, 1, "tensor_a", 1000);
+        let resource_b = Resource::new(2, 1, "tensor_b", 1000);
+        let mut store = MockStoreBuilder::new()
+            .with_list_random_slices(motif_id, motif_width, None, Ok((0i64, run_id, vec![
+                TensorIdSliceIdx(1, 100),
+                TensorIdSliceIdx(1, 200),
+                TensorIdSliceIdx(2, 100)
+            ], HashMap::from([
+                (1, resource_a.clone()),
+                (2, resource_b.clone())
+            ]))))
+            .with_list_run_config_values(
+                run_id,
+                Ok(FindMotifsRunConfig::new(Some(run_id), 100, motif_width, None, None).to_properties_iter(None).collect())
+            )
+            .with_get_motif_meta( [(motif_id, Ok((0usize, run_id)))])
+            .build();
+
+        let random_slices_loader = Arc::new(RandomSlicesLoader::new(
+            Arc::new(RwLock::new(store)),
+
+            Arc::new(
+                mock_tensor_loader::build()
+                    .with_out_id()
+                    .with_run_cached([
+                        (resource_a, lin_t(1000).view((1,-1))),
+                        (resource_b, lin_t(1000).view((1,-1)))
+                    ])
+                    .finish(),
+            )
+        ));
+
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
+
+        let num_devices = GlobalCtx::global().device_count();
+        let cache_area = ctx.read().cache_area();
+        let input = Arc::new(DevicesWrap::wrap_cpu(SlicesLoaderInput{ motif_id: DataId::from(&motif_id), limit: 10 }));
+
+        let slices = random_slices_loader
+            .run(Arc::clone(&input), Arc::clone(&ctx))
+            .await?;
+
+        let r = slices.with_data_ref(0, None, |t: &ThoTensor<MotifSlices, DataId>|{
+            let dist = average_euclidean_distance(t.t_ref()).unwrap();
+
+            trace!("random slices: \t{} dist={dist}", t.t_ref());
+
+            Ok(true)
+        }).await?;
+        // assert_eq!(r, true);
+        //TODO check data
+
+        Ok(())
+    }
+
 }
