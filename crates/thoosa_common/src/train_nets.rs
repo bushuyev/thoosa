@@ -1303,10 +1303,27 @@ pub fn train_final_net(
     Ok((loss, final_node_params))
 }
 
-#[derive(Debug)]
+type ModuleFactory<DI, DO> =
+    dyn Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> + Send + Sync;
+
 pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Send> {
     module: Box<dyn ThoModule<DI, DO>>,
     var_store: VarStore,
+    module_factory: Option<Arc<ModuleFactory<DI, DO>>>,
+}
+
+impl<DI, DO> Debug for ThoModuleWithStore<DI, DO>
+where
+    DI: Dims + Send + 'static + ?Sized,
+    DO: Dims + Send,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ThoModuleWithStore")
+            .field("module", &self.module)
+            .field("var_store", &self.var_store)
+            .field("has_factory", &self.module_factory.is_some())
+            .finish()
+    }
 }
 
 //TODO
@@ -1324,26 +1341,39 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO>
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI, DO> {
     // #[cfg(test)]
     pub fn new(module: Box<dyn ThoModule<DI, DO>>) -> Self {
-        Self {
-            module,
-            var_store: VarStore::new(Cpu), //dummy
-        }
+        Self::with_factory(module, VarStore::new(Cpu), None)
     }
 
     pub fn new_(module: Box<dyn ThoModule<DI, DO>>, var_store: VarStore) -> Self {
-        Self { module, var_store }
+        Self::with_factory(module, var_store, None)
     }
 
-    pub fn load(node: Node, model: PathBuf, device: Device) -> Result<Self, ThoosaError> {
-        let mut vs = VarStore::new(device.clone());
-        let module = node.build_tch_module(&vs.root())?;
+    fn with_factory(
+        module: Box<dyn ThoModule<DI, DO>>,
+        var_store: VarStore,
+        module_factory: Option<Arc<ModuleFactory<DI, DO>>>,
+    ) -> Self {
+        Self {
+            module,
+            var_store,
+            module_factory,
+        }
+    }
+
+    pub fn load<F>(builder: F, model: PathBuf, device: Device) -> Result<Self, ThoosaError>
+    where
+        F: Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        let builder: Arc<ModuleFactory<DI, DO>> = Arc::new(builder);
+        let mut vs = VarStore::new(device);
+        let module = builder(&vs.root())?;
         vs.load(&model)?;
         vs.freeze();
 
-        Ok(Self {
-            module,
-            var_store: vs,
-        })
+        Ok(Self::with_factory(module, vs, Some(builder)))
     }
 
     pub fn set_device(&mut self, device: Device) {
@@ -1351,16 +1381,20 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     }
 
     pub fn copy_to_device(&self, device: Device) -> Self {
-        // let mut vs = VarStore::new(device.clone());
-        // // let module = node.build_tch_module(&vs.root())?;
-        // vs.copy(&self.var_store).expect("copy");
-        // vs.freeze();
-        //
-        // Self {
-        //     module: self.module.clone(),
-        //     var_store: vs,
-        // }
-        todo!()
+        let builder = self
+            .module_factory
+            .as_ref()
+            .unwrap_or_else(|| panic!("copy_to_device requires module_factory; construct modules via ThoModuleWithStore::load to enable copying"));
+
+        let mut var_store = VarStore::new(device);
+        let module = builder(&var_store.root())
+            .expect("module builder failed while copying to device");
+        var_store
+            .copy(&self.var_store)
+            .expect("failed to copy VarStore weights");
+        var_store.freeze();
+
+        Self::with_factory(module, var_store, Some(Arc::clone(builder)))
     }
 
     fn mem_total(&self) -> usize {
@@ -1402,7 +1436,12 @@ pub fn load_final_model(
     let final_node_params = FinalNetParams::from_file(&params_path)?;
     debug!("load_final_model:  final_node_params={final_node_params:?}");
 
-    let node = ThoModuleWithStore::load(final_net(&final_node_params), model_path, *device)?;
+    let final_params_for_builder = final_node_params.clone();
+    let node = ThoModuleWithStore::load(
+        move |path: &nn::Path| final_net(&final_params_for_builder).build_tch_module(path),
+        model_path,
+        *device,
+    )?;
 
     Ok((final_node_params, node))
 }
@@ -2266,7 +2305,7 @@ pub fn flat_label_node(params: &LabelNetParams, slices_len: u32) -> Node {
         .end_seq()
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct FinalNetParams {
     in_features: u32,
     out_features: u32,
@@ -3018,7 +3057,13 @@ impl Runnable<LoadMotifNetInput, LoadMotifNetOutput, ()> for LoadMotifNetCachabl
                 debug!("load_motif_models_ws: model={model:?} config={config:?} motif_node_params={motif_node_params:?}");
 
                 //TODO ChannelsMotifsFlattenData
-                let module:ThoModuleWithStore<SlicesData, MotifData> = ThoModuleWithStore::load(motif_node(&motif_node_params), model, self.device.clone().into()).unwrap();
+                let params_for_builder = motif_node_params.clone();
+                let module: ThoModuleWithStore<SlicesData, MotifData> = ThoModuleWithStore::load(
+                    move |path: &nn::Path| motif_node(&params_for_builder).build_tch_module(path),
+                    model,
+                    self.device.clone().into(),
+                )
+                .unwrap();
 
                 (motif_node_params, module)
             }).collect::<Vec<_>>()
@@ -4451,8 +4496,9 @@ mod train_tests {
             vs_0.variables().len()
         );
 
+        let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(
-            LabelNetParams::label_net(&params),
+            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
             thoosa_shared::replace_extension(&model_path, "safetensors")
                 .1
                 .into(),
@@ -4464,7 +4510,11 @@ mod train_tests {
 
 
         let cuda_module = loaded_module.copy_to_device(Cuda(0));
-        cuda_module.tho_forward(&Tensor::rand([11, 3 * 19, 100], FLOAT_CUDA).into(), false);
+        let _ = cuda_module.tho_forward(
+            &Tensor::rand([11, 3 * 19, 100], FLOAT_CUDA).into(),
+            false,
+        );
+
 
         Ok(())
     }
@@ -4520,8 +4570,9 @@ mod train_tests {
             vs_0.variables().len()
         );
 
+        let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(
-            LabelNetParams::label_net(&params),
+            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
             thoosa_shared::replace_extension(&model_path, "safetensors")
                 .1
                 .into(),
