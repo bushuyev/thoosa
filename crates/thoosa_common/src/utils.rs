@@ -2230,7 +2230,7 @@ pub fn motif_test_net(
     (
         Box::new(move || MotifNetParams::new(motif_width, 1)),
         Box::new(move || {
-            ThoModuleWithStore::new("".into(), test_net(motif_width, k, device, "test_motif_net").unwrap())
+            *test_net(motif_width, k, device, "test_motif_net").unwrap()
         }),
     )
 }

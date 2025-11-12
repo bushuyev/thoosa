@@ -1,12 +1,21 @@
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::ops::Range;
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::lock_api::RwLock;
+use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use caching_runner::global_ctx::GlobalCtx;
+use caching_runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use caching_runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_common::dims::{Batch, MotifProbability, Slice};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore, TrainMotifsNetsResult};
@@ -16,12 +25,13 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, SimpleId, WithId};
+use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput};
+use crate::tasks::resources_motifs_clc_dist::ClcRresourcesMotifsDistOutput;
 use crate::tasks::run_ctx_2::MotifsCtx;
 
 #[derive(Debug, Clone, DummyData)]
@@ -49,7 +59,8 @@ where
     store:Arc<parking_lot::RwLock<Box<dyn Store>>>,
     pd:PhantomData<C>,
     load_motif_net:Arc<LoadMotifNet<C>>,//TODO not needed?
-    loaded_motif_nets:Vec<Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Slice, MotifProbability>, MotifNetParams>>>>
+    loaded_motif_nets:Vec<Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Slice, MotifProbability>, MotifNetParams>>>>,
+    apply_motif_net: Arc<ApplyMotifNet<C>>
 }
 
 impl <C>ApplyMotifNets<C>
@@ -108,7 +119,8 @@ where
             store:Arc::clone(&store),
             pd: PhantomData,
             load_motif_net: Arc::new(LoadMotifNet::new(&ws)),
-            loaded_motif_nets
+            loaded_motif_nets,
+            apply_motif_net: Arc::new(ApplyMotifNet::new())
         })
     }
 }
@@ -160,6 +172,29 @@ where
     type Out = ApplyMotifNetsOutput;
 }
 
+#[derive(Debug)]
+struct MotifsProbabilitiesOutputBuilder {
+
+}
+
+impl MotifsProbabilitiesOutputBuilder {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl OutputBuilder for MotifsProbabilitiesOutputBuilder {
+    type O = ThoTensor<ChannelsData2, SimpleId>;
+
+    fn add_partial_output(&mut self, o: Self::O) {
+        todo!()
+    }
+
+    fn build(self: Box<Self>) -> Self::O {
+        todo!()
+    }
+}
+
 #[async_trait]
 impl <C>AsyncStage for ApplyMotifNets<C>
 where
@@ -171,29 +206,35 @@ where
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
-        // let input = input.clone_from_cpu().await?;
-
-        let results = futures::stream::iter(&self.loaded_motif_nets)
-            .map(|net|{
-                let net = Arc::clone(net);
-                async move {
-
-                    with_data!(device_idx, net; |net|{
-
-                        Ok::<_, ThoosaError>(())
-                    })
-                }
-            })
-            .buffer_unordered(10)
-            .try_collect::<Vec<_>>().await?;
-
-
-        let channels = self.ws.read().channels();
-
-        let out_key = {//TODO move to with_data!
+        let out_key = {
             let out_id = self.out_id(WithId::id(&input));
             Arc::new(out_id) as Arc<dyn CachableIdTr>
         };
+
+        let wrapper = Arc::new(ApplyMotifNetInputDeviceWrapper::new(input, self.loaded_motif_nets.clone()));
+        let output_builder = Box::new(MotifsProbabilitiesOutputBuilder::new());
+
+
+        let map = HashMap::new();
+        let oom_handler = OOMHandler::new(
+            vec![
+                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone())))),
+                Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                Adjusters::Input(Box::new(SplitsAdjuster::<ApplyMotifNetInputDeviceWrapper, std::ops::Range<MonoMetrics<0, 1>>>::new(1.into()))),
+            ], None).run(
+            &self.apply_motif_net,
+            Arc::clone(&wrapper),
+            ctx,
+            Contexts::new(
+                SplitsAdjusterContextImpl::new(wrapper.size().into(), output_builder),
+                NoopRunnableContext {},
+                PermitsAndDumpToCpuAdjustableContex::new(
+                    PermitsAdjustContextImpl::new(ctx_name),
+                    DumpToCpuContextImpl::new(&map),
+                ),
+            ),
+        ).await?;
+
 
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(ApplyMotifNetsOutput::new("".into()))))
@@ -201,16 +242,96 @@ where
     }
 }
 
+#[derive(Debug)]
+struct ApplyMotifNetInputDeviceWrapper {
+    batch: Arc<DevicesWrap<ThoTensor<Batch<ChannelsData2>, SimpleId>>>,
+    motif_nets: Vec<Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Slice, MotifProbability>, MotifNetParams>>>>
+}
 
+impl ApplyMotifNetInputDeviceWrapper {
+    pub fn new(batch: Arc<DevicesWrap<ThoTensor<Batch<ChannelsData2>, SimpleId>>>, motif_nets: Vec<Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Slice, MotifProbability>, MotifNetParams>>>>) -> Self {
+        Self { batch, motif_nets }
+    }
+}
+
+impl WithId for ApplyMotifNetInputDeviceWrapper {
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+
+impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
+    type O<'o> = ApplyMotifNetInput<'o>;
+
+    async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+            for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+    {
+        todo!()
+    }
+
+    async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+        S: Clone + Debug + 'static,
+        Self::O<'o>: Select<S, Output=Self::O<'o>>,
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+    {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl CopyToDevice for ApplyMotifNetInputDeviceWrapper {
+    async fn copy_to_device(&self, dst_device: usize) -> Self {
+        todo!()
+    }
+}
+
+impl Data for ApplyMotifNetInputDeviceWrapper {
+    type Metrics = MonoMetrics<0, 1>;
+
+    fn size(&self) -> Self::Metrics {
+        todo!()
+    }
+
+    fn device(&self) -> usize {
+        todo!()
+    }
+}
+
+
+impl Adjustable for ApplyMotifNetInputDeviceWrapper {}
 
 #[derive(Debug)]
 struct ApplyMotifNetInput<'a> {
-    batch: &'a ThoTensor<Batch<ChannelsData2>, SimpleId>
+    batch: &'a ThoTensor<Batch<ChannelsData2>, SimpleId>,
+    motif_nets: &'a [&'a DataWithExtra<ThoModuleWithStore<Slice, MotifProbability>, MotifNetParams>]
+}
+
+#[async_trait]
+impl CopyToDevice for ApplyMotifNetInput<'_> {
+    async fn copy_to_device(&self, dst_device: usize) -> Self {
+        todo!()
+    }
+}
+
+impl Data for ApplyMotifNetInput<'_> {
+    type Metrics = MonoMetrics<0, 1>;
+
+    fn size(&self) -> Self::Metrics {
+        todo!()
+    }
+
+    fn device(&self) -> usize {
+        todo!()
+    }
 }
 
 impl <'a> ApplyMotifNetInput<'a> {
-    pub fn new(batch: &'a ThoTensor<Batch<ChannelsData2>, SimpleId>) -> Self {
-        Self {  batch }
+    pub fn new(batch: &'a ThoTensor<Batch<ChannelsData2>, SimpleId>, motif_nets: &'a [&'a DataWithExtra<ThoModuleWithStore<Slice, MotifProbability>, MotifNetParams>]) -> Self {
+        Self {  batch, motif_nets }
     }
 }
 
@@ -223,20 +344,53 @@ impl <'a> WithId for ApplyMotifNetInput<'a> {
     }
 }
 
+impl Select<std::ops::Range<MonoMetrics<0, 1>>> for ApplyMotifNetInput<'_> {
+    type Output = Self;
+
+    fn subview(&self, selector: Range<MonoMetrics<0, 1>>) -> Result<Self::Output, ThoosaError> {
+        todo!()
+    }
+}
+
 
 #[derive(Debug)]
-pub struct ApplyMotifNet<C>
+struct ApplyMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable
 {
     pd:PhantomData<C>
 }
+impl <C> ApplyMotifNet<C>
+where
+    C: RunCtx + MotifsCtx + Adjustable
+{
+    pub fn new() -> Self {
+        Self { pd:PhantomData }
+    }
+}
+
+impl <C> Adjustable for ApplyMotifNet<C>
+where
+    C: RunCtx + MotifsCtx + Adjustable
+{
+
+}
+
+impl <C> OutId for ApplyMotifNet<C>
+where
+    C: RunCtx + MotifsCtx + Adjustable
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        todo!()
+    }
+}
+
 
 impl <C>  Stage for ApplyMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable{
     type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData2, SimpleId>;
+    type In<'a> = ApplyMotifNetInput<'a>;
     type Out = ThoTensor<ChannelsData2, SimpleId>;
 }
 
