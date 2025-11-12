@@ -6,10 +6,13 @@ use cached_derive::Cached;
 use caching_runner::common::cachable::DevicesWrap;
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage};
-use thoosa_common::dims::Dims;
-use thoosa_common::train_nets::ThoModuleWithStore;
+use thoosa_common::applicables::ThoDevice;
+use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice};
+use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
+use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::Input;
+use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Adjustable, SimpleId, WithId};
@@ -22,15 +25,17 @@ use crate::tasks::run_ctx_2::MotifsCtx;
 pub struct LoadMotifNetInput {
     id:SimpleId,
     motif_id:u32,
-    train_motif_nets_run_config:RunId
+    channel:u32,
+    // train_motif_nets_run_id:RunId
 }
 
+
 impl LoadMotifNetInput {
-    pub fn new(motif_id: u32, train_motif_nets_run_config: RunId) -> Self {
+    pub fn new(motif_id: u32, channel:u32/*train_motif_nets_run_id: RunId*/) -> Self {
         Self {
-            id: format!("{}_{}", motif_id, train_motif_nets_run_config).into(),
+            id: format!("{}_{}", motif_id, channel).into(),
             motif_id,
-            train_motif_nets_run_config,
+            channel,
         }
     }
 }
@@ -48,60 +53,60 @@ impl WithId for  LoadMotifNetInput{
 }
 
 
-
 #[derive(Debug, Cached)]
-pub struct LoadMotifNet<DI, DO, C>
+pub struct LoadMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
-    DI: Dims + Send + 'static,
-    DO: Dims + Send + 'static
 {
 
-    pd:PhantomData<(DI, DO, C)>
+    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    pd:PhantomData<C>
 }
 
-impl <DI, DO, C> LoadMotifNet<DI, DO, C>
+impl <C> LoadMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
-    DI: Dims + Send + 'static,
-    DO: Dims + Send + 'static
 {
-    pub fn new() -> Self {
-        Self { pd:PhantomData }
+    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
+        Self {
+            ws: Arc::clone(ws),
+            pd: PhantomData,
+        }
     }
 }
 
-impl <DI, DO, C> Stage for LoadMotifNet<DI, DO, C>
+impl <C> Stage for LoadMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
-    DI: Dims + Send + 'static,
-    DO: Dims + Send + 'static
 {
     type Ctx = C;
     type In<'a> = LoadMotifNetInput;
-    type Out = ThoModuleWithStore<DI, DO>;
+    type Out = DataWithExtra<ThoModuleWithStore<Slice, MotifProbability>, MotifNetParams>;
 }
 
 #[async_trait]
-impl <DI, DO, C> AsyncStage for LoadMotifNet<DI, DO, C>
+impl <C> AsyncStage for LoadMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
-    DI: Dims + Send + 'static,
-    DO: Dims + Send + 'static
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
-        todo!()
+        let (device_idx, cache_area) = {
+            let guard = ctx.read();
+            (guard.device_idx(), guard.cache_area())
+        };
+
+        let input = input.clone_from_cpu().await?;
+        let (params, module) = self.ws.read().load_motif_nets(input.channel, input.motif_id, &ThoDevice::from(device_idx).into())?.pop().ok_or(ThoosaError::new(format!("no nets for input={input:?}")))?;
+        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, params), cache_area)))
     }
 }
 
-impl <DI, DO, C> OutId for LoadMotifNet<DI, DO, C>
+impl <C> OutId for LoadMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
-    DI: Dims + Send + 'static,
-    DO: Dims + Send + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        ()//TODO format!("Loaded_{}", input_id).into()
+        format!("Loaded_{}", input_id).into()
     }
 }
 
@@ -109,32 +114,36 @@ where
 mod tests {
     use std::sync::Arc;
     use parking_lot::RwLock;
+    use tch::Device::Cuda;
     use caching_runner::common::cachable::{Cached, DevicesWrap};
     use caching_runner::common::{mock_run_ctx, MockRunCtx};
+    use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::dims::{AnyMetrics, Dims};
+    use thoosa_common::utils;
+    use thoosa_common::ws::{mock_ws_simp, WsMockBuilder};
     use thoosa_shared::ThoosaError;
     use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput};
 
-    #[derive(Debug, Clone)]
-    struct InDims {}
-    impl Dims for InDims {
-        type Metrics = AnyMetrics;
-    }
-    unsafe impl Send for InDims {}
 
-    #[derive(Debug, Clone)]
-    struct OutDims {}
-    impl Dims for OutDims {
-        type Metrics = AnyMetrics;
-    }
-    unsafe impl Send for OutDims {}
 
     #[tokio::test]
     async fn test_0() -> Result<(), ThoosaError>{
 
-        let load_motif_net = Arc::new(LoadMotifNet::<InDims, OutDims, MockRunCtx>::new());
+        GlobalCtx::init_devices(2);
 
-        load_motif_net.run_cached(Arc::new(DevicesWrap::wrap_cpu(LoadMotifNetInput::new(1, 2))), Arc::new(RwLock::new(mock_run_ctx::default(1)))).await?;
+        let ws = Arc::new(RwLock::new(
+            WsMockBuilder::new(None, 5, 100, 1000u32)
+                .with_load_motif_nets(vec![vec![
+                    //channel 0
+                    utils::motif_test_net(100, 1., Cuda(0)),
+                ]])
+                .build(),
+        ));
+
+
+        let load_motif_net = Arc::new(LoadMotifNet::<MockRunCtx>::new(&ws));
+
+        load_motif_net.run_cached(Arc::new(DevicesWrap::wrap_cpu(LoadMotifNetInput::new(0, 0))), Arc::new(RwLock::new(mock_run_ctx::default(1)))).await?;
 
         Ok(())
     }
