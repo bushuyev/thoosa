@@ -93,13 +93,11 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         properties_vals: HashMap<String, Val>,
     ) -> Result<RunId, ThoosaError>;
 
-    fn get_input_run_ids<'a>(
-        &self,
-        run_id: RunId,
-        input_type: Option<&'a dyn Display>,
-    ) -> Result<Vec<RunId>, ThoosaError>;
+    fn get_input_run_ids<'a>(&self, run_id: RunId, input_type: Option<&'a dyn Display>) -> Result<Vec<RunId>, ThoosaError>;
 
     fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError>; //corr_run_id, run_id, label
+
+    fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<RunId>, ThoosaError>; //corr_run_id, run_id, label
 
     fn save_resources_set(
         &mut self,
@@ -190,10 +188,6 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     fn save_selected_motifs(&mut self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoosaError>;
 
-
-
-    fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<usize>, ThoosaError>; //corr_run_id, run_id, label
-
     fn list_selected_motifs(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoosaError>;
 
     fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoosaError>;
@@ -213,11 +207,10 @@ mock! {
             _keys: &'a str,
             properties_vals: HashMap<String, Val>,
         ) -> Result<RunId, ThoosaError>;
-        fn get_input_run_ids<'a>(
-            &self,
-            run_id: RunId,
-            input_type: Option<&'a dyn Display>,
-        ) -> Result<Vec<RunId>, ThoosaError>;
+        fn get_input_run_ids<'a>(&self,run_id: RunId,input_type: Option<&'a dyn Display>,) -> Result<Vec<RunId>, ThoosaError>;
+        fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError>;
+        fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<RunId>, ThoosaError>;
+
         fn save_resources_set(
             &mut self,
             set: String,
@@ -336,8 +329,7 @@ mock! {
             run_id: RunId,
             selected_motifs: Vec<(u32, f64)>,
         ) -> Result<RunId, ThoosaError>;
-        fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError>;
-        fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<usize>, ThoosaError>;
+
         fn list_selected_motifs(
             &self,
             motif_selection_id: RunId,
@@ -2165,7 +2157,7 @@ impl Store for SqlStore {
     }
 
 
-    fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<usize>, ThoosaError> {
+    fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<RunId>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -2174,16 +2166,14 @@ impl Store for SqlStore {
         let id_input_id = {
             let mut stmt = t.prepare(q)?;
 
-            let r = stmt
+            stmt
                 .query_map([input_run_id], |row| row.get::<usize, usize>(0))?
-                .map(|v| v.unwrap())
-                .collect();
-
-            r
+                .map(|v| v.map(|v|v as RunId).map_err(|e|e.into()))
+                .collect::<Result<Vec<_>, ThoosaError>>()
         };
         t.commit()?;
 
-        Ok(id_input_id)
+        id_input_id
     }
 
     /**k
