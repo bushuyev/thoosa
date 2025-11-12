@@ -92,11 +92,15 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         _keys: &'a str,
         properties_vals: HashMap<String, Val>,
     ) -> Result<RunId, ThoosaError>;
+
     fn get_input_run_ids<'a>(
         &self,
         run_id: RunId,
         input_type: Option<&'a dyn Display>,
     ) -> Result<Vec<RunId>, ThoosaError>;
+
+    fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError>; //corr_run_id, run_id, label
+
     fn save_resources_set(
         &mut self,
         set: String,
@@ -186,7 +190,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     fn save_selected_motifs(&mut self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoosaError>;
 
-    fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError>; //corr_run_id, run_id, label
+
 
     fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<usize>, ThoosaError>; //corr_run_id, run_id, label
 
@@ -744,6 +748,46 @@ impl Store for SqlStore {
 
         Ok(input_run_ids)
     }
+
+    /// returns - Vec<run_id, input_run_id>
+    fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError> {
+        assert!(!ids.is_empty());
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        let (mut q, params) = ids.into_iter().fold(
+            (
+                vec!["SELECT run_id, input_run_id FROM run_configs_input WHERE run_id IN ("],
+                vec![],
+            ),
+            |mut a, v| {
+                a.0.push("?");
+                a.0.push(",");
+                a.1.push(*v);
+                a
+            },
+        );
+
+        q.pop();
+        q.push(")");
+
+        let id_input_id = {
+            let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
+
+            let r = stmt
+                .query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
+                    Ok((row.get::<usize, RunId>(0)?, row.get::<usize, RunId>(1)?))
+                })?
+                .map(|v| v.unwrap())
+                .collect();
+
+            r
+        };
+        t.commit()?;
+
+        Ok(id_input_id)
+    }
+
 
     //TODO remove?
     fn save_params_value(
@@ -2120,44 +2164,6 @@ impl Store for SqlStore {
         Ok(run_id) //TODO remove, used in tests only
     }
 
-    /// returns - Vec<run_id, input_run_id>
-    fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError> {
-        assert!(!ids.is_empty());
-        let mut guard = self.conn.lock();
-        let t = guard.transaction()?;
-
-        let (mut q, params) = ids.into_iter().fold(
-            (
-                vec!["SELECT run_id, input_run_id FROM run_configs_input WHERE run_id IN ("],
-                vec![],
-            ),
-            |mut a, v| {
-                a.0.push("?");
-                a.0.push(",");
-                a.1.push(*v);
-                a
-            },
-        );
-
-        q.pop();
-        q.push(")");
-
-        let id_input_id = {
-            let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
-
-            let r = stmt
-                .query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
-                    Ok((row.get::<usize, RunId>(0)?, row.get::<usize, RunId>(1)?))
-                })?
-                .map(|v| v.unwrap())
-                .collect();
-
-            r
-        };
-        t.commit()?;
-
-        Ok(id_input_id)
-    }
 
     fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<usize>, ThoosaError> {
         let mut guard = self.conn.lock();
@@ -3246,10 +3252,10 @@ mod store_tests {
             ],
         )?;
 
-        let input_run_ids = store.read().list_input_run_ids(&[select_motifs_run_id])?;
+        let input_run_ids = store.read().get_input_run_ids(select_motifs_run_id, None)?;
 
         assert_eq!(
-            vec![(select_motifs_run_id, find_motifs_run_id)],
+            vec![find_motifs_run_id],
             input_run_ids
         );
 

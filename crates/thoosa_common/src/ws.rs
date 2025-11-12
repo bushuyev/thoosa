@@ -203,7 +203,7 @@ impl Workspace for FsWorkspace {
     fn save_motif_net(
         &self,
         channel: &dyn Display,
-        motif_node_params_run_id: &dyn Display,
+        train_motif_net_run_id: &dyn Display,
         motif_id: &dyn Display,
         vs: &VarStore,
         params: &MotifNetParams,
@@ -211,14 +211,14 @@ impl Workspace for FsWorkspace {
         let channel_models = self.motifs_nets_path.join(format!("{}", channel));
         fs::create_dir_all(&channel_models)?;
 
-        let vs_path = channel_models.join(format!("{motif_id}_{motif_node_params_run_id}.safetensors"));
+        let vs_path = channel_models.join(format!("{motif_id}_{train_motif_net_run_id}.safetensors"));
 
-        info!("train_on_motif:  motif_id={motif_id} motif_model_run_id={motif_node_params_run_id} saved to {vs_path:?}");
+        info!("train_on_motif:  motif_id={motif_id} motif_model_run_id={train_motif_net_run_id} saved to {vs_path:?}");
 
         vs.save(vs_path)?;
 
         fs::write(
-            channel_models.join(format!("{motif_id}_{motif_node_params_run_id}.json")),
+            channel_models.join(format!("{motif_id}_{train_motif_net_run_id}.json")),
             serde_json5::to_string(&params)?,
         )?;
 
@@ -241,6 +241,7 @@ impl Workspace for FsWorkspace {
             debug!("load_motif_models_ws: model={model:?} config={config:?} motif_node_params={motif_node_params:?}");
 
             let params_for_builder = motif_node_params.clone();
+
             let module = ThoModuleWithStore::load(
                 move |path: &nn::Path| motif_node(&params_for_builder).build_tch_module(path),
                 model,
