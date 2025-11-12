@@ -95,7 +95,7 @@ impl Dims for MotifsNetsSelectionDims {
 #[derive(Clone, Debug)]
 pub struct Batch<D: Dims>(D);
 impl<D: Dims> Dims for Batch<D> {
-    type Metrics = AnyMetrics;
+    type Metrics = MonoMetrics<0, 3>;//O
 }
 
 pub trait Dimensional {

@@ -268,7 +268,7 @@ impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
     }
 
     fn device(&self) -> usize {
-        0 //self.batched_motifs_output.device()
+        0 //self.batched_motifs_output.device()//TODO
     }
 }
 

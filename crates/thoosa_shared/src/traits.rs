@@ -440,7 +440,7 @@ impl <const Idx:usize, const Size:usize> TryFrom<Vec<i64>> for MonoMetrics<Idx, 
     type Error = ThoosaError;
 
     fn try_from(value: Vec<i64>) -> Result<Self, Self::Error> {
-        assert!(Size > 1);
+        assert!(Size > 0);
         assert_eq!(value.len(), Size);
 
         Ok(Self { dims: value.clone().try_into().expect(&format!("can't convert {value:?} to dims")) })//TODO avoid value.clone
@@ -482,6 +482,8 @@ impl From<usize> for MonoMetrics<0, 1> {
         }
     }
 }
+
+
 
 #[async_trait]
 #[delegatable_trait]
