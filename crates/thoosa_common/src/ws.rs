@@ -1,5 +1,5 @@
 use crate::dims::{
-    Batch, ChannelsMotifsData, ChannelsSlicesData, Dims, LabelProbability, MotifData,
+    Batch, ChannelsMotifsData, ChannelsSlicesData, Dims, LabelProbability, MotifProbability,
     MotifsNetsSelectionDims, Slice,
 };
 use crate::find_motifs_run_config::FindMotifsRunConfig;
@@ -225,12 +225,13 @@ impl Workspace for FsWorkspace {
         Ok(())
     }
 
+    //TODO filter by loss and/or train_motif_nets_run_id
     fn load_motif_nets<'a>(
         &self,
         channel: u32,
         motif_id: u32,
         device: &'a Device,
-    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifData>)>, ThoosaError> {
+    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifProbability>)>, ThoosaError> {
         debug!("load_motif_nets: channel={channel} motif_id={motif_id}");
 
         let channel_motif_models_paths = self.motif_models(channel, motif_id)?;
@@ -242,10 +243,10 @@ impl Workspace for FsWorkspace {
 
             let params_for_builder = motif_node_params.clone();
 
-            let module = ThoModuleWithStore::load(
-                move |path: &nn::Path| motif_node(&params_for_builder).build_tch_module(path),
-                model,
-                device.clone(),
+            let module = ThoModuleWithStore::load(format!("MotifNet_{}", motif_id).into(),
+                                                  move |path: &nn::Path| motif_node(&params_for_builder).build_tch_module(path),
+                                                  model,
+                                                  device.clone(),
             )?;
 
             Ok((motif_node_params, module))
@@ -294,10 +295,10 @@ impl Workspace for FsWorkspace {
                 //TODO ChannelsMotifsFlattenData
                 // let module = LabelModule::ChannelsMotifsData(ThoModuleWithStore::load(LabelNetParams::label_net(&label_node_params), model_path.clone(), *device).expect(format!("can't load {model_path:?}").as_str()));
                 let params_for_builder = label_node_params.clone();
-                let module = ThoModuleWithStore::load(
-                    move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
-                    model_path.clone(),
-                    *device,
+                let module = ThoModuleWithStore::load("".into(),
+                                                      move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
+                                                      model_path.clone(),
+                                                      *device,
                 )
                 .expect(format!("can't load {model_path:?}").as_str());
 
@@ -493,7 +494,7 @@ pub trait Workspace: Sync + Send + Debug {
         channel: u32,
         motif_id: u32,
         device: &'a Device,
-    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifData>)>, ThoosaError>;
+    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifProbability>)>, ThoosaError>;
     fn load_label_nets<'a>(
         &self,
         train_label_nodes_run_ids: Option<&'a [RunId]>,
@@ -581,12 +582,12 @@ impl WsMockBuilder {
         }
     }
 
-    pub fn with_motif_nets(
+    pub fn with_load_motif_nets(
         mut self,
         channels_motif_nets: Vec<
             Vec<(
                 Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>,
-                Box<dyn Fn() -> ThoModuleWithStore<Slice, MotifData> + Sync + Send + 'static>,
+                Box<dyn Fn() -> ThoModuleWithStore<Slice, MotifProbability> + Sync + Send + 'static>,
             )>,
         >,
     ) -> Self {

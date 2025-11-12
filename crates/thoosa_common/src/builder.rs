@@ -134,7 +134,7 @@ impl Node {
         self,
         vs: &nn::Path,
     ) -> Result<ThoModuleWithStore<DI, DO>, ThoosaError> {
-        Ok(ThoModuleWithStore::new(self.build_tch_module(vs)?))
+        Ok(ThoModuleWithStore::new("".into(), self.build_tch_module(vs)?))
     }
 
     pub fn build_tch_module<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
