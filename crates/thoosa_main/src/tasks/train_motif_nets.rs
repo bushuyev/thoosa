@@ -79,14 +79,14 @@ where
 #[dummy_data(no_clone)]
 pub struct TrainMotifNetInput{
     id:SimpleId,
-    motif_selection_run_id: Vec<RunId>,
+    select_motifs_run_id: Vec<RunId>,
     opt_config:Arc<OptConfig>
 }
 
 impl Input for TrainMotifNetInput {}
 impl TrainMotifNetInput {
-    pub fn new(motif_selection_run_id: Vec<RunId>, opt_config:Arc<OptConfig>) -> Self {
-        Self { id: SimpleId("TrainMotifNetInput"), motif_selection_run_id, opt_config }
+    pub fn new(select_motifs_run_id: Vec<RunId>, opt_config:Arc<OptConfig>) -> Self {
+        Self { id: SimpleId("TrainMotifNetInput"), select_motifs_run_id, opt_config }
     }
 }
 
@@ -155,8 +155,8 @@ where
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
-        let (motif_selection_run_ids, opt_config) = input.with_data_ref(0, None, |input|{
-            Ok((input.motif_selection_run_id.clone(), input.opt_config.clone()))
+        let (select_motifs_run_ids, opt_config) = input.with_data_ref(0, None, |input|{
+            Ok((input.select_motifs_run_id.clone(), input.opt_config.clone()))
         }).await?;
 
         let channels = self.ws.read().channels();
@@ -167,17 +167,17 @@ where
         };
 
 
-        Ok(Arc::new(DevicesWrap::wrap_cpu(TrainMotifsNetsResult::new(0, futures::stream::iter(motif_selection_run_ids)
-        .flat_map(|motif_selection_run_id|{
+        Ok(Arc::new(DevicesWrap::wrap_cpu(TrainMotifsNetsResult::new(0, futures::stream::iter(select_motifs_run_ids)
+        .flat_map(|select_motifs_run_id|{
 
-                let selected_motifs = self.store.read().list_selected_motifs(motif_selection_run_id, channels).unwrap();
+                let selected_motifs = self.store.read().list_selected_motifs(select_motifs_run_id, channels).unwrap();
 
                 futures::stream::iter(
                     selected_motifs.into_iter()
                         .flat_map( move |channels_motifs|
-                            channels_motifs.into_iter().map(move |v|(v, motif_selection_run_id)))
+                            channels_motifs.into_iter().map(move |v|(v, select_motifs_run_id)))
                 )
-                .map(|(motif_id_rate, motif_selection_run_id)| {
+                .map(|(motif_id_rate, select_motifs_run_id)| {
                     let motif_loader = Arc::clone(&self.motif_loader);
                     let random_slices_loader = Arc::clone(&self.random_slices_loader);
 
@@ -221,7 +221,7 @@ where
                                 channel as u32,
                                 motif_id_rate.0,
                                 var_store,
-                                motif_selection_run_id,
+                                select_motifs_run_id,
                                 motif_node_params,
                                 train_motifs_nets_run_config
                             ))
