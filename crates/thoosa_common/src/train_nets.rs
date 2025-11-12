@@ -53,7 +53,7 @@ use crate::batches::AsyncDataBatch;
 use crate::dims::{
     AnyDims, AnyMetrics, AnySub, Batch, ChannelsData, ChannelsMotifsData,
     ChannelsMotifsFlattenedData, Dims, Final, LabelNetInputTensorDims, LabelNetsProbabilities,
-    LabelProbability, LabelsProbabilities, MotifData, MotifsNetsSelectionDims, Slice, ThoBatch,
+    LabelProbability, LabelsProbabilities, MotifProbability, MotifsNetsSelectionDims, Slice, ThoBatch,
     TCD, TCSD,
 };
 use crate::find_motifs_run_config::*;
@@ -1307,6 +1307,7 @@ type ModuleFactory<DI, DO> =
     dyn Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> + Send + Sync;
 
 pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Send> {
+    id:SimpleId,
     module: Box<dyn ThoModule<DI, DO>>,
     var_store: VarStore,
     module_factory: Option<Arc<ModuleFactory<DI, DO>>>,
@@ -1316,10 +1317,10 @@ impl <DI, DO> WithId for ThoModuleWithStore<DI, DO>
 where
     DI: Dims + Send + 'static + ?Sized,
     DO: Dims + Send, {
-    type ID = ();
+    type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
-        todo!()
+        &self.id
     }
 }
 
@@ -1359,23 +1360,25 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO>
 
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI, DO> {
     // #[cfg(test)]
-    pub fn new(module: Box<dyn ThoModule<DI, DO>>) -> Self {
-        Self::with_factory(module, VarStore::new(Cpu), None)
+    pub fn new(id: SimpleId, module: Box<dyn ThoModule<DI, DO>>) -> Self {
+        Self::with_factory(id, module, VarStore::new(Cpu), None)
     }
 
-    fn with_factory(
+    pub fn with_factory(
+        id: SimpleId,
         module: Box<dyn ThoModule<DI, DO>>,
         var_store: VarStore,
         module_factory: Option<Arc<ModuleFactory<DI, DO>>>,
     ) -> Self {
         Self {
+            id,
             module,
             var_store,
             module_factory,
         }
     }
 
-    pub fn load<F>(builder: F, model: PathBuf, device: Device) -> Result<Self, ThoosaError>
+    pub fn load<F>(id: SimpleId, builder: F, model: PathBuf, device: Device) -> Result<Self, ThoosaError>
     where
         F: Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> + Send + Sync + 'static,
     {
@@ -1385,7 +1388,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         vs.load(&model)?;
         vs.freeze();
 
-        Ok(Self::with_factory(module, vs, Some(builder)))
+        Ok(Self::with_factory(id, module, vs, Some(builder)))
     }
 
     fn mem_total(&self) -> usize {
@@ -1429,7 +1432,7 @@ DO: Dims + Send + 'static {
             .expect("failed to copy VarStore weights");
         var_store.freeze();
 
-        Self::with_factory(module, var_store, Some(Arc::clone(builder)))
+        Self::with_factory(self.id.clone(), module, var_store, Some(Arc::clone(builder)))
     }
 }
 
@@ -1468,10 +1471,10 @@ pub fn load_final_model(
     debug!("load_final_model:  final_node_params={final_node_params:?}");
 
     let final_params_for_builder = final_node_params.clone();
-    let node = ThoModuleWithStore::load(
-        move |path: &nn::Path| final_net(&final_params_for_builder).build_tch_module(path),
-        model_path,
-        *device,
+    let node = ThoModuleWithStore::load("".into(),
+                                        move |path: &nn::Path| final_net(&final_params_for_builder).build_tch_module(path),
+                                        model_path,
+                                        *device,
     )?;
 
     Ok((final_node_params, node))
@@ -2544,6 +2547,7 @@ impl SavableResult for TrainMotifsNetResult {
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoosaError> {
+        //TODO save loss to choose model
         debug!("TrainMotifsNetsRunConfigResult::save: self={:?}", self);
 
         let run_config_id = store.write().save_run_config(
@@ -2745,7 +2749,7 @@ pub fn run_train_motif_net(
         &device,
         batch,
         &motif_node(&node_params)
-            .build_tch_module::<Batch<Slice>, Batch<MotifData>>(&vs.root())
+            .build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&vs.root())
             .unwrap(),
         |pred: &Tensor, target: &Tensor| {
             let pred_y = pred.i((.., 0));
@@ -2783,7 +2787,7 @@ pub async fn run_train_motif_net_2(
         &device,
         batch,
         &motif_node(&node_params)
-            .build_tch_module::<Batch<Slice>, Batch<MotifData>>(&vs.root())
+            .build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&vs.root())
             .unwrap(),
         |pred: &Tensor, target: &Tensor| {
             let pred_y = pred; //.i((.., 0));
@@ -3035,13 +3039,13 @@ impl Input for LoadMotifNetInput {
 #[derive(Debug)]
 pub struct LoadMotifNetOutput {
     channel: u32,
-    nets: Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifData>)>, //single motif's nets (of different types)
+    nets: Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifProbability>)>, //single motif's nets (of different types)
 }
 
 impl LoadMotifNetOutput {
     pub fn new(
         channel: u32,
-        nets: Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifData>)>,
+        nets: Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifProbability>)>,
     ) -> Self {
         Self { channel, nets }
     }
@@ -3706,7 +3710,7 @@ mod train_tests {
     use crate::applicables::ThoRunner;
     use crate::builder::SeqBuilder;
     use crate::dims::{
-        AnyDims, Batch, Dims, LabelProbability, MotifData, MotifsNetsSelectionDims, Slice,
+        AnyDims, Batch, Dims, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice,
         ThoBatch,
     };
     use crate::find_motifs_run_config::FindMotifsRunConfig;
@@ -3940,7 +3944,7 @@ mod train_tests {
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 2, 100, input_n as u32)
-                .with_motif_nets(vec![
+                .with_load_motif_nets(vec![
                     vec![
                         //channel 0
                         utils::motif_test_net(motif_width, 1., Cpu),
@@ -4084,7 +4088,7 @@ mod train_tests {
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 5, 100, input_n as u32)
-                .with_motif_nets(vec![
+                .with_load_motif_nets(vec![
                     vec![
                         //channel 0
                         utils::motif_test_net(motif_width, 1., Cpu),
@@ -4172,7 +4176,7 @@ mod train_tests {
             ))),
             &Arc::new(RwLock::new(
                 WsMockBuilder::new(None, 5, 100, input_n as u32)
-                    .with_motif_nets(vec![
+                    .with_load_motif_nets(vec![
                         vec![
                             //channel 0
                             utils::motif_test_net(motif_width, 1., Cpu),
@@ -4264,7 +4268,7 @@ mod train_tests {
             ))),
             &Arc::new(RwLock::new(
                 WsMockBuilder::new(None, 2, 100, input_n)
-                    .with_motif_nets(vec![
+                    .with_load_motif_nets(vec![
                         vec![
                             //channel 0
                             utils::motif_test_net(motif_width, 1., Cpu),
@@ -4345,8 +4349,8 @@ mod train_tests {
             0u32,
             Box::new(move || LabelNetParams::new(2, 3, 3, 100, params.clone())),
             Box::new(move || {
-                ThoModuleWithStore::new(
-                    test_label_net(num_features, k, device, "test_label_net").unwrap(),
+                ThoModuleWithStore::new("".into(),
+                                        test_label_net(num_features, k, device, "test_label_net").unwrap(),
                 )
             }),
         )]
@@ -4389,7 +4393,7 @@ mod train_tests {
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 5, 100, input_n as u32)
-                .with_motif_nets(vec![vec![
+                .with_load_motif_nets(vec![vec![
                     //channel 0
                     utils::motif_test_net(motif_width, 1., Cuda(0)),
                 ]])
@@ -4443,7 +4447,7 @@ mod train_tests {
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 3, 100, input_n_0 as u32)
-                .with_motif_nets(vec![
+                .with_load_motif_nets(vec![
                     vec![
                         //channel 0
                         utils::motif_test_net(motif_width, 1., Cpu),
@@ -4534,11 +4538,10 @@ mod train_tests {
 
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(
-            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
-            thoosa_shared::replace_extension(&model_path, "safetensors")
-                .1
-                .into(),
-            Cpu,
+            "".into(),
+           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
+           thoosa_shared::replace_extension(&model_path, "safetensors").1.into(),
+           Cpu,
         )?;
 
         assert!(vs_0.variables().len() > 0);
@@ -4607,12 +4610,12 @@ mod train_tests {
         );
 
         let params_for_builder = params.clone();
-        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(
-            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
-            thoosa_shared::replace_extension(&model_path, "safetensors")
-                .1
-                .into(),
-            Cpu,
+        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
+                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
+                                                                                           thoosa_shared::replace_extension(&model_path, "safetensors")
+                                                                                               .1
+                                                                                               .into(),
+                                                                                           Cpu,
         )?;
 
         assert!(vs_0.variables().len() > 0);
@@ -4638,7 +4641,7 @@ mod train_tests {
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, CHANNELS as u32, 100, 1100u32)
-                .with_motif_nets(vec![
+                .with_load_motif_nets(vec![
                     vec![
                         //channel 0
                         utils::motif_test_net(100, 1., Cpu),
@@ -5168,7 +5171,7 @@ mod train_tests {
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, CHANNELS as u32, 100, 1000u32)
-                .with_motif_nets(vec![
+                .with_load_motif_nets(vec![
                     vec![
                         //channel 0
                         utils::motif_test_net(100, 1., Cpu),

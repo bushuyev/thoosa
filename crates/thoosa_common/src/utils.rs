@@ -25,7 +25,7 @@ use tch::display::PrinterOptions;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::nn::{LinearConfig, Optimizer};
 use tch::nn::VarStore;
-use tch::Device::Cuda;
+use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::{nn, Device, Kind, TchError, Tensor};
 use thoosa_shared::{gauss_i, panic_to_err, panic_to_err_async, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
@@ -35,7 +35,7 @@ use crate::my_tch::{LossFp, ThoModule};
 
 use crate::batches::AsyncDataBatch;
 use crate::builder::SeqBuilder;
-use crate::dims::{Batch, Dims, MotifData, Slice};
+use crate::dims::{Batch, Dims, MotifProbability, Slice};
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -1754,7 +1754,7 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
 
 use crate::dims::ThoBatch;
 use crate::tho_tensor::ThoTensor;
-use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
+use crate::train_nets::{LabelNetParams, MotifNetParams, ThoModuleWithStore};
 
 pub trait DataBatch<D: Dims> {
     /// returns (inputs, labels)
@@ -2140,6 +2140,7 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
     }
 }
 
+//TODO check GPT
 pub fn mix_ab_with_labels(a: &Tensor, b: &Tensor) -> (Tensor, Tensor) {
     let (ma, na) = a.size2().expect("A must be 2D [m, n]");
     let (mb, nb) = b.size2().expect("B must be 2D [m, n]");
@@ -2193,10 +2194,11 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
     k: f64,
     device: Device,
     descr: &str,
-) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> {
+) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoosaError> {
     let vs = VarStore::new(device);
 
-    SeqBuilder::new(num_features, None)
+
+    let builder = Arc::new( move |path:&nn::Path|SeqBuilder::new(num_features, None)
         .linear_s_with_conf(
             1,
             LinearConfig {
@@ -2204,11 +2206,17 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
                 bs_init: None,
                 bias: false,
             },
-            #[cfg(debug_assertions)]
-            descr.to_string(),
+            "test".to_string(),
         )
-        .end_seq()
-        .build_tch_module(&vs.root())
+        .end_seq().build_tch_module(path));
+
+    Ok(Box::new(ThoModuleWithStore::with_factory(
+        "test_net".into(),
+        Arc::clone(&builder)(&vs.root())?,
+        vs,
+        Some(builder)
+    )))
+
 }
 
 pub fn motif_test_net(
@@ -2217,12 +2225,12 @@ pub fn motif_test_net(
     device: Device,
 ) -> (
     Box<dyn Fn() -> MotifNetParams + Sync + Send>,
-    Box<dyn Fn() -> ThoModuleWithStore<Slice, MotifData> + Sync + Send>,
+    Box<dyn Fn() -> ThoModuleWithStore<Slice, MotifProbability> + Sync + Send>,
 ) {
     (
         Box::new(move || MotifNetParams::new(motif_width, 1)),
         Box::new(move || {
-            ThoModuleWithStore::new(test_net(motif_width, k, device, "test_motif_net").unwrap())
+            ThoModuleWithStore::new("".into(), test_net(motif_width, k, device, "test_motif_net").unwrap())
         }),
     )
 }
