@@ -9,7 +9,7 @@ use crate::utils::{
     SplitQueue, Splittable, SplittableDataBatch, SplittableTensor,
 };
 use crate::ws::Workspace;
-use thoosa_shared::{panic_to_err, panic_to_err_async};
+use thoosa_shared::{panic_to_err, panic_to_err_async, CopyToDevice};
 use clap::clap_derive::Args;
 use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
@@ -65,7 +65,7 @@ use thoosa_shared::applicables_runner::{CachableId, Input, Output, Runner, ToOrd
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{Cachable, RunConfig, Runnable};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::traits::{DataId, SimpleId, WithId};
+use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -1312,6 +1312,25 @@ pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Sen
     module_factory: Option<Arc<ModuleFactory<DI, DO>>>,
 }
 
+impl <DI, DO> WithId for ThoModuleWithStore<DI, DO>
+where
+    DI: Dims + Send + 'static + ?Sized,
+    DO: Dims + Send, {
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+
+
+impl <DI, DO> Output for ThoModuleWithStore<DI, DO>
+where
+    DI: Dims + Send + 'static + ?Sized,
+    DO: Dims + Send, {
+
+}
+
 impl<DI, DO> Debug for ThoModuleWithStore<DI, DO>
 where
     DI: Dims + Send + 'static + ?Sized,
@@ -1344,10 +1363,6 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         Self::with_factory(module, VarStore::new(Cpu), None)
     }
 
-    pub fn new_(module: Box<dyn ThoModule<DI, DO>>, var_store: VarStore) -> Self {
-        Self::with_factory(module, var_store, None)
-    }
-
     fn with_factory(
         module: Box<dyn ThoModule<DI, DO>>,
         var_store: VarStore,
@@ -1362,10 +1377,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
 
     pub fn load<F>(builder: F, model: PathBuf, device: Device) -> Result<Self, ThoosaError>
     where
-        F: Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> + Send + Sync + 'static,
     {
         let builder: Arc<ModuleFactory<DI, DO>> = Arc::new(builder);
         let mut vs = VarStore::new(device);
@@ -1374,27 +1386,6 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         vs.freeze();
 
         Ok(Self::with_factory(module, vs, Some(builder)))
-    }
-
-    pub fn set_device(&mut self, device: Device) {
-        self.var_store.set_device(device);
-    }
-
-    pub fn copy_to_device(&self, device: Device) -> Self {
-        let builder = self
-            .module_factory
-            .as_ref()
-            .unwrap_or_else(|| panic!("copy_to_device requires module_factory; construct modules via ThoModuleWithStore::load to enable copying"));
-
-        let mut var_store = VarStore::new(device);
-        let module = builder(&var_store.root())
-            .expect("module builder failed while copying to device");
-        var_store
-            .copy(&self.var_store)
-            .expect("failed to copy VarStore weights");
-        var_store.freeze();
-
-        Self::with_factory(module, var_store, Some(Arc::clone(builder)))
     }
 
     fn mem_total(&self) -> usize {
@@ -1415,6 +1406,46 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
 
     pub fn var_store(&self) -> &VarStore {
         &self.var_store
+    }
+}
+
+#[async_trait]
+impl <DI, DO> CopyToDevice for ThoModuleWithStore<DI, DO>
+where
+DI: Dims + Send + 'static,
+DO: Dims + Send + 'static {
+
+    async fn copy_to_device(&self, dst_device: usize) -> Self {
+        let builder = self
+            .module_factory
+            .as_ref()
+            .unwrap_or_else(|| panic!("copy_to_device requires module_factory; construct modules via ThoModuleWithStore::load to enable copying"));
+
+        let mut var_store = VarStore::new(ThoDevice::from(dst_device).into());
+        let module = builder(&var_store.root())
+            .expect("module builder failed while copying to device");
+        var_store
+            .copy(&self.var_store)
+            .expect("failed to copy VarStore weights");
+        var_store.freeze();
+
+        Self::with_factory(module, var_store, Some(Arc::clone(builder)))
+    }
+}
+
+
+impl <DI, DO> Data for ThoModuleWithStore<DI, DO>
+where
+    DI: Dims + Send + 'static,
+    DO: Dims + Send + 'static{
+    type Metrics = ();
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
+        ThoDevice::from(self.var_store.device()).ordinal()
     }
 }
 
@@ -3029,11 +3060,18 @@ impl Output for LoadMotifNetOutput {
     async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
         Arc::new(LoadMotifNetOutput {
             channel: self.channel,
-            nets: self
+            nets: join_all(self
                 .nets
                 .iter()
-                .map(|(params, net)| (params.clone(), net.copy_to_device(Device::Cpu)))
-                .collect(),
+                .map(|(params, net)|  {
+                    async {
+                        (
+                            params.clone(),
+                            net.copy_to_device(0).await
+                        )
+                    }
+                })
+            ).await
         })
     }
 }
@@ -3734,9 +3772,7 @@ mod train_tests {
     use thoosa_shared::run_configs::{Cachable, OptRunConfigs, RunId};
     use thoosa_shared::test_utils::set_panic_hook;
     use thoosa_shared::val::Val;
-    use thoosa_shared::{
-        batch_windows, cdt_for_dir, clc_num_batches, pulse_in_rand, sin_v, slices_len, ThoosaError,
-    };
+    use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, pulse_in_rand, sin_v, slices_len, CopyToDevice, ThoosaError};
     use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
     use torch_sys::at_autocast_clear_cache;
 
@@ -4466,8 +4502,8 @@ mod train_tests {
         )
     }
 
-    #[test]
-    fn test_save_load_label_model_fixed_num_slices() -> Result<(), ThoosaError> {
+    #[tokio::test]
+    async fn test_save_load_label_model_fixed_num_slices() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_dir={test_dir:?}");
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000, 32000)?));
@@ -4509,7 +4545,7 @@ mod train_tests {
         assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
 
 
-        let cuda_module = loaded_module.copy_to_device(Cuda(0));
+        let cuda_module = loaded_module.copy_to_device(1).await;
         let _ = cuda_module.tho_forward(
             &Tensor::rand([11, 3 * 19, 100], FLOAT_CUDA).into(),
             false,

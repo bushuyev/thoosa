@@ -169,14 +169,15 @@ where
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(TrainMotifsNetsResult::new(0, futures::stream::iter(motif_selection_run_ids)
         .flat_map(|motif_selection_run_id|{
+
                 let selected_motifs = self.store.read().list_selected_motifs(motif_selection_run_id, channels).unwrap();
 
                 futures::stream::iter(
                     selected_motifs.into_iter()
-                        .flat_map(|channels_motifs|
-                            channels_motifs.into_iter())
+                        .flat_map( move |channels_motifs|
+                            channels_motifs.into_iter().map(move |v|(v, motif_selection_run_id)))
                 )
-                .map(|motif_id_rate| {
+                .map(|(motif_id_rate, motif_selection_run_id)| {
                     let motif_loader = Arc::clone(&self.motif_loader);
                     let random_slices_loader = Arc::clone(&self.random_slices_loader);
 
@@ -186,7 +187,9 @@ where
                     let store = Arc::clone(&self.store);
                     let out_key = Arc::clone(&out_key);
 
+
                     async move {
+
                         let motif = motif_loader.run(Arc::new(DevicesWrap::wrap_cpu(motif_id_rate.0.into())), Arc::clone(&ctx)).await?;
                         let random_slices = random_slices_loader.run(Arc::new(DevicesWrap::wrap_cpu(SlicesLoaderInput::new(motif_id_rate.0.into(), 100))), Arc::clone(&ctx)).await?;
 
@@ -218,7 +221,7 @@ where
                                 channel as u32,
                                 motif_id_rate.0,
                                 var_store,
-                                find_motifs_run_id,
+                                motif_selection_run_id,
                                 motif_node_params,
                                 train_motifs_nets_run_config
                             ))
