@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
+use log::debug;
 use parking_lot::RwLock;
 use cached_derive::Cached;
 use caching_runner::common::cachable::DevicesWrap;
@@ -96,7 +97,13 @@ where
         };
 
         let input = input.clone_from_cpu().await?;
-        let (params, module) = self.ws.read().load_motif_nets(input.channel, input.motif_id, &ThoDevice::from(device_idx).into())?.pop().ok_or(ThoosaError::new(format!("no nets for input={input:?}")))?;
+        let mut motif_nets = self.ws.read().load_motif_nets(input.channel, input.motif_id, &ThoDevice::from(device_idx).into())?;
+
+        debug!("LoadMotifNet::run: motif_nets={motif_nets:?}");
+
+        let (params, module) = motif_nets
+            .pop().ok_or_else(||ThoosaError::new(format!("no nets for input={input:?}")))?;
+
         Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, params), cache_area)))
     }
 }
