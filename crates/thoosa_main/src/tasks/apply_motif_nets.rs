@@ -210,17 +210,19 @@ where
             let out_id = self.out_id(WithId::id(&input));
             Arc::new(out_id) as Arc<dyn CachableIdTr>
         };
+        let metrics = input.size().clone();
 
         let wrapper = Arc::new(ApplyMotifNetInputDeviceWrapper::new(input, self.loaded_motif_nets.clone()));
         let output_builder = Box::new(MotifsProbabilitiesOutputBuilder::new());
 
 
         let map = HashMap::new();
+
         let oom_handler = OOMHandler::new(
             vec![
                 Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone())))),
                 Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                Adjusters::Input(Box::new(SplitsAdjuster::<ApplyMotifNetInputDeviceWrapper, std::ops::Range<MonoMetrics<0, 1>>>::new(1.into()))),
+                Adjusters::Input(Box::new(SplitsAdjuster::<ApplyMotifNetInputDeviceWrapper, std::ops::Range<MonoMetrics<0, 3>>>::new(metrics))),
             ], None).run(
             &self.apply_motif_net,
             Arc::clone(&wrapper),
@@ -258,7 +260,7 @@ impl WithId for ApplyMotifNetInputDeviceWrapper {
     type ID = ();
 
     fn id(&self) -> &Self::ID {
-        todo!()
+        &()
     }
 }
 
@@ -269,7 +271,20 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
     where
             for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
-        todo!()
+        let t_1_batch= Arc::clone(&self.batch);
+        let motif_nets = self.motif_nets.clone();
+        with_data!(to_device_idx, t_1_batch, [motif_nets];
+            |
+             batch_v:&ThoTensor<Batch<ChannelsData2>, SimpleId>,
+             batched_motifs_output:&[&DataWithExtra<ThoModuleWithStore<Slice, MotifProbability>, MotifNetParams>]
+            |{
+
+                do_run(&ApplyMotifNetInput::new(
+                    batch_v,
+                    batched_motifs_output,
+                ))
+
+        })
     }
 
     async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
@@ -290,13 +305,14 @@ impl CopyToDevice for ApplyMotifNetInputDeviceWrapper {
 }
 
 impl Data for ApplyMotifNetInputDeviceWrapper {
-    type Metrics = MonoMetrics<0, 1>;
+    type Metrics = MonoMetrics<0, 3>;
 
     fn size(&self) -> Self::Metrics {
-        todo!()
+        self.batch.size().clone()
     }
 
     fn device(&self) -> usize {
+        // 0 //TODOself.batch.device
         todo!()
     }
 }
@@ -318,7 +334,7 @@ impl CopyToDevice for ApplyMotifNetInput<'_> {
 }
 
 impl Data for ApplyMotifNetInput<'_> {
-    type Metrics = MonoMetrics<0, 1>;
+    type Metrics = MonoMetrics<0, 3>;
 
     fn size(&self) -> Self::Metrics {
         todo!()
@@ -344,10 +360,10 @@ impl <'a> WithId for ApplyMotifNetInput<'a> {
     }
 }
 
-impl Select<std::ops::Range<MonoMetrics<0, 1>>> for ApplyMotifNetInput<'_> {
+impl Select<std::ops::Range<MonoMetrics<0, 3>>> for ApplyMotifNetInput<'_> {
     type Output = Self;
 
-    fn subview(&self, selector: Range<MonoMetrics<0, 1>>) -> Result<Self::Output, ThoosaError> {
+    fn subview(&self, selector: Range<MonoMetrics<0, 3>>) -> Result<Self::Output, ThoosaError> {
         todo!()
     }
 }
@@ -381,7 +397,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        todo!()
+        format!("ApplyMotifNet: {:?}", input_id).into()
     }
 }
 

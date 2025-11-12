@@ -272,7 +272,7 @@ impl Data for DataWithLabels {
     type Metrics = <Batch<Slice> as Dims>::Metrics;
 
     fn size(&self) -> Self::Metrics {
-        self.slices.size().into()
+        self.slices.size().try_into().unwrap()//TODO unwrap
     }
 
     fn device(&self) -> usize {
