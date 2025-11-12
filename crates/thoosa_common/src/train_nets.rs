@@ -70,7 +70,7 @@ use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
     #[arg(long)]
-    pub motif_selection_run_id: Vec<RunId>,
+    pub select_motifs_run_id: Vec<RunId>,
 
     #[arg(long)]
     train_resource_group: String,
@@ -980,7 +980,7 @@ pub fn run_opt_train_label_nets(
         *device,
         "label",
     ).map(|(var_store, label_node_params, run_config, min_loss)| {
-        Box::new(TrainLabelNetsRunConfigResult::new(motifs_nets_selection_applicable_arc.motif_selection_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
+        Box::new(TrainLabelNetsRunConfigResult::new(motifs_nets_selection_applicable_arc.select_motifs_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
     })
 }
 
@@ -1480,7 +1480,7 @@ pub fn load_final_model(
 #[derive(Args, Debug, Clone)]
 pub struct TrainMotifsNetsArgs {
     #[arg(long)]
-    pub motif_selection_run_ids: Vec<RunId>,
+    pub select_motifs_run_ids: Vec<RunId>,
 
     #[command(flatten)]
     pub fixed_config: OptConfig,
@@ -1669,7 +1669,7 @@ pub fn motif_node(params: &MotifNetParams) -> Node {
 
 #[derive(Debug)]
 pub struct MotifsNetsSelectionApplicable {
-    pub motif_selection_run_id: RunId,
+    pub select_motifs_run_id: RunId,
     pub find_motifs_applicable: FindMotifsApplicable,
     pub channels_motifs: Vec<Vec<Arc<LoadMotifNetOutput>>>,
     pub device: Device,
@@ -1678,17 +1678,17 @@ pub struct MotifsNetsSelectionApplicable {
 
 impl MotifsNetsSelectionApplicable {
     pub fn new(
-        motif_selection_run_id: RunId,
+        select_motifs_run_id: RunId,
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         device: Device,
         channels_motifs: Vec<Vec<Arc<LoadMotifNetOutput>>>,
     ) -> Self {
         debug!(
-            "MotifsNetsSelectionApplicable::new: motif_selection_run_id={motif_selection_run_id}"
+            "MotifsNetsSelectionApplicable::new: select_motifs_run_id={select_motifs_run_id}"
         );
 
-        let find_motifs_run_config_ids = store.read().get_input_run_ids(motif_selection_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for motif_selection_run_id={motif_selection_run_id:?} not found").as_str());
+        let find_motifs_run_config_ids = store.read().get_input_run_ids(select_motifs_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for select_motifs_run_id={select_motifs_run_id:?} not found").as_str());
         assert_eq!(find_motifs_run_config_ids.len(), 1);
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(
@@ -1713,7 +1713,7 @@ impl MotifsNetsSelectionApplicable {
         );
 
         MotifsNetsSelectionApplicable {
-            motif_selection_run_id,
+            select_motifs_run_id,
             find_motifs_applicable: find_motifs_run_config.to_applicable(&ws.read(), device),
             channels_motifs,
             device,
@@ -1893,7 +1893,7 @@ impl Cachable<TCD, ThoTensor<ChannelsMotifsData, CachableId>, ()>
     }
 
     fn run_id(&self) -> String {
-        self.motif_selection_run_id.to_string()
+        self.select_motifs_run_id.to_string()
     }
 }
 
@@ -3142,7 +3142,7 @@ impl Cachable<LoadMotifNetInput, LoadMotifNetOutput, ()> for LoadMotifNetCachabl
 
 ///returns vec[channels][motifs][LoadMotifNetOutput(motif's net)]
 pub async fn load_channels_motifs(
-    motif_selection_run_id: RunId,
+    select_motifs_run_id: RunId,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
     device: Device,
@@ -3154,7 +3154,7 @@ pub async fn load_channels_motifs(
     join_all(
         store
             .read()
-            .list_selected_motifs(motif_selection_run_id, ws.read().channels())
+            .list_selected_motifs(select_motifs_run_id, ws.read().channels())
             .expect("list_selected_motifs") //TODO move out
             .into_iter()
             .enumerate()
@@ -3204,17 +3204,17 @@ impl LabelNetsApplicable {
             labels_applicables: join_all(label_models.into_iter().map( | (label, label_run_id_nodes)| {
                 async {
                     let label_applicables = join_all(label_run_id_nodes.into_iter().map(async |(label_run_id, label_net_params, module)| {
-                        let motif_selection_run_ids = store
+                        let select_motifs_run_ids = store
                             .read()
                             .get_input_run_ids(label_run_id, Some(&SelectMotifsRunConfig::type_name()))
                             .expect("get_input_run_ids(motif_node_params_selection_run_ids")
                             .into_iter()
                             .collect::<HashSet<RunId>>(); //TODO distinct in sql?
 
-                        debug!("load_all_label_and_motif_models: label={label} label_run_id={label_run_id} motif_selection_run_ids={motif_selection_run_ids:?}");
+                        debug!("load_all_label_and_motif_models: label={label} label_run_id={label_run_id} select_motifs_run_ids={select_motifs_run_ids:?}");
 
-                        assert_eq!(motif_selection_run_ids.len(), 1);
-                        let select_motifs_for_label_run_id = motif_selection_run_ids.into_iter().next().unwrap();
+                        assert_eq!(select_motifs_run_ids.len(), 1);
+                        let select_motifs_for_label_run_id = select_motifs_run_ids.into_iter().next().unwrap();
 
                         let channels_motifs: Vec<Vec<Arc<LoadMotifNetOutput>>> = load_channels_motifs(
                             select_motifs_for_label_run_id,

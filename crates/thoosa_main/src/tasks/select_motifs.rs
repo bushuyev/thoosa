@@ -330,7 +330,7 @@ where
                         let required_ids = HashMap::new();
 
                         let ClcRresourcesMotifsDistOutput {
-                                select_motifs_run_config_id: find_motifs_run_config_id,
+                                select_motifs_run_id: find_motifs_run_config_id,
                                 channel_masks_dists_ids,
                                 resources_iter,
                                 ..
