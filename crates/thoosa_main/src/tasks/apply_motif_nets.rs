@@ -200,15 +200,28 @@ where
 
     }
 }
-//
-// impl <C>SyncStage for ApplyMotifNets<C>
-// where
-//     C: RunCtx + MotifsCtx + Adjustable + 'static
-// {
-//     fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
-//         todo!()
-//     }
-// }
+
+
+
+#[derive(Debug)]
+struct ApplyMotifNetInput<'a> {
+    batch: &'a ThoTensor<Batch<ChannelsData2>, SimpleId>
+}
+
+impl <'a> ApplyMotifNetInput<'a> {
+    pub fn new(batch: &'a ThoTensor<Batch<ChannelsData2>, SimpleId>) -> Self {
+        Self {  batch }
+    }
+}
+
+impl <'a> Input for ApplyMotifNetInput<'a> {}
+impl <'a> WithId for ApplyMotifNetInput<'a> {
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        &()
+    }
+}
 
 
 #[derive(Debug)]

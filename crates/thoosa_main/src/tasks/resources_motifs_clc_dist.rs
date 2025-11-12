@@ -319,7 +319,7 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
 
         debug!("ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref: selector={selector:?}");
 
-        //FIXME
+        //FIXME dyn Any
         let (t_1_batch, batched_motifs_output) = if let Some(selector) = (&selector as &dyn Any).downcast_ref::<std::ops::Range<MonoMetrics<0, 1>>>() {
             let s = self.subview(selector.clone())?;
             (s.batch.clone(), s.batched_motifs_output)
