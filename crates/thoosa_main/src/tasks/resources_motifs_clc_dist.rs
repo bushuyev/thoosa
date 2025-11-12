@@ -425,7 +425,7 @@ impl<'a> Input for ClcResourcesMotifsDistInput<'a> {}
 #[derive(Debug)]
 pub struct ClcRresourcesMotifsDistOutput {
     id: SimpleId,
-    pub select_motifs_run_config_id: RunId,
+    pub select_motifs_run_id: RunId,
     pub channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<DataId>)>>,
     pub resources_iter: SlicesIter,
 }
@@ -438,7 +438,7 @@ impl ClcRresourcesMotifsDistOutput {
     ) -> Self {
         Self {
             id: SimpleId("ClcRresourcesMotifsDistOutput"),
-            select_motifs_run_config_id,
+            select_motifs_run_id: select_motifs_run_config_id,
             channel_masks_dists_ids,
             resources_iter,
         }

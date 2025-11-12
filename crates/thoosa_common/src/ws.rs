@@ -101,7 +101,7 @@ impl FsWorkspace {
     }
 
     /*
-       motif_selection_run_id/channel/motif_id
+       select_motifs_run_id/channel/motif_id
     */
 
     pub fn net_path_to_run_id(model_path: &Path) -> RunId {

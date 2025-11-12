@@ -3234,7 +3234,7 @@ mod store_tests {
             ]),
         )?;
 
-        let motif_selection_run_id = store.write().save_selected_motifs(
+        let select_motifs_run_id = store.write().save_selected_motifs(
             find_motifs_run_id,
             vec![
                 (motif_slices_444[0].motif_id, 0.1),  //motif_id corr
@@ -3251,7 +3251,7 @@ mod store_tests {
 
         let motifs = store
             .read()
-            .list_selected_motifs(motif_selection_run_id, 20)?;
+            .list_selected_motifs(select_motifs_run_id, 20)?;
 
         debug!("motifs: {:?}", motifs);
 
@@ -3315,7 +3315,7 @@ mod store_tests {
         //
         // assert_eq!(
         //     vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],
-        //     store.run_configs_descr(motif_selection_run_id)?
+        //     store.run_configs_descr(select_motifs_run_id)?
         // );
         //
         // store.lock().delete_slices_without_matches(run_id)?;
