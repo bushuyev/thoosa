@@ -1,7 +1,7 @@
 use crate::applicables::ThoDevice;
 use crate::copy_ctx::CopyCtx;
 use crate::cuda_utils::tensor_mem_size;
-use crate::dims::{Dimensional, Dims};
+use crate::dims::{AnyDims, Dimensional, Dims};
 use thoosa_shared::panic_to_err;
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
@@ -363,7 +363,7 @@ impl<'a, D: Dims, Id: Named + Clone> ThoTensorMut<'a, D, Id> {
 }
 
 pub struct ThoTensor<D: Dims, Id: Named + Clone> {
-    id: Id,
+    id: Id,//TODO remove
     pub t: Tensor,
 
     #[allow(dead_code)]
@@ -371,6 +371,7 @@ pub struct ThoTensor<D: Dims, Id: Named + Clone> {
 
     pd: PhantomData<D>,
 }
+
 
 // impl<D: Dims> WithId for &ThoTensor<D, CachableId> {
 //     type ID = CachableId;
