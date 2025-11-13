@@ -43,11 +43,11 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
 pub trait InputContext<'a, R>: Debug + Send + Sync
 where
     R: Stage + 'a,
-    <R as Stage>::In<'a>: Data
+    // <R as Stage>::In<'a>: Data
 {
     fn add_partial_output(&mut self, o: R::Out);
     fn all_done(&self) -> bool;
-    fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics;
+    // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics;
     fn build_final_output(self) -> R::Out;
 }
 
@@ -65,7 +65,7 @@ pub mod mock_input_context {
         impl super::InputContext<'static, MockRunnable> for InputContext{
             fn add_partial_output(&mut self, o: TestOutput);
             fn all_done(&self) -> bool;
-            fn input_len(&self) -> &[usize; 1];
+            // fn input_len(&self) -> &[usize; 1];
             fn build_final_output(self) -> TestOutput;
         }
     }
@@ -116,7 +116,7 @@ pub trait RunCtxContext: Debug {}
 pub struct Contexts<'a, R, IC, RC, RCC>
 where
     R: Stage + 'a,
-    <R as Stage>::In<'a>: Data,
+    // <R as Stage>::In<'a>: Data,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
@@ -130,7 +130,7 @@ where
 impl<'a, R, IC, RC, RCC> Contexts<'a, R, IC, RC, RCC>
 where
     R: Stage + 'a,
-    <R as Stage>::In<'a>: Data,
+    // <R as Stage>::In<'a>: Data,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
@@ -149,7 +149,7 @@ where
 pub enum Adjusters<'a, R, IC, RC, RCC, S>
 where
     R: Stage + 'a,
-    <R as Stage>::In<'a>: Data + Select<S> + Debug,
+    <R as Stage>::In<'a>: /*Data +*/ Select<S> + Debug,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
@@ -166,7 +166,7 @@ where
     R: Stage + 'a,
     IC: InputContext<'a, R>,
     R: Adjustable,
-    <R as Stage>::In<'a>: Data + Select<S> + Debug,
+    <R as Stage>::In<'a>: /*Data + */Select<S> + Debug,
     RC: RunnableContext,
     RCC: RunCtxContext,
     <R as Stage>::Ctx: Adjustable,
@@ -199,9 +199,9 @@ where
         self.0.is_some()
     }
 
-    fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics {
-        unimplemented!()
-    }
+    // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics {
+    //     unimplemented!()
+    // }
 
     fn build_final_output(self) -> R::Out {
         self.0.unwrap()
@@ -221,7 +221,7 @@ impl RunCtxContext for NoopRunCtxContext {}
 pub struct OOMHandler<'a, 'z, R, IC, RC, RCC, S>
 where
     R: SyncStage + Adjustable + OutId,
-    for<'i> <R as Stage>::In<'i>: Data,
+    // for<'i> <R as Stage>::In<'i>: Data,
     R::Ctx: Adjustable,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
@@ -240,7 +240,7 @@ where
 impl<'a, 'z, R, IC, RC, RCC, S> OOMHandler<'a, 'z, R, IC, RC, RCC, S>
 where
     R: SyncStage + Adjustable + OutId + 'a,
-    for<'i> <R as Stage>::In<'i>: Data,
+    // for<'i> <R as Stage>::In<'i>: Data,
     R::Ctx: Adjustable,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
@@ -261,7 +261,7 @@ where
         }
     }
 
-    #[instrument]
+    // #[instrument]
     pub async fn run<W>(
         &self,
         task: &Arc<R>,
@@ -397,7 +397,7 @@ where
 
                                         let all_done = contexts.input.all_done();
 
-                                        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}", os_thread_id());
+                                        // debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}", os_thread_id());
 
                                         if all_done {
                                             run_context.write().drop_permits(DropIf::Always);
@@ -419,7 +419,7 @@ where
 
                                         match te.what() {
                                             MyError::OutOfMemory => {
-                                                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+                                                // debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                 if !adjuster.degrade(&mut contexts) {
                                                     match adjuster {
