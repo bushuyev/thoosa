@@ -28,7 +28,6 @@ use tokio::task::JoinSet;
 
 type StageIn<'a, S> = <S as Stage>::In<'a>;
 type StageInStatic<S> = StageIn<'static, S>;
-type StageInMetrics<S> = <StageInStatic<S> as Data>::Metrics;
 
 #[derive(Debug)]
 pub enum FailUntil {
@@ -39,7 +38,7 @@ pub enum FailUntil {
 }
 
 //for tests in torch_runner
-pub struct ClcOOMRunner<R: Stage + 'static, S:Debug+Default+Clone+Adjustable> {
+pub struct ClcOOMRunner<R: Stage, S:Debug+Default+Clone+Adjustable + 'static> {
     pd: PhantomData<(R,S)>,
     config: OOMRunnerConfig,
     output_builder: Box<
@@ -49,7 +48,7 @@ pub struct ClcOOMRunner<R: Stage + 'static, S:Debug+Default+Clone+Adjustable> {
     >,
 }
 
-impl<R: Stage + Stage, S:Debug+Default+Clone+Adjustable> Debug for ClcOOMRunner<R, S> {
+impl<R: Stage + Stage, S:Debug+Default+Clone+Adjustable + 'static> Debug for ClcOOMRunner<R, S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MulOOMRunner")
             .field("config", &self.config)
@@ -57,7 +56,7 @@ impl<R: Stage + Stage, S:Debug+Default+Clone+Adjustable> Debug for ClcOOMRunner<
     }
 }
 
-impl<R, S:Debug+Default+Clone+Adjustable> ClcOOMRunner<R, S>
+impl<R, S:Debug+Default+Clone+Adjustable + 'static> ClcOOMRunner<R, S>
 where
     R: Stage + Adjustable + 'static,
     for<'i> <R as Stage>::In<'i>: Adjustable,
@@ -80,14 +79,17 @@ where
         }
     }
 
-    pub async fn run<'f>(
+    pub async fn run<'z, W>(
         &self,
         runnable: &Arc<R>,
-        input: Arc<DevicesWrap<<R as Stage>::In<'_>>>,
+        input: Arc<W>,
         ctx: Arc<RwLock<<R as Stage>::Ctx>>,
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
     ) -> Result<<R as Stage>::Out, ThoosaError>
     where
+        for <'f> W: WithDataRef<O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
+        W:WithId<ID=<R::In<'z> as WithId>::ID>,
+
         R: SyncStage + Adjustable + 'static,
         for<'i> <R as Stage>::In<'i>: Debug + Adjustable + Data,
         for<'a> <R as Stage>::In<'a>: WithId,
@@ -97,128 +99,130 @@ where
         for <'i> <R::In<'i> as Data>::Metrics:  AddAssign<&'i <R::In<'i> as Data>::Metrics>,
         for <'i> <R::In<'i> as Data>::Metrics: DivAssign<i64>,
         for <'i> <R::In<'i> as Data>::Metrics: PartialOrd<i64>,
-        for<'a, 'b> &'a <R::In<'a> as Data>::Metrics: Add<&'b <R::In<'b> as Data>::Metrics, Output = StageInMetrics<R>>,
+        for<'a, 'b> &'a <R::In<'a> as Data>::Metrics: Add<&'b <R::In<'b> as Data>::Metrics, Output = <R::In<'a> as Data>::Metrics>,
         for <'i> <R::In<'i> as Data>::Metrics: PartialOrd,
-        <R as Stage>::In<'static>: Select<S, Output=<R as Stage>::In<'static>>
+        <R as Stage>::In<'z>: Select<S, Output=<R as Stage>::In<'z>>
     {
         let (device_idx, ctx_name) = {
             let guard = ctx.read();
             (guard.device_idx(), guard.name())
         };
 
-        let size = input.size().clone();
-        let mut min_split_len = input.size().clone();
+        let size = input._size().clone();
+        let mut min_split_len = input._size().clone();
         min_split_len /= 10;
 
-        debug!("ClcOOMRUnner::run: min_split_len={min_split_len:?} size={size:?}");
+        // debug!("ClcOOMRUnner::run: min_split_len={min_split_len:?} size={size:?}");
         let out_id = runnable.out_id(input.id()); //.clone();
         let out_key = Arc::new(out_id.clone()) as Arc<dyn CachableIdTr>;
 
         match self.config {
             OOMRunnerConfig::Permits { max, step } => {
-                // OOMHandler::new(
-                //     vec![Adjusters::RunContext(Box::new(PermitsAdjuster::new(
-                //         max,
-                //         step,
-                //         move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
-                //     )))],
-                //     None,
-                // )
-                // .run(
-                //     &runnable,
-                //     input,
-                //     ctx,
-                //     Contexts::new(
-                //         NoopInputContext(None),
-                //         NoopRunnableContext {},
-                //         PermitsAdjustContextImpl::new(ctx_name),
-                //     ),
-                // )
-                // .await
-                todo!()
+                OOMHandler::new(
+                    vec![Adjusters::RunContext(Box::new(PermitsAdjuster::new(
+                        max,
+                        step,
+                        move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
+                    )))],
+                    None,
+                )
+                .run(
+                    &runnable,
+                    input,
+                    ctx,
+                    Contexts::new(
+                        NoopInputContext(None),
+                        NoopRunnableContext {},
+                        PermitsAdjustContextImpl::new(ctx_name),
+                    ),
+                )
+                .await
+                // todo!()
             },
+            // doesn't compile with "error[E0275]: overflow evaluating the requirement `&Simd<_, _>: Add<&Simd<_, _>>`" - fix by replace AJ in SplitsAdjuster with M:Metrics?
+            // OOMRunnerConfig::Splits => {
+            //     OOMHandler::new(
+            //         vec![
+            //             Adjusters::Input(Box::new(
+            //                SplitsAdjuster::<<R as Stage>::In<'z>, std::ops::Range<<<R as Stage>::In<'z> as Data>::Metrics>>::new(min_split_len),
+            //             ))
+            //         ],
+            //         None,
+            //     )
+            //     .run(
+            //         &runnable,
+            //         input,
+            //         ctx,
+            //         Contexts::new(
+            //             SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id)),
+            //             NoopRunnableContext {},
+            //             NoopRunCtxContext {},
+            //         ),
+            //     )
+            //     .await
+            // },
             _=>{
                 todo!()
-            }
-        //
-        //     OOMRunnerConfig::Splits => {
-        //         OOMHandler::new(
-        //             vec![Adjusters::Input(Box::new(
-        //                 SplitsAdjuster::<StageInStatic<R>, std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>>::new(min_split_len),
-        //             ))],
-        //             None,
-        //         )
-        //         .run(
-        //             &runnable,
-        //             input,
-        //             ctx,
-        //             Contexts::new(
-        //                 SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id)),
-        //                 NoopRunnableContext {},
-        //                 NoopRunCtxContext {},
-        //             ),
-        //         )
-        //         .await
-        //     }
-        //     OOMRunnerConfig::PermitsAndSplits {
-        //         max: _max,
-        //         step: _step,
-        //     } => {
-        //         OOMHandler::new(
-        //             vec![
-        //                 Adjusters::RunContext(Box::new(PermitsAdjuster::new(
-        //                     MAX_PERMITS,
-        //                     *PermitStep::TWENTY,
-        //                     move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
-        //                 ))),
-        //                 Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>, std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>>::new(
-        //                     min_split_len,
-        //                 ))),
-        //             ],
-        //             None,
-        //         )
-        //         .run(
-        //             &runnable,
-        //             input,
-        //             ctx,
-        //             Contexts::new(
-        //                 SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id)),
-        //                 NoopRunnableContext {},
-        //                 PermitsAdjustContextImpl::new(ctx_name),
-        //             ),
-        //         )
-        //         .await
-        //     }
-        //     OOMRunnerConfig::DumpedToCpu => {
-        //         OOMHandler::new(
-        //             vec![
-        //                 Adjusters::RunContext(Box::new(PermitsAdjuster::new(
-        //                     MAX_PERMITS,
-        //                     *PermitStep::FIFTY,
-        //                     move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
-        //                 ))),
-        //                 Adjusters::RunContext(Box::new(DumpToCpu::new())),
-        //                 Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>, std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>>::new(
-        //                     min_split_len,
-        //                 ))),
-        //             ],
-        //             None,
-        //         )
-        //         .run(
-        //             &runnable,
-        //             input,
-        //             ctx,
-        //             Contexts::new(
-        //                 SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id)),
-        //                 NoopRunnableContext {},
-        //                 PermitsAndDumpToCpuAdjustableContex::new(
-        //                     PermitsAdjustContextImpl::new(ctx_name),
-        //                     DumpToCpuContextImpl::new(required_ids),
-        //                 ),
-        //             ),
-        //         )
-        //         .await
-        //     }
+            },
+            // OOMRunnerConfig::PermitsAndSplits {
+            //     max: _max,
+            //     step: _step,
+            // } => {
+            //     OOMHandler::new(
+            //         vec![
+            //             Adjusters::RunContext(Box::new(PermitsAdjuster::new(
+            //                 MAX_PERMITS,
+            //                 *PermitStep::TWENTY,
+            //                 move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
+            //             ))),
+            //             Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>, std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>>::new(
+            //                 min_split_len,
+            //             ))),
+            //         ],
+            //         None,
+            //     )
+            //     .run(
+            //         &runnable,
+            //         input,
+            //         ctx,
+            //         Contexts::new(
+            //             SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id)),
+            //             NoopRunnableContext {},
+            //             PermitsAdjustContextImpl::new(ctx_name),
+            //         ),
+            //     )
+            //     .await
+            // }
+            // OOMRunnerConfig::DumpedToCpu => {
+            //     OOMHandler::new(
+            //         vec![
+            //             Adjusters::RunContext(Box::new(PermitsAdjuster::new(
+            //                 MAX_PERMITS,
+            //                 *PermitStep::FIFTY,
+            //                 move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
+            //             ))),
+            //             Adjusters::RunContext(Box::new(DumpToCpu::new())),
+            //             Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>, std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>>::new(
+            //                 min_split_len,
+            //             ))),
+            //         ],
+            //         None,
+            //     )
+            //     .run(
+            //         &runnable,
+            //         input,
+            //         ctx,
+            //         Contexts::new(
+            //             SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id)),
+            //             NoopRunnableContext {},
+            //             PermitsAndDumpToCpuAdjustableContex::new(
+            //                 PermitsAdjustContextImpl::new(ctx_name),
+            //                 DumpToCpuContextImpl::new(required_ids),
+            //             ),
+            //         ),
+            //     )
+            //     .await
+            // }
         }
         // todo!()
     }
@@ -331,7 +335,7 @@ mod tests {
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use caching_runner::common::{ambassador_impl_PermitsCtx, DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
-    use thoosa_shared::traits::Adjustable;
+    use thoosa_shared::traits::{Adjustable};
     use caching_runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
     use caching_runner::test_utils::DummyTensor;
     use dashmap::DashMap;
@@ -538,6 +542,7 @@ mod tests {
             0
         }
     }
+
 
     #[async_trait]
     impl CopyToDevice for DLoadedTensor {

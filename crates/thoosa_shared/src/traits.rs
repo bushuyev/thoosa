@@ -483,8 +483,6 @@ impl From<usize> for MonoMetrics<0, 1> {
     }
 }
 
-
-
 #[async_trait]
 #[delegatable_trait]
 #[automock(type D=MockCopyToDevice; type Metrics=[usize;1]; type Sub=Self; type SubSelect=Range<<Self as Data>::Metrics>;)]

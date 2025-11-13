@@ -10,22 +10,22 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics};
 
 #[derive(Debug)]
-pub struct SplitsAdjuster<A, RA>//A - target adjustable, RA its range
+pub struct SplitsAdjuster<AJ, RA>//A - target adjustable, RA its range
 where
-    A: Data + Adjustable,
-    <A as Data>::Metrics: DivAssign<i64>,
+    AJ: Data + Adjustable,
+    <AJ as Data>::Metrics: DivAssign<i64>,
 {
-    pd: PhantomData<(A, RA)>,
-    min_split_len: <A as Data>::Metrics,
+    pd: PhantomData<(AJ, RA)>,
+    min_split_len: <AJ as Data>::Metrics,
 }
 
-impl<A, RA> SplitsAdjuster<A, RA>
+impl<AJ, RA> SplitsAdjuster<AJ, RA>
 where
-    A: Data + Adjustable,
-    <A as Data>::Metrics: DivAssign<i64>,
-    <A as Data>::Metrics: PartialOrd<<A as Data>::Metrics>,
+    AJ: Data + Adjustable,
+    <AJ as Data>::Metrics: DivAssign<i64>,
+    <AJ as Data>::Metrics: PartialOrd<<AJ as Data>::Metrics>,
 {
-    pub fn new(min_split_len: <A as Data>::Metrics) -> Self {
+    pub fn new(min_split_len: <AJ as Data>::Metrics) -> Self {
         debug!("SplitsAdjuster::new: min_split_len={min_split_len:?}");
 
         Self {
@@ -119,9 +119,9 @@ where
         self.done_to >= self.input_len
     }
 
-    fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics {
-        &self.input_len
-    }
+    // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics {
+    //     &self.input_len
+    // }
 
     fn build_final_output(self) -> R::Out {
         self.output_builder.build()
