@@ -10,7 +10,7 @@ use parking_lot::RwLock;
 use cached_derive::Cached;
 use caching_runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_shared::applicables_runner::*;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{Data, SimpleId, WithId};
 
 #[derive(Debug, cached_derive::Cached)]
@@ -19,11 +19,11 @@ where
     C:RunCtx + 'static,
 
     A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    for <'i> A::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    A::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + 'static
+    B::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static
 {
     id:SimpleId,
     stage_a: Arc<A>,
@@ -38,11 +38,11 @@ where
     C:RunCtx + 'static,
 
     A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    for <'i> A::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    A::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + 'static
+    B::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static
 
 {
     type Ctx = C;
@@ -56,11 +56,11 @@ where
     C:RunCtx + 'static,
 
     A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    for <'i> A::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    A::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + 'static,
+    B::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static,
     //
     //
     // <<B as Stage>::Out as WithId>::ID: From<String>,
@@ -79,11 +79,11 @@ where
     C:RunCtx + 'static,
 
     A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    for <'i> A::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    A::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + 'static
+    B::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static
 {
     pub fn new<I:Into<SimpleId>>(id:I, stage_a: Arc<A>, stage_b: Arc<B>) -> ABStage<A, B, C> {
         ABStage {
@@ -100,11 +100,11 @@ where
     C:RunCtx + 'static,
 
     A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    for <'i> A::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    A::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + 'static
+    B::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static
 {
     type ID = SimpleId;
 
@@ -120,11 +120,11 @@ where
     C:RunCtx + 'static,
 
     A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    for <'i> A::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    A::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + 'static
+    B::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
 
@@ -140,8 +140,8 @@ where
 pub enum StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <A as Stage>::Out: Data + WithId + Send + Sync,
+    for<'i> <A as Stage>::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    <A as Stage>::Out: Data + CopyToDevice + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
@@ -152,8 +152,8 @@ where
 impl<A, B> Debug for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <A as Stage>::Out: Data + WithId + Send + Sync,
+    for<'i> <A as Stage>::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    <A as Stage>::Out: Data + CopyToDevice + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
@@ -174,8 +174,8 @@ where
 impl<A, B> Stage for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <A as Stage>::Out: Data + WithId + Send + Sync,
+    for<'i> <A as Stage>::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    <A as Stage>::Out: Data + CopyToDevice + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
@@ -190,8 +190,8 @@ where
 impl<A, B> AsyncStage for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <A as Stage>::Out: Data + WithId + Send + Sync,
+    for<'i> <A as Stage>::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    <A as Stage>::Out: Data + CopyToDevice + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId + Send + Sync + Debug + 'static,
 {
@@ -210,8 +210,8 @@ where
 impl<A, B> OutId for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <A as Stage>::Out: Data + WithId + Send + Sync,
+    for<'i> <A as Stage>::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    <A as Stage>::Out: Data + CopyToDevice + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
@@ -228,8 +228,8 @@ where
 // impl<A, B> Cached for StageChainOption<A, B>
 // where
 //     A: AsyncStage + Send + Sync + Debug + 'static,
-//     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
-//     <A as Stage>::Out: Data + WithId + Send + Sync,
+//     for<'i> <A as Stage>::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+//     <A as Stage>::Out: Data + CopyToDevice + WithId + Send + Sync,
 //
 //     B: for<'i> Cached<
 //         In<'i>=<A as Stage>::In<'i>,

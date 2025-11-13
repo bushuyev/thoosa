@@ -486,7 +486,7 @@ impl From<usize> for MonoMetrics<0, 1> {
 #[async_trait]
 #[delegatable_trait]
 #[automock(type D=MockCopyToDevice; type Metrics=[usize;1]; type Sub=Self; type SubSelect=Range<<Self as Data>::Metrics>;)]
-pub trait Data: Debug + CopyToDevice {
+pub trait Data: Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default;
 
     fn size(&self) -> Self::Metrics;
