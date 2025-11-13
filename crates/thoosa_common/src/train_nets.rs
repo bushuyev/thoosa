@@ -1303,8 +1303,7 @@ pub fn train_final_net(
     Ok((loss, final_node_params))
 }
 
-type ModuleFactory<DI, DO> =
-    dyn Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> + Send + Sync;
+type ModuleFactory<DI, DO> = dyn Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> + Send + Sync;
 
 pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Send> {
     id:SimpleId,
@@ -3039,13 +3038,13 @@ impl Input for LoadMotifNetInput {
 #[derive(Debug)]
 pub struct LoadMotifNetOutput {
     channel: u32,
-    nets: Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifProbability>)>, //single motif's nets (of different types)
+    nets: Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>, //single motif's nets (of different types)
 }
 
 impl LoadMotifNetOutput {
     pub fn new(
         channel: u32,
-        nets: Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifProbability>)>,
+        nets: Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>,
     ) -> Self {
         Self { channel, nets }
     }

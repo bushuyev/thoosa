@@ -76,13 +76,38 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MotifNetMeta {
+    motif_id:u32,
+    channel:u32,
+    motif_net_params:MotifNetParams
+}
+
+impl MotifNetMeta {
+    pub fn new(motif_id:u32, channel: u32, motif_net_params: MotifNetParams) -> Self {
+        Self { motif_id, channel, motif_net_params }
+    }
+
+    pub fn motif_id(&self) -> u32 {
+        self.motif_id
+    }
+
+    pub fn channel(&self) -> u32 {
+        self.channel
+    }
+
+    pub fn motif_net_params(&self) -> &MotifNetParams {
+        &self.motif_net_params
+    }
+}
+
 impl <C> Stage for LoadMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = LoadMotifNetInput;
-    type Out = DataWithExtra<ThoModuleWithStore<Slice, MotifProbability>, MotifNetParams>;
+    type Out = DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>;
 }
 
 #[async_trait]
@@ -102,9 +127,9 @@ where
         debug!("LoadMotifNet::run: motif_nets={motif_nets:?}");
 
         let (params, module) = motif_nets
-            .pop().ok_or_else(||ThoosaError::new(format!("no nets for input={input:?}")))?;
+            .pop().ok_or_else(||ThoosaError::new(format!("no nets for input={input:?}")))?;//TODO select best net or select with run config
 
-        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, params), cache_area)))
+        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, MotifNetMeta::new(input.motif_id, input.channel, params)), cache_area)))
     }
 }
 

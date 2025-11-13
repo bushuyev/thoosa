@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use log::debug;
 use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, Module};
-use tch::{Tensor, nn};
+use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
 use crate::my_tch::{
@@ -11,6 +11,9 @@ use crate::my_tch::{
 };
 use crate::train_nets::ThoModuleWithStore;
 use thoosa_shared::ThoosaError;
+use thoosa_shared::traits::SimpleId;
+use crate::runs::Simple;
+use crate::tho_tensor::ThoTensor;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out(l_in: u32, k: u32, c: ConvConfig) -> u32 {
@@ -36,10 +39,12 @@ pub enum Node {
         join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
     },
     Conv1d {
+        path:&'static str,
         kernel: u32,
         in_channels: u32,
         out_channels: u32,
         config: ConvConfig,
+        init: Option<ThoTensor<AnyDims, SimpleId>>
     },
     Conv2d {
         kernel: u32,
@@ -170,17 +175,28 @@ impl Node {
             }
 
             Node::Conv1d {
+                path,
                 kernel,
                 in_channels,
                 out_channels,
                 config,
-            } => Box::new(MyConv::new(nn::conv1d(
-                vs / "cnn_1d",
-                in_channels as i64,
-                out_channels as i64,
-                kernel as i64,
-                config,
-            ))),
+                init
+            } => {
+                let mut conv = nn::conv1d(
+                    vs / path,
+                    in_channels as i64,
+                    out_channels as i64,
+                    kernel as i64,
+                    config,
+                );
+                if let Some(init) = init {
+                    no_grad(|| {
+                        conv.ws.copy_(&init.t.view((1, 1, kernel as i64)));
+                    });
+
+                }
+                Box::new(MyConv::new(conv))
+            },
 
             Node::Conv2d {
                 kernel,
@@ -307,16 +323,20 @@ impl SeqBuilder {
 
     pub fn conv_1d(
         &mut self,
+        path: &'static str,
         kernel: u32,
         in_channels: u32,
         out_channels: u32,
         config: ConvConfig,
+        init: Option<ThoTensor<AnyDims, SimpleId>>,
     ) -> &mut Self {
         self.elts.push(Node::Conv1d {
+            path,
             kernel,
             in_channels,
             out_channels,
             config,
+            init,
         });
 
         self.num_features = clc_conv1d_out(self.num_features, kernel, config) as u32;

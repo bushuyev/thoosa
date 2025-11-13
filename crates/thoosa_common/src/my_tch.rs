@@ -487,9 +487,9 @@ pub fn configure_dense(
         b.n_blocks(
             |b: &mut SeqBuilder, _i| {
                 b.func(Tensor::elu)
-                    .conv_1d(kernel, channels, channels, ConvConfig::default())
+                    .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)
                     .func(Tensor::elu)
-                    .conv_1d(kernel, channels, channels, ConvConfig::default())
+                    .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)
                     .end()
             },
             num_layers_in_block,
@@ -498,7 +498,7 @@ pub fn configure_dense(
     };
 
     builder
-        .conv_1d(kernel, channels, channels, ConvConfig::default())
+        .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)
         .func(|t| t.elu())
         .max_pool(3, 2, 1)
         .n_blocks(
@@ -506,9 +506,9 @@ pub fn configure_dense(
                 b.block(dense_block)
                     .block(|b: &mut SeqBuilder| {
                         b.func(Tensor::elu)
-                            .conv_1d(kernel, channels, channels, ConvConfig::default())
+                            .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)
                             .func(Tensor::elu)
-                            .conv_1d(kernel, channels, channels, ConvConfig::default())
+                            .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)
                             .end()
                     })
                     .end()
@@ -604,7 +604,7 @@ mod tch_tests {
             .end_seq();
 
         let conv_seq = SeqBuilder::new(10, None)
-            .conv_1d(5, 1, 1, ConvConfig::default())
+            .conv_1d("conv", 5, 1, 1, ConvConfig::default(), None)
             .linear_s(
                 1,
                 #[cfg(debug_assertions)]
@@ -751,7 +751,7 @@ mod tch_tests {
                 }),
                 None,
             )
-            .conv_1d((num_features / 10), 1, 1, ConvConfig::default())
+            .conv_1d("conv", (num_features / 10), 1, 1, ConvConfig::default(), None)
             .linear_s(
                 1,
                 #[cfg(debug_assertions)]
@@ -910,8 +910,8 @@ mod tch_tests {
                     #[cfg(debug_assertions)]
                     "test".to_string(),
                 ) //2 weight bias
-                .conv_1d(3, 1, 2, ConvConfig::default()) //2 weight bias
-                .conv_1d(5, 1, 2, ConvConfig::default()) //2 weight bias
+                .conv_1d("conv", 3, 1, 2, ConvConfig::default(), None) //2 weight bias
+                .conv_1d("conv", 5, 1, 2, ConvConfig::default(), None) //2 weight bias
                 .linear_s(
                     20,
                     #[cfg(debug_assertions)]
