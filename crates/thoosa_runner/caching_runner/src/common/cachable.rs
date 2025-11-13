@@ -778,6 +778,11 @@ pub trait WithDataRef: WithId + Debug {
 
     }
 
+    //shouldn't be here, used only in ClcOOMRunner which is test-only util
+    fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics{
+        Default::default()
+    }
+
     fn mem_size(&self) ->u64{
         0
     }
@@ -843,6 +848,10 @@ impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap
 
     fn mem_size(&self) -> u64 {
         self.mem_size
+    }
+
+    fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics {
+        self.size().clone()
     }
 }
 
