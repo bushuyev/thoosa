@@ -256,7 +256,7 @@ impl CopyToDevice for ClcResourcesMotifsDistInputDeviceWrapper {
         }
     }
 
-}
+}*/
 
 //implemented so that ClcResourcesMotifsDistInputDeviceWrapper's resources batch can be adjusted.
 // Batched_motifs_output can't be adjusted since moitfs' ranges do not match in different channels
@@ -270,7 +270,7 @@ impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
     fn device(&self) -> usize {
         0 //self.batched_motifs_output.device()//TODO
     }
-}*/
+}
 
 impl ClcResourcesMotifsDistInputDeviceWrapper {
     pub fn new(id: SimpleId, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>, resource_ids: Vec<ResourceId>, batched_motifs_output: Arc<DevicesWrap<StackedMotifsOutput>>) -> Self {

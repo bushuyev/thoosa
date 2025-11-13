@@ -297,12 +297,6 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
     }
 }
 
-#[async_trait]
-impl CopyToDevice for ApplyMotifNetInputDeviceWrapper {
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
-        todo!()
-    }
-}
 
 impl Data for ApplyMotifNetInputDeviceWrapper {
     type Metrics = MonoMetrics<0, 3>;
