@@ -563,10 +563,9 @@ mod tests {
 
         let tho_tensor:Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::new("".into(), t));
 
-        let module = SeqBuilder::new(num_features, None)
-
+        let node = SeqBuilder::new(num_features, None)
             .split(vec![
-                SeqBuilder::new(num_features, None).conv_1d("conv", l as u32, 1, 1, cfg, Some(tho_tensor)).end_seq(),
+                SeqBuilder::new(num_features, None).conv_1d("conv", l as u32, 1, 1, cfg, Some(Arc::clone(&tho_tensor))).end_seq(),
                 SeqBuilder::new(num_features, None)
                     .closure(
                         Arc::new(Box::new(move |t: &Tensor| {
@@ -574,16 +573,16 @@ mod tests {
                         })),
                         None,
                     )
-                    .conv_1d("energy", l as u32, 1, 1, cfg, Some(Arc::new(ThoTensor::new("".into(), Tensor::ones([1, 1, l], FLOAT_CPU) ))))
+                    .conv_1d("energy", l as u32, 1, 1, cfg, Some(Arc::new(ThoTensor::new("".into(), Tensor::ones([1, 1, l], FLOAT_CPU)))))
                     .closure(
                         Arc::new(Box::new(move |t: &Tensor| {
-                            t.clamp_min(1e-12)//.sqrt()
+                            t.clamp_min(1e-12) //.sqrt()
                         })),
                         None,
                     )
                     .end_seq()
             ],
-                   Box::new(move |t: &Tensor|{
+                   Box::new(move |t: &Tensor| {
                        vec![
                            t.shallow_clone(),
                            t.shallow_clone()
@@ -594,19 +593,17 @@ mod tests {
 
                        (num / denom).squeeze_dim(1)
                    })
-            ).end_seq()
-            .build_tch_module(&vs.root())?;
+            ).end_seq();
 
+
+
+        let module = node.clone().build_tch_module(&vs.root())?;
         Ok(Box::new(ThoModuleWithStore::with_factory(
             "test_net".into(),
             module,
             vs,
             Some(Arc::new( move |path:&nn::Path| {
-                //for ws mocks & copy_to_device
-                SeqBuilder::new(num_features, None)
-                    .conv_1d("conv", l as u32, 1, 1, cfg, None)
-                    .end_seq()
-                    .build_tch_module(path)
+                node.clone().build_tch_module(path)
             }))
         )))
 
