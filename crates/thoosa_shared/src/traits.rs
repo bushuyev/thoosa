@@ -510,7 +510,7 @@ impl CopyToDevice for MockData {
 
 #[delegatable_trait]
 pub trait Select<S> {
-    type Output: CopyToDevice;
+    type Output; //: CopyToDevice;
 
     fn subview(&self, selector: S) -> Result<Self::Output, ThoosaError>;
 }

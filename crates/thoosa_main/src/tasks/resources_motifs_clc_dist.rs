@@ -236,7 +236,7 @@ impl Select<std::ops::Range<MonoMetrics<0, 1>>> for ClcResourcesMotifsDistInputD
     }
 }
 
-#[async_trait]
+/*#[async_trait]
 impl CopyToDevice for ClcResourcesMotifsDistInputDeviceWrapper {
     async fn copy_to_device(&self, dst_device: usize) -> Self {
         let batch = futures::stream::iter(&self.batch)
@@ -270,7 +270,7 @@ impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
     fn device(&self) -> usize {
         0 //self.batched_motifs_output.device()//TODO
     }
-}
+}*/
 
 impl ClcResourcesMotifsDistInputDeviceWrapper {
     pub fn new(id: SimpleId, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>, resource_ids: Vec<ResourceId>, batched_motifs_output: Arc<DevicesWrap<StackedMotifsOutput>>) -> Self {
