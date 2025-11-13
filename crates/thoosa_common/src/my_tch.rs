@@ -323,7 +323,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAvgPool1d {
     }
 }
 
-pub trait ThoModule<DI: Dims, DO: Dims>: Debug + Send + Sync {
+pub trait ThoModule<DI: Dims, DO: Dims>: Debug {
     fn debug(&self) {}
     fn mem_size(&self) -> usize {
         //TODO
@@ -362,14 +362,14 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyFuncModule {
 }
 
 pub struct MyClosureModule {
-    func: Box<dyn Fn(&Tensor) -> Tensor + Send>,
+    func: Arc<Box<dyn Fn(&Tensor) -> Tensor >>
 }
 
 // unsafe impl Send for MyClosureModule {}
-unsafe impl Sync for MyClosureModule {}
+// unsafe impl Sync for MyClosureModule {}
 
 impl MyClosureModule {
-    pub fn new(func: Box<impl Fn(&Tensor) -> Tensor + Send + 'static>) -> Self {
+    pub fn new(func: Arc<Box<impl Fn(&Tensor) -> Tensor  + 'static>> ) -> Self {
         Self { func }
     }
 }
@@ -746,9 +746,9 @@ mod tch_tests {
         SeqBuilder::new(num_features, None)
             .batch_norm(BatchNormConfig::default())
             .closure(
-                Box::new(|t: &Tensor| {
+                Arc::new(Box::new(|t: &Tensor| {
                     t.view((t.size()[0], 1, t.size()[1])) //channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
-                }),
+                })),
                 None,
             )
             .conv_1d("conv", (num_features / 10), 1, 1, ConvConfig::default(), None)

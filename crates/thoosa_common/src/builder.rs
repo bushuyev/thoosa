@@ -28,6 +28,7 @@ pub fn clc_avgpool1d_out(l_in: u32, kernel: u32, padding: u32, stride: u32) -> u
     (l_in + 2 * padding - kernel) / stride + 1
 }
 
+#[derive(Clone)]
 pub enum Node {
     Seq {
         elts: Vec<Node>,
@@ -44,7 +45,7 @@ pub enum Node {
         in_channels: u32,
         out_channels: u32,
         config: ConvConfig,
-        init: Option<ThoTensor<AnyDims, SimpleId>>
+        init: Option<Arc<ThoTensor<AnyDims, SimpleId>>>
     },
     Conv2d {
         kernel: u32,
@@ -77,32 +78,8 @@ pub enum Node {
         padding: u32,
     },
     Closure {
-        cl: Box<dyn Fn(&Tensor) -> Tensor + Send + Sync>,
+        cl: Arc<Box<dyn Fn(&Tensor) -> Tensor>>
     },
-}
-
-impl Clone for Node {
-    fn clone(&self) -> Self {
-        match self {
-            Node::Seq { elts, split_input } => {
-                Node::Seq {
-                    elts: elts.clone(),
-                    split_input: split_input.clone(),
-                }
-            }
-            Node::Par { elts, split, join } => {
-                Node::Par {
-                    elts: elts.clone(),
-                    split: Arc::clone(split),
-                    join: Arc::clone(join),
-                }
-            }
-            _=> {
-                todo!()
-            }
-
-        }
-    }
 }
 
 impl Debug for Node {
@@ -264,7 +241,9 @@ impl Node {
 
             Node::Func { func } => Box::new(MyFuncModule::new(func)),
 
-            Node::Closure { cl: closure } => Box::new(MyClosureModule::new(Box::new(closure))),
+            Node::Closure { cl: closure } => {
+                Box::new(MyClosureModule::new(closure))
+            },
         })
     }
 }
@@ -328,7 +307,7 @@ impl SeqBuilder {
         in_channels: u32,
         out_channels: u32,
         config: ConvConfig,
-        init: Option<ThoTensor<AnyDims, SimpleId>>,
+        init: Option<Arc<ThoTensor<AnyDims, SimpleId>>>,
     ) -> &mut Self {
         self.elts.push(Node::Conv1d {
             path,
@@ -492,7 +471,7 @@ impl SeqBuilder {
 
     pub fn closure(
         &mut self,
-        cl: Box<dyn Fn(&Tensor) -> Tensor + Send + Sync>,
+        cl: Arc<Box<dyn Fn(&Tensor) -> Tensor>>,
         num_features: Option<u32>,
     ) -> &mut Self {
         self.elts.push(Node::Closure { cl });

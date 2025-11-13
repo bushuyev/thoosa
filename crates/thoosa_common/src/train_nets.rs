@@ -839,12 +839,6 @@ impl WithId for Box<TrainLabelNetsRunConfigResult> {
     }
 }
 
-#[async_trait]
-impl Output for Box<TrainLabelNetsRunConfigResult> {
-    async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
-        todo!() //TODO not needed for not cachable Outputs
-    }
-}
 
 impl TrainLabelNetsRunConfigResult {
     pub fn new(
@@ -1418,17 +1412,20 @@ DI: Dims + Send + 'static,
 DO: Dims + Send + 'static {
 
     async fn copy_to_device(&self, dst_device: usize) -> Self {
+
+        debug!("ThoModuleWithStore::copy_to_device: has module_factory={}", self.module_factory.is_some());
+
         let builder = self
             .module_factory
             .as_ref()
             .unwrap_or_else(|| panic!("copy_to_device requires module_factory; construct modules via ThoModuleWithStore::load to enable copying"));
 
         let mut var_store = VarStore::new(ThoDevice::from(dst_device).into());
-        let module = builder(&var_store.root())
-            .expect("module builder failed while copying to device");
-        var_store
-            .copy(&self.var_store)
-            .expect("failed to copy VarStore weights");
+
+        let module = builder(&var_store.root()).expect("module builder failed while copying to device");
+
+        var_store.copy(&self.var_store).expect("failed to copy VarStore weights");
+
         var_store.freeze();
 
         Self::with_factory(self.id.clone(), module, var_store, Some(Arc::clone(builder)))
@@ -2176,14 +2173,14 @@ impl LabelNetParams {
                 }),
             )
             .closure(
-                Box::new(move |t: &Tensor| {
+                Arc::new(Box::new(move |t: &Tensor| {
                     debug!(
                         "label_net_fixed_num_slices: merged final in flatten t.size={:?}",
                         t.size()
                     );
 
                     t.shallow_clone()
-                }),
+                })),
                 Some(motif_nodes),
             )
             .linear(
@@ -2209,10 +2206,10 @@ impl LabelNetParams {
         let motif_nodes = params.motif_nets;
         SeqBuilder::new(params.slices_len, None) // batch x channel x max motif_nets x slices //TODO split?
             .closure(
-                Box::new(move |t: &Tensor| {
+                Arc::new(Box::new(move |t: &Tensor| {
                     debug!("label_node_max_padding: input.size={:?}", t.size());
                     t.shallow_clone()
-                }),
+                })),
                 None,
             )
             .split(
@@ -2268,7 +2265,7 @@ impl LabelNetParams {
                 }),
             )
             .closure(
-                Box::new(move |t: &Tensor| {
+                Arc::new(Box::new(move |t: &Tensor| {
                     debug!(
                         "label_net_max_padding: merged final in flatten t.size()={:?}",
                         t.size()
@@ -2281,7 +2278,7 @@ impl LabelNetParams {
                     );
 
                     t_0
-                }),
+                })),
                 Some(params.channels),
             )
             .linear(
@@ -2305,7 +2302,7 @@ pub fn flat_label_node(params: &LabelNetParams, slices_len: u32) -> Node {
     let mut builder = SeqBuilder::new(slices_len, None);
     builder
         .closure(
-            Box::new(move |t: &Tensor| {
+            Arc::new(Box::new(move |t: &Tensor| {
                 let t_0 = t.flatten(1, 3);
                 debug!(
                     "label_node flatten t.size={:?} t_0.size={:?}",
@@ -2314,7 +2311,7 @@ pub fn flat_label_node(params: &LabelNetParams, slices_len: u32) -> Node {
                 );
 
                 t_0
-            }),
+            })),
             Some(num_features),
         )
         .linear_s(
@@ -3860,7 +3857,7 @@ mod train_tests {
 
         SeqBuilder::new(num_features, None)
             .closure(
-                Box::new(move |t: &Tensor| {
+                Arc::new(Box::new(move |t: &Tensor| {
                     debug!(
                         "test_label_net: merged final in flatten t.size()={:?}",
                         t.size()
@@ -3873,7 +3870,7 @@ mod train_tests {
                     );
 
                     t_0
-                }),
+                })),
                 None,
             )
             .linear_s_with_conf(
@@ -4557,6 +4554,7 @@ mod train_tests {
         Ok(())
     }
 
+
     #[test]
     fn test_save_load_label_model_max_padding() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
@@ -4623,14 +4621,6 @@ mod train_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_x() {
-        let rc = FindMotifsRunConfig::new(Some(1), 100, 100, None, Some(0.1));
-
-        let map: HashMap<String, Val> = rc.to_properties_iter(None).collect();
-
-        debug!("map={map:?}");
-    }
 
     //TODO split into tests for FixedNumSlices and MaxPadding
     #[test]
