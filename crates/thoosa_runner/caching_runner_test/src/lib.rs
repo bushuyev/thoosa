@@ -22,7 +22,7 @@ use std::ops::{Add, AddAssign, DivAssign, Range};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
 use tokio::task::JoinSet;
 
@@ -246,12 +246,11 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 ) -> Result<(), ThoosaError>
 where
     R: Cached + OutId + Send + Sync + 'static,
-    for<'a> <R as Stage>::In<'a>: Data + WithId+ Send + Sync,
-    R::Out: Data + Send + Sync,
+    for<'a> <R as Stage>::In<'a>: Data + CopyToDevice + WithId+ Send + Sync,
+    R::Out: Data + CopyToDevice + Send + Sync,
     StageInStatic<R>: From<&'static str>,
     F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF: Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
-    <R as Stage>::Out: Data,
 {
     let check_arc = Arc::new(check);
     let ctx_fac_arc = Arc::new(ctx_fac);
