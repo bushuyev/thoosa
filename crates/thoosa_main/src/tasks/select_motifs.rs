@@ -863,6 +863,7 @@ pub mod tests {
     ///returns Tensor [channels x resource_len] + channels[ motifs[ intervals[Interval] ] ]
     pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, usize, MotifKind)>], gap: usize) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoosaError> {
         use rand::{rngs::StdRng, Rng, SeedableRng};
+        use rand::seq::SliceRandom;
         const STEP_SIGMA: f32 = 0.4;
 
         fn normal_step(rng: &mut StdRng, sigma: f32) -> f32 {
@@ -871,6 +872,45 @@ pub mod tests {
             let r = (-2.0 * u1.ln()).sqrt();
             let theta = std::f32::consts::TAU * u2;
             sigma * r * theta.cos()
+        }
+
+        fn distribute_slack(rng: &mut StdRng, segments: usize, slack: usize) -> Vec<usize> {
+            if segments == 0 {
+                return Vec::new();
+            }
+
+            if slack == 0 {
+                return vec![0; segments];
+            }
+
+            let mut offsets = vec![0usize; segments];
+            let mut weights: Vec<f32> = (0..segments).map(|_| rng.random::<f32>().max(f32::MIN_POSITIVE)).collect();
+            let weight_sum: f32 = weights.iter().sum();
+
+            if !weight_sum.is_finite() || weight_sum <= f32::MIN_POSITIVE {
+                offsets[0] = slack;
+                return offsets;
+            }
+
+            let mut allocated = 0usize;
+            for (offset, weight) in offsets.iter_mut().zip(weights.iter()) {
+                let share = ((*weight / weight_sum) * slack as f32).floor() as usize;
+                *offset = share;
+                allocated = allocated.saturating_add(share);
+            }
+
+            let allocated = allocated.min(slack);
+            let remainder = slack.saturating_sub(allocated);
+
+            if remainder > 0 {
+                let mut indices: Vec<usize> = (0..segments).collect();
+                indices.shuffle(rng);
+                for idx in indices.into_iter().cycle().take(remainder) {
+                    offsets[idx] += 1;
+                }
+            }
+
+            offsets
         }
 
         let mut channels_signals = Vec::with_capacity(channels_motif_kinds.len());
@@ -919,7 +959,12 @@ pub mod tests {
             let start_bound = if use_segment { channel_start } else { 0 };
             let end_bound = if use_segment { channel_end } else { resource_len };
 
-            let mut current = start_bound + slack / 2;
+            let segment_offsets = distribute_slack(&mut rng, total_repeats + 1, slack);
+            let mut current = start_bound
+                .checked_add(segment_offsets.get(0).copied().unwrap_or(0))
+                .ok_or_else(|| ThoosaError::new(format!(
+                    "motif placement exceeds resource length for channel {channel_idx}"
+                )))?;
             let mut channel_motif_intervals = Vec::with_capacity(channel_kinds.len());
             let mut placed = 0usize;
 
@@ -941,7 +986,9 @@ pub mod tests {
 
                 for motif in motifs.into_iter().take(*repeats) {
                     let start = current;
-                    let end = start + *motif_len;
+                    let end = start.checked_add(*motif_len).ok_or_else(|| ThoosaError::new(format!(
+                        "motif placement exceeds resource length for channel {channel_idx}"
+                    )))?;
                     if end > end_bound {
                         return Err(ThoosaError::new(format!(
                             "motif placement exceeds resource length for channel {channel_idx}"
@@ -956,7 +1003,11 @@ pub mod tests {
                     placed += 1;
                     current = end;
                     if placed < total_repeats {
-                        current = current.checked_add(gap).ok_or_else(|| ThoosaError::new("motif gap sizing overflows usize"))?;
+                        let extra_gap = segment_offsets.get(placed).copied().unwrap_or(0);
+                        let spacing = gap.checked_add(extra_gap).ok_or_else(|| ThoosaError::new("motif gap sizing overflows usize"))?;
+                        current = current.checked_add(spacing).ok_or_else(|| ThoosaError::new(format!(
+                            "motif placement exceeds resource length for channel {channel_idx}"
+                        )))?;
                     }
                 }
 

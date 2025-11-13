@@ -4,7 +4,7 @@ use std::fmt::{Debug, Display};
 use std::pin::Pin;
 use thoosa_shared::applicables_runner::CachableId;
 use thoosa_shared::CopyToDevice;
-use thoosa_shared::traits::{Metrics, MonoMetrics};
+use thoosa_shared::traits::{Metrics, MonoMetrics, Named};
 
 pub trait Dims: Send + Sync + Clone + Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default + TryFrom<Vec<i64>>;
@@ -30,7 +30,7 @@ impl Dims for ChannelsSlicesData {
 }
 
 #[derive(Clone, Debug)]
-pub struct Slice; //sliced data [slices, slice_width]
+pub struct Slice; //sliced data [lice_width]
 impl Dims for Slice {
     type Metrics = MonoMetrics<0, 1>;
 }
@@ -111,6 +111,9 @@ pub type ThoBatch<D> = ThoTensor<Batch<D>, CachableId>;
 pub struct AnyDims {}
 impl Dims for AnyDims {
     type Metrics = AnyMetrics;
+}
+impl Named for AnyDims {
+
 }
 
 pub struct AnySub {}

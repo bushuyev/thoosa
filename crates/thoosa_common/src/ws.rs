@@ -231,7 +231,7 @@ impl Workspace for FsWorkspace {
         channel: u32,
         motif_id: u32,
         device: &'a Device,
-    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifProbability>)>, ThoosaError> {
+    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>, ThoosaError> {
         debug!("load_motif_nets: channel={channel} motif_id={motif_id}");
 
         let channel_motif_models_paths = self.motif_models(channel, motif_id)?;
@@ -494,7 +494,7 @@ pub trait Workspace: Sync + Send + Debug {
         channel: u32,
         motif_id: u32,
         device: &'a Device,
-    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Slice, MotifProbability>)>, ThoosaError>;
+    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>, ThoosaError>;
     fn load_label_nets<'a>(
         &self,
         train_label_nodes_run_ids: Option<&'a [RunId]>,
@@ -587,7 +587,7 @@ impl WsMockBuilder {
         channels_motif_nets: Vec<
             Vec<(
                 Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>,
-                Box<dyn Fn() -> ThoModuleWithStore<Slice, MotifProbability> + Sync + Send + 'static>,
+                Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send + 'static>,
             )>,
         >,
     ) -> Self {

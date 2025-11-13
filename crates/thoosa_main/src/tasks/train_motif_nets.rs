@@ -389,14 +389,16 @@ mod tests {
     use log::debug;
     use log::LevelFilter::{Debug, Trace};
     use parking_lot::RwLock;
+    use tch::Device;
     use tokio::fs;
     use caching_runner::common::cachable::DevicesWrap;
     use caching_runner::common::mock_run_ctx;
     use caching_runner::common::runnable::AsyncStage;
     use caching_runner::global_ctx::GlobalCtx;
+    use thoosa_common::dims::{Batch, MotifProbability, Slice};
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, OptConfig, TrainMotifsNetsRunConfigFields};
-    use thoosa_common::utils::reset_print_options;
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifNetParams, OptConfig, ThoModuleWithStore, TrainMotifsNetsRunConfigFields};
+    use thoosa_common::utils::{reset_print_options, test_net};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;

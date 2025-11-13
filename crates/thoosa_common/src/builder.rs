@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use log::debug;
 use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, Module};
-use tch::{Tensor, nn};
+use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
 use crate::my_tch::{
@@ -11,6 +11,9 @@ use crate::my_tch::{
 };
 use crate::train_nets::ThoModuleWithStore;
 use thoosa_shared::ThoosaError;
+use thoosa_shared::traits::SimpleId;
+use crate::runs::Simple;
+use crate::tho_tensor::ThoTensor;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out(l_in: u32, k: u32, c: ConvConfig) -> u32 {
@@ -25,6 +28,7 @@ pub fn clc_avgpool1d_out(l_in: u32, kernel: u32, padding: u32, stride: u32) -> u
     (l_in + 2 * padding - kernel) / stride + 1
 }
 
+#[derive(Clone)]
 pub enum Node {
     Seq {
         elts: Vec<Node>,
@@ -36,10 +40,12 @@ pub enum Node {
         join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
     },
     Conv1d {
+        path:&'static str,
         kernel: u32,
         in_channels: u32,
         out_channels: u32,
         config: ConvConfig,
+        init: Option<Arc<ThoTensor<AnyDims, SimpleId>>>
     },
     Conv2d {
         kernel: u32,
@@ -72,32 +78,8 @@ pub enum Node {
         padding: u32,
     },
     Closure {
-        cl: Box<dyn Fn(&Tensor) -> Tensor + Send + Sync>,
+        cl: Arc<Box<dyn Fn(&Tensor) -> Tensor>>
     },
-}
-
-impl Clone for Node {
-    fn clone(&self) -> Self {
-        match self {
-            Node::Seq { elts, split_input } => {
-                Node::Seq {
-                    elts: elts.clone(),
-                    split_input: split_input.clone(),
-                }
-            }
-            Node::Par { elts, split, join } => {
-                Node::Par {
-                    elts: elts.clone(),
-                    split: Arc::clone(split),
-                    join: Arc::clone(join),
-                }
-            }
-            _=> {
-                todo!()
-            }
-
-        }
-    }
 }
 
 impl Debug for Node {
@@ -170,17 +152,28 @@ impl Node {
             }
 
             Node::Conv1d {
+                path,
                 kernel,
                 in_channels,
                 out_channels,
                 config,
-            } => Box::new(MyConv::new(nn::conv1d(
-                vs / "cnn_1d",
-                in_channels as i64,
-                out_channels as i64,
-                kernel as i64,
-                config,
-            ))),
+                init
+            } => {
+                let mut conv = nn::conv1d(
+                    vs / path,
+                    in_channels as i64,
+                    out_channels as i64,
+                    kernel as i64,
+                    config,
+                );
+                if let Some(init) = init {
+                    no_grad(|| {
+                        conv.ws.copy_(&init.t.view((1, 1, kernel as i64)));
+                    });
+
+                }
+                Box::new(MyConv::new(conv))
+            },
 
             Node::Conv2d {
                 kernel,
@@ -248,7 +241,9 @@ impl Node {
 
             Node::Func { func } => Box::new(MyFuncModule::new(func)),
 
-            Node::Closure { cl: closure } => Box::new(MyClosureModule::new(Box::new(closure))),
+            Node::Closure { cl: closure } => {
+                Box::new(MyClosureModule::new(closure))
+            },
         })
     }
 }
@@ -307,16 +302,20 @@ impl SeqBuilder {
 
     pub fn conv_1d(
         &mut self,
+        path: &'static str,
         kernel: u32,
         in_channels: u32,
         out_channels: u32,
         config: ConvConfig,
+        init: Option<Arc<ThoTensor<AnyDims, SimpleId>>>,
     ) -> &mut Self {
         self.elts.push(Node::Conv1d {
+            path,
             kernel,
             in_channels,
             out_channels,
             config,
+            init,
         });
 
         self.num_features = clc_conv1d_out(self.num_features, kernel, config) as u32;
@@ -472,7 +471,7 @@ impl SeqBuilder {
 
     pub fn closure(
         &mut self,
-        cl: Box<dyn Fn(&Tensor) -> Tensor + Send + Sync>,
+        cl: Arc<Box<dyn Fn(&Tensor) -> Tensor>>,
         num_features: Option<u32>,
     ) -> &mut Self {
         self.elts.push(Node::Closure { cl });

@@ -28,14 +28,14 @@ use tch::nn::VarStore;
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::{nn, Device, Kind, TchError, Tensor};
-use thoosa_shared::{gauss_i, panic_to_err, panic_to_err_async, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
+use thoosa_shared::{gauss_i, panic_to_err, panic_to_err_async, pulse_in_rand, pulse_v, pulses_in_const, saw, MotifKind, ThoosaError};
 use torch_sys::cuda::atc_cuda_device_count;
-use thoosa_shared::traits::Named;
+use thoosa_shared::traits::{Named, SimpleId};
 use crate::my_tch::{LossFp, ThoModule};
 
 use crate::batches::AsyncDataBatch;
 use crate::builder::SeqBuilder;
-use crate::dims::{Batch, Dims, MotifProbability, Slice};
+use crate::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -2219,13 +2219,14 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 
 }
 
+
 pub fn motif_test_net(
     motif_width: u32,
     k: f64,
     device: Device,
 ) -> (
     Box<dyn Fn() -> MotifNetParams + Sync + Send>,
-    Box<dyn Fn() -> ThoModuleWithStore<Slice, MotifProbability> + Sync + Send>,
+    Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
 ) {
     (
         Box::new(move || MotifNetParams::new(motif_width, 1)),
