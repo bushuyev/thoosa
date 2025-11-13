@@ -2114,10 +2114,10 @@ impl LabelNetParams {
         let motif_nodes = params.motif_nets;
         SeqBuilder::new(params.slices_len, None) //Some(2)
             .closure(
-                Box::new(move |t: &Tensor| {
+                Arc::new(Box::new(move |t: &Tensor| {
                     debug!("label_net_fixed_num_slices: input.size={:?}", t.size());
                     t.shallow_clone()
-                }),
+                })),
                 None,
             )
             .split(
