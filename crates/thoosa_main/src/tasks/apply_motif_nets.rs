@@ -228,7 +228,7 @@ where
             Arc::clone(&wrapper),
             ctx,
             Contexts::new(
-                SplitsAdjusterContextImpl::new(wrapper.size().into(), output_builder),
+                SplitsAdjusterContextImpl::new(wrapper._size().into(), output_builder),
                 NoopRunnableContext {},
                 PermitsAndDumpToCpuAdjustableContex::new(
                     PermitsAdjustContextImpl::new(ctx_name),
