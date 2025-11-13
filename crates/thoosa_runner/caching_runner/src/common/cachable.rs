@@ -743,9 +743,9 @@ impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O
     }
 }
 
-
+///To let OOMHandler accept both plain wrapped data as it's stored in caches and composite inputs like module + tensor or batch + motif
 pub trait WithDataRef: WithId + Debug {
-    type O<'o>: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice;
+    type O<'o>: Data + /*CopyToDevice +*/ WithId + Send + Sync;
 
     async fn with_data_ref<R, F>(
         &self,
