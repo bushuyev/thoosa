@@ -362,14 +362,14 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyFuncModule {
 }
 
 pub struct MyClosureModule {
-    func: Arc<Box<dyn Fn(&Tensor) -> Tensor >>
+    func: Arc<Box<dyn Fn(&Tensor) -> Tensor>>,
 }
 
 // unsafe impl Send for MyClosureModule {}
 // unsafe impl Sync for MyClosureModule {}
 
 impl MyClosureModule {
-    pub fn new(func: Arc<Box<impl Fn(&Tensor) -> Tensor  + 'static>> ) -> Self {
+    pub fn new(func: Arc<Box<dyn Fn(&Tensor) -> Tensor>>) -> Self {
         Self { func }
     }
 }
