@@ -156,7 +156,7 @@ where
     // <R as Stage>::In<'a>: Select<S>,
     S: Adjustable + Debug + Default + Clone
 {
-    Input(Box<dyn Adjuster<IC, A =S> + 'a>),
+    Input(Box<dyn Adjuster<IC, A=S> + 'a>),//it adjusts Selector used to fetch chunk of input
     Task(Box<dyn Adjuster<RC, A = R> + 'a>),
     RunContext(Box<dyn Adjuster<RCC, A = Arc<RwLock<R::Ctx>>> + 'a>),
 }

@@ -28,14 +28,14 @@ use crate::purge::FuturesRunnerMapPurger;
 
 ///To keep tensors in async functions in between async calls so that data can be dumped to CPU when competing task wins 100 Permits and requests others to be dumped.
 #[derive(Debug)]
-pub struct TmpCached<D:Data + WithId  + Output+ Debug + Send + Sync + 'static> {
+pub struct TmpCached<D:Data +CopyToDevice + WithId  + Output+ Debug + Send + Sync + 'static> {
     name: &'static str,
     cache_area:u64,
     map: Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>
 
 }
 
-impl<D: Data + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
+impl<D: Data + CopyToDevice +WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
     pub fn insert(&self, value: D) {
         let cache_area = self.cache_area;
         self.map.insert(
@@ -97,7 +97,7 @@ impl<D: Data + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
 }
 
 
-impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
+impl <D:Data + CopyToDevice+ WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
 
     pub async fn new(name: &'static str, cache_area: u64) -> Self {
 
@@ -125,7 +125,7 @@ impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
 #[async_trait]
 impl <D> FuturesRunnerMapPurger for DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>
 where
-    D: Data + WithId + Output + CopyToDevice + Debug + Send + Sync + 'static,
+    D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static,
 {
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize) -> Result<(), ThoosaError> {
         debug!("TmpCached::purge_gpu: ids_to_keep={ids_to_keep:?} device_idx={device_idx}");
@@ -168,7 +168,7 @@ where
     }
 }
 
-impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> Drop for TmpCached<D> {
+impl <D:Data + CopyToDevice + WithId+ Output+ Debug+ Send + Sync + 'static> Drop for TmpCached<D> {
     fn drop(&mut self) {
         tokio::task::block_in_place(move || {
             Handle::current().block_on(async move {

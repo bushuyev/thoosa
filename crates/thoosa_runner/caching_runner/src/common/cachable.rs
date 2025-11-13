@@ -27,8 +27,8 @@ use thoosa_with_data::with_data;
 #[async_trait]
 pub trait Cached: AsyncStage
 where
-    for <'i> Self::In<'i>: Data + WithId + Send + Sync,
-    <Self as Stage>::Out: Data + WithId + Send + Sync + 'static
+    for <'i> Self::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    <Self as Stage>::Out: Data + CopyToDevice + WithId + Send + Sync + 'static
 {
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
@@ -198,7 +198,7 @@ where
 
 struct TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync + CopyToDevice,
+    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
     D: Deref<Target = O>,
 {
     o: D,
@@ -207,7 +207,7 @@ where
 
 impl<O, D> Debug for TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync + CopyToDevice,
+    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
     D: Deref<Target = O>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -216,7 +216,7 @@ where
 }
 impl<O, D> TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync + CopyToDevice,
+    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
     D: Deref<Target = O>,
 {
     pub fn new(o: D, init_ctx: Option<&'static str>) -> Self {
@@ -230,7 +230,7 @@ where
 
 impl<O, D> Drop for TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync + CopyToDevice,
+    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
     D: Deref<Target = O>,
 {
     fn drop(&mut self) {
@@ -242,7 +242,7 @@ where
 
 impl<O, D> Deref for TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync + CopyToDevice,
+    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
     D: Deref<Target = O>,
 {
     type Target = O;
@@ -254,13 +254,13 @@ where
 
 unsafe impl<O, D> Send for TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync + CopyToDevice,
+    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
     D: Deref<Target = O>,
 {
 }
 
 
-impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
+impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     pub fn wrap(o: O, cache_area: u64) -> Self {
         let id = o.id().clone();
         let size = o.size();
@@ -322,8 +322,8 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
      do_run: impl FnOnce(&A, &B) -> Result<R, ThoosaError>,
     ) -> Result<R, ThoosaError>
     where
-        A:Data + WithId + Send + Sync + CopyToDevice + 'static,
-        B:Data + WithId + Send + Sync + CopyToDevice + 'static,
+        A:Data + CopyToDevice + WithId + Send + Sync + CopyToDevice + 'static,
+        B:Data + CopyToDevice + WithId + Send + Sync + CopyToDevice + 'static,
         WA:AsRef<DevicesWrap<A>> + Debug + 'static,
         WB:AsRef<DevicesWrap<B>> + Debug + 'static,
     {
@@ -369,8 +369,8 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         do_run: impl FnOnce(&[&O], &[&B]) -> Result<R, ThoosaError>,
     ) -> Result<R, ThoosaError>
     where
-        // A: Data + WithId + Send + Sync + CopyToDevice + 'static,
-        B: Data + WithId + Send + Sync + CopyToDevice + 'static,
+        // A: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice + 'static,
+        B: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice + 'static,
         WA: AsRef<DevicesWrap<O>> + Debug + 'static,
         WB: AsRef<DevicesWrap<B>> + Debug + 'static,
     {
@@ -420,7 +420,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
     ) -> Result<R, ThoosaError>
     where
         O: Select<S>,
-        <O as Select<S>>::Output: Data + WithId + Send + Sync + CopyToDevice,
+        <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
         S: Clone,
     {
         let read_guard: RwLockReadGuard<'_, Option<O>> = self.cached_data[to_device_idx].read().await;
@@ -474,7 +474,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
         data: T,
     ) -> Result<R, ThoosaError>
     where
-        T: Data + WithId + Send + Sync + CopyToDevice,
+        T: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
     {
         if trace_ctx.is_none() {
             do_run(&data)
@@ -745,7 +745,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
 
 
 pub trait WithDataRef: WithId + Debug {
-    type O<'o>: Data + WithId + Send + Sync + CopyToDevice;
+    type O<'o>: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice;
 
     async fn with_data_ref<R, F>(
         &self,
@@ -789,7 +789,7 @@ pub trait WithDataRef: WithId + Debug {
 }
 
 
-impl <O: Data + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap<O> {
+impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap<O> {
     type O<'o> = O;
 
     async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
