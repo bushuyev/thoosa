@@ -218,7 +218,6 @@ impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 
-//it's i64 because SplitsAdjuster is used for building tensor select and has to require DivAssing<i64> for Data::Metrics
 impl Select<std::ops::Range<MonoMetrics<0, 1>>> for ClcResourcesMotifsDistInputDeviceWrapper {
     type Output = ClcResourcesMotifsDistInputDeviceWrapper;
 
