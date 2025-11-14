@@ -209,8 +209,9 @@ where
 
         let out_id = Arc::new(self.out_id(WithId::id(&input))) as Arc<dyn CachableIdTr>;
 
+        debug!("ApplyMotifNets::run: self.loaded_motif_nets.len={:?}", self.loaded_motif_nets.len());
 
-        futures::stream::iter(self.loaded_motif_nets.iter())
+        let matches = futures::stream::iter(self.loaded_motif_nets.iter())
             .map(|motif_net|{
                 let motif_net = Arc::clone(motif_net);
                 let metrics = input.size().clone();
@@ -230,7 +231,7 @@ where
                         vec![
                             Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, Arc::clone(&out_id))))),
                             Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                            Adjusters::Input(Box::new(SplitsAdjuster::<ApplyMotifNetInputDeviceWrapper, std::ops::Range<MonoMetrics<0, 3>>>::new(metrics))),
+                            Adjusters::Input(Box::new(SplitsAdjuster::<ApplyMotifNetInputDeviceWrapper, Range<MonoMetrics<0, 3>>>::new(metrics))),//MonoMetrics<0, 3> - 0 dim of 3-dimensional  Batch<ChannelsData>
                         ], None).run(
                         &apply_motif_net,
                         Arc::clone(&wrapper),
@@ -246,8 +247,10 @@ where
                     ).await
                 }
             })
-            .buffer_unordered(10)
+            .buffered(10)//TODO config, TODO - use buffer_unordered and then sort by motif_id?
             .try_collect::<Vec<_>>().await?;
+
+        debug!("ApplyMotifNets::run: matches={matches:?}");
 
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(ApplyMotifNetsOutput::new("".into()))))
@@ -294,7 +297,7 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
                 do_run(&ApplyMotifNetInput::new(
                     batch_v,
                     batched_motifs_output,
-                    100//TODO slice step
+                    100//TODO slice step - take from train label run config
                 ))
 
         })
@@ -304,9 +307,56 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
     where
         S: Clone + Debug + 'static,
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
-        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
     {
-        todo!()
+        let t_1_batch = Arc::clone(&self.batch);
+        let motif_net = Arc::clone(&self.motif_net);
+
+        {
+            let __with_data_device = to_device_idx;
+            async {
+                let __device_idx = __with_data_device;
+                let __with_data_var_0 = ::std::sync::Arc::clone(&(t_1_batch));
+                let __with_data_var_1 = ::std::sync::Arc::clone(&(motif_net));
+
+                let __with_data_handle_0 = ::tokio::spawn({
+                    let __wrap = ::std::sync::Arc::clone(&__with_data_var_0);
+                    let __device_idx = __device_idx;
+                    async move {
+                        __wrap.load_from_any_device(__device_idx).await?;
+                        Ok::<(), ::thoosa_shared::ThoosaError>(())
+                    }
+                });
+
+                let __with_data_handle_1 = ::tokio::spawn({
+                    let __wrap = ::std::sync::Arc::clone(&__with_data_var_1);
+                    let __device_idx = __device_idx;
+                    async move {
+                        __wrap.load_from_any_device(__device_idx).await?;
+                        Ok::<(), ::thoosa_shared::ThoosaError>(())
+                    }
+                });
+
+                let __with_data_handle_res_0 = __with_data_handle_0.await?;
+                __with_data_handle_res_0?;
+                let __with_data_handle_res_1 = __with_data_handle_1.await?;
+                __with_data_handle_res_1?;
+
+                let __with_data_guard_0 = __with_data_var_0.get_copied(__device_idx).await?;
+                let __with_data_ref_0 = &*__with_data_guard_0;
+                let __with_data_guard_1 = __with_data_var_1.get_copied(__device_idx).await?;
+                let __with_data_ref_1 = &*__with_data_guard_1;
+
+                (|batch_v: &ThoTensor<Batch<ChannelsData2>, SimpleId>,
+                  batched_motifs_output: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>| {
+                    do_run(&ApplyMotifNetInput::new(
+                        batch_v,
+                        batched_motifs_output,
+                        100, //TODO slice step - take from train label run config
+                    ))
+                })(__with_data_ref_0, __with_data_ref_1)
+            }.await
+        }
     }
 }
 
@@ -334,12 +384,12 @@ struct ApplyMotifNetInput<'a> {
     motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>
 }
 
-#[async_trait]
-impl CopyToDevice for ApplyMotifNetInput<'_> {
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
-        todo!()
-    }
-}
+// #[async_trait]
+// impl CopyToDevice for ApplyMotifNetInput<'_> {
+//     async fn copy_to_device(&self, dst_device: usize) -> Self {
+//         todo!()
+//     }
+// }
 
 impl Data for ApplyMotifNetInput<'_> {
     type Metrics = MonoMetrics<0, 3>;
@@ -425,7 +475,11 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 
         let params = input.motif_net.extra();
 
-        let slices = input.batch.as_ref().i((.., params.channel() as i64, ..)).unfold(1, params.motif_net_params().num_features() as i64, input.slice_step as i64);
+        let input_t = input.batch.as_ref();
+        let c = params.channel() as i64;
+        let slices = input_t.i((.., c..c+1, ..));
+
+        debug!("ApplyMotifNet::do_run: input_t.size={:?} slices.size={:?}", input_t.size(), slices.size());
         Ok(input.motif_net.data().tho_forward(&ThoTensor::new("".into(), slices), false))
     }
 }
@@ -466,37 +520,36 @@ mod tests {
     use crate::tasks::tensor_loader::mock_tensor_loader;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_0() -> Result<(), ThoosaError>{
+    async fn test_apply_motif_nets_3_channels_2_motifs() -> Result<(), ThoosaError> {
         log::set_max_level(Trace);
         reset_print_options();
         GlobalCtx::init_devices(2);
 
         let input_n_0 = 1000;
-        let motif_width = 120;
 
         let find_motifs_run_id:RunId = 1;
         let select_motifs_run_id:RunId = 2;
 
         let train_motifs_run_id:RunId = 3;
-        let motif_id = 1;
+        let motif_0_0_id = 0; //channel 0 motif 0
+        let motif_0_1_id = 1; //channel 0 motif 1
+        let motif_1_0_id = 0; //channel 1 motif 0
 
-        let motif_t = Arc::new(ThoTensor::new("".into(), motifs_tensor(100, 3, MotifKind::Pulse)));
-        let resource_a = Resource::new(1, 1, "tensor_a", input_n_0);
-        let resource_b = Resource::new(2, 1, "tensor_b", input_n_0);
+        let motif_0_0 = Arc::new(ThoTensor::new("motif_0_0".into(), motifs_tensor(100, 3, MotifKind::Pulse)));
+        let motif_0_1 = Arc::new(ThoTensor::new("motif_0_1".into(), motifs_tensor(100, 3, MotifKind::Triangle)));
+        let motif_1_0 = Arc::new(ThoTensor::new("motif_1_0".into(), motifs_tensor(100, 3, MotifKind::Sin)));
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 3, 100, input_n_0 as u32)
                 .with_load_motif_nets(vec![
                     vec![
                         //channel 0
-                        motif_test_net_(Cpu, Arc::clone(&motif_t)),
-                        motif_test_net_(Cpu, Arc::clone(&motif_t)),
+                        motif_test_net_(Cpu, Arc::clone(&motif_0_0)),
+                        motif_test_net_(Cpu, Arc::clone(&motif_0_1)),
                     ],
                     vec![
                         //channel 1
-                        motif_test_net_(Cpu, Arc::clone(&motif_t)),
-                        motif_test_net_(Cpu, Arc::clone(&motif_t)),
-                        motif_test_net_(Cpu, Arc::clone(&motif_t)),
+                        motif_test_net_(Cpu, Arc::clone(&motif_1_0)),
                     ],
                     vec![],
                 ])
@@ -514,9 +567,15 @@ mod tests {
                     (train_motifs_run_id, Ok(vec![select_motifs_run_id])),
                     (select_motifs_run_id, Ok(vec![find_motifs_run_id]))
                 ])
-                .with_get_motif_meta( [(motif_id, Ok((0usize, find_motifs_run_id)))])
+                .with_get_motif_meta( [(motif_0_0_id, Ok((0usize, find_motifs_run_id)))])
                 .with_list_selected_motifs([
-                    (select_motifs_run_id, Ok(vec![vec![(motif_id, 1.0f64)]]))
+                    (select_motifs_run_id, Ok(
+                        vec![
+                            vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)], //channel 0
+                            vec![(motif_1_0_id, 1.0f64)], //channel 1
+                            vec![]//channel 2
+                        ]
+                    ))
                 ])
                 .build()));
 
@@ -530,11 +589,23 @@ mod tests {
             Arc::new(RwLock::new(mock_run_ctx::default(1)))
         ).await?);
 
+        let (resource_a_t, resource_a_intervals) = resource_tensor(2000, &[
+            vec![(2, 100, MotifKind::Pulse), (1, 100, MotifKind::Triangle)],
+            vec![(3, 100, MotifKind::Sin)],
+        ], 200)?;
+
+        let (resource_b_t, resource_a_intervals) = resource_tensor(2000, &[
+            vec![(1, 100, MotifKind::Pulse), (2, 100, MotifKind::Triangle)],
+            vec![(3, 100, MotifKind::Sin)],
+        ], 200)?;
+        let batch = Tensor::stack(&[resource_a_t, resource_b_t], 0);
+
         let out = apply_motif_nets.run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new("test_batch".into(), Tensor::rand(&[11, 5, 1000], FLOAT_CPU)), 0)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::new("test_batch".into(), batch), 0)),
             Arc::new(RwLock::new(mock_run_ctx::default(1)))
         ).await?;
 
+        debug!("test_apply_motif_nets_3_channels_1_motif: out={out:?}");
 
         Ok(())
     }
@@ -564,35 +635,36 @@ mod tests {
         let tho_tensor:Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::new("".into(), t));
 
         let node = SeqBuilder::new(num_features, None)
-            .split(vec![
-                SeqBuilder::new(num_features, None).conv_1d("conv", l as u32, 1, 1, cfg, Some(Arc::clone(&tho_tensor))).end_seq(),
-                SeqBuilder::new(num_features, None)
-                    .closure(
-                        Arc::new(Box::new(move |t: &Tensor| {
-                            t.pow_tensor_scalar(2)
-                        })),
-                        None,
-                    )
-                    .conv_1d("energy", l as u32, 1, 1, cfg, Some(Arc::new(ThoTensor::new("".into(), Tensor::ones([1, 1, l], FLOAT_CPU)))))
-                    .closure(
-                        Arc::new(Box::new(move |t: &Tensor| {
-                            t.clamp_min(1e-12) //.sqrt()
-                        })),
-                        None,
-                    )
-                    .end_seq()
-            ],
-                   Box::new(move |t: &Tensor| {
-                       vec![
-                           t.shallow_clone(),
-                           t.shallow_clone()
-                       ]
-                   }),
-                   Box::new(move |num_denom: Vec<Tensor>| {
-                       let [num, denom] = <[Tensor; 2]>::try_from(num_denom).unwrap();
+            .split(
+                vec![
+                    SeqBuilder::new(num_features, None).conv_1d("conv", l as u32, 1, 1, cfg, Some(Arc::clone(&tho_tensor))).end_seq(),
+                    SeqBuilder::new(num_features, None)
+                        .closure(
+                            Arc::new(Box::new(move |t: &Tensor| {
+                                t.pow_tensor_scalar(2)
+                            })),
+                            None,
+                        )
+                        .conv_1d("energy", l as u32, 1, 1, cfg, Some(Arc::new(ThoTensor::new("".into(), Tensor::ones([1, 1, l], FLOAT_CPU)))))
+                        .closure(
+                            Arc::new(Box::new(move |t: &Tensor| {
+                                t.clamp_min(1e-12) //.sqrt()
+                            })),
+                            None,
+                        )
+                        .end_seq()
+                ],
+                Box::new(move |t: &Tensor| {
+                    vec![
+                        t.shallow_clone(),
+                        t.shallow_clone()
+                    ]
+                }),
+                Box::new(move |num_denom: Vec<Tensor>| {
+                    let [num, denom] = <[Tensor; 2]>::try_from(num_denom).unwrap();
 
-                       (num / denom).squeeze_dim(1)
-                   })
+                    (num / denom).squeeze_dim(1)
+                }),
             ).end_seq();
 
 
