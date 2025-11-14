@@ -804,6 +804,7 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
             let base: &Self::O<'_> = read_guard
                 .as_ref()
                 .expect("no value behind guard");
+
             let data: Self::O<'_> = base.subview(selector.clone())?;
 
             return Self::do_run_trace_owned(trace_ctx, do_run, data);
@@ -820,10 +821,9 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
 
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t: Self::O<'_> = src.subview(selector.clone())?;
-                debug!(
-                    "DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",
-                    sub_t.size()
-                );
+
+                debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
+
                 let data = sub_t.copy_to_device(to_device_idx);
 
                 return Self::do_run_trace_owned(trace_ctx, do_run, data.await);

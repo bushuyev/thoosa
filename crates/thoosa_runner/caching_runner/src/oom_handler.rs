@@ -240,7 +240,6 @@ where
 impl<'a, 'z, R, IC, RC, RCC, S> OOMHandler<'a, 'z, R, IC, RC, RCC, S>
 where
     R: SyncStage + Adjustable + OutId + 'a,
-    // for<'i> <R as Stage>::In<'i>: Data,
     R::Ctx: Adjustable,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
@@ -270,7 +269,7 @@ where
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
     where
-       for <'f> W: WithDataRef<O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
+       for <'f> W: WithDataRef<O<'f>=<R as Stage>::In<'f>>,
         W:WithId<ID=<R::In<'z> as WithId>::ID>
     {
 

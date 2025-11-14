@@ -372,21 +372,6 @@ pub struct ThoTensor<D: Dims, Id: Named + Clone> {
     pd: PhantomData<D>,
 }
 
-
-// impl<D: Dims> WithId for &ThoTensor<D, CachableId> {
-//     type ID = CachableId;
-//
-//     fn id(&self) -> &Self::ID {
-//         &self.id
-//     }
-// }
-
-
-// impl<D: Dims, Id: Named + Clone> Dimensional for ThoTensor<D, Id> {
-//     type Dimensions = D;
-// }
-
-
 impl<D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
     fn from(tensor: Tensor) -> Self {
         Self {
