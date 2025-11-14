@@ -59,13 +59,16 @@ impl <D:Data+CopyToDevice+WithId, E:Clone+Debug> WithId for DataWithExtra<D, E> 
 impl <D:Data+CopyToDevice+WithId, E:Clone+Debug> Output for DataWithExtra<D, E> {}
 
 
-impl <Selector, D:Data+CopyToDevice+WithId+Sync, E:Clone+Debug+Sync> Select<Selector> for DataWithExtra<D, E>
+impl <'s, S, D, E> Select<'s, S> for DataWithExtra<D, E>
 where
-    D:Select<Selector, Output=D>
-{
-    type Output = Self;
+    D:Select<'s, S, Output=D>,
+    D:Data+CopyToDevice+WithId+Sync + 's,
+    E:Clone+Debug+Sync + 's
 
-    fn subview(&self, selector: Selector) -> Result<Self::Output, ThoosaError> {
+{
+    type Output= Self;
+
+    fn subview(&self, selector: S) -> Result<Self::Output, ThoosaError> {
         Ok(DataWithExtra {
             data: self.data.subview(selector)?,
             extra: self.extra.clone()

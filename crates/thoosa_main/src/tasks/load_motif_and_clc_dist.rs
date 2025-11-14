@@ -221,7 +221,7 @@ impl From<Range<MonoMetrics<0, 2>>> for MotifSlicesSelector {
 
 impl Adjustable for MotifSlicesSelector {}
 
-impl Select<MotifSlicesSelector> for ThoTensor<MotifSlices, DataId> {
+impl <'s> Select<'s, MotifSlicesSelector> for ThoTensor<MotifSlices, DataId> {
     type Output = ThoTensor<MotifSlices, DataId>;
 
     fn subview(&self, selector: MotifSlicesSelector) -> Result<Self::Output, ThoosaError> {

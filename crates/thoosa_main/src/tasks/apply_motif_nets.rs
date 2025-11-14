@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::lock_api::RwLock;
-use tch::IndexOp;
+use tch::{IndexOp, Tensor};
 use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
@@ -28,10 +28,10 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{CopyToDevice, ThoosaError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Select, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
-use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcRresourcesMotifsDistOutput;
 use crate::tasks::run_ctx_2::MotifsCtx;
@@ -278,6 +278,37 @@ impl WithId for ApplyMotifNetInputDeviceWrapper {
     }
 }
 
+
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RawTensorsBatchSelector {
+    slices: Range<MonoMetrics<0, 3>>,
+}
+
+impl From<Range<MonoMetrics<0, 3>>> for RawTensorsBatchSelector {
+    fn from(value: Range<MonoMetrics<0, 3>>) -> Self {
+        RawTensorsBatchSelector { slices: value }
+    }
+}
+
+impl Adjustable for RawTensorsBatchSelector {}
+
+impl <'s> Select<'s, RawTensorsBatchSelector> for ThoTensor<Batch<ChannelsData2>, SimpleId> {
+    type Output = ThoTensor<Batch<ChannelsData2>, SimpleId>;
+
+    fn subview(&self, selector: RawTensorsBatchSelector) -> Result<Self::Output, ThoosaError> {
+        let size: MonoMetrics<0, 3> = self.size().try_into()?;
+
+        let ranges = MonoMetrics::<0, 3>::map_to_ranges(&selector.slices.start, &selector.slices.end)?;
+
+        let sub_tensor = self.t_ref().f_i((ranges[0].clone(), ranges[1].clone()))?;
+
+        Ok(ThoTensor::new(self.id().clone(), sub_tensor))
+    }
+}
+
+
+
 impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
     type O<'o> = ApplyMotifNetInput<'o>;
 
@@ -287,6 +318,8 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
     {
         let t_1_batch= Arc::clone(&self.batch);
         let motif_net = Arc::clone(&self.motif_net);
+
+
 
         with_data!(to_device_idx, t_1_batch, motif_net;
             |
@@ -306,11 +339,32 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
     async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
         S: Clone + Debug + 'static,
-        Self::O<'o>: Select<S, Output=Self::O<'o>>,
+        Self::O<'o>: Select<'o, S, Output=Self::O<'o>>,
         for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
     {
-        let t_1_batch = Arc::clone(&self.batch);
+        let t_1_batch = Arc::clone(&self.batch)/*.with_selected_data_ref(to_device_idx, selector, None, |v|{
+            Ok(ThoTensor::new(v.id().clone(), Tensor::new()))
+        }).await?*/;
+
         let motif_net = Arc::clone(&self.motif_net);
+        //
+        // with_data!(to_device_idx, t_1_batch, motif_net;
+        //     |
+        //      batch_v:&ThoTensor<Batch<ChannelsData2>, SimpleId>,
+        //      batched_motifs_output:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>
+        //     |{
+        //
+        //
+        //         do_run(&ApplyMotifNetInput::new(
+        //             batch_v,
+        //             batched_motifs_output,
+        //             100//TODO slice step - take from train label run config
+        //         ))
+        //
+        // })
+        // todo!()
+
+        let batch_selector = RawTensorsBatchSelector::from(MonoMetrics::from([0, 10, 10])..MonoMetrics::from([10, 10, 10]));
 
         {
             let __with_data_device = to_device_idx;
@@ -342,8 +396,8 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
                 let __with_data_handle_res_1 = __with_data_handle_1.await?;
                 __with_data_handle_res_1?;
 
-                let __with_data_guard_0 = __with_data_var_0.get_copied(__device_idx).await?;
-                let __with_data_ref_0 = &*__with_data_guard_0;
+                let __with_data_guard_0 = __with_data_var_0.get_selected_data(__device_idx, batch_selector).await?;
+                let __with_data_ref_0 = &__with_data_guard_0;
                 let __with_data_guard_1 = __with_data_var_1.get_copied(__device_idx).await?;
                 let __with_data_ref_1 = &*__with_data_guard_1;
 
@@ -357,6 +411,14 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
                 })(__with_data_ref_0, __with_data_ref_1)
             }.await
         }
+    }
+}
+
+impl <'s> Select<'s, std::ops::Range<MonoMetrics<0, 3>>> for ApplyMotifNetInputDeviceWrapper {
+    type Output =  ApplyMotifNetInput<'static>;
+
+    fn subview(&self, selector: Range<MonoMetrics<0, 3>>) -> Result<Self::Output, ThoosaError> {
+        todo!()
     }
 }
 
@@ -418,7 +480,7 @@ impl <'a> WithId for ApplyMotifNetInput<'a> {
     }
 }
 
-impl Select<std::ops::Range<MonoMetrics<0, 3>>> for ApplyMotifNetInput<'_> {
+impl <'s> Select<'s, std::ops::Range<MonoMetrics<0, 3>>> for ApplyMotifNetInput<'s> {
     type Output = Self;
 
     fn subview(&self, selector: Range<MonoMetrics<0, 3>>) -> Result<Self::Output, ThoosaError> {

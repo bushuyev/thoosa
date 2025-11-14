@@ -149,7 +149,7 @@ where
 pub enum Adjusters<'a, R, IC, RC, RCC, S>
 where
     R: Stage + 'a,
-    <R as Stage>::In<'a>: /*Data +*/ Select<S> + Debug,
+    <R as Stage>::In<'a>: /*Data +*/ Select<'a, S> + Debug,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
@@ -166,7 +166,7 @@ where
     R: Stage + 'a,
     IC: InputContext<'a, R>,
     R: Adjustable,
-    <R as Stage>::In<'a>: /*Data + */Select<S> + Debug,
+    <R as Stage>::In<'a>: /*Data + */Select<'a, S> + Debug,
     RC: RunnableContext,
     RCC: RunCtxContext,
     <R as Stage>::Ctx: Adjustable,
@@ -227,7 +227,7 @@ where
     RC: RunnableContext,
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default,
-    <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
+    <R as Stage>::In<'a>: Select<'a, S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId
 {
@@ -245,7 +245,7 @@ where
     RC: RunnableContext,
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default+ 'static,//S - for Select<Selector>, 'static is for Any in WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
-    <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
+    <R as Stage>::In<'a>: Select<'a, S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId,
 {
@@ -269,7 +269,7 @@ where
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
     where
-       for <'f> W: WithDataRef<O<'f>=<R as Stage>::In<'f>>,
+       for <'f> W: WithDataRef<O<'f>=<R as Stage>::In<'f>>, // + Select<'a, S, Output=<R as Stage>::In<'a>>,
         W:WithId<ID=<R::In<'z> as WithId>::ID>
     {
 
@@ -382,6 +382,7 @@ where
                                     panic_to_err_async!(input.with_selected_data_ref(device_idx, selector.clone(), None, |data| {
                                         Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
                                     }).await)
+                                    // Err(ThoosaError::new("xxx"))
 
                                 } else {
                                     panic_to_err_async!(input.with_data_ref(device_idx, None, |data| {

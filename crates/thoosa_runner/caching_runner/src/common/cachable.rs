@@ -167,6 +167,15 @@ where
     pd: PhantomData<O>,
 }
 
+// impl <'s, O, S> Select<'s, S> for DevicesWrap<O> where
+//     O: Select<'s, S> + WithId + Data + CopyToDevice + Send + Sync,
+// {
+//     type Output = O;
+//
+//     fn subview(&self, selector: S) -> Result<Self::Output, ThoosaError> {
+//         todo!()
+//     }
+// }
 
 impl <O> Input for DevicesWrap<O>
 where
@@ -419,8 +428,8 @@ impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O
         do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>,
     ) -> Result<R, ThoosaError>
     where
-        O: Select<S>,
-        <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+        for <'s> O: Select<'s, S>,
+        for <'s> <O as Select<'s, S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
         S: Clone,
     {
         let read_guard: RwLockReadGuard<'_, Option<O>> = self.cached_data[to_device_idx].read().await;
@@ -454,6 +463,46 @@ impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O
 
         Err(MyError::NotFound.into())
     }
+
+    pub async fn get_selected_data<S>(
+        &self,
+        to_device_idx: usize,
+        selector: S,
+    ) -> Result<<O as Select<S>>::Output, ThoosaError>
+    where
+        for <'s> O: Select<'s, S>,
+        for <'s> <O as Select<'s, S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+        S: Clone,
+    {
+        let read_guard: RwLockReadGuard<'_, Option<O>> = self.cached_data[to_device_idx].read().await;
+
+        if read_guard.is_some() {
+            return read_guard
+                .as_ref()
+                .expect("no value behind guard")
+                .subview(selector.clone());
+        }
+
+        drop(read_guard);
+
+        for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+            if source_device_idx == to_device_idx {
+                continue;
+            }
+
+            let source_read_guard: RwLockReadGuard<'_, Option<O>> = op.read().await;
+
+            if let Some(src) = source_read_guard.as_ref() {
+                let sub_t = src.subview(selector.clone())?;
+                debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
+                return Ok(sub_t.copy_to_device(to_device_idx).await);
+
+            }
+        }
+
+        Err(MyError::NotFound.into())
+    }
+
 
 
     fn do_run_trace_ref<R>(
@@ -766,7 +815,7 @@ pub trait WithDataRef: WithId + Debug {
     ) -> Result<R, ThoosaError>
     where
         S: Clone + Debug + 'static,
-        Self::O<'o>: Select<S, Output=Self::O<'o>>,
+        Self::O<'o>: Select<'o, S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
 
 
@@ -795,7 +844,7 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
     async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
         S: Clone + Debug+ 'static,
-        Self::O<'o>: Select<S, Output=Self::O<'o>>,
+        Self::O<'o>: Select<'o, S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
         let read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> = self.cached_data[to_device_idx].read().await;

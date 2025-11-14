@@ -464,6 +464,18 @@ impl <const Idx:usize, const Size:usize> From<[i64; 2]> for MonoMetrics<Idx, Siz
     }
 }
 
+impl <const Idx:usize, const Size:usize> From<[i64; 3]> for MonoMetrics<Idx, Size> {
+    fn from(value: [i64; 3]) -> Self {
+        assert_eq!(3, Size);
+
+        let mut me = Self::default();
+        me.dims[0] = value[0];
+        me.dims[1] = value[1];
+        me.dims[2] = value[2];
+        me
+    }
+}
+
 impl <const Idx:usize, const Size:usize> From<&[i64; 2]> for MonoMetrics<Idx, Size> {
     fn from(value: &[i64; 2]) -> Self {
         assert_eq!(2, Size);
@@ -509,7 +521,7 @@ impl CopyToDevice for MockData {
 }
 
 #[delegatable_trait]
-pub trait Select<S> {
+pub trait Select<'s, S> {
     type Output; //: CopyToDevice;
 
     fn subview(&self, selector: S) -> Result<Self::Output, ThoosaError>;
