@@ -13,7 +13,7 @@ use tch::{IndexOp, Tensor};
 
 use caching_runner::common::runnable::{Stage, SyncStage};
 use caching_runner::common::{OutId, RunCtx};
-use caching_runner::common::cachable::{DevicesWrap, WithDataRef};
+use caching_runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::applicables::with_cuda_stream;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
@@ -308,7 +308,9 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
 
         })
     }
+}
 
+impl WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
         S: Clone + Debug + 'static,
