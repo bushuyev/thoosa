@@ -793,8 +793,10 @@ impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O
 }
 
 ///To let OOMHandler accept both plain wrapped data as it's stored in caches and composite inputs like module + tensor or batch + motif
-pub trait WithDataRef: WithId + Debug {
+pub trait WithDataRef<S>: WithId + Debug {
     type O<'o>: Data + /*CopyToDevice +*/ WithId + Send + Sync;
+
+    type S;//selector
 
     async fn with_data_ref<R, F>(
         &self,
@@ -806,16 +808,15 @@ pub trait WithDataRef: WithId + Debug {
        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
 
 
-    async fn with_selected_data_ref<'o, S, R, F>(
+    async fn with_selected_data_ref<'o, R, F>(
         &self,
         to_device_idx: usize,
-        selector: S,
+        selector: Self::S,
         trace_ctx: Option<&'static str>,
         do_run: F,
     ) -> Result<R, ThoosaError>
     where
-        S: Clone + Debug + 'static,
-        Self::O<'o>: Select<'o, S, Output=Self::O<'o>>,
+        // Self::O<'o>: Select<'o, Self::S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
 
 
@@ -838,14 +839,18 @@ pub trait WithDataRef: WithId + Debug {
 }
 
 
-impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap<O> {
+impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice, S:Clone> WithDataRef<S> for DevicesWrap<O>
+where
+//   for <'o> Self::O<'o>: Select<'o, Self::S, Output=Self::O<'o>>
+  for <'o> O: Select<'o, S, Output=O>
+{
     type O<'o> = O;
+    type S = S;
 
-    async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F>(&self, to_device_idx: usize, selector: Self::S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        S: Clone + Debug+ 'static,
-        Self::O<'o>: Select<'o, S, Output=Self::O<'o>>,
-        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+        // S: Clone + Debug+ 'static,
+        for <'f> F: FnOnce(&O) -> Result<R, ThoosaError>
     {
         let read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> = self.cached_data[to_device_idx].read().await;
 
@@ -854,7 +859,7 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
                 .as_ref()
                 .expect("no value behind guard");
 
-            let data: Self::O<'_> = base.subview(selector.clone())?;
+            let data = base.subview(selector.clone())?;
 
             return Self::do_run_trace_owned(trace_ctx, do_run, data);
         }
@@ -869,7 +874,7 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
             let source_read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> = op.read().await;
 
             if let Some(src) = source_read_guard.as_ref() {
-                let sub_t: Self::O<'_> = src.subview(selector.clone())?;
+                let sub_t = src.subview(selector.clone())?;
 
                 debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
 
@@ -902,6 +907,8 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
     fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics {
         self.size().clone()
     }
+
+
 }
 
 #[cfg(test)]

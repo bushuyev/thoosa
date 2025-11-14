@@ -295,8 +295,9 @@ impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 
-impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
+impl WithDataRef<()> for ClcResourcesMotifsDistInputDeviceWrapper {
     type O<'o> = ClcResourcesMotifsDistInput<'o>;
+    type S = ();
 
     async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
@@ -319,10 +320,9 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
         })
     }
 
-    async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F>(&self, to_device_idx: usize, selector: (), trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        S: Clone + Debug + 'static,
-        Self::O<'o>: Select<'o, S, Output=Self::O<'o>>,
+        // Self::O<'o>: Select<'o, (), Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
 

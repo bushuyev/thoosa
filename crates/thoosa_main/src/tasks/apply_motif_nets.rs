@@ -309,8 +309,27 @@ impl <'s> Select<'s, RawTensorsBatchSelector> for ThoTensor<Batch<ChannelsData2>
 
 
 
-impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
+impl WithDataRef<std::ops::Range<MonoMetrics<0, 3>>> for ApplyMotifNetInputDeviceWrapper {
     type O<'o> = ApplyMotifNetInput<'o>;
+    type S = std::ops::Range<MonoMetrics<0, 3>>;
+
+    async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+            for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+    {
+        todo!()
+    }
+
+    async fn with_selected_data_ref<'o, R, F>(&self, to_device_idx: usize, selector: Self::S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+            for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+    {
+        todo!()
+    }
+}
+impl WithDataRef<RawTensorsBatchSelector> for ApplyMotifNetInputDeviceWrapper {
+    type O<'o> = ApplyMotifNetInput<'o>;
+    type S = RawTensorsBatchSelector;
 
     async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
@@ -336,10 +355,10 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
         })
     }
 
-    async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o,  R, F>(&self, to_device_idx: usize, selector: RawTensorsBatchSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        S: Clone + Debug + 'static,
-        Self::O<'o>: Select<'o, S, Output=Self::O<'o>>,
+        // S: Clone + Debug + 'static,
+        // Self::O<'o>: Select<'o, RawTensorsBatchSelector, Output=Self::O<'o>>,
         for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
     {
         let t_1_batch = Arc::clone(&self.batch)/*.with_selected_data_ref(to_device_idx, selector, None, |v|{
@@ -364,7 +383,7 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
         // })
         // todo!()
 
-        let batch_selector = RawTensorsBatchSelector::from(MonoMetrics::from([0, 10, 10])..MonoMetrics::from([10, 10, 10]));
+        // let batch_selector = RawTensorsBatchSelector::from(MonoMetrics::from([0, 10, 10])..MonoMetrics::from([10, 10, 10]));
 
         {
             let __with_data_device = to_device_idx;
@@ -396,7 +415,7 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
                 let __with_data_handle_res_1 = __with_data_handle_1.await?;
                 __with_data_handle_res_1?;
 
-                let __with_data_guard_0 = __with_data_var_0.get_selected_data(__device_idx, batch_selector).await?;
+                let __with_data_guard_0 = __with_data_var_0.get_selected_data(__device_idx, selector).await?;
                 let __with_data_ref_0 = &__with_data_guard_0;
                 let __with_data_guard_1 = __with_data_var_1.get_copied(__device_idx).await?;
                 let __with_data_ref_1 = &*__with_data_guard_1;

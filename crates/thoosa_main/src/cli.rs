@@ -1766,7 +1766,7 @@ async fn plot_motif(
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<RunCtx2>, RunCtx2>>,
     clc_dist: Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<RunCtx2>, RunCtx2>, AverageEuclideanDistanceStage<RunCtx2>, RunCtx2>>,
 ) -> Result<(), ThoosaError> {
-    let cache_area = ctx.read().cache_area();
+   /* let cache_area = ctx.read().cache_area();
     let num_devices = GlobalCtx::global().device_count();
     let motif_id_cache = Arc::new(DevicesWrap::wrap_cpu(DataId(motif_id as u32)));
 
@@ -1802,7 +1802,8 @@ async fn plot_motif(
 
         Ok(true)
     }).await?;
-    Ok(())
+    Ok(())*/
+    todo!()
 }
 
 #[allow(dead_code)]
