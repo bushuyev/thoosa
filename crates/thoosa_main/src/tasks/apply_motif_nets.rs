@@ -11,7 +11,7 @@ use tch::IndexOp;
 use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::global_ctx::GlobalCtx;
@@ -302,7 +302,9 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
 
         })
     }
+}
 
+impl WithSelectDataRef for ApplyMotifNetInputDeviceWrapper {
     async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
         S: Clone + Debug + 'static,

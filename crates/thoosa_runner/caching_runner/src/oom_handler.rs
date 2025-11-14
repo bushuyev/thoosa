@@ -1,5 +1,5 @@
 use crate::common::{PermitsCtx, RunCtx};
-use crate::common::cachable::{DevicesWrap, WithDataRef};
+use crate::common::cachable::{DevicesWrap, WithSelectDataRef};
 use crate::common::runnable::{Stage, SyncStage};
 use crate::common::{DropIf, OutId};
 #[double]
@@ -244,7 +244,7 @@ where
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
-    S: Adjustable + Debug + Clone + Default+ 'static,//S - for Select<Selector>, 'static is for Any in WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
+    S: Adjustable + Debug + Clone + Default+ 'static,//S - for Select<Selector>, 'static is for Any in WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
     <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId,
@@ -269,7 +269,7 @@ where
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
     where
-       for <'f> W: WithDataRef<O<'f>=<R as Stage>::In<'f>>,
+       for <'f> W: WithSelectDataRef<O<'f>=<R as Stage>::In<'f>>,
         W:WithId<ID=<R::In<'z> as WithId>::ID>
     {
 

@@ -11,7 +11,7 @@ use caching_runner::oom_handler::{
 };
 use caching_runner::permits::{NumPermits, PermitStep, MAX_PERMITS};
 
-use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use log::debug;
 use parking_lot::RwLock;
@@ -87,7 +87,7 @@ where
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
     ) -> Result<<R as Stage>::Out, ThoosaError>
     where
-        for <'f> W: WithDataRef<O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
+        for <'f> W: WithSelectDataRef<O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
         W:WithId<ID=<R::In<'z> as WithId>::ID>,
 
         R: SyncStage + Adjustable + 'static,

@@ -757,19 +757,6 @@ pub trait WithDataRef: WithId + Debug {
        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
 
 
-    async fn with_selected_data_ref<'o, S, R, F>(
-        &self,
-        to_device_idx: usize,
-        selector: S,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> Result<R, ThoosaError>
-    where
-        S: Clone + Debug + 'static,
-        Self::O<'o>: Select<S, Output=Self::O<'o>>,
-        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
-
-
     async fn dummy<R, F>(&self, f:F) -> Result<R, ThoosaError>
     where
         for <'f> F:  FnOnce() -> Result<R, ThoosaError> {
@@ -788,10 +775,50 @@ pub trait WithDataRef: WithId + Debug {
     }
 }
 
+pub trait WithSelectDataRef: WithDataRef {
+    async fn with_selected_data_ref<'o, S, R, F>(
+        &self,
+        to_device_idx: usize,
+        selector: S,
+        trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> Result<R, ThoosaError>
+    where
+        S: Clone + Debug + 'static,
+        Self::O<'o>: Select<S, Output = Self::O<'o>>,
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
+}
+
 
 impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap<O> {
     type O<'o> = O;
 
+    async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+    {
+        match self.load_from_any_device_(to_device_idx).await {
+            Ok(v) => {
+                let data: &Self::O<'_> = v.deref();
+                Self::do_run_trace_ref(trace_ctx, do_run, data)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.mem_size
+    }
+
+    fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics {
+        self.size().clone()
+    }
+}
+
+impl<O> WithSelectDataRef for DevicesWrap<O>
+where
+    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+{
     async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
         S: Clone + Debug+ 'static,
@@ -833,26 +860,6 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
         Err(MyError::NotFound.into())
     }
 
-    async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
-    where
-        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
-    {
-        match self.load_from_any_device_(to_device_idx).await {
-            Ok(v) => {
-                let data: &Self::O<'_> = v.deref();
-                Self::do_run_trace_ref(trace_ctx, do_run, data)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    fn mem_size(&self) -> u64 {
-        self.mem_size
-    }
-
-    fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics {
-        self.size().clone()
-    }
 }
 
 #[cfg(test)]
