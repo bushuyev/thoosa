@@ -87,7 +87,7 @@ where
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
     ) -> Result<<R as Stage>::Out, ThoosaError>
     where
-        for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
+        for <'f> W: WithSelectDataRef<(), S, O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
         W:WithId<ID=<R::In<'z> as WithId>::ID>,
 
         R: SyncStage + Adjustable + 'static,
@@ -101,7 +101,7 @@ where
         for <'i> <R::In<'i> as Data>::Metrics: PartialOrd<i64>,
         for<'a, 'b> &'a <R::In<'a> as Data>::Metrics: Add<&'b <R::In<'b> as Data>::Metrics, Output = <R::In<'a> as Data>::Metrics>,
         for <'i> <R::In<'i> as Data>::Metrics: PartialOrd,
-        <R as Stage>::In<'z>: Select<S, Output=<R as Stage>::In<'z>>
+        <R as Stage>::In<'z>: Select<(), S, Output=<R as Stage>::In<'z>>
     {
         let (device_idx, ctx_name) = {
             let guard = ctx.read();
@@ -507,7 +507,7 @@ mod tests {
         data: DummyTensor,
     }
 
-    impl Select<std::ops::Range<<DLoadedTensor as Data>::Metrics>> for DLoadedTensor {
+    impl Select<(), std::ops::Range<<DLoadedTensor as Data>::Metrics>> for DLoadedTensor {
         type Output = DLoadedTensor;
 
         fn subview(&self, selector: Range<<DLoadedTensor as Data>::Metrics>) -> Result<Self::Output, ThoosaError> {

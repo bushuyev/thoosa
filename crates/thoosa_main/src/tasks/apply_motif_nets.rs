@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::{AddAssign, DivAssign, Range};
+use std::ops::{Add, AddAssign, DivAssign, Range};
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
@@ -231,7 +231,7 @@ where
                         vec![
                             Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, Arc::clone(&out_id))))),
                             Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                            Adjusters::Input(Box::new(SplitsAdjuster::<ApplyMotifNetInputDeviceWrapper, ApplyMotifNetInputDeviceWrapperSelector>::new(ApplyMotifNetInputDeviceWrapperSelector::new()))),//MonoMetrics<0, 3> - 0 dim of 3-dimensional  Batch<ChannelsData>
+                            Adjusters::Input(Box::new(SplitsAdjuster::<ApplyMotifNetInputDeviceWrapperSelector>::new(ApplyMotifNetInputDeviceWrapperSelector::new()))),//MonoMetrics<0, 3> - 0 dim of 3-dimensional  Batch<ChannelsData>
                         ], None).run(
                         &apply_motif_net,
                         Arc::clone(&wrapper),
@@ -329,7 +329,15 @@ impl AddAssign<&ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNetInputD
     }
 }
 
-impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNetInputDeviceWrapper {
+impl Add<&ApplyMotifNetInputDeviceWrapperSelector> for &ApplyMotifNetInputDeviceWrapperSelector {
+    type Output = ApplyMotifNetInputDeviceWrapperSelector;
+
+    fn add(self, rhs: &ApplyMotifNetInputDeviceWrapperSelector) -> Self::Output {
+        todo!()
+    }
+}
+
+impl WithSelectDataRef<(), ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNetInputDeviceWrapper {
     async fn with_selected_data_ref<'o, R, F>(&self, to_device_idx: usize, selector: ApplyMotifNetInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
         // Self::O<'o>: Select<S, Output=Self::O<'o>>,
@@ -445,7 +453,7 @@ impl <'a> WithId for ApplyMotifNetInput<'a> {
     }
 }
 
-impl Select<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNetInput<'_> {
+impl Select<(), ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNetInput<'_> {
     type Output = Self;
 
     fn subview(&self, selector: ApplyMotifNetInputDeviceWrapperSelector) -> Result<Self::Output, ThoosaError> {

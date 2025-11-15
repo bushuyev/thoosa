@@ -22,7 +22,7 @@ pub struct ChannelsDataVec {
     pub ranges:Vec<Range<MonoMetrics<1, 2>>>
 }
 
-impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SimpleId> {
+impl Select<(), ChannelsDataVec> for ThoTensor<ChannelsData2, SimpleId> {
     type Output = ThoTensor<ChannelsData2, SimpleId>;
 
     fn subview(&self, selector: ChannelsDataVec) -> Result<Self::Output, ThoosaError> {

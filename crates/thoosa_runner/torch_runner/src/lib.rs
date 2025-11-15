@@ -309,7 +309,7 @@ struct  LoadedRange {
 }
 impl Adjustable for LoadedRange {}
 
-impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
+impl Select<(), LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
     type Output = ThoTensor<LoadedTensor, SimpleId>;
 
     fn subview(&self, selector: LoadedRange) -> Result<Self::Output, ThoosaError> {

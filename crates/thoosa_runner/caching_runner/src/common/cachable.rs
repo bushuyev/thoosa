@@ -412,15 +412,15 @@ impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O
         Ok(self.cached_data[0].read().await.clone().expect("no data in cpu"))
     }
 
-    pub async fn with_selected_data<S, R>(
+    pub async fn with_selected_data<LS, S, R>(
         &self,
         to_device_idx: usize,
         selector: S,
-        do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>,
+        do_run: impl FnOnce(<O as Select<LS, S>>::Output) -> Result<R, ThoosaError>,
     ) -> Result<R, ThoosaError>
     where
-        O: Select<S>,
-        <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+        O: Select<LS, S>,
+        <O as Select<LS, S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
         S: Clone,
     {
         let read_guard: RwLockReadGuard<'_, Option<O>> = self.cached_data[to_device_idx].read().await;
@@ -775,8 +775,9 @@ pub trait WithDataRef: WithId + Debug {
     }
 }
 
-pub trait WithSelectDataRef<S>: WithDataRef
+pub trait WithSelectDataRef<LS, S>: WithDataRef
 where
+    LS:Debug,
     S: Clone + Debug + 'static,
 {
     async fn with_selected_data_ref<'o, R, F>(
@@ -818,14 +819,15 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
 
 
 
-impl<O, S> WithSelectDataRef<S> for DevicesWrap<O>
+impl<O, LS, S> WithSelectDataRef<LS, S> for DevicesWrap<O>
 where
+    LS:Debug,
     S:Debug + Clone + 'static,
-    O: Select<S, Output=O> + Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+    O: Select<LS, S, Output=O> + Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
 {
     async fn with_selected_data_ref<'o, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        Self::O<'o>: Select<S, Output=Self::O<'o>>,
+        Self::O<'o>: Select<LS, S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
         let read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> = self.cached_data[to_device_idx].read().await;

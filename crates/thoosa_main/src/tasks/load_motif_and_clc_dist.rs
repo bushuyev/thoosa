@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
@@ -22,7 +23,7 @@ use thoosa_common::dims::Dims;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
-use thoosa_shared::traits::MonoMetrics;
+use thoosa_shared::traits::{Metrics, MonoMetrics};
 use thoosa_shared::traits::{Adjustable, Data, DataId, Select, SimpleId, WithId};
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_common::tho_tensor::ThoTensor;
@@ -193,7 +194,7 @@ where
 
         let dist = OOMHandler::new(
             vec![
-                Adjusters::Input(Box::new(SplitsAdjuster::<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, MotifSlicesSelector>::new([2, -1].into())))
+                Adjusters::Input(Box::new(SplitsAdjuster::<MonoMetrics<0,2>>::new([2i64, -1].into())))
             ], None)
             .run(
                 &self.clc_dist,
@@ -207,10 +208,49 @@ where
     }
 }
 
+#[derive(Debug)]
+struct Local;
 
-#[derive(Clone, Debug, Default)]
+impl Select<Local, MonoMetrics<0, 2>> for ThoTensor<MotifSlices, DataId> {
+    type Output = ThoTensor<MotifSlices, DataId>;
+
+    fn subview(&self, selector: MonoMetrics<0, 2>) -> Result<Self::Output, ThoosaError> {
+        todo!()
+    }
+}
+
+/*
+#[derive(Clone, Debug, Default,  PartialEq)]
 pub(crate) struct MotifSlicesSelector {
     slices: Range<MonoMetrics<0, 2>>,
+}
+
+impl From<&[i64]> for MotifSlicesSelector {
+    fn from(value: &[i64]) -> Self {
+        todo!()
+    }
+}
+
+impl Metrics for MotifSlicesSelector {}
+
+impl DivAssign<i64> for MotifSlicesSelector {
+    fn div_assign(&mut self, rhs: i64) {
+        todo!()
+    }
+}
+
+impl PartialOrd for MotifSlicesSelector {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        None
+    }
+}
+
+impl Add<&MotifSlicesSelector> for &MotifSlicesSelector {
+    type Output = MotifSlicesSelector;
+
+    fn add(self, rhs: &MotifSlicesSelector) -> Self::Output {
+        todo!()
+    }
 }
 
 impl From<Range<MonoMetrics<0, 2>>> for MotifSlicesSelector {
@@ -233,7 +273,7 @@ impl Select<MotifSlicesSelector> for ThoTensor<MotifSlices, DataId> {
 
         Ok(ThoTensor::new(self.id().clone(), sub_tensor))
     }
-}
+}*/
 
 #[derive(Debug)]
 pub struct DistOutputBuilder {

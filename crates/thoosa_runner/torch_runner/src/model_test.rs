@@ -196,7 +196,7 @@ mod tests {
 
     impl Adjustable for ABRange {}
 
-    impl Select<ABRange> for ThoTensor<ABData, SimpleId> {
+    impl <LS> Select<LS, ABRange> for ThoTensor<ABData, SimpleId> {
         type Output = ThoTensor<ABData, SimpleId>;
 
         fn subview(&self, selector: ABRange) -> Result<Self::Output, ThoosaError> {

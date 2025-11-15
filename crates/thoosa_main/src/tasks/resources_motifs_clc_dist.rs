@@ -323,7 +323,7 @@ impl Metrics for ClcResourcesMotifsDistInputDeviceWrapperSelector{
 
 }
 
-impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
+impl WithSelectDataRef<(), ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
     async fn with_selected_data_ref<'o, R, F>(&self, to_device_idx: usize, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
         // S: Clone + Debug + 'static,
@@ -418,7 +418,7 @@ impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
     }
 }
 
-impl <'a> Select<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInput<'a> {
+impl <'a> Select<(), ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInput<'a> {
     type Output =  ClcResourcesMotifsDistInput<'a>;
 
     fn subview(&self, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector) -> Result<Self::Output, ThoosaError> {

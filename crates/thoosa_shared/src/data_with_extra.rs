@@ -59,9 +59,9 @@ impl <D:Data+CopyToDevice+WithId, E:Clone+Debug> WithId for DataWithExtra<D, E> 
 impl <D:Data+CopyToDevice+WithId, E:Clone+Debug> Output for DataWithExtra<D, E> {}
 
 
-impl <Selector, D:Data+CopyToDevice+WithId+Sync, E:Clone+Debug+Sync> Select<Selector> for DataWithExtra<D, E>
+impl <L, Selector, D:Data+CopyToDevice+WithId+Sync, E:Clone+Debug+Sync> Select<L, Selector> for DataWithExtra<D, E>
 where
-    D:Select<Selector, Output=D>
+    D:Select<L, Selector, Output=D>
 {
     type Output = Self;
 

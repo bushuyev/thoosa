@@ -47,7 +47,7 @@ use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::dists_tracker::DistsMask;
-use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, LoadMotifAndClcDistanceStage, MotifSlicesSelector};
+use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, LoadMotifAndClcDistanceStage};
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::run_ctx_2::{MotifsCtx, RunCtx2};
 use crate::tasks::tensor_loader::RawTensorLoader;

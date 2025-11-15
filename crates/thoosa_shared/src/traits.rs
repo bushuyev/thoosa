@@ -483,6 +483,8 @@ impl From<usize> for MonoMetrics<0, 1> {
     }
 }
 
+impl <const Idx:usize, const Size:usize> Adjustable for MonoMetrics<Idx, Size> {}
+
 #[async_trait]
 #[delegatable_trait]
 #[automock(type D=MockCopyToDevice; type Metrics=[usize;1]; type Sub=Self; type SubSelect=Range<<Self as Data>::Metrics>;)]
@@ -509,7 +511,7 @@ impl CopyToDevice for MockData {
 }
 
 #[delegatable_trait]
-pub trait Select<S> {
+pub trait Select<N, S> {
     type Output; //: CopyToDevice;
 
     fn subview(&self, selector: S) -> Result<Self::Output, ThoosaError>;

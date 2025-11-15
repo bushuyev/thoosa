@@ -149,7 +149,7 @@ where
 pub enum Adjusters<'a, R, IC, RC, RCC, S>
 where
     R: Stage + 'a,
-    <R as Stage>::In<'a>: /*Data +*/ Select<S> + Debug,
+    // <R as Stage>::In<'a>: /*Data +*/ Select<LS, S> + Debug,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
@@ -166,7 +166,7 @@ where
     R: Stage + 'a,
     IC: InputContext<'a, R>,
     R: Adjustable,
-    <R as Stage>::In<'a>: /*Data + */Select<S> + Debug,
+    // <R as Stage>::In<'a>: /*Data + */Select<LS, S> + Debug,
     RC: RunnableContext,
     RCC: RunCtxContext,
     <R as Stage>::Ctx: Adjustable,
@@ -218,7 +218,7 @@ pub struct NoopRunCtxContext {}
 impl RunCtxContext for NoopRunCtxContext {}
 
 #[derive(Debug)]
-pub struct OOMHandler<'a, 'z, R, IC, RC, RCC, S>
+pub struct OOMHandler<'a, 'z, R, IC, RC, RCC, LS, S>
 where
     R: SyncStage + Adjustable + OutId,
     // for<'i> <R as Stage>::In<'i>: Data,
@@ -226,26 +226,28 @@ where
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
+    LS:Debug,
     S: Adjustable + Debug + Clone + Default,
-    <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
+    <R as Stage>::In<'a>: Select<LS, S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId
 {
     adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
     #[allow(dead_code)]
     statistics: Option<&'a Arc<Statistics>>,
-    pd_rc: PhantomData<(RC, &'z RCC)>,
+    pd_rc: PhantomData<(LS, RC, &'z RCC)>,
 }
 
-impl<'a, 'z, R, IC, RC, RCC, S> OOMHandler<'a, 'z, R, IC, RC, RCC, S>
+impl<'a, 'z, R, IC, RC, RCC, LS, S> OOMHandler<'a, 'z, R, IC, RC, RCC, LS, S>
 where
     R: SyncStage + Adjustable + OutId + 'a,
     R::Ctx: Adjustable,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
+    LS:Debug,
     S: Adjustable + Debug + Clone + Default+ 'static,//S - for Select<Selector>, 'static is for Any in WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
-    <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
+    <R as Stage>::In<'a>: Select<LS, S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId,
 {
@@ -269,7 +271,7 @@ where
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
     where
-       for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>>,
+       for <'f> W: WithSelectDataRef<LS, S, O<'f>=<R as Stage>::In<'f>>,
         W:WithId<ID=<R::In<'z> as WithId>::ID>
     {
 
@@ -491,7 +493,7 @@ pub(crate) mod test_types {
         pub data: DummyTensor,
     }
 
-    impl Select<Range<[usize;1]>> for TestInput {
+    impl Select<(), Range<[usize;1]>> for TestInput {
         type Output = TestInput;
 
         fn subview(&self, selector: Range<[usize; 1]>) -> Result<Self::Output, ThoosaError> {

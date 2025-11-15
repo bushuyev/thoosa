@@ -85,7 +85,7 @@ use caching_runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
-use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
+use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage};
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
 use crate::tasks::train_motif_nets::{TrainMotifNets, TrainMotifNetInput};

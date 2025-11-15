@@ -6,48 +6,48 @@ use log::debug;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, DivAssign};
+use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics};
 
 ///AJ - target adjustable (data), RA its range, returned from Adjuster::adjust
 #[derive(Debug)]
-pub struct SplitsAdjuster<AJ, RA>
+pub struct SplitsAdjuster<M>
 where
-    AJ: Data + Adjustable,
-    <AJ as Data>::Metrics: DivAssign<i64>,
+    M:Adjustable + Metrics  + Debug,
+    M: DivAssign<i64>,//TODO replace i64 with num_traits type
+    M: PartialOrd<M>,
+    for<'a, 'b> &'a M: Add<&'b M, Output = M>,
 {
-    pd: PhantomData<(AJ, RA)>,
-    min_split_len: <AJ as Data>::Metrics,
+    min_split_len: M,
 }
 
-impl<AJ, RA> SplitsAdjuster<AJ, RA>
+impl<M> SplitsAdjuster<M>
 where
-    AJ: Data + Adjustable,
-    <AJ as Data>::Metrics: DivAssign<i64>,
-    <AJ as Data>::Metrics: PartialOrd<<AJ as Data>::Metrics>,
+    M:Adjustable + Metrics  + Debug,
+    M: DivAssign<i64>,//TODO replace i64 with num_traits type
+    M: PartialOrd<M>,
+    for<'a, 'b> &'a M: Add<&'b M, Output = M>,
 {
-    pub fn new(min_split_len: <AJ as Data>::Metrics) -> Self {
+    pub fn new(min_split_len: M) -> Self {
         debug!("SplitsAdjuster::new: min_split_len={min_split_len:?}");
 
         Self {
-            pd: Default::default(),
             min_split_len,
         }
     }
 }
 
 #[async_trait]
-impl <AC, AJ, RA:Debug> Adjuster<AC> for SplitsAdjuster<AJ, RA>
+impl <AC, M> Adjuster<AC> for SplitsAdjuster<M>
 where
-    AC:SplitsAdjusterContext<Metrics = <AJ as Data>::Metrics>,
-    AJ: Data + Adjustable,
-    <AJ as Data>::Metrics: DivAssign<i64>,//TODO replace i64 with num_traits type
-    <AJ as Data>::Metrics: PartialOrd<<AJ as Data>::Metrics>,
-    // for<'a, 'b> &'a <AJ as Data>::Metrics: Add<&'b <AJ as Data>::Metrics, Output = <AJ as Data>::Metrics>,
-    // for<'a, 'b> &'a <AJ as Data>::Metrics: Add<&'b <AJ as Data>::Metrics, Output = <AJ as Data>::Metrics>,
-    RA:Adjustable //+ From<std::ops::Range<AJ::Metrics>>
+    AC:SplitsAdjusterContext<Metrics = M>,
+    M:Adjustable + Metrics  + Debug,
+    M: DivAssign<i64>,//TODO replace i64 with num_traits type
+    M: PartialOrd<M>,
+    for<'a, 'b> &'a M: Add<&'b M, Output = M>,
 {
-    type A = RA;
+    type A = M;
 
     async fn adjust(
         &self,
