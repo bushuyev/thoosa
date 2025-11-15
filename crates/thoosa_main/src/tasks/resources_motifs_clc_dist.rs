@@ -20,7 +20,7 @@ use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, Select, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
@@ -218,22 +218,22 @@ impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 
-impl Select<std::ops::Range<MonoMetrics<0, 1>>> for ClcResourcesMotifsDistInputDeviceWrapper {
-    type Output = ClcResourcesMotifsDistInputDeviceWrapper;
-
-    fn subview(&self, selector: std::ops::Range<MonoMetrics<0, 1>>) -> Result<Self::Output, ThoosaError> {
-        debug!("ClcResourcesMotifsDistInputDeviceWrapper::subview: selector={selector:?}");
-
-        let range = selector.start.dim_0() as usize..selector.end.dim_0() as usize;
-
-        Ok(ClcResourcesMotifsDistInputDeviceWrapper {
-            id:self.id.clone(),
-            batch: self.batch[range.clone()].to_vec(),
-            resource_ids: self.resource_ids[range].to_vec(),
-            batched_motifs_output: Arc::clone(&self.batched_motifs_output)
-        })
-    }
-}
+// impl Select<std::ops::Range<MonoMetrics<0, 1>>> for ClcResourcesMotifsDistInputDeviceWrapper {
+//     type Output = ClcResourcesMotifsDistInputDeviceWrapper;
+//
+//     fn subview(&self, selector: std::ops::Range<MonoMetrics<0, 1>>) -> Result<Self::Output, ThoosaError> {
+//         debug!("ClcResourcesMotifsDistInputDeviceWrapper::subview: selector={selector:?}");
+//
+//         let range = selector.start.dim_0() as usize..selector.end.dim_0() as usize;
+//
+//         Ok(ClcResourcesMotifsDistInputDeviceWrapper {
+//             id:self.id.clone(),
+//             batch: self.batch[range.clone()].to_vec(),
+//             resource_ids: self.resource_ids[range].to_vec(),
+//             batched_motifs_output: Arc::clone(&self.batched_motifs_output)
+//         })
+//     }
+// }
 
 /*#[async_trait]
 impl CopyToDevice for ClcResourcesMotifsDistInputDeviceWrapper {
@@ -260,10 +260,11 @@ impl CopyToDevice for ClcResourcesMotifsDistInputDeviceWrapper {
 //implemented so that ClcResourcesMotifsDistInputDeviceWrapper's resources batch can be adjusted.
 // Batched_motifs_output can't be adjusted since moitfs' ranges do not match in different channels
 impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
-    type Metrics = MonoMetrics<0, 1>;
+    type Metrics = ClcResourcesMotifsDistInputDeviceWrapperSelector;
 
     fn size(&self) -> Self::Metrics {
-        self.batch.len().into()
+        // self.batch.len().into()
+        todo!()
     }
 
     fn device(&self) -> usize {
@@ -310,39 +311,52 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     }
 }
 
-impl WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
-    async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+#[derive(Debug, Clone, Default)]
+pub struct ClcResourcesMotifsDistInputDeviceWrapperSelector {
+
+}
+
+
+impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapperSelector {}
+
+impl Metrics for ClcResourcesMotifsDistInputDeviceWrapperSelector{
+
+}
+
+impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
+    async fn with_selected_data_ref<'o, R, F>(&self, to_device_idx: usize, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        S: Clone + Debug + 'static,
-        Self::O<'o>: Select<S, Output=Self::O<'o>>,
+        // S: Clone + Debug + 'static,
+        // Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
 
         debug!("ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref: selector={selector:?}");
 
         //FIXME dyn Any
-        let (t_1_batch, batched_motifs_output) = if let Some(selector) = (&selector as &dyn Any).downcast_ref::<std::ops::Range<MonoMetrics<0, 1>>>() {
-            let s = self.subview(selector.clone())?;
-            (s.batch.clone(), s.batched_motifs_output)
-        } else {
-            (self.batch.clone(), self.batched_motifs_output.clone())
-        };
-
-
-        with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
-            |
-             batch_v:&[&ThoTensor<ChannelsData2, SimpleId>],
-             batched_motifs_output:&StackedMotifsOutput
-            |{
-                let inpt = ClcResourcesMotifsDistInput::new(
-                    &batch_v,//TODO select [selector] slice from t_1_batch
-                    self.resource_ids.clone(),
-                    batched_motifs_output,
-                );
-
-                do_run(&inpt)
-
-        })
+        // let (t_1_batch, batched_motifs_output) = if let Some(selector) = (&selector as &dyn Any).downcast_ref::<std::ops::Range<MonoMetrics<0, 1>>>() {
+        //     let s = self.subview(selector.clone())?;
+        //     (s.batch.clone(), s.batched_motifs_output)
+        // } else {
+        //     (self.batch.clone(), self.batched_motifs_output.clone())
+        // };
+        //
+        //
+        // with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
+        //     |
+        //      batch_v:&[&ThoTensor<ChannelsData2, SimpleId>],
+        //      batched_motifs_output:&StackedMotifsOutput
+        //     |{
+        //         let inpt = ClcResourcesMotifsDistInput::new(
+        //             &batch_v,//TODO select [selector] slice from t_1_batch
+        //             self.resource_ids.clone(),
+        //             batched_motifs_output,
+        //         );
+        //
+        //         do_run(&inpt)
+        //
+        // })
+        todo!()
     }
 }
 
@@ -381,10 +395,11 @@ impl <'a> CopyToDevice for ClcResourcesMotifsDistInput<'a> {
 }
 
 impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
-    type Metrics = MonoMetrics<0, 1>;
+    type Metrics = ClcResourcesMotifsDistInputDeviceWrapperSelector;
 
     fn size(&self) -> Self::Metrics {
-        self.batch.len().into()
+        // self.batch.len().into()
+        ClcResourcesMotifsDistInputDeviceWrapperSelector {}
     }
 
     fn device(&self) -> usize {
@@ -403,10 +418,10 @@ impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
     }
 }
 
-impl <'a> Select<std::ops::Range<MonoMetrics<0, 1>>> for ClcResourcesMotifsDistInput<'a> {
+impl <'a> Select<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInput<'a> {
     type Output =  ClcResourcesMotifsDistInput<'a>;
 
-    fn subview(&self, selector: std::ops::Range<MonoMetrics<0, 1>>) -> Result<Self::Output, ThoosaError> {
+    fn subview(&self, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector) -> Result<Self::Output, ThoosaError> {
         debug!("ClcResourcesMotifsDistInput::subview: selector={selector:?}");
 
         unimplemented!()

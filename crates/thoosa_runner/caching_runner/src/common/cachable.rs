@@ -775,18 +775,19 @@ pub trait WithDataRef: WithId + Debug {
     }
 }
 
-pub trait WithSelectDataRef: WithDataRef {
-    async fn with_selected_data_ref<'o, S, R, F>(
+pub trait WithSelectDataRef<S>: WithDataRef
+where
+    S: Clone + Debug + 'static,
+{
+    async fn with_selected_data_ref<'o, R, F>(
         &self,
         to_device_idx: usize,
         selector: S,
         trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<R, ThoosaError>
-    where
-        S: Clone + Debug + 'static,
-        Self::O<'o>: Select<S, Output = Self::O<'o>>,
-        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
+    ) -> Result<R, ThoosaError> where
+     // Self::O<'o>: Select<S, Output = Self::O<'o>>,
+     for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
 }
 
 
@@ -815,13 +816,15 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
     }
 }
 
-impl<O> WithSelectDataRef for DevicesWrap<O>
+
+
+impl<O, S> WithSelectDataRef<S> for DevicesWrap<O>
 where
-    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+    S:Debug + Clone + 'static,
+    O: Select<S, Output=O> + Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
 {
-    async fn with_selected_data_ref<'o, S, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F>(&self, to_device_idx: usize, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        S: Clone + Debug+ 'static,
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
