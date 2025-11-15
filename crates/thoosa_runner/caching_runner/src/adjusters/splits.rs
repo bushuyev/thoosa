@@ -43,8 +43,9 @@ where
     AJ: Data + Adjustable,
     <AJ as Data>::Metrics: DivAssign<i64>,//TODO replace i64 with num_traits type
     <AJ as Data>::Metrics: PartialOrd<<AJ as Data>::Metrics>,
-    for<'a, 'b> &'a <AJ as Data>::Metrics: Add<&'b <AJ as Data>::Metrics, Output = <AJ as Data>::Metrics>,
-    RA:Adjustable + From<std::ops::Range<AJ::Metrics>>
+    // for<'a, 'b> &'a <AJ as Data>::Metrics: Add<&'b <AJ as Data>::Metrics, Output = <AJ as Data>::Metrics>,
+    // for<'a, 'b> &'a <AJ as Data>::Metrics: Add<&'b <AJ as Data>::Metrics, Output = <AJ as Data>::Metrics>,
+    RA:Adjustable //+ From<std::ops::Range<AJ::Metrics>>
 {
     type A = RA;
 
@@ -54,15 +55,16 @@ where
         adjust_context: &mut AC,
     ) -> Result<Self::A, ThoosaError> {
 
-        let split_start = adjust_context.done_to();
-
-        let mut split_end = split_start + adjust_context.split_len();
-        adjust_context.input_len().cap(&mut split_end);
-
-        debug!("SplitsAdjuster::adjust: split_start={split_start:?} split_end={split_end:?} adjustable.size={:?}", adjust_context.input_len());
-
-
-        Ok((split_start.clone()..split_end).into())
+        // let split_start = adjust_context.done_to();
+        //
+        // let mut split_end = split_start + adjust_context.split_len();
+        // adjust_context.input_len().cap(&mut split_end);
+        //
+        // debug!("SplitsAdjuster::adjust: split_start={split_start:?} split_end={split_end:?} adjustable.size={:?}", adjust_context.input_len());
+        //
+        //
+        // Ok((split_start.clone()..split_end).into())
+        todo!()
     }
 
     fn degrade(&self, adjust_context: &mut AC) -> bool {

@@ -87,7 +87,7 @@ where
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
     ) -> Result<<R as Stage>::Out, ThoosaError>
     where
-        for <'f> W: WithSelectDataRef<O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
+        for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
         W:WithId<ID=<R::In<'z> as WithId>::ID>,
 
         R: SyncStage + Adjustable + 'static,
