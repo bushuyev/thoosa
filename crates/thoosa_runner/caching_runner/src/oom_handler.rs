@@ -269,7 +269,7 @@ where
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
     where
-       for <'f> W: WithSelectDataRef<O<'f>=<R as Stage>::In<'f>>,
+       for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>>,
         W:WithId<ID=<R::In<'z> as WithId>::ID>
     {
 
