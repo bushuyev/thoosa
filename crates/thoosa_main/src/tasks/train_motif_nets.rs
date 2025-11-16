@@ -196,6 +196,7 @@ where
 
                         // let batch_ref = &batch;
                         opt_train_2(
+
                             opt_config,
                             async |vs: &VarStore, run_config: TrainMotifsNetsRunConfig, _listener| {
                                 if ctx.read().acquired_permits() == 0 { //TODO move to with_data!
@@ -212,6 +213,7 @@ where
                             train_motifs_nodes_run_configs,
                             ThoDevice::from(device_idx).into(),
                             "motifs"
+                            
                         ).await.map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)| {
                             debug!("TrainMotifNet::run: motif_node_params={motif_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
                             let (channel, find_motifs_run_id) = store.read().get_motif_meta(motif_id_rate.0)?;

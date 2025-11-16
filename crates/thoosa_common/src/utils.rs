@@ -1823,16 +1823,8 @@ where
 
         opt.backward_step(&loss);
 
-        debug!(
-            "train: 3. cuda_mem={:?}  optimizer_size={}",
-            cuda_mem(),
-            optimizer_mem_size(&opt)
-        );
-        debug!(
-            "train: device={:?}  backward_step done in {}",
-            device,
-            t1.elapsed().as_millis()
-        );
+        debug!("train: 3. cuda_mem={:?}  optimizer_size={}",cuda_mem(),optimizer_mem_size(&opt));
+        debug!("train: device={:?}  backward_step done in {}",device,t1.elapsed().as_millis());
 
         if idx % 10 == 0 {
             let (x_t_0, y_t) = data.valid_batch().await?;
