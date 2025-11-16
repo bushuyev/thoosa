@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
@@ -193,7 +194,7 @@ where
 
         let dist = OOMHandler::new(
             vec![
-                Adjusters::Input(Box::new(SplitsAdjuster::<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, MotifSlicesSelector>::new([2, -1].into())))
+                Adjusters::Input(Box::new(SplitsAdjuster::<MotifSlicesSelector, MonoMetrics<0, 2>>::new([2, -1].into())))
             ], None)
             .run(
                 &self.clc_dist,
@@ -212,6 +213,7 @@ where
 pub(crate) struct MotifSlicesSelector {
     slices: Range<MonoMetrics<0, 2>>,
 }
+
 
 impl From<Range<MonoMetrics<0, 2>>> for MotifSlicesSelector {
     fn from(value: Range<MonoMetrics<0, 2>>) -> Self {
