@@ -31,7 +31,7 @@ use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
-use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::cross_dims::{BatchChannelsData2Selector, ChannelsData2};
 use crate::tasks::load_motif_and_clc_dist::MotifSlicesSelector;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcRresourcesMotifsDistOutput;
@@ -307,7 +307,7 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
 
 #[derive(Debug, Clone, Default)]
 struct ApplyMotifNetInputDeviceWrapperSelector {
-    batch_slices: Range<MonoMetrics<0, 3>>,
+    batch_slices: BatchChannelsData2Selector,
 }
 
 
@@ -316,66 +316,71 @@ impl Adjustable for ApplyMotifNetInputDeviceWrapperSelector{}
 
 impl From<Range<MonoMetrics<0, 3>>> for ApplyMotifNetInputDeviceWrapperSelector {
     fn from(value: Range<MonoMetrics<0, 3>>) -> Self {
-        ApplyMotifNetInputDeviceWrapperSelector { batch_slices: value }
+        ApplyMotifNetInputDeviceWrapperSelector { batch_slices: BatchChannelsData2Selector(value) }
     }
 }
-
-
 
 impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNetInputDeviceWrapper {
     async fn with_selected_data_ref<'o, R, F>(&self, to_device_idx: usize, selector: ApplyMotifNetInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        // Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
     {
         let t_1_batch = Arc::clone(&self.batch);
         let motif_net = Arc::clone(&self.motif_net);
 
-        {
-            let __with_data_device = to_device_idx;
-            async {
-                let __device_idx = __with_data_device;
-                let __with_data_var_0 = ::std::sync::Arc::clone(&(t_1_batch));
-                let __with_data_var_1 = ::std::sync::Arc::clone(&(motif_net));
+        let selected_batch = t_1_batch.with_selected_data(to_device_idx, selector.batch_slices, |v|{
 
-                let __with_data_handle_0 = ::tokio::spawn({
-                    let __wrap = ::std::sync::Arc::clone(&__with_data_var_0);
-                    let __device_idx = __device_idx;
-                    async move {
-                        __wrap.load_from_any_device(__device_idx).await?;
-                        Ok::<(), ::thoosa_shared::ThoosaError>(())
-                    }
-                });
+            Ok(v)
+        }).await?;
 
-                let __with_data_handle_1 = ::tokio::spawn({
-                    let __wrap = ::std::sync::Arc::clone(&__with_data_var_1);
-                    let __device_idx = __device_idx;
-                    async move {
-                        __wrap.load_from_any_device(__device_idx).await?;
-                        Ok::<(), ::thoosa_shared::ThoosaError>(())
-                    }
-                });
 
-                let __with_data_handle_res_0 = __with_data_handle_0.await?;
-                __with_data_handle_res_0?;
-                let __with_data_handle_res_1 = __with_data_handle_1.await?;
-                __with_data_handle_res_1?;
 
-                let __with_data_guard_0 = __with_data_var_0.get_copied(__device_idx).await?;
-                let __with_data_ref_0 = &*__with_data_guard_0;
-                let __with_data_guard_1 = __with_data_var_1.get_copied(__device_idx).await?;
-                let __with_data_ref_1 = &*__with_data_guard_1;
 
-                (|batch_v: &ThoTensor<Batch<ChannelsData2>, SimpleId>,
-                  batched_motifs_output: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>| {
-                    do_run(&ApplyMotifNetInput::new(
-                        batch_v,
-                        batched_motifs_output,
-                        100, //TODO slice step - take from train label run config
-                    ))
-                })(__with_data_ref_0, __with_data_ref_1)
-            }.await
-        }
+        let __with_data_device = to_device_idx;
+
+        let __device_idx = __with_data_device;
+        // let __with_data_var_0 = ::std::sync::Arc::clone(&(t_1_batch));
+        let __with_data_var_1 = ::std::sync::Arc::clone(&(motif_net));
+
+        // let __with_data_handle_0 = ::tokio::spawn({
+        //     let __wrap = ::std::sync::Arc::clone(&__with_data_var_0);
+        //     let __device_idx = __device_idx;
+        //     async move {
+        //         __wrap.load_from_any_device(__device_idx).await?;
+        //         Ok::<(), ::thoosa_shared::ThoosaError>(())
+        //     }
+        // });
+
+        let __with_data_handle_1 = ::tokio::spawn({
+            let __wrap = ::std::sync::Arc::clone(&__with_data_var_1);
+            let __device_idx = __device_idx;
+            async move {
+                __wrap.load_from_any_device(__device_idx).await?;
+                Ok::<(), ::thoosa_shared::ThoosaError>(())
+            }
+        });
+
+        // let __with_data_handle_res_0 = __with_data_handle_0.await?;
+        // __with_data_handle_res_0?;
+        let __with_data_handle_res_1 = __with_data_handle_1.await?;
+        __with_data_handle_res_1?;
+
+        // let __with_data_guard_0 = __with_data_var_0.get_copied(__device_idx).await?;
+        // let __with_data_ref_0 = &*__with_data_guard_0;
+        let __with_data_guard_1 = __with_data_var_1.get_copied(__device_idx).await?;
+        let __with_data_ref_1 = &*__with_data_guard_1;
+
+        // (|batch_v: &ThoTensor<Batch<ChannelsData2>, SimpleId>,
+        //   batched_motifs_output: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>| {
+        //
+        // })(__with_data_ref_0, __with_data_ref_1)
+        do_run(&ApplyMotifNetInput::new(
+            &selected_batch,
+            __with_data_ref_1,
+            100, //TODO slice step - take from train label run config
+        ))
+
+
     }
 }
 
