@@ -358,15 +358,15 @@ where
 
                         debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");
                         let mut motif_ids = vec![];
-                        for channel_mask_idsts_ids in channel_masks_dists_ids.into_iter().enumerate() {
-                            if let (channel, Some(mask_idsts_ids)) = channel_mask_idsts_ids {
+                        for channel_mask_dists_ids in channel_masks_dists_ids.into_iter().enumerate() {
+                            if let (channel, Some(mask_dists_ids)) = channel_mask_dists_ids {
 
-                                debug!("SelectMotifsStage::run: channel={channel} mask_idsts_ids={:?}", mask_idsts_ids.1);
+                                debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
 
-                                let (cpu_mask, _) = mask_idsts_ids.0.to_cpu().await.unpack();
+                                let (cpu_mask, _) = mask_dists_ids.0.to_cpu().await.unpack();
 
                                 let mut mask_in_channel = BoolTensorIterator::from(&cpu_mask);
-                                for motif_id in mask_idsts_ids.1 {
+                                for motif_id in mask_dists_ids.1 {
                                     let resources_iter= resources_iter.clone();
 
                                     let mut slices = HashSet::new();

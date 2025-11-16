@@ -2,7 +2,7 @@ use std::cmp::min;
 use std::ops::Range;
 use log::{debug, trace};
 use tch::{IndexOp, Tensor};
-use thoosa_common::dims::{AnyMetrics, Dims};
+use thoosa_common::dims::{AnyMetrics, Batch, Dims};
 use thoosa_shared::{MyError, ThoosaError};
 use thoosa_shared::traits::{DataId, Select, SimpleId};
 use thoosa_common::tho_tensor::ThoTensor;
@@ -54,6 +54,17 @@ impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SimpleId> {
         trace!("ChannelsData2::select: Vec sub.t=\n{}", sub.t_ref());
 
         Ok(sub)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BatchChannelsData2Selector(pub Range<MonoMetrics<0, 3>>);
+
+impl Select<BatchChannelsData2Selector> for ThoTensor<Batch<ChannelsData2>, SimpleId> {
+    type Output = ThoTensor<Batch<ChannelsData2>, SimpleId>;
+
+    fn subview(&self, selector: BatchChannelsData2Selector) -> Result<Self::Output, ThoosaError> {
+        todo!()
     }
 }
 

@@ -205,6 +205,7 @@ where
 }
 
 
+//for SelectMotifsStage
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistInputDeviceWrapper {
     id: SimpleId,
