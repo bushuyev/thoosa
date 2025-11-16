@@ -32,6 +32,7 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::load_motif_and_clc_dist::MotifSlicesSelector;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcRresourcesMotifsDistOutput;
 use crate::tasks::run_ctx_2::MotifsCtx;
@@ -231,7 +232,7 @@ where
                         vec![
                             Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, Arc::clone(&out_id))))),
                             Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                            Adjusters::Input(Box::new(SplitsAdjuster::<ApplyMotifNetInputDeviceWrapper, ApplyMotifNetInputDeviceWrapperSelector>::new(ApplyMotifNetInputDeviceWrapperSelector::new()))),//MonoMetrics<0, 3> - 0 dim of 3-dimensional  Batch<ChannelsData>
+                            Adjusters::Input(Box::new(SplitsAdjuster::<ApplyMotifNetInputDeviceWrapperSelector, MonoMetrics<0, 3>>::new([2, -1, -1].into()))),//MonoMetrics<0, 3> - 0 dim of 3-dimensional  Batch<ChannelsData>
                         ], None).run(
                         &apply_motif_net,
                         Arc::clone(&wrapper),
@@ -304,30 +305,22 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialOrd, PartialEq)]
-struct ApplyMotifNetInputDeviceWrapperSelector {}
+#[derive(Debug, Clone, Default)]
+struct ApplyMotifNetInputDeviceWrapperSelector {
+    batch_slices: Range<MonoMetrics<0, 3>>,
+}
 
-impl Metrics for ApplyMotifNetInputDeviceWrapperSelector {}
 
 impl Adjustable for ApplyMotifNetInputDeviceWrapperSelector{}
 
-impl ApplyMotifNetInputDeviceWrapperSelector {
-    pub fn new() -> Self {
-        Self {}
+
+impl From<Range<MonoMetrics<0, 3>>> for ApplyMotifNetInputDeviceWrapperSelector {
+    fn from(value: Range<MonoMetrics<0, 3>>) -> Self {
+        ApplyMotifNetInputDeviceWrapperSelector { batch_slices: value }
     }
 }
 
-impl DivAssign<i64> for ApplyMotifNetInputDeviceWrapperSelector {
-    fn div_assign(&mut self, rhs: i64) {
-        todo!()
-    }
-}
 
-impl AddAssign<&ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNetInputDeviceWrapperSelector {
-    fn add_assign(&mut self, rhs: &ApplyMotifNetInputDeviceWrapperSelector) {
-        todo!()
-    }
-}
 
 impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNetInputDeviceWrapper {
     async fn with_selected_data_ref<'o, R, F>(&self, to_device_idx: usize, selector: ApplyMotifNetInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
@@ -388,11 +381,10 @@ impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNe
 
 
 impl Data for ApplyMotifNetInputDeviceWrapper {
-    type Metrics = ApplyMotifNetInputDeviceWrapperSelector;
+    type Metrics = MonoMetrics<0, 3>;
 
     fn size(&self) -> Self::Metrics {
-        // self.batch.size().clone()
-        todo!()
+        self.batch.size().clone()
     }
 
     fn device(&self) -> usize {
@@ -419,7 +411,7 @@ struct ApplyMotifNetInput<'a> {
 // }
 
 impl Data for ApplyMotifNetInput<'_> {
-    type Metrics = ApplyMotifNetInputDeviceWrapperSelector;
+    type Metrics = MonoMetrics<0, 3>;
 
     fn size(&self) -> Self::Metrics {
         todo!()

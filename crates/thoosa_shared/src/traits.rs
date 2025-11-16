@@ -475,6 +475,19 @@ impl <const Idx:usize, const Size:usize> From<&[i64; 2]> for MonoMetrics<Idx, Si
     }
 }
 
+impl <const Idx:usize, const Size:usize> From<[i64; 3]> for MonoMetrics<Idx, Size> {
+    fn from(value: [i64; 3]) -> Self {
+        assert_eq!(3, Size);
+
+        let mut me = Self::default();
+        me.dims[0] = value[0];
+        me.dims[1] = value[1];
+        me.dims[2] = value[2];
+        me
+    }
+}
+
+
 impl From<usize> for MonoMetrics<0, 1> {
     fn from(value: usize) -> Self {
         MonoMetrics {
