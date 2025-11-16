@@ -88,7 +88,7 @@ impl<D: Dims> WithId for &ThoTensor<D, CachableId> {
     type ID = CachableId;
 
     fn id(&self) -> &Self::ID {
-        todo!()
+        &self.id
     }
 }
 
