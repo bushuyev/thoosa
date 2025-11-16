@@ -17,7 +17,7 @@ use tokio::io::AsyncWriteExt;
 use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::global_ctx::GlobalCtx;
@@ -327,34 +327,45 @@ where
                         let out_id = Arc::new(SimpleId("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
 
 
-                        let required_ids = HashMap::new();
+                        /*
+                       let required_ids = HashMap::new();
+
+                      let ClcRresourcesMotifsDistOutput {
+                               select_motifs_run_id: find_motifs_run_config_id,
+                               channel_masks_dists_ids,
+                               resources_iter,
+                               ..
+                       } = OOMHandler::new(
+                           vec![
+                               Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, out_id.clone())))),
+                               Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                               // Adjusters::Input(Box::new(SplitsAdjuster::<ClcResourcesMotifsDistInputDeviceWrapper, std::ops::Range<MonoMetrics<0, 1>>>::new(1.into()))),//TODO
+                           ], None)
+                           .run(
+                               &clc_stage,
+                               Arc::clone(&clc_resources_input),
+                               ctx_clone,
+                               Contexts::new(
+                                   NoopInputContext(None),
+                                   // SplitsAdjusterContextImpl::new(t_1_batch_len.into(), output_builder),
+                                   NoopRunnableContext {},
+                                   PermitsAndDumpToCpuAdjustableContex::new(
+                                       PermitsAdjustContextImpl::new(ctx_name),
+                                       DumpToCpuContextImpl::new(&required_ids),
+                                   ),
+                               ),
+                           )
+                           .await?;*/
 
                         let ClcRresourcesMotifsDistOutput {
-                                select_motifs_run_id: find_motifs_run_config_id,
-                                channel_masks_dists_ids,
-                                resources_iter,
-                                ..
-                        } = OOMHandler::new(
-                            vec![
-                                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, out_id.clone())))),
-                                Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                                // Adjusters::Input(Box::new(SplitsAdjuster::<ClcResourcesMotifsDistInputDeviceWrapper, std::ops::Range<MonoMetrics<0, 1>>>::new(1.into()))),//TODO
-                            ], None)
-                            .run(
-                                &clc_stage,
-                                Arc::clone(&clc_resources_input),
-                                ctx_clone,
-                                Contexts::new(
-                                    NoopInputContext(None),
-                                    // SplitsAdjusterContextImpl::new(t_1_batch_len.into(), output_builder),
-                                    NoopRunnableContext {},
-                                    PermitsAndDumpToCpuAdjustableContex::new(
-                                        PermitsAdjustContextImpl::new(ctx_name),
-                                        DumpToCpuContextImpl::new(&required_ids),
-                                    ),
-                                ),
-                            )
-                            .await?;
+                            select_motifs_run_id: find_motifs_run_config_id,
+                            channel_masks_dists_ids,
+                            resources_iter,
+                            ..
+                        } = clc_resources_input.with_data_ref(1, None, |v|{
+                            clc_stage.do_run(v, ctx_clone)
+                        }).await?;
+
 
                         debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");
                         let mut motif_ids = vec![];
@@ -486,7 +497,7 @@ pub mod tests {
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     run_id,
-                    Ok(FindMotifsRunConfig::new(Some(run_id), 50, 100, None, None).to_properties_iter(None).collect()),
+                    Ok(FindMotifsRunConfig::new(Some(run_id), 1, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_motifs([
                     (find_motifs_run_id as RunId, Ok(channel_0_motifs_ids.clone()))
@@ -569,7 +580,7 @@ pub mod tests {
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     run_id,
-                    Ok(FindMotifsRunConfig::new(Some(run_id), 50, 100, None, None).to_properties_iter(None).collect()),
+                    Ok(FindMotifsRunConfig::new(Some(run_id), 1, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_motifs([
                     (find_motifs_run_id as RunId, Ok(channel_0_motifs_ids.clone()))
@@ -654,7 +665,7 @@ pub mod tests {
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     run_id,
-                    Ok(FindMotifsRunConfig::new(Some(run_id), 50, 100, None, None).to_properties_iter(None).collect()),
+                    Ok(FindMotifsRunConfig::new(Some(run_id), 1, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_motifs([
                     (find_motifs_run_id as RunId, Ok(motifs_ids.clone()))
