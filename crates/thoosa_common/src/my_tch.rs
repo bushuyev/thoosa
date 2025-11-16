@@ -323,7 +323,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAvgPool1d {
     }
 }
 
-pub trait ThoModule<DI: Dims, DO: Dims>: Debug {
+pub trait ThoModule<DI: Dims, DO: Dims>: Debug + Sync + Send {
     fn debug(&self) {}
     fn mem_size(&self) -> usize {
         //TODO
@@ -365,8 +365,8 @@ pub struct MyClosureModule {
     func: Arc<Box<dyn Fn(&Tensor) -> Tensor>>,
 }
 
-// unsafe impl Send for MyClosureModule {}
-// unsafe impl Sync for MyClosureModule {}
+unsafe impl Send for MyClosureModule {}
+unsafe impl Sync for MyClosureModule {}
 
 impl MyClosureModule {
     pub fn new(func: Arc<Box<dyn Fn(&Tensor) -> Tensor>>) -> Self {

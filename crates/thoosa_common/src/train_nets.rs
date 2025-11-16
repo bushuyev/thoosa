@@ -2782,9 +2782,7 @@ pub async fn run_train_motif_net_2(
     let loss = train_2(
         &device,
         batch,
-        &motif_node(&node_params)
-            .build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&vs.root())
-            .unwrap(),
+        &motif_node(&node_params).build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&vs.root())?,
         |pred: &Tensor, target: &Tensor| {
             let pred_y = pred; //.i((.., 0));
 
