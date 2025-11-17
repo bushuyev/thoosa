@@ -735,23 +735,17 @@ impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O
 pub trait WithDataRef: WithId + Debug {
     type O<'o>: Data + /*CopyToDevice +*/ WithId + Send + Sync;
 
-    async fn with_data_ref<R, F>(
+    async fn with_data_ref<R, F, P>(
         &self,
         to_device_idx: usize,
+        permits_ctx: Arc<parking_lot::RwLock<P>>,
         trace_ctx: Option<&'static str>,
         do_run: F,
     ) -> Result<R, ThoosaError>
     where
-       for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>;
+       for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+        P:PermitsCtx;
 
-
-    async fn dummy<R, F>(&self, f:F) -> Result<R, ThoosaError>
-    where
-        for <'f> F:  FnOnce() -> Result<R, ThoosaError> {
-
-        (f)()
-
-    }
 
     //shouldn't be here, used only in ClcOOMRunner which is test-only util
     fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics{
@@ -782,10 +776,15 @@ where
 impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap<O> {
     type O<'o> = O;
 
-    async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+        P:PermitsCtx
     {
+        if to_device_idx > 0 {
+            assert!(permits_ctx.read().acquired_permits() > 0);
+        }
+
         match self.load_from_any_device_(to_device_idx).await {
             Ok(v) => {
                 let data: &Self::O<'_> = v.deref();
@@ -950,8 +949,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_dump_to_cpu() -> Result<(), ThoosaError> {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
+        let global_ctx = MockGlobalCtx::global_context();
+        global_ctx.expect().returning(|| {
             Box::leak(Box::new(
                 mock_global_ctx::build_default(),
             )) as &'static global_ctx::MockGlobalCtx
@@ -962,11 +961,12 @@ mod tests {
         assert!(tested.cached_data[1].read().await.is_none());
 
         tested
-            .with_data_ref(1, None, |data_on_1: &MockDataWithId| {
-                assert_eq!(data_on_1.device(), &1);
+            .with_data_ref(1,
+                           Arc::clone(&Arc::new(RwLock::new(MockRunCtx::default()))), None, |data_on_1: &MockDataWithId| {
+                                           assert_eq!(data_on_1.device(), &1);
 
-                Ok(())
-            })
+                                           Ok(())
+                                       })
             .await?;
 
         assert!(tested.cached_data[1].read().await.is_some());

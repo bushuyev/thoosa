@@ -762,9 +762,10 @@ mod tests {
             let ctx_for_run = Arc::clone(&ctx);
 
             let output = input
-                .with_data_ref(device_idx, None, move |tensor: &Self::In<'_>| {
-                    Arc::clone(&stage).do_run(tensor, Arc::clone(&ctx_for_run))
-                })
+                .with_data_ref(device_idx,
+                               Arc::clone(&ctx), None, move |tensor: &Self::In<'_>| {
+                                                   Arc::clone(&stage).do_run(tensor, Arc::clone(&ctx_for_run))
+                                               })
                 .await?;
 
             Ok(Arc::new(DevicesWrap::wrap(
@@ -982,14 +983,15 @@ mod tests {
 
         debug!("acc={acc:?}");
 
-        acc.with_data_ref(0, None, |acc_t: &ThoTensor<ClsOut, SimpleId>| {
-            debug!("acc_t={acc_t:?} t=\n{}", acc_t.t_ref());
-
-            // Dim impls are to define domain-specific operations on tensors
-            let v = ClsOut::accuracy(acc_t);
-            assert!(v > 0.9, "training accuracy too low: {v}");
-            Ok(())
-        })
+        acc.with_data_ref(0,
+                          Arc::clone(&ctx), None, |acc_t: &ThoTensor<ClsOut, SimpleId>| {
+                                      debug!("acc_t={acc_t:?} t=\n{}", acc_t.t_ref());
+                          
+                                      // Dim impls are to define domain-specific operations on tensors
+                                      let v = ClsOut::accuracy(acc_t);
+                                      assert!(v > 0.9, "training accuracy too low: {v}");
+                                      Ok(())
+                                  })
         .await?;
 
         Ok(())
@@ -1037,11 +1039,12 @@ mod tests {
             .run_cached(input_cache, Arc::clone(&ctx))
             .await?;
 
-        acc.with_data_ref(1, None, |acc: &ThoTensor<ClsOut, SimpleId>| {
-            let v = ClsOut::accuracy(acc);
-            assert!(v > 0.9, "training accuracy too low (4 files): {v}");
-            Ok(())
-        })
+        acc.with_data_ref(1,
+                          Arc::clone(&ctx), None, |acc: &ThoTensor<ClsOut, SimpleId>| {
+                                      let v = ClsOut::accuracy(acc);
+                                      assert!(v > 0.9, "training accuracy too low (4 files): {v}");
+                                      Ok(())
+                                  })
         .await?;
 
         Ok(())
@@ -1097,13 +1100,14 @@ mod tests {
             .run_cached(input_cache, Arc::clone(&ctx))
             .await?;
 
-        acc.with_data_ref(1, None, |acc: &ThoTensor<ClsOut, SimpleId>| {
-            debug!("acc={}", acc.t_ref());
-
-            let v = ClsOut::accuracy(acc);
-            assert!(v >= 0.5, "should train after permits escalation: {v}");
-            Ok(())
-        })
+        acc.with_data_ref(1,
+                          Arc::clone(&ctx), None, |acc: &ThoTensor<ClsOut, SimpleId>| {
+                                      debug!("acc={}", acc.t_ref());
+                          
+                                      let v = ClsOut::accuracy(acc);
+                                      assert!(v >= 0.5, "should train after permits escalation: {v}");
+                                      Ok(())
+                                  })
         .await?;
 
         Ok(())

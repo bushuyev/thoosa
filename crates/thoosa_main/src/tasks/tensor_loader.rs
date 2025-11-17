@@ -73,13 +73,14 @@ where
         let target_device = self.device.ordinal();
 
         input
-            .with_data_ref(0, None, |resource: &Resource| {
-                let tensor = (self.loader_fn)(resource, &self.device);
-                Ok(Arc::new(DevicesWrap::wrap(
-                    tensor,
-                    cache_area,
-                )))
-            })
+            .with_data_ref(0,
+                           Arc::clone(&ctx), None, |resource: &Resource| {
+                                           let tensor = (self.loader_fn)(resource, &self.device);
+                                           Ok(Arc::new(DevicesWrap::wrap(
+                                               tensor,
+                                               cache_area,
+                                           )))
+                                       })
             .await
     }
 
@@ -254,19 +255,20 @@ mod tests {
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
 
         let loaded = loader
-            .run_cached(Arc::new(DevicesWrap::wrap(Resource::new(0, 0, "aaa", 20), 0)), ctx)
+            .run_cached(Arc::new(DevicesWrap::wrap(Resource::new(0, 0, "aaa", 20), 0)), Arc::clone(&ctx))
             .await
             .map_err(|e| ThoosaError::new("zzz"))?;
 
         let result = loaded
-            .with_data_ref(0, None, |v: &ThoTensor<ChannelsData2, SimpleId>| {
-                println!("loaded: v={v:?}");
-                v.run_inner(|t| {
-                    Ok(Tensor::from_slice(&data)
-                        .view((-1, 1))
-                        .allclose(t, 0.01, 0.01, false))
-                })
-            })
+            .with_data_ref(0,
+            Arc::clone(&ctx), None, |v: &ThoTensor<ChannelsData2, SimpleId>| {
+               println!("loaded: v={v:?}");
+               v.run_inner(|t| {
+                   Ok(Tensor::from_slice(&data)
+                       .view((-1, 1))
+                       .allclose(t, 0.01, 0.01, false))
+               })
+           })
             .await?;
 
         assert!(result);

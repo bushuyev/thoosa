@@ -115,7 +115,7 @@ where
         };
 
         let motif_id = input
-            .with_data_ref(0, None, |id: &DataId| Ok(id.clone()))
+            .with_data_ref(0, Arc::clone(&ctx), None, |id: &DataId| Ok(id.clone()))
             .await?;
 
         let motif_id_value = motif_id.clone().0;
@@ -402,11 +402,12 @@ pub mod mock_motif_loader {
             self.mock.expect_run_cached().returning(move |input, ctx| {
                 block_in_place(|| {
                     Handle::current().block_on(async {
-                        input.with_data_ref(0, None, |v: &DataId| {
-                            Ok(Arc::clone(data_map
-                                .get(v)
-                                .expect(&format!("no mock data for {input:? } in MockMotifLoader"))))
-                        }).await
+                        input.with_data_ref(0,
+                                            Arc::clone(&ctx), None, |v: &DataId| {
+                                                                        Ok(Arc::clone(data_map
+                                                                            .get(v)
+                                                                            .expect(&format!("no mock data for {input:? } in MockMotifLoader"))))
+                                                                    }).await
                     })
                 })
             });
@@ -502,13 +503,14 @@ mod tests {
             .run_cached(Arc::clone(&input_id), Arc::clone(&ctx))
             .await?;
 
-        let r = motif.with_data_ref(0, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
-            let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
+        let r = motif.with_data_ref(0,
+            Arc::clone(&ctx), None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
+                        let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
 
-            trace!("motif.t={} dist={dist}", t.data().t_ref());
+                        trace!("motif.t={} dist={dist}", t.data().t_ref());
 
-            Ok(true)
-        }).await?;
+                        Ok(true)
+                    }).await?;
 
         assert_eq!(r, true);
         //TODO check data
@@ -567,13 +569,16 @@ mod tests {
             .run(Arc::clone(&input), Arc::clone(&ctx))
             .await?;
 
-        let r = slices.with_data_ref(0, None, |t: &ThoTensor<MotifSlices, DataId>|{
-            let dist = average_euclidean_distance(t.t_ref()).unwrap();
+        let r = slices.with_data_ref(
+            0,
+            Arc::clone(&ctx), None, |t: &ThoTensor<MotifSlices, DataId>| {
+                let dist = average_euclidean_distance(t.t_ref()).unwrap();
 
-            trace!("random slices: \t{} dist={dist}", t.t_ref());
+                trace!("random slices: \t{} dist={dist}", t.t_ref());
 
-            Ok(true)
-        }).await?;
+                Ok(true)
+            },
+        ).await?;
         // assert_eq!(r, true);
         //TODO check data
 
