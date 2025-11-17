@@ -15,7 +15,7 @@ use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_common::find_motifs_run_config::InputFilter;
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft};
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{SimpleId, WithId};
+use thoosa_shared::traits::{CachableIdTr, SimpleId, WithId};
 use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::RunCtx2;
@@ -104,38 +104,47 @@ where
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area())
         };
+        let out_key = {
+            let out_id = self.out_id(input.id());
+            Arc::new(out_id) as Arc<dyn CachableIdTr>
+        };
+
+        if ctx.read().acquired_permits() == 0 {
+            let result = GlobalCtx::global()
+                .acquire_many(device_idx, 1, out_key.clone())
+                .await?;
+            ctx.write().add_permit(result);
+        }
+
+
         let num_devices = GlobalCtx::global().device_count();
 
         let filtered = input
-            .with_data_ref(device_idx, None, |tensor: &ThoTensor<ChannelsData2, SimpleId>| {
+            .with_data_ref(
+                device_idx,
+               Arc::clone(&ctx), None, |tensor: &ThoTensor<ChannelsData2, SimpleId>| {
 
-                let t = notch_band_rfft(tensor.t_ref(), 200., 58., 62.)?;//TODO params
+               let t = notch_band_rfft(tensor.t_ref(), 200., 58., 62.)?;//TODO params
 
-                if let Some(band_filter) = self.band_pass_tensor.as_ref() {
+               if let Some(band_filter) = self.band_pass_tensor.as_ref() {
 
-                    let t =  band_filter.run_inner(|band_filter_inner| {
-                        let input = t.unsqueeze(0);
-
-
-                        let output = input.conv1d(band_filter_inner, None::<Tensor>, 1, 0, 1, 20).view((20, -1));//TODO channels from WS
-
-                        debug!("FreqFilter::run: band_filter.size={:?} input.size={:?} output.size={:?}", band_filter_inner.size(), input.size(), output.size());
-                        Ok(output)
-                    })?;
-
-                    Ok(ThoTensor::new(self.out_id(tensor.id()), t))
-
-                } else {
-                    Ok(ThoTensor::new(self.out_id(tensor.id()), t))
-                }
+                   let t =  band_filter.run_inner(|band_filter_inner| {
+                       let input = t.unsqueeze(0);
 
 
+                       let output = input.conv1d(band_filter_inner, None::<Tensor>, 1, 0, 1, 20).view((20, -1));//TODO channels from WS
 
+                       debug!("FreqFilter::run: band_filter.size={:?} input.size={:?} output.size={:?}", band_filter_inner.size(), input.size(), output.size());
+                       Ok(output)
+                   })?;
 
-            })
+                   Ok(ThoTensor::new(self.out_id(tensor.id()), t))
+
+               } else {
+                   Ok(ThoTensor::new(self.out_id(tensor.id()), t))
+               }
+           })
             .await?;
-
-
 
         Ok(Arc::new(DevicesWrap::wrap(filtered, cache_area)))
     }
@@ -159,7 +168,7 @@ mod tests {
     use crate::tasks::transforms::freq_filter::FreqFilter;
 
     #[tokio::test]
-    async fn test_0() ->Result<(),ThoosaError> {
+    async fn test_freq_fultder() ->Result<(),ThoosaError> {
         GlobalCtx::init_devices(2);
         let filter_config = InputFilter::BandPassFilter(BandPassFilterParams{
             low_hz: 0.0,

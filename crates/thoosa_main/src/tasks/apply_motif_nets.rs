@@ -12,7 +12,7 @@ use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
-use caching_runner::common::{OutId, RunCtx};
+use caching_runner::common::{OutId, PermitsCtx, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -282,9 +282,10 @@ impl WithId for ApplyMotifNetInputDeviceWrapper {
 impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
     type O<'o> = ApplyMotifNetInput<'o>;
 
-    async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-            for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+        P:PermitsCtx
     {
         let t_1_batch= Arc::clone(&self.batch);
         let motif_net = Arc::clone(&self.motif_net);

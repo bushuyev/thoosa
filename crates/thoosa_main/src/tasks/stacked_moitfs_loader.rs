@@ -208,9 +208,9 @@ where
 
 
                 let avg_motif_dist = load_and_clc_avg_dist_clone
-                    .run_cached(Arc::clone(&motif_id_wrap), ctx_for_clc)
+                    .run_cached(Arc::clone(&motif_id_wrap), Arc::clone(&ctx_for_clc))
                     .await?
-                    .with_data_ref(0, None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
+                    .with_data_ref(0, Arc::clone(&ctx_for_clc), None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
                     .await?;
 
                 debug!("SelectMotifsStage::run: find_motifs_run_id={:?} run_config.id={:?} motif={motif:?} avg_motif_dist={avg_motif_dist}", find_motifs_run_config_id, select_motifs_run_config_id);

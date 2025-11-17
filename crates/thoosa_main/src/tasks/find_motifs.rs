@@ -347,10 +347,10 @@ mod tests {
     use crate::tasks::find_motifs::FindMotifsStage;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
-    use caching_runner::common::RunCtx;
+    use caching_runner::common::{PermitsCtx, RunCtx};
     use caching_runner::common::cachable::{DevicesWrap, WithDataRef};
     use caching_runner::common::runnable::{AsyncStage, Stage};
-    use caching_runner::global_ctx::GlobalCtx;
+    use caching_runner::global_ctx::{GlobalCtx};
     use log::debug;
     use parking_lot::RwLock;
     use std::collections::HashMap;
@@ -396,7 +396,7 @@ mod tests {
         }
 
         // log::set_max_level(log::LevelFilter::Trace);
-        GlobalCtx::init_devices(2);
+        let global_ctx = GlobalCtx::init_devices(2);
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_motifs: test_dir={test_dir:?}");
@@ -525,6 +525,7 @@ mod tests {
         ));
 
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
+        ctx.write().add_permit(global_ctx.acquire_many(0, 1, Arc::new(SimpleId("test"))).await?);
 
         let cache_area = ctx.read().cache_area();
         let resources_input = Arc::new(DevicesWrap::wrap_cpu(
@@ -593,17 +594,18 @@ mod tests {
             .await?;
 
             motif
-                .with_data_ref(1, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
-                    debug!("motif_id={motif_id_raw} slices={:?}", t.data());
+                .with_data_ref(1,
+                Arc::clone(&ctx), None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
+                   debug!("motif_id={motif_id_raw} slices={:?}", t.data());
 
-                    Ok(())
-                })
+                   Ok(())
+               })
                 .await?;
 
             let _dist = Arc::clone(&clc_dist)
                 .run_cached(Arc::clone(&motif_id), Arc::clone(&ctx))
                 .await?
-                .with_data_ref(0, None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
+                .with_data_ref(0, Arc::clone(&ctx), None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
                 .await?;
         }
         ////////////////Select

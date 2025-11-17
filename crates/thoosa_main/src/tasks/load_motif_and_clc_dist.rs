@@ -310,7 +310,7 @@ mod tests {
         let input_id = Arc::new(DevicesWrap::wrap_cpu(input_id_value.clone()));
         let result = stage.run_cached(Arc::clone(&input_id), Arc::clone(&ctx)).await?;
 
-        let result_value: AverageDistanceValue = result.with_data_ref(0, None, |val: &AverageDistanceValue| Ok(val.clone())).await?;
+        let result_value: AverageDistanceValue = result.with_data_ref(0, Arc::clone(&ctx), None, |val: &AverageDistanceValue| Ok(val.clone())).await?;
 
         assert_eq!(result_value.value(), 20.0);
         let expected_id = SimpleId::from(format!("{}_avg_ec_dist", input_id_value));

@@ -1779,29 +1779,30 @@ async fn plot_motif(
     let dist = clc_dist
         .run_cached(Arc::clone(&motif_id_cache), Arc::clone(&ctx))
         .await?
-        .with_data_ref(0, None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
+        .with_data_ref(0, Arc::clone(&ctx), None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
         .await?;
 
-    let r = motif.with_data_ref(0, None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>| {
-        let run_id = motif.extra().find_motifs_run_id;
-        let channel = motif.extra().channel;
-
-        trace!("motif.t={} dist={dist}", motif.data().t_ref());
-        let all_slices = motif.data().t_ref().unbind(0);
-        let slices_len = all_slices.len();
-        let mut color_iter = DistinctColorIter::new();
-        plot_series(
-            all_slices.into_iter().enumerate().map(|(i, t)| {
-                (format!("{i}"), color_iter.next().unwrap_or(BLACK), t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
-            }).collect(),
-            format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={dist}").as_str(),
-            (2000, 1000),
-            &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
-        )?;
-
-
-        Ok(true)
-    }).await?;
+    let r = motif.with_data_ref(0,
+                                Arc::clone(&ctx), None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>| {
+                                        let run_id = motif.extra().find_motifs_run_id;
+                                        let channel = motif.extra().channel;
+                                
+                                        trace!("motif.t={} dist={dist}", motif.data().t_ref());
+                                        let all_slices = motif.data().t_ref().unbind(0);
+                                        let slices_len = all_slices.len();
+                                        let mut color_iter = DistinctColorIter::new();
+                                        plot_series(
+                                            all_slices.into_iter().enumerate().map(|(i, t)| {
+                                                (format!("{i}"), color_iter.next().unwrap_or(BLACK), t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
+                                            }).collect(),
+                                            format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={dist}").as_str(),
+                                            (2000, 1000),
+                                            &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
+                                        )?;
+                                
+                                
+                                        Ok(true)
+                                    }).await?;
     Ok(())
 }
 

@@ -228,14 +228,16 @@ where
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
-        let resources = input.with_data_ref(0, None, |input: &ResourcesConfigInput<Simple>|{//TODO replace with with_data!(device_idx,
-            Ok(input
-                .resources_config()
-                .to_resources(&self.store)?
-                .into_iter()
-                // .map(|r| Arc::new(r))
-                .collect::<Vec<_>>())
-        }).await?;
+        let resources = input.with_data_ref(0, Arc::clone(&ctx), None,
+    |input: &ResourcesConfigInput<Simple>|{//TODO replace with with_data!(device_idx,
+                Ok(input
+                    .resources_config()
+                    .to_resources(&self.store)?
+                    .into_iter()
+                    // .map(|r| Arc::new(r))
+                    .collect::<Vec<_>>())
+            }).await?;
+
         let max_batch = 10000;//TODO
 
         debug!("SelectMotifsStage::run: resources={resources:?}");
@@ -362,9 +364,12 @@ where
                             channel_masks_dists_ids,
                             resources_iter,
                             ..
-                        } = clc_resources_input.with_data_ref(1, None, |v|{
-                            clc_stage.do_run(v, ctx_clone)
-                        }).await?;
+                        } = clc_resources_input.with_data_ref(
+                            1,
+                              Arc::clone(&ctx_clone), None, |v|{
+                                  clc_stage.do_run(v, ctx_clone)
+                              }
+                        ).await?;
 
 
                         debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");

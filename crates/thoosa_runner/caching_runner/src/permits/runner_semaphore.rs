@@ -31,11 +31,7 @@ impl RunnerSemaphore {
         {
             let mut waited = self.permits_waited_for.lock();
             *waited += n;
-            debug!(
-                "RunnerSemaphore::acquire_many_owned: n={n} permits_waited_for={} available_permits={}",
-                *waited,
-                self.sem.available_permits()
-            );
+            debug!("RunnerSemaphore::acquire_many_owned: n={n} permits_waited_for={} available_permits={}",*waited,self.sem.available_permits());
         }
 
         let permit_fut = Arc::clone(&self.sem).acquire_many_owned(n as u32);

@@ -284,18 +284,19 @@ where
                     .await?;
 
                 multed
-                    .with_data_ref(device_idx, None, |guard: &<R as Stage>::Out| {
-                        // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
+                    .with_data_ref(device_idx,
+                                   Arc::clone(&ctx_device), None, |guard: &<R as Stage>::Out| {
+                                                           // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
 
-                        check_arc(res, &guard);
+                                                           check_arc(res, &guard);
 
-                        debug!("run_mul_task_invocations: task {idx}: device_idx={device_idx} thread id={:?} done",std::thread::current().id());
-                        debug!("run_mul_task_invocations: task {idx}: multed=\n{:?}", guard);
+                                                           debug!("run_mul_task_invocations: task {idx}: device_idx={device_idx} thread id={:?} done",std::thread::current().id());
+                                                           debug!("run_mul_task_invocations: task {idx}: multed=\n{:?}", guard);
 
-                        res_cnt_arc.fetch_add(1, Relaxed);
+                                                           res_cnt_arc.fetch_add(1, Relaxed);
 
-                        Ok(())
-                    })
+                                                           Ok(())
+                                                       })
                     .await?;
 
                 debug!("run_mul_task_invocations: task {idx}: all done");
@@ -979,11 +980,12 @@ mod tests {
 
         debug!("loaded_tensor_1_0={loaded_tensor_1_0:?}");
         loaded_tensor_1_0
-            .with_data_ref(1, None, |data: &DLoadedTensor| {
-                assert_eq!(data.data.0, [0.0, 1.0, 2.0]);
+            .with_data_ref(1,
+                           Arc::clone(&ctx_device_1), None, |data: &DLoadedTensor| {
+                                           assert_eq!(data.data.0, [0.0, 1.0, 2.0]);
 
-                Ok(())
-            })
+                                           Ok(())
+                                       })
             .await?;
 
         // assert!(loaded_tensor_1_0.is_ok());
@@ -1024,19 +1026,20 @@ mod tests {
                 Arc::new(DevicesWrap::wrap(DLoaderInput {
                                     id: DLoaderInputId("resource_1"),
                                 }, 0)),
-                ctx_device_0,
+                Arc::clone(&ctx_device_0),
             )
             .await?;
 
         multed
-            .with_data_ref(1, None, |data: &DMulTaskOutput| {
-                assert_eq!(
-                    data.data.0,
-                    (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()
-                );
+            .with_data_ref(1,
+                           Arc::clone(&ctx_device_0), None, |data: &DMulTaskOutput| {
+                                           assert_eq!(
+                                               data.data.0,
+                                               (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()
+                                           );
 
-                Ok(())
-            })
+                                           Ok(())
+                                       })
             .await?;
 
         debug!("multed={multed:?}");
