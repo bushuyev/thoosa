@@ -225,14 +225,15 @@ where
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
         let device_idx = ctx.read().device_idx();
 
-        let resources = input.with_data_ref(0, None, |input: &ResourcesConfigInput<ResC>|{
-            Ok(input
-                .resources_config
-                .to_resources(&self.store)?
-                .into_iter()
-                .map(|r| Arc::new(r))
-                .collect::<Vec<_>>())
-        }).await?;
+        let resources = input.with_data_ref(0,
+            Arc::clone(&ctx), None, |input: &ResourcesConfigInput<ResC>|{
+                        Ok(input
+                            .resources_config
+                            .to_resources(&self.store)?
+                            .into_iter()
+                            .map(|r| Arc::new(r))
+                            .collect::<Vec<_>>())
+                    }).await?;
 
         debug!("CrossLoader::run  max_batch={max_batch} resources={}",resources.len());
 

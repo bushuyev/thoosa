@@ -12,7 +12,7 @@ use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
 
 use caching_runner::common::runnable::{Stage, SyncStage};
-use caching_runner::common::{OutId, RunCtx};
+use caching_runner::common::{OutId, PermitsCtx, RunCtx};
 use caching_runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::applicables::with_cuda_stream;
 use thoosa_dummy_data_derive::DummyData;
@@ -290,9 +290,10 @@ impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
 impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     type O<'o> = ClcResourcesMotifsDistInput<'o>;
 
-    async fn with_data_ref<R, F>(&self, to_device_idx: usize, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        F: for <'f> FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+        F: for <'f> FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+        P:PermitsCtx
     {
         let t_1_batch= self.batch.clone();
         let batched_motifs_output = Arc::clone(&self.batched_motifs_output);

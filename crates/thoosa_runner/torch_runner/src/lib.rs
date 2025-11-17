@@ -587,9 +587,10 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
             let ctx_for_run = Arc::clone(&ctx);
 
             let output = input
-                .with_data_ref(device_idx, None, move |tensor: &ThoTensor<LoadedTensor, SimpleId>| {
-                    Arc::clone(&stage).do_run(tensor, Arc::clone(&ctx_for_run))
-                })
+                .with_data_ref(device_idx,
+                               Arc::clone(&ctx), None, move |tensor: &ThoTensor<LoadedTensor, SimpleId>| {
+                                                   Arc::clone(&stage).do_run(tensor, Arc::clone(&ctx_for_run))
+                                               })
                 .await?;
 
             Ok(Arc::new(DevicesWrap::wrap(
@@ -789,22 +790,23 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
         debug!("loaded_tensor_0_0={loaded_tensor_0_0:?}");
 
             let tensor_data_0_0 = loaded_tensor_0_0
-            .with_data_ref(load_to_device, None, |tensor_data_0_0: &ThoTensor<LoadedTensor, SimpleId>| {
-                debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
+            .with_data_ref(load_to_device,
+                           Arc::clone(&ctx_device_0), None, |tensor_data_0_0: &ThoTensor<LoadedTensor, SimpleId>| {
+                                           debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
 
-                assert!(
-                    Tensor::from_slice(&[
-                        0., 1., 2., 3., 4., 5., 6., 7., 8., 9., 10., 11., 12., 13., 14., 15., 16.,
-                        17., 18., 19., 20., 21., 22., 23., 24., 25., 26., 27., 28., 29.
-                    ])
-                    .totype(Float)
-                    .to_device(Device::Cuda(0))
-                    .view((10, 3))
-                    .allclose(&(*tensor_data_0_0).t_ref(), 0.01, 0.01, false)
-                );
+                                           assert!(
+                                               Tensor::from_slice(&[
+                                                   0., 1., 2., 3., 4., 5., 6., 7., 8., 9., 10., 11., 12., 13., 14., 15., 16.,
+                                                   17., 18., 19., 20., 21., 22., 23., 24., 25., 26., 27., 28., 29.
+                                               ])
+                                               .totype(Float)
+                                               .to_device(Device::Cuda(0))
+                                               .view((10, 3))
+                                               .allclose(&(*tensor_data_0_0).t_ref(), 0.01, 0.01, false)
+                                           );
 
-                Ok(tensor_data_0_0.t_ref().shallow_clone())
-            })
+                                           Ok(tensor_data_0_0.t_ref().shallow_clone())
+                                       })
             .await?;
 
         let _loaded_tensor_0_1 = Arc::clone(&loader)
@@ -815,12 +817,13 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
             .await?;
 
         loaded_tensor_0_0
-            .with_data_ref(load_to_device, None, |tensor_data_0_1: &ThoTensor<LoadedTensor, SimpleId>| {
-                // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
+            .with_data_ref(load_to_device,
+                           Arc::clone(&ctx_device_0), None, |tensor_data_0_1: &ThoTensor<LoadedTensor, SimpleId>| {
+                                           // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
-                assert_eq!(&tensor_data_0_0, tensor_data_0_1.t_ref());
-                Ok(())
-            })
+                                           assert_eq!(&tensor_data_0_0, tensor_data_0_1.t_ref());
+                                           Ok(())
+                                       })
             .await?;
         // let tensor_data_0_0 = loaded_tensor_0_0.load_from_any_device(load_to_device, None).await?;
 
@@ -1362,17 +1365,18 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
         debug!("multed={multed:?}");
 
         multed
-            .with_data_ref(1, None, |r: &ThoTensor<ClcTaskOutput, SimpleId>| {
-                mul_check_with_exp_f(MUL_K as f64, "resource_1", r, 0.01, 0.01, |k, t| {
-                    lin_for_size(k, size, t.kind(), &t.device())
-                        .sum_dim_intlist(1, false, t.kind())
-                        .view((-1, 1))
-                });
+            .with_data_ref(1,
+                           Arc::clone(&ctx_device), None, |r: &ThoTensor<ClcTaskOutput, SimpleId>| {
+                                           mul_check_with_exp_f(MUL_K as f64, "resource_1", r, 0.01, 0.01, |k, t| {
+                                               lin_for_size(k, size, t.kind(), &t.device())
+                                                   .sum_dim_intlist(1, false, t.kind())
+                                                   .view((-1, 1))
+                                           });
 
-                debug!("Ok");
+                                           debug!("Ok");
 
-                Ok(())
-            })
+                                           Ok(())
+                                       })
             .await?;
 
         Ok(())
