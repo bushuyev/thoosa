@@ -160,7 +160,7 @@ where
     type Ctx = C;
 }
 
-#[async_trait]
+// #[async_trait]
 impl<ML, CLC, C> AsyncStage for LoadMotifAndClcDistanceStage<ML, CLC, C>
 where
     C: RunCtx + Adjustable + 'static,

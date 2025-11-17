@@ -88,7 +88,7 @@ where
     type Out = ThoTensor<ChannelsData2, SimpleId>;
 }
 
-#[async_trait]
+// #[async_trait]
 impl<C> AsyncStage for FreqFilter<C>
 where
     C: RunCtx + 'static,

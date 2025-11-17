@@ -354,7 +354,7 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
         type Ctx = TorchRunCtx;
     }
 
-    #[async_trait]
+    // #[async_trait]
     impl AsyncStage for TestTensorLoader {
         async fn run(
             self: Arc<Self>,
@@ -570,7 +570,7 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
         }
     }
 
-    #[async_trait]
+    // #[async_trait]
     impl AsyncStage for ClcTask {
         async fn run(
             self: Arc<Self>,
@@ -632,7 +632,7 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
         type Ctx = TorchRunCtx;
     }
 
-    #[async_trait]
+    // #[async_trait]
     impl AsyncStage for LoadAndClcTask {
         async fn run(
             self: Arc<Self>,

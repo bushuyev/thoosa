@@ -323,7 +323,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAvgPool1d {
     }
 }
 
-pub trait ThoModule<DI: Dims, DO: Dims>: Debug + Sync + Send {
+pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send {
     fn debug(&self) {}
     fn mem_size(&self) -> usize {
         //TODO

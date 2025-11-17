@@ -260,7 +260,7 @@ where
 }
 
 
-#[async_trait]
+// #[async_trait]
 impl<RC, L, C> AsyncStage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,

@@ -81,18 +81,6 @@ where
             Entry::Vacant(slot) => {
                 let fut = Arc::clone(&self)
                     .run(input, ctx)
-                    .map(move |r| {
-                        r.map(|v| {
-                            // assert_eq!(v.device(), device_idx); - loaded to CPU, copied to GPU when used
-                            // Arc::new(DataCacheWrapper::new(
-                            //     v,
-                            //     device_idx,
-                            //     GlobalCtx::global().device_count(),
-                            //     cache_area,
-                            // ))v
-                            v
-                        })
-                    })
                     .boxed()
                     .shared();
 

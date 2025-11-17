@@ -114,7 +114,7 @@ where
 }
 
 
-#[async_trait]
+// #[async_trait]
 impl<A, B, C> AsyncStage for ABStage<A, B, C>
 where
     C:RunCtx + 'static,
@@ -186,7 +186,7 @@ where
     type Out = <A as Stage>::Out;
 }
 
-#[async_trait]
+// #[async_trait]
 impl<A, B> AsyncStage for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,

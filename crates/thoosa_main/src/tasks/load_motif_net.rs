@@ -110,7 +110,7 @@ where
     type Out = DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>;
 }
 
-#[async_trait]
+// #[async_trait]
 impl <C> AsyncStage for LoadMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
