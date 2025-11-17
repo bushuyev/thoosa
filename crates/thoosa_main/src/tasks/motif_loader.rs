@@ -94,7 +94,7 @@ where
     type Ctx = C;
 }
 
-#[async_trait]
+// #[async_trait]
 impl<L, C> AsyncStage for MotifLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx = C> + Cached + OutId + 'static,
@@ -191,7 +191,7 @@ where
 }
 
 
-#[async_trait]
+// #[async_trait]
 impl<L, C> AsyncStage for RandomSlicesLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx = C> + Cached + OutId + 'static,
@@ -371,7 +371,7 @@ pub mod mock_motif_loader {
             fn out_id<'a>(&self,input_id: &<<Self as Stage>::In<'a> as WithId>::ID,) -> <<MockMotifLoader as Stage>::Out as WithId>::ID;
         }
 
-        #[async_trait]
+        // #[async_trait]
         impl AsyncStage for MotifLoader {}
 
         #[async_trait]

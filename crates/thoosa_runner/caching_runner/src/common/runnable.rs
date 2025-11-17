@@ -21,7 +21,7 @@ pub trait Stage: Debug {
 
 }
 
-#[async_trait]
+// #[async_trait]
 pub trait AsyncStage:Stage + Debug + Send + Sync + 'static 
 where
         for <'a> Self::In<'a>: Data + CopyToDevice + WithId + Send + Sync,
@@ -30,8 +30,10 @@ where
 
     //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stages wins 100 GPU)
     //it means 'plain' inputs like resource ID should have dummy Data impl, TODO look for the better way (enum based solution appear to be essentially same dummy wrapper)
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
-        unimplemented!()
+    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> + Send {
+        async {
+            unimplemented!()
+        }
     }
 
 

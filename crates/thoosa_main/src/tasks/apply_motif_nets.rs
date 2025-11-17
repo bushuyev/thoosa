@@ -197,7 +197,7 @@ impl OutputBuilder for MotifsProbabilitiesOutputBuilder {
     }
 }
 
-#[async_trait]
+// #[async_trait]
 impl <C>AsyncStage for ApplyMotifNets<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static
