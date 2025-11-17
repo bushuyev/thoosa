@@ -143,7 +143,7 @@ where
     }
 
 }
-#[async_trait]
+// #[async_trait]
 impl <L, C> AsyncStage for TrainMotifNets<L, C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -213,7 +213,7 @@ where
                             train_motifs_nodes_run_configs,
                             ThoDevice::from(device_idx).into(),
                             "motifs"
-                            
+
                         ).await.map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)| {
                             debug!("TrainMotifNet::run: motif_node_params={motif_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
                             let (channel, find_motifs_run_id) = store.read().get_motif_meta(motif_id_rate.0)?;
@@ -235,6 +235,7 @@ where
         .buffer_unordered(10)
         .try_collect::<Vec<_>>()
         .await?))))
+        // todo!()
     }
 
 }

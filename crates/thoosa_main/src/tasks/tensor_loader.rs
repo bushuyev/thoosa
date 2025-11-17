@@ -56,7 +56,7 @@ where
     type Ctx = C;
 }
 
-#[async_trait]
+// #[async_trait]
 impl<C> AsyncStage for RawTensorLoader<C>
 where
     C: RunCtx + MotifsCtx + 'static,
@@ -156,7 +156,7 @@ pub(crate) mod mock_tensor_loader {
             fn out_id<'a>(&self,input_id: &<<Self as Stage>::In<'a> as WithId>::ID,) -> <<MockTensorLoader as Stage>::Out as WithId>::ID;
         }
 
-        #[async_trait]
+        // #[async_trait]
         impl AsyncStage for TensorLoader {}
 
         #[async_trait]

@@ -203,7 +203,7 @@ where
     type Out = CrossResult;
 }
 
-#[async_trait]
+// #[async_trait]
 impl<ResC, L, CLC, RSV, R, C> AsyncStage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,

@@ -215,7 +215,7 @@ where
     type Out = SelectMotifsSavableResult;
 }
 
-#[async_trait]
+// #[async_trait]
 impl <L, ML, C> AsyncStage  for  SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
@@ -803,7 +803,7 @@ pub mod tests {
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     run_id,
-                    Ok(FindMotifsRunConfig::new(Some(run_id), 50, 100, None, None).to_properties_iter(None).collect()),
+                    Ok(FindMotifsRunConfig::new(Some(run_id), 1, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_motifs([
                     (find_motifs_run_id as RunId, Ok(vec![

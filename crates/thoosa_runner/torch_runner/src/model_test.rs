@@ -334,7 +334,7 @@ mod tests {
         type Ctx = TorchRunCtx;
     }
 
-    #[async_trait]
+    // #[async_trait]
     impl AsyncStage for ABLoader {
         async fn run(
             self: Arc<Self>,
@@ -443,7 +443,7 @@ mod tests {
         type Ctx = TorchRunCtx;
     }
 
-    #[async_trait]
+    // #[async_trait]
     impl AsyncStage for BatchBuilder {
         async fn run(
             self: Arc<Self>,
@@ -745,7 +745,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    // #[async_trait]
     impl AsyncStage for Classifier {
         async fn run(
             self: Arc<Self>,
@@ -858,7 +858,7 @@ mod tests {
         type Ctx = TorchRunCtx;
     }
 
-    #[async_trait]
+    // #[async_trait]
     impl AsyncStage for JoinAndClassifyTask {
         async fn run(
             self: Arc<Self>,

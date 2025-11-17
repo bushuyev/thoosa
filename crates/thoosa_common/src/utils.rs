@@ -1780,7 +1780,7 @@ pub enum ListenerResponse {
 pub async fn train_2<F, DI: Dims, DO: Dims>(
     device: &Device,
     data: &dyn AsyncDataBatch<DI>,
-    net: &Box<dyn ThoModule<Batch<DI>, DO>>,
+    net: Box<dyn ThoModule<Batch<DI>, DO>>,
     loss_fn: LossFp,
     cycles: usize,
     mut opt: Optimizer,

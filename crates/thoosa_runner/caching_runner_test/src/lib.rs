@@ -630,7 +630,7 @@ mod tests {
         type Ctx = DummyRunCtx;
     }
 
-    #[async_trait]
+    // #[async_trait]
     impl AsyncStage for DummyLoader {
 
         async fn run(
@@ -883,7 +883,7 @@ mod tests {
         type Ctx = DummyRunCtx;
     }
 
-    #[async_trait]
+    // #[async_trait]
     impl AsyncStage for DLoadAndMulTask {
 
 

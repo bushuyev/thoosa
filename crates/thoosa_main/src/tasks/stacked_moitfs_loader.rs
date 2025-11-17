@@ -166,7 +166,7 @@ where
     type Out = StackedMotifsOutput;
 }
 
-#[async_trait]
+// #[async_trait]
 impl <ML, C> AsyncStage for BatchedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
