@@ -12,7 +12,7 @@ use caching_runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Named, SimpleId};
 use torch_runner::TorchPermsCtx;
-use crate::tasks::stacked_moitfs_loader::BatchedMotifsLoader;
+use crate::tasks::stacked_moitfs_loader::StackedMotifsLoader;
 use crate::tasks::motif_loader::MotifLoader;
 use crate::tasks::tensor_loader::RawTensorLoader;
 
@@ -85,7 +85,7 @@ impl RunCtx for RunCtx2 {
                         cache_area,
                         device_idx
                     ),
-                    BatchedMotifsLoader::<MotifLoader<RawTensorLoader<RunCtx2>, RunCtx2>, RunCtx2>::purge_gpu_cache_area(
+                    StackedMotifsLoader::<MotifLoader<RawTensorLoader<RunCtx2>, RunCtx2>, RunCtx2>::purge_gpu_cache_area(
                         batched_motifs_ids,
                         cache_area,
                         device_idx

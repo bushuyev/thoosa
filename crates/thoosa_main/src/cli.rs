@@ -399,7 +399,8 @@ where
                         loader_2,
                         motif_loader,
                         run_configs,
-                        select_motifs_args.find_motifs_run_ids.clone()
+                        select_motifs_args.find_motifs_run_ids.clone(),
+                        1000
                     ))
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "select motifs"))),
@@ -1786,7 +1787,7 @@ async fn plot_motif(
                                 Arc::clone(&ctx), None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>| {
                                         let run_id = motif.extra().find_motifs_run_id;
                                         let channel = motif.extra().channel;
-                                
+
                                         trace!("motif.t={} dist={dist}", motif.data().t_ref());
                                         let all_slices = motif.data().t_ref().unbind(0);
                                         let slices_len = all_slices.len();
@@ -1799,8 +1800,8 @@ async fn plot_motif(
                                             (2000, 1000),
                                             &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
                                         )?;
-                                
-                                
+
+
                                         Ok(true)
                                     }).await?;
     Ok(())

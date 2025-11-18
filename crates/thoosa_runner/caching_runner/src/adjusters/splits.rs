@@ -9,7 +9,7 @@ use std::ops::{Add, AddAssign, DivAssign, Range};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics};
 
-///AJ - target adjustable (data), RA its range, returned from Adjuster::adjust
+///A - Selector (range, etc), M - its metrics
 #[derive(Debug)]
 pub struct SplitsAdjuster<A, M>
 where
