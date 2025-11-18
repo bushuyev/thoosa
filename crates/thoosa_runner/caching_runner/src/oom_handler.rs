@@ -379,7 +379,7 @@ where
 
                                 let run_result = if let Some(selector) = input_select_adjusted.as_ref() {
 
-                                    panic_to_err_async!(input.with_selected_data_ref(device_idx, selector.clone(), None, |data| {
+                                    panic_to_err_async!(input.with_selected_data_ref(device_idx, Arc::clone(&run_context), selector.clone(), None, |data| {
                                         Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
                                     }).await)
 

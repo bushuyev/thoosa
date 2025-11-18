@@ -322,8 +322,9 @@ impl From<Range<MonoMetrics<0, 3>>> for ApplyMotifNetInputDeviceWrapperSelector 
 }
 
 impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNetInputDeviceWrapper {
-    async fn with_selected_data_ref<'o, R, F>(&self, to_device_idx: usize, selector: ApplyMotifNetInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: ApplyMotifNetInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
+        P:PermitsCtx,
         for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
     {
         let t_1_batch = Arc::clone(&self.batch);

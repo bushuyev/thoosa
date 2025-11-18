@@ -101,7 +101,7 @@ where
         );
 
         let (batch_1_t, batch_1_sizes) = unfold_and_cat(input.batch, &unfold_params)?;
-        debug!("ClcResourcesMotifsDist::do_run: batch_1_t.size={:?} motifs.size={:?} avg_dists.size={:?} input.resource_ids={:?}",batch_1_t.size(),input.batched_motifs_output.motifs.data().t_ref().size(), input.batched_motifs_output.motifs_avg_dists.t_ref().size(), input.resource_ids);
+        debug!("ClcResourcesMotifsDist::do_run: batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} avg_dists.size={:?} input.resource_ids={:?}",batch_1_t.size(), batch_1_t.device(), input.batched_motifs_output.motifs.data().t_ref().size(), input.batched_motifs_output.motifs_avg_dists.t_ref().size(), input.resource_ids);
 
         let resource_ids_sizes = input
             .resource_ids
@@ -205,13 +205,12 @@ where
 }
 
 
-//for SelectMotifsStage
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistInputDeviceWrapper {
     id: SimpleId,
     batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>,
     resource_ids: Vec<ResourceId>,
-    batched_motifs_output: Arc<DevicesWrap<StackedMotifsOutput>>,
+    stacked_motifs_output: Arc<DevicesWrap<StackedMotifsOutput>>,
 }
 
 impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapper {
@@ -219,63 +218,24 @@ impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 
-// impl Select<std::ops::Range<MonoMetrics<0, 1>>> for ClcResourcesMotifsDistInputDeviceWrapper {
-//     type Output = ClcResourcesMotifsDistInputDeviceWrapper;
-//
-//     fn subview(&self, selector: std::ops::Range<MonoMetrics<0, 1>>) -> Result<Self::Output, ThoosaError> {
-//         debug!("ClcResourcesMotifsDistInputDeviceWrapper::subview: selector={selector:?}");
-//
-//         let range = selector.start.dim_0() as usize..selector.end.dim_0() as usize;
-//
-//         Ok(ClcResourcesMotifsDistInputDeviceWrapper {
-//             id:self.id.clone(),
-//             batch: self.batch[range.clone()].to_vec(),
-//             resource_ids: self.resource_ids[range].to_vec(),
-//             batched_motifs_output: Arc::clone(&self.batched_motifs_output)
-//         })
-//     }
-// }
-
-/*#[async_trait]
-impl CopyToDevice for ClcResourcesMotifsDistInputDeviceWrapper {
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
-        let batch = futures::stream::iter(&self.batch)
-            .map(|b|{
-                Arc::clone(b).copy_to_device(dst_device)
-            })
-            .buffer_unordered(10)
-            .collect::<Vec<_>>()
-            .await;
-
-        let batched_motifs_output = Arc::clone(&self.batched_motifs_output).copy_to_device(dst_device).await;
-        ClcResourcesMotifsDistInputDeviceWrapper {
-            id: self.id.clone(),
-            batch,
-            resource_ids: self.resource_ids.clone(),
-            batched_motifs_output,
-        }
-    }
-
-}*/
 
 //implemented so that ClcResourcesMotifsDistInputDeviceWrapper's resources batch can be adjusted.
-// Batched_motifs_output can't be adjusted since moitfs' ranges do not match in different channels
+//stacked_motifs_output can't be adjusted since moitfs' ranges do not match in different channels
 impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
-    type Metrics = ClcResourcesMotifsDistInputDeviceWrapperSelector;
+    type Metrics = i64;
 
     fn size(&self) -> Self::Metrics {
-        // self.batch.len().into()
-        todo!()
+        self.batch.len() as i64
     }
 
     fn device(&self) -> usize {
-        0 //self.batched_motifs_output.device()//TODO
+        0
     }
 }
 
 impl ClcResourcesMotifsDistInputDeviceWrapper {
     pub fn new(id: SimpleId, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>, resource_ids: Vec<ResourceId>, batched_motifs_output: Arc<DevicesWrap<StackedMotifsOutput>>) -> Self {
-        Self { id, batch, resource_ids, batched_motifs_output }
+        Self { id, batch, resource_ids, stacked_motifs_output: batched_motifs_output }
     }
 }
 
@@ -296,7 +256,7 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
         P:PermitsCtx
     {
         let t_1_batch= self.batch.clone();
-        let batched_motifs_output = Arc::clone(&self.batched_motifs_output);
+        let batched_motifs_output = Arc::clone(&self.stacked_motifs_output);
         with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
             |
              batch_v:&[&ThoTensor<ChannelsData2, SimpleId>],
@@ -315,50 +275,52 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
 
 #[derive(Debug, Clone, Default)]
 pub struct ClcResourcesMotifsDistInputDeviceWrapperSelector {
+    resources_batch_range:Range<i64>
+}
 
+impl ClcResourcesMotifsDistInputDeviceWrapperSelector {
+    pub fn new() -> Self {
+        Self { resources_batch_range: Default::default() }
+    }
+}
+
+impl From<Range<i64>> for ClcResourcesMotifsDistInputDeviceWrapperSelector {
+    fn from(value: Range<i64>) -> Self {
+        Self { resources_batch_range: value }
+    }
 }
 
 
 impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapperSelector {}
 
-impl Metrics for ClcResourcesMotifsDistInputDeviceWrapperSelector{
-
-}
 
 impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
-    async fn with_selected_data_ref<'o, R, F>(&self, to_device_idx: usize, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        // S: Clone + Debug + 'static,
-        // Self::O<'o>: Select<S, Output=Self::O<'o>>,
+        P:PermitsCtx,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
     {
 
         debug!("ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref: selector={selector:?}");
 
-        //FIXME dyn Any
-        // let (t_1_batch, batched_motifs_output) = if let Some(selector) = (&selector as &dyn Any).downcast_ref::<std::ops::Range<MonoMetrics<0, 1>>>() {
-        //     let s = self.subview(selector.clone())?;
-        //     (s.batch.clone(), s.batched_motifs_output)
-        // } else {
-        //     (self.batch.clone(), self.batched_motifs_output.clone())
-        // };
-        //
-        //
-        // with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
-        //     |
-        //      batch_v:&[&ThoTensor<ChannelsData2, SimpleId>],
-        //      batched_motifs_output:&StackedMotifsOutput
-        //     |{
-        //         let inpt = ClcResourcesMotifsDistInput::new(
-        //             &batch_v,//TODO select [selector] slice from t_1_batch
-        //             self.resource_ids.clone(),
-        //             batched_motifs_output,
-        //         );
-        //
-        //         do_run(&inpt)
-        //
-        // })
-        todo!()
+
+        let t_1_batch= self.batch[selector.resources_batch_range.start as usize .. selector.resources_batch_range.end as usize].to_vec();
+        let stacked_motifs_output = Arc::clone(&self.stacked_motifs_output);
+
+        with_data!(to_device_idx, [t_1_batch], stacked_motifs_output;
+            |
+             batch_v:&[&ThoTensor<ChannelsData2, SimpleId>],
+             stacked_motifs_output:&StackedMotifsOutput
+            |{
+                let inpt = ClcResourcesMotifsDistInput::new(
+                    &batch_v,
+                    self.resource_ids.clone(),
+                    stacked_motifs_output,
+                );
+
+                do_run(&inpt)
+
+        })
     }
 }
 
@@ -397,11 +359,10 @@ impl <'a> CopyToDevice for ClcResourcesMotifsDistInput<'a> {
 }
 
 impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
-    type Metrics = ClcResourcesMotifsDistInputDeviceWrapperSelector;
+    type Metrics = i64;
 
     fn size(&self) -> Self::Metrics {
-        // self.batch.len().into()
-        ClcResourcesMotifsDistInputDeviceWrapperSelector {}
+        self.batch.len() as i64
     }
 
     fn device(&self) -> usize {
