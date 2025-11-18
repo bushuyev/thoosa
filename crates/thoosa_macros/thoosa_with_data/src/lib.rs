@@ -156,6 +156,7 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
 
     quote! {
         {
+            //TODO add permits check
             let __with_data_device = #device_expr;
             async {
                 let __device_idx = __with_data_device;
