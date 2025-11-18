@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use async_trait::async_trait;
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
 use parking_lot::RwLock;
 use tch::Kind::Float;
@@ -34,14 +34,14 @@ use crate::tasks::motif_loader::MotifMeta;
 use crate::tasks::run_ctx_2::MotifsCtx;
 
 #[derive(Debug, Clone, DummyData)]
-pub struct BatchedMotifsInput {
+pub struct StackedMotifsInput {
 
     id:SimpleId,
     find_motifs_run_config: Arc<FindMotifsRunConfig>,
     select_motifs_run_config: Arc<SelectMotifsRunConfig>,
 }
 
-impl BatchedMotifsInput {
+impl StackedMotifsInput {
     pub fn new( find_config: Arc<FindMotifsRunConfig>, select_config: Arc<SelectMotifsRunConfig>) -> Self {
         Self {
             id: format!("{}_{}", find_config.id.unwrap(), select_config.id.unwrap()).into(),
@@ -50,9 +50,9 @@ impl BatchedMotifsInput {
         }
     }
 }
-impl Input for BatchedMotifsInput {}
+impl Input for StackedMotifsInput {}
 
-impl WithId for BatchedMotifsInput {
+impl WithId for StackedMotifsInput {
     type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
@@ -110,7 +110,7 @@ impl WithId for StackedMotifsOutput {
 impl Output for StackedMotifsOutput {}
 
 #[derive(Debug, Cached)]
-pub struct BatchedMotifsLoader<ML, C>
+pub struct StackedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
@@ -123,7 +123,7 @@ where
 }
 
 
-impl <ML, C> OutId for BatchedMotifsLoader<ML, C>
+impl <ML, C> OutId for StackedMotifsLoader<ML, C>
 where
 ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
 C: RunCtx + MotifsCtx + Adjustable + 'static
@@ -133,7 +133,7 @@ C: RunCtx + MotifsCtx + Adjustable + 'static
     }
 }
 
-impl <ML, C> BatchedMotifsLoader<ML, C>
+impl <ML, C> StackedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
@@ -155,19 +155,19 @@ where
 
 }
 
-impl <ML, C> Stage for BatchedMotifsLoader<ML, C>
+impl <ML, C> Stage for StackedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 
 {
     type Ctx = C;
-    type In<'a> = BatchedMotifsInput;
+    type In<'a> = StackedMotifsInput;
     type Out = StackedMotifsOutput;
 }
 
 // #[async_trait]
-impl <ML, C> AsyncStage for BatchedMotifsLoader<ML, C>
+impl <ML, C> AsyncStage for StackedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
@@ -189,41 +189,41 @@ where
         let motif_ids = self.store.read().list_motifs(input.find_motifs_run_config.id.expect("no id in find_motifs_run_config"))?;
 
         let loaded_motifs = futures::stream::iter(motif_ids)
-        .map( |motif_id| {
-            let done_cnt = Arc::clone(&done_cnt);
+            .map( |motif_id| {
+                let done_cnt = Arc::clone(&done_cnt);
 
-            let motif_loader_clone = Arc::clone(&self.motif_loader);
-            let load_and_clc_avg_dist_clone = Arc::clone(&self.load_and_clc_avg_dist);
+                let motif_loader_clone = Arc::clone(&self.motif_loader);
+                let load_and_clc_avg_dist_clone = Arc::clone(&self.load_and_clc_avg_dist);
 
-            let ctx = Arc::clone(&ctx);
-            let ctx_for_clc = Arc::clone(&ctx);
-            let motif_avg_dists = Arc::clone(&motif_avg_dists);
+                let ctx = Arc::clone(&ctx);
+                let ctx_for_clc = Arc::clone(&ctx);
+                let motif_avg_dists = Arc::clone(&motif_avg_dists);
 
-            let find_motifs_run_config_id = input.find_motifs_run_config.id;
-            let select_motifs_run_config_id = input.select_motifs_run_config.id;
+                let find_motifs_run_config_id = input.find_motifs_run_config.id;
+                let select_motifs_run_config_id = input.select_motifs_run_config.id;
 
-            async move {
-                let motif_id_wrap = Arc::new(DevicesWrap::wrap_cpu((motif_id as u32).into()));
-                let mut motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx).await?;
-
-
-                let avg_motif_dist = load_and_clc_avg_dist_clone
-                    .run_cached(Arc::clone(&motif_id_wrap), Arc::clone(&ctx_for_clc))
-                    .await?
-                    .with_data_ref(0, Arc::clone(&ctx_for_clc), None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
-                    .await?;
-
-                debug!("SelectMotifsStage::run: find_motifs_run_id={:?} run_config.id={:?} motif={motif:?} avg_motif_dist={avg_motif_dist}", find_motifs_run_config_id, select_motifs_run_config_id);
-
-                motif_avg_dists.write().insert(DataId(motif_id as u32), avg_motif_dist);
+                async move {
+                    let motif_id_wrap = Arc::new(DevicesWrap::wrap_cpu((motif_id as u32).into()));
+                    let mut motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx).await?;
 
 
-                Ok::<_, ThoosaError>(motif)
-            }
-        })
-        .buffer_unordered(10)//TODO buffer_unordered
-        .try_collect::<Vec<_>>()
-        .await?;
+                    let avg_motif_dist = load_and_clc_avg_dist_clone
+                        .run_cached(Arc::clone(&motif_id_wrap), Arc::clone(&ctx_for_clc))
+                        .await?
+                        .with_data_ref(0, Arc::clone(&ctx_for_clc), None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
+                        .await?;
+
+                    debug!("SelectMotifsStage::run: find_motifs_run_id={:?} run_config.id={:?} motif={motif:?} avg_motif_dist={avg_motif_dist}", find_motifs_run_config_id, select_motifs_run_config_id);
+
+                    motif_avg_dists.write().insert(DataId(motif_id as u32), avg_motif_dist);
+
+
+                    Ok::<_, ThoosaError>(motif)
+                }
+            })
+            .buffered/*_unordered*/(10)//TODO buffered- to keep motif ids order consistent, try buffer_unordered and then sort?
+            .try_collect::<Vec<_>>()
+            .await?;
 
         with_data!(device_idx, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
 

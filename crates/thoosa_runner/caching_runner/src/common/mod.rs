@@ -55,6 +55,7 @@ pub mod mock_run_ctx {
     use mockall::mock;
     use parking_lot::RwLock;
     use std::sync::Arc;
+    use mockall::predicate::always;
     use thoosa_shared::traits::{Adjustable, Named};
     use thoosa_shared::ThoosaError;
     use crate::common::DropIf::IfNotMax;
@@ -114,6 +115,15 @@ pub mod mock_run_ctx {
             self
         }
 
+        pub fn with_add_permits(mut self) -> Self {
+            self.mock.expect_add_permit()
+                .with(always())
+                .return_const(());
+
+            self
+        }
+
+
         pub fn finish(self) -> MockRunCtx {
             self.mock
         }
@@ -129,6 +139,7 @@ pub mod mock_run_ctx {
         build()
             .with_device_idx(device_idx)
             .with_acquired_permits(1)
+            .with_add_permits()
             .with_drop_permits(vec![IfNotMax])
             .with_cache_area(0)
             .finish()
