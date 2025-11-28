@@ -10,7 +10,7 @@ use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
-use caching_runner::oom_handler::{Adjuster, Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use caching_runner::oom_handler::{Adjuster, Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use log::debug;
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
@@ -48,7 +48,7 @@ where
     id: SimpleId,
     motif_loader: Arc<ML>,
     clc_dist: Arc<CLC>,
-    output_builder: Box<dyn Fn(<Self as WithId>::ID) -> Box<dyn OutputBuilder<O = AverageDistanceValue>> + Send + Sync>,
+    // output_builder: Box<dyn Fn(<Self as WithId>::ID) -> Box<dyn OutputBuilder<O = AverageDistanceValue>> + Send + Sync>,
     _ctx: PhantomData<C>,
 }
 impl<ML, CLC, C> Debug for LoadMotifAndClcDistanceStage<ML, CLC, C>
@@ -113,7 +113,7 @@ where
             id: SimpleId("LoadMotifAndClcDistanceStage"),
             motif_loader,
             clc_dist,
-            output_builder: Box::new(|id| Box::new(DistOutputBuilder::new(id))),
+            // output_builder: Box::new(|id| Box::new(DistOutputBuilder::new(id))),
             _ctx: PhantomData,
         }
     }
@@ -200,11 +200,18 @@ where
                 &self.clc_dist,
                 Arc::clone(&motif),
                 Arc::clone(&ctx),
-                Contexts::new(SplitsAdjusterContextImpl::new(motif_size.clone(), (self.output_builder)(out_id.clone())), NoopRunnableContext {}, NoopRunCtxContext {}),
+                Contexts::new(
+                    SplitsAdjusterContextImpl::new(motif_size.clone(), DistOutputBuilder::new(out_id.clone())),
+                    // NoopInputContext(None),
+                    NoopRunnableContext {},
+                    NoopRunCtxContext {}
+                ),
             )
             .await?;
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(dist)))
+
+
     }
 }
 
@@ -257,7 +264,7 @@ impl OutputBuilder for DistOutputBuilder {
         self.values.push(o.value());
     }
 
-    fn build(self: Box<Self>) -> Result<Self::O, ThoosaError> {
+    async fn build(self) -> Result<Self::O, ThoosaError> {
         debug!("DistOutputBuilder::build: self.values={:?}", self.values);
 
         Ok(AverageDistanceValue::new(self.id.clone(), if self.values.is_empty() { 0.0 } else { self.values.iter().sum::<f32>() / self.values.len() as f32 }))

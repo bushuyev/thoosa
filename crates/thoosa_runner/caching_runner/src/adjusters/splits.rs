@@ -96,20 +96,23 @@ pub trait SplitsAdjusterContext: Debug + Send + Sync {
 }
 
 #[derive(Debug)]
-pub struct SplitsAdjusterContextImpl<'a, R>
+pub struct SplitsAdjusterContextImpl<'a, R, B>
 where
-    R: Stage + Adjustable + 'static,
+    R: Stage + Adjustable + 'a,
     <R as Stage>::In<'a>: Data,
+    B:OutputBuilder<O = <R as Stage>::Out>
 {
     done_to: <<R as Stage>::In<'a> as Data>::Metrics,
     split_len: <<R as Stage>::In<'a> as Data>::Metrics,
     input_len: <<R as Stage>::In<'a> as Data>::Metrics,
 
-    output_builder: Box<dyn OutputBuilder<O = <R as Stage>::Out>>,
+    output_builder: B, //Box<dyn OutputBuilder<O = <R as Stage>::Out>>,
 }
 
-impl<'a, 'b, R: Stage + Adjustable + 'a> InputContext<'a, R> for SplitsAdjusterContextImpl<'b, R>
+impl<'a, 'b, R, B> InputContext<'a, R> for SplitsAdjusterContextImpl<'b, R, B>
 where
+    R:Stage + Adjustable + 'a,
+    B:OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::In<'b>: Data,
     <<R as Stage>::In<'b> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'b> as Data>::Metrics>,
     <<R as Stage>::In<'b> as Data>::Metrics: PartialOrd,
@@ -131,17 +134,21 @@ where
     // }
 
     async fn build_final_output(self) -> Result<R::Out, ThoosaError> {
-        self.output_builder.build()
+        self.output_builder.build().await
     }
 }
 
-impl<'a, R: Stage + Adjustable + 'a> SplitsAdjusterContextImpl<'a, R>
+impl<'a, R, B> SplitsAdjusterContextImpl<'a, R, B>
 where
+    R:Stage + Adjustable + 'a,
+    B:OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::In<'a>: Data,
+    <<R as Stage>::In<'a> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'a> as Data>::Metrics>,
+    <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
 {
     pub fn new(
         input_len: <<R as Stage>::In<'a> as Data>::Metrics,
-        output_builder: Box<dyn OutputBuilder<O = <R as Stage>::Out>>,
+        output_builder: B,
     ) -> Self {
         Self {
             done_to: input_len.default_end(),
@@ -152,10 +159,13 @@ where
     }
 }
 
-impl<'a, R: Stage + Adjustable + 'a> SplitsAdjusterContext for SplitsAdjusterContextImpl<'a, R>
+impl<'a, R, B> SplitsAdjusterContext for SplitsAdjusterContextImpl<'a, R, B>
 where
-    R: Stage + Adjustable,
+    R:Stage + Adjustable + 'a,
+    B:OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::In<'a>: Data,
+    <<R as Stage>::In<'a> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'a> as Data>::Metrics>,
+    <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
 {
     type Metrics = <<R as Stage>::In<'a> as Data>::Metrics;
 
@@ -180,7 +190,7 @@ where
 pub trait OutputBuilder: Debug + Send + Sync {
     type O;
     fn add_partial_output(&mut self, o: Self::O);
-    fn build(self: Box<Self>) -> Result<Self::O, ThoosaError>;
+    async fn build(self) -> Result<Self::O, ThoosaError>;
 }
 
 #[cfg(test)]
