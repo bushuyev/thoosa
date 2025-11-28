@@ -14,6 +14,7 @@ use tch::Kind::{Float, Uint8};
 use tch::{IndexOp, Kind, Tensor};
 use tch::kind::FLOAT_CUDA;
 use tokio::io::AsyncWriteExt;
+use tokio::task::JoinSet;
 use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
@@ -109,7 +110,7 @@ where
 #[derive(Debug)]
 struct SelectMotifsSavableResultBuilder {
     id:SimpleId,
-    output:Vec<ClcResourcesMotifsDistOutput>,//TODO TempCache
+    output:JoinSet<Result<ClcResourcesMotifsDistOutput, ThoosaError>>,//TODO TempCache
     channels:u32
 }
 
@@ -119,7 +120,7 @@ impl SelectMotifsSavableResultBuilder {
 
         Self {
             id,
-            output: vec![],
+            output: JoinSet::new(),
             channels
         }
     }
@@ -131,16 +132,17 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
     fn add_partial_output(&mut self, o: Self::O) {
         debug!("SelectMotifsSavableResultBuilder::add_partial_output: o={o:?}");
 
-       self.output.push(o);
+       self.output.spawn(async {
+           Ok(o)
+       });
     }
 
-    fn build(self: Box<Self>) -> Self::O {
-        // let mut acc_channel_masks_dists_ids:Vec<Vec<(DistsMask, Vec<DataId>)>> =vec![vec![]; self.channels as usize];//TODO channels
+    fn build(self: Box<Self>) -> Result<Self::O, ThoosaError> {
 
         let resource_ids_sizes = vec![];
 
-        let step = self.output[0].resources_iter.step;
-        let select_motifs_run_config_id = self.output[0].select_motifs_run_id.clone();
+        let step = 0; //self.output[0].resources_iter.step;
+        let select_motifs_run_config_id = 0; //self.output[0].select_motifs_run_id.clone();
 
         // for out in self.output {
         //     let ClcRresourcesMotifsDistOutput {
@@ -158,11 +160,11 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         // }
 
 
-        ClcResourcesMotifsDistOutput::new(
+        Ok(ClcResourcesMotifsDistOutput::new(
             select_motifs_run_config_id,
             vec![], //acc_channel_masks_dists_ids,
             SlicesIter::new(step, resource_ids_sizes)
-        )
+        ))
     }
 }
 

@@ -192,7 +192,7 @@ impl OutputBuilder for MotifsProbabilitiesOutputBuilder {
         todo!()
     }
 
-    fn build(self: Box<Self>) -> Self::O {
+    fn build(self: Box<Self>) -> Result<Self::O, ThoosaError> {
         todo!()
     }
 }
