@@ -42,13 +42,13 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
 
 pub trait InputContext<'a, R>: Debug + Send + Sync
 where
-    R: Stage + 'a,
+    R: Stage,
     // <R as Stage>::In<'a>: Data
 {
     fn add_partial_output(&mut self, o: R::Out);
     fn all_done(&self) -> bool;
     // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics;
-    fn build_final_output(self) -> R::Out;
+    async fn build_final_output(self) -> R::Out;
 }
 
 #[cfg(test)]
@@ -66,7 +66,7 @@ pub mod mock_input_context {
             fn add_partial_output(&mut self, o: TestOutput);
             fn all_done(&self) -> bool;
             // fn input_len(&self) -> &[usize; 1];
-            fn build_final_output(self) -> TestOutput;
+            async fn build_final_output(self) -> TestOutput;
         }
     }
 
@@ -115,7 +115,7 @@ pub trait RunCtxContext: Debug {}
 #[derive(Debug)]
 pub struct Contexts<'a, R, IC, RC, RCC>
 where
-    R: Stage + 'a,
+    R: Stage,
     // <R as Stage>::In<'a>: Data,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
@@ -129,7 +129,7 @@ where
 
 impl<'a, R, IC, RC, RCC> Contexts<'a, R, IC, RC, RCC>
 where
-    R: Stage + 'a,
+    R: Stage,
     // <R as Stage>::In<'a>: Data,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
@@ -148,7 +148,7 @@ where
 #[derive(Debug)]
 pub enum Adjusters<'a, R, IC, RC, RCC, S>
 where
-    R: Stage + 'a,
+    R: Stage,
     <R as Stage>::In<'a>: /*Data +*/ Select<S> + Debug,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
@@ -163,7 +163,7 @@ where
 
 impl<'a, R, IC, RC, RCC, S> Adjusters<'a, R, IC, RC, RCC, S>
 where
-    R: Stage + 'a,
+    R: Stage,
     IC: InputContext<'a, R>,
     R: Adjustable,
     <R as Stage>::In<'a>: /*Data + */Select<S> + Debug,
@@ -189,7 +189,7 @@ impl<'a, R> InputContext<'a, R> for NoopInputContext<R>
 where
     <R as Stage>::In<'a>: Data,
     <R as Stage>::Out: Send + Sync,
-    R: Stage + 'a,
+    R: Stage,
 {
     fn add_partial_output(&mut self, o: R::Out) {
         self.0.replace(o);
@@ -203,7 +203,7 @@ where
     //     unimplemented!()
     // }
 
-    fn build_final_output(self) -> R::Out {
+    async fn build_final_output(self) -> R::Out {
         self.0.unwrap()
     }
 }
@@ -269,7 +269,7 @@ where
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
     where
-       for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>>,
+       for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'z>>,
         W:WithId<ID=<R::In<'z> as WithId>::ID>
     {
 
@@ -289,7 +289,7 @@ where
             let result = GlobalCtx::global()
                 .acquire_many(device_idx, 1, out_key.clone())
                 .await?;
-            run_context.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped 
+            run_context.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
         }
 
 
@@ -402,7 +402,7 @@ where
                                             run_context.write().drop_permits(DropIf::Always);
 
                                             debug!("done in {i} steps");
-                                            return Ok(contexts.input.build_final_output());
+                                            // return Ok(contexts.input.build_final_output().await);
                                         }
                                     }
                                     Err(te) => {
@@ -458,7 +458,9 @@ where
                 Err(MyError::SomethingElse(format!("all failed: task={task:?}")).into())
             }
             Ok(o) => Ok(o),
+
         }
+        // todo!()
     }
 }
 

@@ -94,11 +94,80 @@ pub trait SplitsAdjusterContext: Debug + Send + Sync {
     fn done_to(&self) -> &Self::Metrics;
     fn split_len_mut(&mut self) -> &mut Self::Metrics;
 }
+#[derive(Debug)]
+pub struct XSplitsAdjusterContextImpl<'a, R>
+where
+    R:Stage + Debug + Send + Sync,
+    // <R as Stage>::In<'a>: Data,
+    // <<R as Stage>::In<'a> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'a> as Data>::Metrics>,
+    // <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd
+{
+    pd:PhantomData<&'a R>
+}
+
+
+impl <'a, R> XSplitsAdjusterContextImpl<'a, R>
+where
+    R:Stage + Debug + Send + Sync,
+    // <R as Stage>::In<'a>: Data,
+    // <<R as Stage>::In<'a> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'a> as Data>::Metrics>,
+    // <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
+{
+    pub fn new() -> Self {
+        Self { pd: Default::default() }
+    }
+}
+
+impl<'a, R> InputContext<'a, R> for XSplitsAdjusterContextImpl<'a, R>
+where
+    R:Stage + Debug + Send + Sync,
+    // <R as Stage>::In<'a>: Data,
+    // <<R as Stage>::In<'a> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'a> as Data>::Metrics>,
+    // <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
+{
+    fn add_partial_output(&mut self, o: R::Out) {
+        todo!()
+    }
+
+    fn all_done(&self) -> bool {
+        todo!()
+    }
+
+    async fn build_final_output(self) -> R::Out {
+        todo!()
+    }
+}
+
+impl<'a, R> SplitsAdjusterContext for XSplitsAdjusterContextImpl<'a, R>
+where
+    R:Stage + Debug + Send + Sync,
+    // <R as Stage>::In<'a>: Data,
+    // <<R as Stage>::In<'a> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'a> as Data>::Metrics>,
+    // <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
+{
+    type Metrics = MonoMetrics<0, 2>;
+
+    fn input_len(&self) -> &Self::Metrics {
+        todo!()
+    }
+
+    fn split_len(&self) -> &Self::Metrics {
+        todo!()
+    }
+
+    fn done_to(&self) -> &Self::Metrics {
+        todo!()
+    }
+
+    fn split_len_mut(&mut self) -> &mut Self::Metrics {
+        todo!()
+    }
+}
 
 #[derive(Debug)]
 pub struct SplitsAdjusterContextImpl<'a, R>
 where
-    R: Stage + Adjustable + 'static,
+    R: Stage + Adjustable,
     <R as Stage>::In<'a>: Data,
 {
     done_to: <<R as Stage>::In<'a> as Data>::Metrics,
@@ -130,7 +199,7 @@ where
     //     &self.input_len
     // }
 
-    fn build_final_output(self) -> R::Out {
+    async fn build_final_output(self) -> R::Out {
         self.output_builder.build()
     }
 }

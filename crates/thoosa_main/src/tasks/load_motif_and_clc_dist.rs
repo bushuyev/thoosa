@@ -5,7 +5,7 @@ use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use cached_derive::Cached;
-use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
+use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl, XSplitsAdjusterContextImpl};
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::common::{OutId, RunCtx};
@@ -200,7 +200,8 @@ where
                 &self.clc_dist,
                 Arc::clone(&motif),
                 Arc::clone(&ctx),
-                Contexts::new(SplitsAdjusterContextImpl::new(motif_size.clone(), (self.output_builder)(out_id.clone())), NoopRunnableContext {}, NoopRunCtxContext {}),
+                // Contexts::new(SplitsAdjusterContextImpl::new(motif_size.clone(), (self.output_builder)(out_id.clone())), NoopRunnableContext {}, NoopRunCtxContext {}),
+                Contexts::new(XSplitsAdjusterContextImpl::new(), NoopRunnableContext {}, NoopRunCtxContext {}),
             )
             .await?;
 
