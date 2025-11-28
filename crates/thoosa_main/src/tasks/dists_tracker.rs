@@ -59,6 +59,8 @@ impl WithId for DistsMask {
 impl DistsMask {
 
     pub fn new(mask: Tensor, dists: Option<Tensor>, pack: bool, stream_to_sync: Option<ThoCudaStream>) -> Self {
+        debug!("DistsMask::new: mask={mask:?} dists={dists:?}");
+
         assert_eq!(mask.kind(), Bool);
         Self {
             sizes: if pack {
@@ -88,10 +90,9 @@ impl DistsMask {
                 stream.synchronize();
             }
 
-
             Ok(Self {
 
-                mask: if self.sizes.is_some() {
+                mask: if self.sizes.is_some() {//was packed
                     CopyCtx::instance().move_t(self.mask, 0, Uint8).await?
                 } else {
                     CopyCtx::instance().move_t(self.mask, 0, Bool).await?

@@ -21,7 +21,7 @@ pub trait Stage: Debug {
 
 }
 
-// #[async_trait]
+// #[async_trait] - it's anyway not obj safe, and it forces Output to be Send
 pub trait AsyncStage:Stage + Debug + Send + Sync + 'static 
 where
         for <'a> Self::In<'a>: Data + CopyToDevice + WithId + Send + Sync,

@@ -262,8 +262,11 @@ where
             let mut t_1_batch_resources: Vec<_> = vec![];
             let mut t_1_batch_len = 0;
 
-            for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
-                //skipping lower triangle
+            for (i_1, resource_1) in resources
+                .iter()
+                .enumerate()
+                .skip(skip_0_i)//skipping lower triangle
+            {
 
                 let t_1 = Arc::clone(&self.loader)
                     .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_1.as_ref().clone())), Arc::clone(&ctx))
@@ -278,7 +281,8 @@ where
                     continue;
                 }
 
-                let mut cross_clc_output = DevicesWrap::with_data_array(
+
+                let mut cross_clc_output = DevicesWrap::with_data_array(//TODO replace with with_data!
                     [t_0_batch.clone(), t_1_batch].concat().as_slice(), //t_0_batch and t_1_batch are DataCacheWrappers
                     device_idx,
                     None,
@@ -720,6 +724,7 @@ mod tests {
         yield_now().await;
         sleep(Duration::from_millis(10)).await;
 
+        //TODO
         Ok(())
     }
 

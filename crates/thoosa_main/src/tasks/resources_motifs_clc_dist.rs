@@ -31,7 +31,7 @@ use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::slices_iter::SlicesIter;
 use thoosa_common::tho_tensor::ThoTensor;
 
-pub struct ClcRresourcesMotifsDist<C>
+pub struct ClcResourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -39,30 +39,30 @@ where
     _ctx: PhantomData<C>,
 }
 
-impl <C> Debug for ClcRresourcesMotifsDist<C>
+impl <C> Debug for ClcResourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClcRresourcesMotifsDist").finish()
+        f.debug_struct("ClcResourcesMotifsDist").finish()
     }
 }
 
-impl <C> Adjustable for ClcRresourcesMotifsDist<C>
+impl <C> Adjustable for ClcResourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
 {}
 
-impl <C>  OutId for  ClcRresourcesMotifsDist<C>
+impl <C>  OutId for  ClcResourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        format!("ClcRresourcesMotifsDist_{}", input_id).into()
+        format!("ClcResourcesMotifsDist_{}", input_id).into()
     }
 }
 
-impl<C> ClcRresourcesMotifsDist<C>
+impl<C> ClcResourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -74,16 +74,16 @@ where
     }
 }
 
-impl<C> Stage for ClcRresourcesMotifsDist<C>
+impl<C> Stage for ClcResourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = ClcResourcesMotifsDistInput<'a>;
-    type Out = ClcRresourcesMotifsDistOutput;
+    type Out = ClcResourcesMotifsDistOutput;
 }
 
-impl<C> SyncStage for ClcRresourcesMotifsDist<C>
+impl<C> SyncStage for ClcResourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -96,12 +96,12 @@ where
 
         let unfold_params = UnfoldParams::new(
             1,
-            input.batched_motifs_output.motifs.extra().1.window as i64,
-            input.batched_motifs_output.motifs.extra().1.step as i64,
+            input.stacked_motifs_output.motifs.extra().1.window as i64,
+            input.stacked_motifs_output.motifs.extra().1.step as i64,
         );
 
         let (batch_1_t, batch_1_sizes) = unfold_and_cat(input.batch, &unfold_params)?;
-        debug!("ClcResourcesMotifsDist::do_run: batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} avg_dists.size={:?} input.resource_ids={:?}",batch_1_t.size(), batch_1_t.device(), input.batched_motifs_output.motifs.data().t_ref().size(), input.batched_motifs_output.motifs_avg_dists.t_ref().size(), input.resource_ids);
+        debug!("ClcResourcesMotifsDist::do_run: batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} avg_dists.size={:?} input.resource_ids={:?}",batch_1_t.size(), batch_1_t.device(), input.stacked_motifs_output.motifs.data().t_ref().size(), input.stacked_motifs_output.motifs_avg_dists.t_ref().size(), input.resource_ids);
 
         let resource_ids_sizes = input
             .resource_ids
@@ -117,7 +117,7 @@ where
             LocalMin { dim: 2 },
             Le {
                 v: input
-                    .batched_motifs_output
+                    .stacked_motifs_output
                     .motifs_avg_dists
                     .t_ref()
                     .unsqueeze(-1)
@@ -130,15 +130,14 @@ where
 
         let channel_masks_dists_ids = {
             if device_idx > 0 {
-                let motifs_stream =
-                    ThoCudaStream::new((device_idx - 1) as i32);
+                let motifs_stream = ThoCudaStream::new((device_idx - 1) as i32);
                 let _guard = ThoStreamGuard::set(&motifs_stream);
             }
 
             let ((mask_dists_result), motifs_stream) = with_cuda_stream(device_idx, || {
                 thoosa_motifs::distance::clc_dist_d2_and_mask(
                     input
-                        .batched_motifs_output
+                        .stacked_motifs_output
                         .motifs
                         .data()
                         .t_ref()
@@ -153,10 +152,9 @@ where
 
             (0..self.num_channels)
                 .map(|c| {
-                    let ids =
-                        &input.batched_motifs_output.motifs.extra().0[c];
+                    let ids = &input.stacked_motifs_output.motifs.extra().0[c];
                     if ids.is_empty() {
-                        None
+                        None //no motifs in channel c
                     } else {
                         Some((
                             DistsMask::new(
@@ -190,9 +188,9 @@ where
                 .collect::<Vec<Option<(DistsMask, Vec<DataId>)>>>()
         };
 
-        Ok(ClcRresourcesMotifsDistOutput::new(
+        Ok(ClcResourcesMotifsDistOutput::new(
             input
-                .batched_motifs_output
+                .stacked_motifs_output
                 .motifs
                 .extra()
                 .2
@@ -325,13 +323,12 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
 }
 
 
-#[derive(Debug)] //DummyData
-// #[dummy_data(no_clone)]
+#[derive(Debug)]
 pub struct ClcResourcesMotifsDistInput<'a> {
     id: SimpleId,
     batch: &'a [&'a ThoTensor<ChannelsData2, SimpleId>],
     resource_ids: Vec<ResourceId>,
-    batched_motifs_output: &'a StackedMotifsOutput,
+    stacked_motifs_output: &'a StackedMotifsOutput,
 }
 
 
@@ -342,21 +339,15 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
         batched_motifs_output: &'a StackedMotifsOutput,
     ) -> ClcResourcesMotifsDistInput<'a> {
         Self {
-            id: SimpleId("ClcRresourcesMotifsDistInput"),
+            id: SimpleId("ClcResourcesMotifsDistInput"),
             batch,
             resource_ids,
-            batched_motifs_output,
+            stacked_motifs_output: batched_motifs_output,
         }
     }
 
 }
 
-#[async_trait]
-impl <'a> CopyToDevice for ClcResourcesMotifsDistInput<'a> {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError>{
-        !unimplemented!()
-    }
-}
 
 impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
     type Metrics = i64;
@@ -372,8 +363,8 @@ impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
     fn mem_size(&self) -> u64 {
 
         let batch_mem_size = self.batch.iter().map(|t|t.mem_size()).sum::<u64>();
-        let motifs_output_mem_size =  self.batched_motifs_output.motifs.mem_size();
-        let motifs_avg_dists_mem_size = self.batched_motifs_output.motifs_avg_dists.mem_size();
+        let motifs_output_mem_size =  self.stacked_motifs_output.motifs.mem_size();
+        let motifs_avg_dists_mem_size = self.stacked_motifs_output.motifs_avg_dists.mem_size();
 
         debug!("ClcResourcesMotifsDistInput::mem_size: batch_mem_size={} motifs_output_mem_size={} motifs_avg_dists_mem_size={}", batch_mem_size, motifs_output_mem_size, motifs_avg_dists_mem_size);
 
@@ -402,21 +393,21 @@ impl<'a> WithId for ClcResourcesMotifsDistInput<'a> {
 impl<'a> Input for ClcResourcesMotifsDistInput<'a> {}
 
 #[derive(Debug)]
-pub struct ClcRresourcesMotifsDistOutput {
+pub struct ClcResourcesMotifsDistOutput {
     id: SimpleId,
     pub select_motifs_run_id: RunId,
     pub channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<DataId>)>>,
     pub resources_iter: SlicesIter,
 }
 
-impl ClcRresourcesMotifsDistOutput {
+impl ClcResourcesMotifsDistOutput {
     pub fn new(
         select_motifs_run_config_id: RunId,
         channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<DataId>)>>,
         resources_iter: SlicesIter,
     ) -> Self {
         Self {
-            id: SimpleId("ClcRresourcesMotifsDistOutput"),
+            id: SimpleId("ClcResourcesMotifsDistOutput"),
             select_motifs_run_id: select_motifs_run_config_id,
             channel_masks_dists_ids,
             resources_iter,
@@ -424,7 +415,7 @@ impl ClcRresourcesMotifsDistOutput {
     }
 }
 
-impl WithId for ClcRresourcesMotifsDistOutput {
+impl WithId for ClcResourcesMotifsDistOutput {
     type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
@@ -432,8 +423,9 @@ impl WithId for ClcRresourcesMotifsDistOutput {
     }
 }
 
-impl thoosa_shared::applicables_runner::Output for ClcRresourcesMotifsDistOutput {}
+impl Output for ClcResourcesMotifsDistOutput {}
 
+///returns true if any motif slices x resource slice contains true (close enough)
 pub fn fold_mask<I>(mask: Tensor, ids: &Vec<I>, dim: usize) -> Tensor
 where
     I: PartialEq + Debug,
@@ -441,6 +433,7 @@ where
     reduce_by_groups(mask, |chunk| chunk.any_dim(dim as i64, true), ids, dim)
 }
 
+///returns mean dist between all motif slices x resource slice
 pub fn fold_dists<I>(mask: Tensor, ids: &Vec<I>, dim: usize) -> Tensor
 where
     I: PartialEq + Debug,
