@@ -392,6 +392,7 @@ where
 
                                 match run_result {
                                     Ok(v) => {
+                                        
                                         contexts.input.add_partial_output(v);
 
                                         let all_done = contexts.input.all_done();

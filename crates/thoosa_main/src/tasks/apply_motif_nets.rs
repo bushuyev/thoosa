@@ -34,7 +34,7 @@ use thoosa_with_data::with_data;
 use crate::tasks::cross_dims::{BatchChannelsData2Selector, ChannelsData2};
 use crate::tasks::load_motif_and_clc_dist::MotifSlicesSelector;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
-use crate::tasks::resources_motifs_clc_dist::ClcRresourcesMotifsDistOutput;
+use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::tasks::run_ctx_2::MotifsCtx;
 
 #[derive(Debug, Clone, DummyData)]
