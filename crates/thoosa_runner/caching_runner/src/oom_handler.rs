@@ -48,7 +48,7 @@ where
     fn add_partial_output(&mut self, o: R::Out);
     fn all_done(&self) -> bool;
     // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics;
-    fn build_final_output(self) -> R::Out;
+    fn build_final_output(self) -> Result<R::Out, ThoosaError>;
 }
 
 #[cfg(test)]
@@ -56,6 +56,7 @@ pub mod mock_input_context {
     use crate::oom_handler::mock_runnable::MockRunnable;
     use crate::oom_handler::test_types::TestOutput;
     use mockall::mock;
+    use thoosa_shared::ThoosaError;
 
     mock! {
         #[derive(Debug)]
@@ -66,7 +67,7 @@ pub mod mock_input_context {
             fn add_partial_output(&mut self, o: TestOutput);
             fn all_done(&self) -> bool;
             // fn input_len(&self) -> &[usize; 1];
-            fn build_final_output(self) -> TestOutput;
+            fn build_final_output(self) -> Result<TestOutput, ThoosaError>;
         }
     }
 
@@ -82,7 +83,7 @@ pub mod mock_input_context {
         }
 
         pub fn with_build_final_output(mut self, inp: super::test_types::TestOutput) -> Self {
-            self.mock.expect_build_final_output().return_once(|| inp);
+            self.mock.expect_build_final_output().return_once(|| Ok(inp));
             self
         }
 
@@ -203,8 +204,8 @@ where
     //     unimplemented!()
     // }
 
-    fn build_final_output(self) -> R::Out {
-        self.0.unwrap()
+    fn build_final_output(self) -> Result<R::Out, ThoosaError> {
+        self.0.ok_or(ThoosaError::new("no final output"))
     }
 }
 
@@ -403,7 +404,7 @@ where
                                             run_context.write().drop_permits(DropIf::Always);
 
                                             debug!("done in {i} steps");
-                                            return Ok(contexts.input.build_final_output());
+                                            return contexts.input.build_final_output();
                                         }
                                     }
                                     Err(te) => {

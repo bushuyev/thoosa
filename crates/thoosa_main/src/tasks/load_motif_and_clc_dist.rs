@@ -257,10 +257,10 @@ impl OutputBuilder for DistOutputBuilder {
         self.values.push(o.value());
     }
 
-    fn build(self: Box<Self>) -> Self::O {
+    fn build(self: Box<Self>) -> Result<Self::O, ThoosaError> {
         debug!("DistOutputBuilder::build: self.values={:?}", self.values);
 
-        AverageDistanceValue::new(self.id.clone(), if self.values.is_empty() { 0.0 } else { self.values.iter().sum::<f32>() / self.values.len() as f32 })
+        Ok(AverageDistanceValue::new(self.id.clone(), if self.values.is_empty() { 0.0 } else { self.values.iter().sum::<f32>() / self.values.len() as f32 }))
     }
 }
 
