@@ -40,6 +40,7 @@ use thoosa_shared::traits::{Adjustable, DataId, MonoMetrics, SimpleId, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_shared::applicables_runner::Output;
 use crate::cli::Commands::SelectMotifs;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput};
@@ -51,7 +52,7 @@ use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, LoadMotifAndClcDi
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::run_ctx_2::{MotifsCtx, RunCtx2};
 use crate::tasks::tensor_loader::RawTensorLoader;
-use crate::tasks::resources_motifs_clc_dist::{ClcRresourcesMotifsDist, ClcResourcesMotifsDistInput, ClcRresourcesMotifsDistOutput, ClcResourcesMotifsDistInputDeviceWrapper, ClcResourcesMotifsDistInputDeviceWrapperSelector};
+use crate::tasks::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResourcesMotifsDistInput, ClcResourcesMotifsDistOutput, ClcResourcesMotifsDistInputDeviceWrapper, ClcResourcesMotifsDistInputDeviceWrapperSelector};
 
 pub use crate::tasks::resources_motifs_clc_dist::{fold_dists, fold_mask};
 use crate::tasks::slices_iter::SlicesIter;
@@ -68,13 +69,13 @@ where
     ws:Arc<RwLock<Box<dyn Workspace>>>,
     loader:Arc<L>,
     motif_loader:Arc<ML>,
-    batched_motifs_loader:Arc<StackedMotifsLoader<ML, C>>,
+    stacked_motifs_loader:Arc<StackedMotifsLoader<ML, C>>,
     pd:PhantomData<C>,
     run_configs:Vec<SelectMotifsRunConfig>,
     find_motifs_run_ids:Vec<RunId>,
     load_and_clc_avg_dist:Arc<LoadMotifAndClcDistanceStage<ML, AverageEuclideanDistanceStage<C>, C>>,
-    clc_resources_motifs_dist:Arc<ClcRresourcesMotifsDist<C>>,
-    output_builder: Box<dyn Fn(<Self as WithId>::ID) -> Box<dyn OutputBuilder<O = ClcRresourcesMotifsDistOutput>> + Send + Sync>,
+    clc_resources_motifs_dist:Arc<ClcResourcesMotifsDist<C>>,
+    // output_builder: fn(<Self as WithId>::ID) -> Box<dyn OutputBuilder<O = ClcRresourcesMotifsDistOutput>> + Send + Sync>,
     max_batch:i64//TODO to SelectMotifsSFixedConfig
 }
 
@@ -108,12 +109,14 @@ where
 #[derive(Debug)]
 struct SelectMotifsSavableResultBuilder {
     id:SimpleId,
-    output:Vec<ClcRresourcesMotifsDistOutput>,//TODO TempCache
+    output:Vec<ClcResourcesMotifsDistOutput>,//TODO TempCache
     channels:u32
 }
 
 impl SelectMotifsSavableResultBuilder {
-    pub fn new(id:SimpleId, channels:u32) -> Self {
+    pub async fn new(id:SimpleId, channels:u32, cache_area: u64) -> Self {
+        // let tmp_cache: TmpCached<ClcRresourcesMotifsDistOutput> = TmpCached::new("motifs", cache_area).await;
+
         Self {
             id,
             output: vec![],
@@ -123,10 +126,11 @@ impl SelectMotifsSavableResultBuilder {
 }
 
 impl OutputBuilder for SelectMotifsSavableResultBuilder {
-    type O = ClcRresourcesMotifsDistOutput;
+    type O = ClcResourcesMotifsDistOutput;
 
     fn add_partial_output(&mut self, o: Self::O) {
         debug!("SelectMotifsSavableResultBuilder::add_partial_output: o={o:?}");
+
        self.output.push(o);
     }
 
@@ -154,13 +158,14 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         // }
 
 
-        ClcRresourcesMotifsDistOutput::new(
+        ClcResourcesMotifsDistOutput::new(
             select_motifs_run_config_id,
             vec![], //acc_channel_masks_dists_ids,
             SlicesIter::new(step, resource_ids_sizes)
         )
     }
 }
+
 
 impl <L, ML, C> SelectMotifsStage<L, ML, C>
 where
@@ -184,7 +189,7 @@ where
         ));
 
         let batched_motifs_loader = Arc::new(StackedMotifsLoader::new(Arc::clone(ws), Arc::clone(&motif_loader), Arc::clone(&load_and_clc_avg_dist), Arc::clone(store)));
-        let clc_resources_motifs_dist = Arc::new(ClcRresourcesMotifsDist::<C>::new(ws.read().channels() as usize));
+        let clc_resources_motifs_dist = Arc::new(ClcResourcesMotifsDist::<C>::new(ws.read().channels() as usize));
         let channels = ws.read().channels();
         Self {
             id: "SelectMotifsStage".into(),
@@ -192,13 +197,13 @@ where
             ws: Arc::clone(ws),
             loader,
             motif_loader,
-            batched_motifs_loader,
+            stacked_motifs_loader: batched_motifs_loader,
             run_configs,
             find_motifs_run_ids,
             load_and_clc_avg_dist,
             clc_resources_motifs_dist,
             pd: Default::default(),
-            output_builder: Box::new(move |id| Box::new(SelectMotifsSavableResultBuilder::new(id, channels))),
+            // output_builder: Box::new(move |id| Box::new(SelectMotifsSavableResultBuilder::new(id, channels))),
             max_batch
         }
     }
@@ -263,7 +268,7 @@ where
 
             for select_motifs_run_config in self.run_configs.iter() {
 
-                stacked_motifs.push(Arc::clone(&self.batched_motifs_loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(
+                stacked_motifs.push(Arc::clone(&self.stacked_motifs_loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(
                     StackedMotifsInput::new(
                         Arc::clone(&find_motifs_run_config),
                         Arc::new(select_motifs_run_config.clone())
@@ -325,14 +330,15 @@ where
                     ));
 
                     debug!("SelectMotifsStage::run: clc_resources_input={clc_resources_input:?}");
-                    let output_builder = (self.output_builder)(SimpleId("zzz"));
-                    async move {
 
-                       let out_id = Arc::new(SimpleId("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
+                    async move {
+                        let output_builder = Box::new(SelectMotifsSavableResultBuilder::new(SimpleId("zzz"), num_channels as u32, 0).await);
+
+                        let out_id = Arc::new(SimpleId("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
 
                         let required_ids = HashMap::new();
 
-                        let ClcRresourcesMotifsDistOutput {
+                        let ClcResourcesMotifsDistOutput {
                             select_motifs_run_id: find_motifs_run_config_id,
                             channel_masks_dists_ids,
                             resources_iter,
@@ -376,18 +382,16 @@ where
                         let mut motif_ids = vec![];
                         for channel_mask_dists_ids in channel_masks_dists_ids.into_iter().enumerate() {
                             if let (channel, Some(mask_dists_ids)) = channel_mask_dists_ids {
-
                                 debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
 
                                 let (cpu_mask, _) = mask_dists_ids.0.to_cpu().await?.unpack();
 
                                 let mut mask_in_channel = BoolTensorIterator::from(&cpu_mask);
                                 for motif_id in mask_dists_ids.1 {
-                                    let resources_iter= resources_iter.clone();
+                                    let resources_iter = resources_iter.clone();
 
                                     let mut slices = HashSet::new();
                                     for slice_1 in resources_iter {
-
                                         if let Some(mask) = mask_in_channel.next() {
                                             trace!("SelectMotifsStage::run: motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} mask={mask}");
                                             if mask {
@@ -398,7 +402,7 @@ where
                                         }
                                     }
 
-                                    if !slices.is_empty(){
+                                    if !slices.is_empty() {
                                         motif_ids.push(motif_id.clone());
                                         store.write().add_slices_to_motif(find_motifs_run_config_id, *motif_id, channel as i64, slices)?;
                                     }
@@ -407,7 +411,6 @@ where
                         }
 
                         Ok::<Vec<DataId>, ThoosaError>(motif_ids)
-
                     }
                 })
                 .buffer_unordered(10)
@@ -438,9 +441,12 @@ pub mod tests {
     use log::Level::Debug;
     use log::LevelFilter::{Info, Trace};
     use parking_lot::RwLock;
-    use tch::kind::FLOAT_CPU;
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{IndexOp, Kind, Tensor};
+    use tch::Device::Cuda;
+    use tch::Kind::Bool;
     use tokio::fs;
+    use caching_runner::adjusters::splits::OutputBuilder;
     use caching_runner::common::cachable::DevicesWrap;
     use caching_runner::common::{mock_run_ctx, MockRunCtx};
     use caching_runner::common::DropIf::IfNotMax;
@@ -467,9 +473,12 @@ pub mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
+    use crate::tasks::dists_tracker::DistsMask;
     use crate::tasks::motif_loader::{mock_motif_loader, MotifMeta};
+    use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::select_motifs::{fold_dists, fold_mask, SelectMotifsStage};
+    use crate::tasks::select_motifs::{fold_dists, fold_mask, SelectMotifsSavableResultBuilder, SelectMotifsStage};
+    use crate::tasks::slices_iter::SlicesIter;
     use crate::tasks::tensor_loader::{mock_tensor_loader};
 
     #[ctor::ctor]
@@ -735,7 +744,7 @@ pub mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_3_resources_2_labels_3_channels_3_motifs_cuda() -> Result<(), ThoosaError> {
-        log::set_max_level(Trace);
+        log::set_max_level(LevelFilter::Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
 
@@ -1275,7 +1284,7 @@ pub mod tests {
         );
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached(
-            motif_ids.iter().map(|m|(*m as u32, (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))))
+            motif_ids.iter().map(|m|(*m as u32, (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))))
         ).finish());
 
 
@@ -1300,6 +1309,40 @@ pub mod tests {
         let result = select_motifs_stage.run(
             Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))))), Arc::new(RwLock::new(ctx)),
         ).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_output_builder() -> Result<(), ThoosaError>  {
+        let num_channels = 3;
+        let mut output_builder = Box::new(SelectMotifsSavableResultBuilder::new(SimpleId("zzz"), num_channels as u32, 0).await);
+
+        output_builder.add_partial_output(
+            ClcResourcesMotifsDistOutput::new(
+                0,
+                vec![
+                    Some(
+                        (
+                            DistsMask::new(
+                                //3 channels, 5 motifs, 7 resource slices
+                                Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5),
+                                Some(Tensor::rand(&[3, 5, 7], FLOAT_CUDA)),
+                                false,
+                                None,
+                            ),
+                            vec![
+                                0.into()
+                            ]
+                        )
+                    )
+                ],
+                SlicesIter::new(100, vec![
+                    (0u32, 100),
+                    (1u32, 100)
+                ])
+            )
+        );
 
         Ok(())
     }
