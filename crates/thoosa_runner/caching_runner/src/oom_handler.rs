@@ -48,7 +48,7 @@ where
     fn add_partial_output(&mut self, o: R::Out);
     fn all_done(&self) -> bool;
     // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics;
-    fn build_final_output(self) -> Result<R::Out, ThoosaError>;
+    async fn build_final_output(self) -> Result<R::Out, ThoosaError>;
 }
 
 #[cfg(test)]
@@ -67,7 +67,7 @@ pub mod mock_input_context {
             fn add_partial_output(&mut self, o: TestOutput);
             fn all_done(&self) -> bool;
             // fn input_len(&self) -> &[usize; 1];
-            fn build_final_output(self) -> Result<TestOutput, ThoosaError>;
+            async fn build_final_output(self) -> Result<TestOutput, ThoosaError>;
         }
     }
 
@@ -204,7 +204,7 @@ where
     //     unimplemented!()
     // }
 
-    fn build_final_output(self) -> Result<R::Out, ThoosaError> {
+    async fn build_final_output(self) -> Result<R::Out, ThoosaError> {
         self.0.ok_or(ThoosaError::new("no final output"))
     }
 }
@@ -404,7 +404,8 @@ where
                                             run_context.write().drop_permits(DropIf::Always);
 
                                             debug!("done in {i} steps");
-                                            return contexts.input.build_final_output();
+
+                                            return contexts.input.build_final_output().await;
                                         }
                                     }
                                     Err(te) => {
