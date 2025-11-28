@@ -130,7 +130,7 @@ where
     //     &self.input_len
     // }
 
-    async fn build_final_output(self) -> R::Out {
+    async fn build_final_output(self) -> Result<R::Out, ThoosaError> {
         self.output_builder.build()
     }
 }
@@ -180,7 +180,7 @@ where
 pub trait OutputBuilder: Debug + Send + Sync {
     type O;
     fn add_partial_output(&mut self, o: Self::O);
-    fn build(self: Box<Self>) -> Self::O;
+    fn build(self: Box<Self>) -> Result<Self::O, ThoosaError>;
 }
 
 #[cfg(test)]
