@@ -6,6 +6,7 @@ use log::{debug, warn};
 use tch::Device;
 use tch::Kind;
 use thoosa_common::dims::Dims;
+use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{SimpleId, WithId};
 
 #[allow(dead_code)]
@@ -71,8 +72,8 @@ where
         self.added_partial_output_len += partial_size[self.dim as usize];
     }
 
-    fn build(self: Box<Self>) -> Self::O {
-        self.output
+    fn build(self: Box<Self>) -> Result<Self::O, ThoosaError> {
+        Ok(self.output)
     }
 }
 

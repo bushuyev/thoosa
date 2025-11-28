@@ -814,15 +814,15 @@ mod tests {
             self.partial_output.push(o);
         }
 
-        fn build(self: Box<Self>) -> Self::O {
-            DMulTaskOutput {
+        fn build(self: Box<Self>) -> Result<Self::O, ThoosaError> {
+            Ok(DMulTaskOutput {
                 id: self.id.clone(),
 
                 data: DummyTensor(self.partial_output.into_iter().fold(vec![], |mut a, v| {
                     a.extend(v.data.0);
                     a
                 })),
-            }
+            })
         }
     }
 
