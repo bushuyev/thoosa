@@ -300,6 +300,7 @@ mod tests {
             |t_0, t_1, input, ctx, _| {
                 debug!("t_0=\n{t_0}");
                 debug!("t_1=\n{t_1}");
+                debug!("input={input:?}");
 
                 let tensor_00 = Tensor::from_slice(&[
                     0.00, 0.01,  0.01,0.02,     1.00, 1.01,  1.01, 1.02,  1.02,1.03,     /* 2.00, 2.01,*/

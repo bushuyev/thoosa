@@ -94,10 +94,7 @@ impl<D: Data + CopyToDevice +WithId + Output + Debug + Send + Sync + 'static> Tm
             .try_collect::<Vec<R>>()
             .await
     }
-}
 
-
-impl <D:Data + CopyToDevice+ WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
 
     pub async fn new(name: &'static str, cache_area: u64) -> Self {
 
