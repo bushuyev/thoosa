@@ -72,7 +72,7 @@ where
         self.added_partial_output_len += partial_size[self.dim as usize];
     }
 
-    fn build(self: Box<Self>) -> Result<Self::O, ThoosaError> {
+    async fn build(self: Self) -> Result<Self::O, ThoosaError> {
         Ok(self.output)
     }
 }
