@@ -1,4 +1,5 @@
-#![feature(macro_metavar_expr_concat)]
+#![feature(macro_metavar_expr_concat, async_fn_in_trait)]
+#![allow(async_fn_in_trait)]
 
 pub mod adjusters;
 pub mod common;
