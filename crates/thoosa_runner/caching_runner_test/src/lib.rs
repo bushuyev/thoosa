@@ -38,17 +38,31 @@ pub enum FailUntil {
 }
 
 //for tests in torch_runner
-pub struct ClcOOMRunner<R: Stage, S:Debug+Default+Clone+Adjustable + 'static> {
+pub struct ClcOOMRunner<R, S, B>
+where
+    R: Stage + Adjustable + 'static,
+    R::Ctx: Adjustable,
+    for<'i> <R as Stage>::In<'i>: Adjustable,
+    S:Debug+Default+Clone+Adjustable + 'static,
+    B:OutputBuilder<O = <R as Stage>::Out>,
+{
     pd: PhantomData<(R,S)>,
     config: OOMRunnerConfig,
     output_builder: Box<
-        dyn Fn(<<R as Stage>::Out as WithId>::ID) -> Box<dyn OutputBuilder<O = <R as Stage>::Out>>
+        dyn Fn(<<R as Stage>::Out as WithId>::ID) -> B
             + Send
             + Sync,
     >,
 }
 
-impl<R: Stage + Stage, S:Debug+Default+Clone+Adjustable + 'static> Debug for ClcOOMRunner<R, S> {
+impl<R, S, B> Debug for ClcOOMRunner<R, S, B>
+where
+    R: Stage + Adjustable + 'static,
+    R::Ctx: Adjustable,
+    for<'i> <R as Stage>::In<'i>: Adjustable,
+    S:Debug+Default+Clone+Adjustable + 'static,
+    B:OutputBuilder<O = <R as Stage>::Out>,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MulOOMRunner")
             .field("config", &self.config)
@@ -56,21 +70,17 @@ impl<R: Stage + Stage, S:Debug+Default+Clone+Adjustable + 'static> Debug for Clc
     }
 }
 
-impl<R, S:Debug+Default+Clone+Adjustable + 'static> ClcOOMRunner<R, S>
+impl<R, S, B> ClcOOMRunner<R, S, B>
 where
     R: Stage + Adjustable + 'static,
-    for<'i> <R as Stage>::In<'i>: Adjustable,
     R::Ctx: Adjustable,
+    for<'i> <R as Stage>::In<'i>: Adjustable,
+    S:Debug+Default+Clone+Adjustable + 'static,
+    B:OutputBuilder<O = <R as Stage>::Out>,
 {
     pub fn new(
         config: OOMRunnerConfig,
-        output_builder: Box<
-            dyn Fn(
-                    <<R as Stage>::Out as WithId>::ID,
-                ) -> Box<dyn OutputBuilder<O = <R as Stage>::Out>>
-                + Send
-                + Sync,
-        >,
+        output_builder: Box<dyn Fn(<<R as Stage>::Out as WithId>::ID) -> B + Send + Sync >,
     ) -> Self {
         Self {
             pd: PhantomData,
@@ -814,7 +824,7 @@ mod tests {
             self.partial_output.push(o);
         }
 
-        fn build(self: Box<Self>) -> Result<Self::O, ThoosaError> {
+        async fn build(self) -> Result<Self::O, ThoosaError> {
             Ok(DMulTaskOutput {
                 id: self.id.clone(),
 
@@ -848,7 +858,7 @@ mod tests {
 
         loader: Arc<DummyLoader>,
         mul: Arc<DMulTask>,
-        mul_oom_runner: ClcOOMRunner<DMulTask, std::ops::Range<<DLoadedTensor as Data>::Metrics>>,
+        mul_oom_runner: ClcOOMRunner<DMulTask, std::ops::Range<<DLoadedTensor as Data>::Metrics>,DMulTaskOutputBuilder>,
     }
 
     impl OutId for DLoadAndMulTask {
@@ -866,7 +876,7 @@ mod tests {
             k: f32,
             fail_until: FailUntil,
             len: usize,
-            oom_runner: ClcOOMRunner<DMulTask, std::ops::Range<<DLoadedTensor as Data>::Metrics>>,
+            oom_runner: ClcOOMRunner<DMulTask, std::ops::Range<<DLoadedTensor as Data>::Metrics>, DMulTaskOutputBuilder>,
         ) -> Self {
             Self {
                 id,
@@ -1016,7 +1026,7 @@ mod tests {
                     max: MAX_PERMITS,
                     step: 10,
                 },
-                Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
+                Box::new(|id| DMulTaskOutputBuilder::new(id)),
             ),
         ));
         let ctx_device_0 = Arc::new(RwLock::new(DummyRunCtx::new(1, 0, "noname")));
@@ -1074,7 +1084,7 @@ mod tests {
                 100,
                 ClcOOMRunner::new(
                     OOMRunnerConfig::Permits { max: 20, step: 10 },
-                    Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
+                    Box::new(|id| DMulTaskOutputBuilder::new(id)),
                 ),
             ));
 
@@ -1109,7 +1119,7 @@ mod tests {
                         max: MAX_PERMITS,
                         step: *PermitStep::TEN,
                     },
-                    Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
+                    Box::new(|id| DMulTaskOutputBuilder::new(id)),
                 ),
             ));
 
@@ -1141,7 +1151,7 @@ mod tests {
                 100,
                 ClcOOMRunner::new(
                     OOMRunnerConfig::Splits {},
-                    Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
+                    Box::new(|id| DMulTaskOutputBuilder::new(id)),
                 ),
             ));
 
@@ -1180,7 +1190,7 @@ mod tests {
                 100,
                 ClcOOMRunner::new(
                     OOMRunnerConfig::DumpedToCpu,
-                    Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
+                    Box::new(|id| DMulTaskOutputBuilder::new(id)),
                 ),
             ));
 
