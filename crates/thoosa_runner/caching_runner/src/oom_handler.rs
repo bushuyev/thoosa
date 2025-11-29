@@ -239,7 +239,7 @@ where
 
 impl<'a, 'z, R, IC, RC, RCC, S> OOMHandler<'a, 'z, R, IC, RC, RCC, S>
 where
-    R: SyncStage + Adjustable + OutId + 'a,
+    R: SyncStage + Adjustable + OutId , //+ 'a,
     R::Ctx: Adjustable,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
@@ -269,198 +269,223 @@ where
         mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
     where
-       for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'z>>,
-        W:WithId<ID=<R::In<'z> as WithId>::ID>
+       // for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>>,
+       //  W:WithId<ID=<R::In<'z> as WithId>::ID>
     {
 
-        let (device_idx, ctx_name) = {
-            let guard = run_context.read();
-            (guard.device_idx(), guard.name())
-        };
-        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} input.id={:?}", os_thread_id(), input.id());
+        // let (device_idx, ctx_name) = {
+        //     let guard = run_context.read();
+        //     (guard.device_idx(), guard.name())
+        // };
+        // debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} input.id={:?}", os_thread_id(), input.id());
+        //
+        // // Identify this task by its output id for Arbiter fairness.
+        // let out_key = {
+        //     let out_id = task.out_id(input.id());
+        //     Arc::new(out_id) as Arc<dyn CachableIdTr>
+        // };
+        //
+        // if run_context.read().acquired_permits() == 0 {
+        //     let result = GlobalCtx::global()
+        //         .acquire_many(device_idx, 1, out_key.clone())
+        //         .await?;
+        //     run_context.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
+        // }
+        //
+        //
+        // debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}   acquired_permits={:?}", os_thread_id(), run_context.read().acquired_permits());
+        //
+        // let mut i = 0;
+        //
+        // let mut last_input_adjuster = None::<&Box<dyn Adjuster<IC, A = S>>>;
+        // let mut last_task_adjuster = None::<&Box<dyn Adjuster<RC, A = R>>>;
+        // let mut last_context_adjuster = None::<&Box<dyn Adjuster<RCC, A = Arc<RwLock<R::Ctx>>>>>;
+        //
 
-        // Identify this task by its output id for Arbiter fairness.
-        let out_key = {
-            let out_id = task.out_id(input.id());
-            Arc::new(out_id) as Arc<dyn CachableIdTr>
-        };
+        // loop {
+        //     let result = panic_to_err_async!(input.with_data_ref(device_idx, Arc::clone(&run_context), None, |data| {
+        //             Arc::clone(task).do_run(data, Arc::clone(&run_context))
+        //
+        //     }).await);
+        //
+        //
+        //     let result= panic_to_err_async!(input.with_selected_data_ref(device_idx, Arc::clone(&run_context), S::default(), None, |data| {
+        //         Arc::clone(task).do_run(data, Arc::clone(&run_context))
+        //     }).await);
+        //
+        //     match result {
+        //         Ok(v) => {
+        //             contexts.input.add_partial_output(v);
+        //         }
+        //         Err(_) => {}
+        //     }
+        //
+        // }
 
-        if run_context.read().acquired_permits() == 0 {
-            let result = GlobalCtx::global()
-                .acquire_many(device_idx, 1, out_key.clone())
-                .await?;
-            run_context.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
-        }
+        contexts.input.build_final_output().await;
 
 
-        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}   acquired_permits={:?}", os_thread_id(), run_context.read().acquired_permits());
 
-        let mut i = 0;
-
-        let mut last_input_adjuster = None::<&Box<dyn Adjuster<IC, A = S>>>;
-        let mut last_task_adjuster = None::<&Box<dyn Adjuster<RC, A = R>>>;
-        let mut last_context_adjuster = None::<&Box<dyn Adjuster<RCC, A = Arc<RwLock<R::Ctx>>>>>;
-
-        let mut input_select_adjusted = None;
-
-        match panic_to_err_async!(
-            input
-                .with_data_ref(device_idx, Arc::clone(&run_context), None, |data| {
-                    Arc::clone(task).do_run(data, Arc::clone(&run_context))
-                })
-                .await
-        ) {
-            Err(te) => {
-                match te.what() {
-                    MyError::OutOfMemory => {
-                        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  oom 0", os_thread_id());
-
-                        let mut task_adjusted = None::<Arc<R>>;
-
-                        for adjuster in &self.adjusters {
-                            debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  starting adjuster={adjuster:?}", os_thread_id());
-
-                            loop {
-                                i += 1;
-                                if i > 10000 {
-                                    //TODO
-                                    panic!("OOMHandler: ctx_name={ctx_name}  i={i}");
-                                }
-                                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} oom i={i}", os_thread_id());
-
-                                match adjuster {
-                                    Adjusters::Input(input_ad) => {
-                                        if last_input_adjuster.is_some() {
-                                            last_input_adjuster = None;
-                                        }
-
-                                        input_select_adjusted = Some(
-                                            input_ad
-                                                .adjust(
-                                                    input_select_adjusted
-                                                        .as_ref()
-                                                        .unwrap_or(&S::default())/*.unwrap_or(input_guard_op.as_ref().unwrap())*/,
-                                                    &mut contexts.input,
-                                                )
-                                                .await?,
-                                        );
-                                    }
-
-                                    Adjusters::Task(task_ad) => {
-                                        if last_task_adjuster.is_some() {
-                                            last_task_adjuster = None;
-                                        }
-                                        task_adjusted.replace(Arc::new(
-                                            task_ad.adjust(task, &mut contexts.runnable).await?,
-                                        ));
-                                    }
-
-                                    Adjusters::RunContext(context_ad) => {
-                                        if last_context_adjuster.is_some() {
-                                            last_context_adjuster = None;
-                                        }
-
-                                        context_ad
-                                            .adjust(&run_context, &mut contexts.run_ctx)
-                                            .await?;
-                                    }
-                                };
-
-                                let task_to_run = task_adjusted.as_ref().unwrap_or(task);
-
-                                if run_context.read().acquired_permits() == 0 {
-                                    let result = GlobalCtx::global()
-                                        .acquire_many(device_idx, 1, out_key.clone())
-                                        .await?;
-                                    run_context.write().add_permit(result);
-                                }
-
-                                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",os_thread_id(), run_context.read().acquired_permits());
-
-                                let run_result = if let Some(selector) = input_select_adjusted.as_ref() {
-
-                                    panic_to_err_async!(input.with_selected_data_ref(device_idx, Arc::clone(&run_context), selector.clone(), None, |data| {
-                                        Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
-                                    }).await)
-
-                                } else {
-                                    panic_to_err_async!(input.with_data_ref(device_idx, Arc::clone(&run_context), None, |data| {
-                                        Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
-                                    }).await)
-
-                                };
-
-                                match run_result {
-                                    Ok(v) => {
-                                        contexts.input.add_partial_output(v);
-
-                                        let all_done = contexts.input.all_done();
-
-                                        // debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}", os_thread_id());
-
-                                        if all_done {
-                                            run_context.write().drop_permits(DropIf::Always);
-
-                                            debug!("done in {i} steps");
-                                            // return Ok(contexts.input.build_final_output().await);
-                                        }
-                                    }
-                                    Err(te) => {
-                                        debug!("OOMHandler::run: err te={te:?}");
-
-                                        if run_context.read().acquired_permits() == MAX_PERMITS {
-                                            GlobalCtx::global()
-                                                .dump_all_to_cpu(&HashMap::new(), device_idx)
-                                                .await?;
-                                        }
-
-                                        run_context.write().drop_permits(DropIf::IfNotMax); //TODO config? - not needed for runner_semaphore
-
-                                        match te.what() {
-                                            MyError::OutOfMemory => {
-                                                // debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
-
-                                                if !adjuster.degrade(&mut contexts) {
-                                                    match adjuster {
-                                                        Adjusters::Input(v) => {
-                                                            last_input_adjuster.replace(v);
-                                                        }
-                                                        Adjusters::Task(v) => {
-                                                            last_task_adjuster.replace(v);
-                                                        }
-                                                        Adjusters::RunContext(v) => {
-                                                            last_context_adjuster.replace(v);
-                                                        }
-                                                    }
-
-                                                    break;
-                                                }
-                                            }
-                                            e => {
-                                                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} other error 1", os_thread_id());
-                                                return Err(te);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  other error 2", os_thread_id());
-                        return Err(te);
-                    }
-                }
-
-                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  all failed: input.mem_size={:?} cuda_mem: {:?}", os_thread_id(), input.mem_size(), cuda_mem());
-                trace!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} all failed: task={task:?} input={input:?}", os_thread_id());
-
-                Err(MyError::SomethingElse(format!("all failed: task={task:?}")).into())
-            }
-            Ok(o) => Ok(o),
-
-        }
-        // todo!()
+        // let mut input_select_adjusted = None;
+        //
+        // match panic_to_err_async!(
+        //     input
+        //         .with_data_ref(device_idx, Arc::clone(&run_context), None, |data| {
+        //             Arc::clone(task).do_run(data, Arc::clone(&run_context))
+        //         })
+        //         .await
+        // ) {
+        //     Err(te) => {
+        //         match te.what() {
+        //             MyError::OutOfMemory => {
+        //                 debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  oom 0", os_thread_id());
+        //
+        //                 let mut task_adjusted = None::<Arc<R>>;
+        //
+        //                 for adjuster in &self.adjusters {
+        //                     debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  starting adjuster={adjuster:?}", os_thread_id());
+        //
+        //                     loop {
+        //                         i += 1;
+        //                         if i > 10000 {
+        //                             //TODO
+        //                             panic!("OOMHandler: ctx_name={ctx_name}  i={i}");
+        //                         }
+        //                         debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} oom i={i}", os_thread_id());
+        //
+        //                         match adjuster {
+        //                             Adjusters::Input(input_ad) => {
+        //                                 if last_input_adjuster.is_some() {
+        //                                     last_input_adjuster = None;
+        //                                 }
+        //
+        //                                 input_select_adjusted = Some(
+        //                                     input_ad
+        //                                         .adjust(
+        //                                             input_select_adjusted
+        //                                                 .as_ref()
+        //                                                 .unwrap_or(&S::default())/*.unwrap_or(input_guard_op.as_ref().unwrap())*/,
+        //                                             &mut contexts.input,
+        //                                         )
+        //                                         .await?,
+        //                                 );
+        //                             }
+        //
+        //                             Adjusters::Task(task_ad) => {
+        //                                 if last_task_adjuster.is_some() {
+        //                                     last_task_adjuster = None;
+        //                                 }
+        //                                 task_adjusted.replace(Arc::new(
+        //                                     task_ad.adjust(task, &mut contexts.runnable).await?,
+        //                                 ));
+        //                             }
+        //
+        //                             Adjusters::RunContext(context_ad) => {
+        //                                 if last_context_adjuster.is_some() {
+        //                                     last_context_adjuster = None;
+        //                                 }
+        //
+        //                                 context_ad
+        //                                     .adjust(&run_context, &mut contexts.run_ctx)
+        //                                     .await?;
+        //                             }
+        //                         };
+        //
+        //                         let task_to_run = task_adjusted.as_ref().unwrap_or(task);
+        //
+        //                         if run_context.read().acquired_permits() == 0 {
+        //                             let result = GlobalCtx::global()
+        //                                 .acquire_many(device_idx, 1, out_key.clone())
+        //                                 .await?;
+        //                             run_context.write().add_permit(result);
+        //                         }
+        //
+        //                         debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",os_thread_id(), run_context.read().acquired_permits());
+        //
+        //                         let run_result = if let Some(selector) = input_select_adjusted.as_ref() {
+        //
+        //                             panic_to_err_async!(input.with_selected_data_ref(device_idx, Arc::clone(&run_context), selector.clone(), None, |data| {
+        //                                 Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
+        //                             }).await)
+        //
+        //                         } else {
+        //                             panic_to_err_async!(input.with_data_ref(device_idx, Arc::clone(&run_context), None, |data| {
+        //                                 Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
+        //                             }).await)
+        //
+        //                         };
+        //
+        //                         match run_result {
+        //                             Ok(v) => {
+        //                                 contexts.input.add_partial_output(v);
+        //
+        //                                 let all_done = contexts.input.all_done();
+        //
+        //                                 // debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}", os_thread_id());
+        //
+        //                                 if all_done {
+        //                                     run_context.write().drop_permits(DropIf::Always);
+        //
+        //                                     debug!("done in {i} steps");
+        //                                     // return Ok(contexts.input.build_final_output().await);
+        //                                 }
+        //                             }
+        //                             Err(te) => {
+        //                                 debug!("OOMHandler::run: err te={te:?}");
+        //
+        //                                 if run_context.read().acquired_permits() == MAX_PERMITS {
+        //                                     GlobalCtx::global()
+        //                                         .dump_all_to_cpu(&HashMap::new(), device_idx)
+        //                                         .await?;
+        //                                 }
+        //
+        //                                 run_context.write().drop_permits(DropIf::IfNotMax); //TODO config? - not needed for runner_semaphore
+        //
+        //                                 match te.what() {
+        //                                     MyError::OutOfMemory => {
+        //                                         // debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+        //
+        //                                         if !adjuster.degrade(&mut contexts) {
+        //                                             match adjuster {
+        //                                                 Adjusters::Input(v) => {
+        //                                                     last_input_adjuster.replace(v);
+        //                                                 }
+        //                                                 Adjusters::Task(v) => {
+        //                                                     last_task_adjuster.replace(v);
+        //                                                 }
+        //                                                 Adjusters::RunContext(v) => {
+        //                                                     last_context_adjuster.replace(v);
+        //                                                 }
+        //                                             }
+        //
+        //                                             break;
+        //                                         }
+        //                                     }
+        //                                     e => {
+        //                                         debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} other error 1", os_thread_id());
+        //                                         return Err(te);
+        //                                     }
+        //                                 }
+        //                             }
+        //                         }
+        //                     }
+        //                 }
+        //             }
+        //             _ => {
+        //                 debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  other error 2", os_thread_id());
+        //                 return Err(te);
+        //             }
+        //         }
+        //
+        //         debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  all failed: input.mem_size={:?} cuda_mem: {:?}", os_thread_id(), input.mem_size(), cuda_mem());
+        //         trace!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} all failed: task={task:?} input={input:?}", os_thread_id());
+        //
+        //         Err(MyError::SomethingElse(format!("all failed: task={task:?}")).into())
+        //     }
+        //     Ok(o) => Ok(o),
+        //
+        // }
+        todo!()
     }
 }
 

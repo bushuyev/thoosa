@@ -203,59 +203,58 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
-        // let (device_idx, cache_area, ctx_name) = {
-        //     let guard = ctx.read();
-        //     (guard.device_idx(), guard.cache_area(), guard.name())
-        // };
-        //
-        // let out_id = Arc::new(self.out_id(WithId::id(&input))) as Arc<dyn CachableIdTr>;
-        //
-        // debug!("ApplyMotifNets::run: self.loaded_motif_nets.len={:?}", self.loaded_motif_nets.len());
-        //
-        // let matches = futures::stream::iter(self.loaded_motif_nets.iter())
-        //     .map(|motif_net|{
-        //         let motif_net = Arc::clone(motif_net);
-        //         let metrics = input.size().clone();
-        //         let input = Arc::clone(&input);
-        //         let out_id = Arc::clone(&out_id);
-        //         let ctx = Arc::clone(&ctx);
-        //         let apply_motif_net = Arc::clone(&self.apply_motif_net);
-        //
-        //         async move {
-        //             let wrapper = Arc::new(ApplyMotifNetInputDeviceWrapper::new(input, motif_net));
-        //             let output_builder = Box::new(MotifsProbabilitiesOutputBuilder::new());
-        //
-        //
-        //             let map = HashMap::new();
-        //
-        //             OOMHandler::new(
-        //                 vec![
-        //                     Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, Arc::clone(&out_id))))),
-        //                     Adjusters::RunContext(Box::new(DumpToCpu::new())),
-        //                     Adjusters::Input(Box::new(SplitsAdjuster::<ApplyMotifNetInputDeviceWrapperSelector, MonoMetrics<0, 3>>::new([2, -1, -1].into()))),//MonoMetrics<0, 3> - 0 dim of 3-dimensional  Batch<ChannelsData>
-        //                 ], None).run(
-        //                 &apply_motif_net,
-        //                 Arc::clone(&wrapper),
-        //                 ctx,
-        //                 Contexts::new(
-        //                     SplitsAdjusterContextImpl::new(wrapper._size().into(), output_builder),
-        //                     NoopRunnableContext {},
-        //                     PermitsAndDumpToCpuAdjustableContex::new(
-        //                         PermitsAdjustContextImpl::new(ctx_name),
-        //                         DumpToCpuContextImpl::new(&map),
-        //                     ),
-        //                 ),
-        //             ).await
-        //         }
-        //     })
-        //     .buffered(10)//TODO config, TODO - use buffer_unordered and then sort by motif_id?
-        //     .try_collect::<Vec<_>>().await?;
-        //
-        // debug!("ApplyMotifNets::run: matches={matches:?}");
-        //
-        //
-        // Ok(Arc::new(DevicesWrap::wrap_cpu(ApplyMotifNetsOutput::new("".into()))))
-        todo!()
+        let (device_idx, cache_area, ctx_name) = {
+            let guard = ctx.read();
+            (guard.device_idx(), guard.cache_area(), guard.name())
+        };
+
+        let out_id = Arc::new(self.out_id(WithId::id(&input))) as Arc<dyn CachableIdTr>;
+
+        debug!("ApplyMotifNets::run: self.loaded_motif_nets.len={:?}", self.loaded_motif_nets.len());
+
+        let matches = futures::stream::iter(self.loaded_motif_nets.iter())
+            .map(|motif_net|{
+                let motif_net = Arc::clone(motif_net);
+                let metrics = input.size().clone();
+                let input = Arc::clone(&input);
+                let out_id = Arc::clone(&out_id);
+                let ctx = Arc::clone(&ctx);
+                let apply_motif_net = Arc::clone(&self.apply_motif_net);
+
+                async move {
+                    let wrapper = Arc::new(ApplyMotifNetInputDeviceWrapper::new(input, motif_net));
+                    let output_builder = Box::new(MotifsProbabilitiesOutputBuilder::new());
+
+
+                    let map = HashMap::new();
+
+                    OOMHandler::new(
+                        vec![
+                            Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, Arc::clone(&out_id))))),
+                            Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                            Adjusters::Input(Box::new(SplitsAdjuster::<ApplyMotifNetInputDeviceWrapperSelector, MonoMetrics<0, 3>>::new([2, -1, -1].into()))),//MonoMetrics<0, 3> - 0 dim of 3-dimensional  Batch<ChannelsData>
+                        ], None).run(
+                        &apply_motif_net,
+                        Arc::clone(&wrapper),
+                        ctx,
+                        Contexts::new(
+                            SplitsAdjusterContextImpl::new(wrapper._size().into(), output_builder),
+                            NoopRunnableContext {},
+                            PermitsAndDumpToCpuAdjustableContex::new(
+                                PermitsAdjustContextImpl::new(ctx_name),
+                                DumpToCpuContextImpl::new(&map),
+                            ),
+                        ),
+                    ).await
+                }
+            })
+            .buffered(10)//TODO config, TODO - use buffer_unordered and then sort by motif_id?
+            .try_collect::<Vec<_>>().await?;
+
+        debug!("ApplyMotifNets::run: matches={matches:?}");
+
+
+        Ok(Arc::new(DevicesWrap::wrap_cpu(ApplyMotifNetsOutput::new("".into()))))
 
     }
 }
