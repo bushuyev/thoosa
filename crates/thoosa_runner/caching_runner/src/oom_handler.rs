@@ -40,7 +40,6 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
     }
 }
 
-#[async_trait]
 pub trait InputContext<'a, R>: Debug + Send + Sync
 where
     R: Stage + 'a,
@@ -56,7 +55,6 @@ where
 pub mod mock_input_context {
     use crate::oom_handler::mock_runnable::MockRunnable;
     use crate::oom_handler::test_types::TestOutput;
-    use async_trait::async_trait;
     use mockall::mock;
 
     mock! {
@@ -64,7 +62,6 @@ pub mod mock_input_context {
         pub InputContext {
 
         }
-        #[async_trait]
         impl super::InputContext<'static, MockRunnable> for InputContext{
             fn add_partial_output(&mut self, o: TestOutput);
             fn all_done(&self) -> bool;
@@ -85,7 +82,9 @@ pub mod mock_input_context {
         }
 
         pub fn with_build_final_output(mut self, inp: super::test_types::TestOutput) -> Self {
-            self.mock.expect_build_final_output().return_once(|| inp);
+            self.mock
+                .expect_build_final_output()
+                .return_once(move || Box::pin(async move { inp }));
             self
         }
 
@@ -188,7 +187,6 @@ where
 #[derive(Debug)]
 pub struct NoopInputContext<R: Stage + 'static>(pub Option<R::Out>);
 
-#[async_trait]
 impl<'a, R> InputContext<'a, R> for NoopInputContext<R>
 where
     <R as Stage>::In<'a>: Data,
