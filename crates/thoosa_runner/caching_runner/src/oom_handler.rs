@@ -84,7 +84,7 @@ pub mod mock_input_context {
         pub fn with_build_final_output(mut self, inp: super::test_types::TestOutput) -> Self {
             self.mock
                 .expect_build_final_output()
-                .return_once(move || Box::pin(async move { inp }));
+                .return_once(move || inp);
             self
         }
 
