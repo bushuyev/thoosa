@@ -40,6 +40,7 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
     }
 }
 
+#[async_trait]
 pub trait InputContext<'a, R>: Debug + Send + Sync
 where
     R: Stage + 'a,
@@ -48,13 +49,14 @@ where
     fn add_partial_output(&mut self, o: R::Out);
     fn all_done(&self) -> bool;
     // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics;
-    fn build_final_output(self) -> R::Out;
+    async fn build_final_output(self) -> R::Out;
 }
 
 #[cfg(test)]
 pub mod mock_input_context {
     use crate::oom_handler::mock_runnable::MockRunnable;
     use crate::oom_handler::test_types::TestOutput;
+    use async_trait::async_trait;
     use mockall::mock;
 
     mock! {
@@ -62,11 +64,12 @@ pub mod mock_input_context {
         pub InputContext {
 
         }
+        #[async_trait]
         impl super::InputContext<'static, MockRunnable> for InputContext{
             fn add_partial_output(&mut self, o: TestOutput);
             fn all_done(&self) -> bool;
             // fn input_len(&self) -> &[usize; 1];
-            fn build_final_output(self) -> TestOutput;
+            async fn build_final_output(self) -> TestOutput;
         }
     }
 
@@ -185,6 +188,7 @@ where
 #[derive(Debug)]
 pub struct NoopInputContext<R: Stage + 'static>(pub Option<R::Out>);
 
+#[async_trait]
 impl<'a, R> InputContext<'a, R> for NoopInputContext<R>
 where
     <R as Stage>::In<'a>: Data,
@@ -203,7 +207,7 @@ where
     //     unimplemented!()
     // }
 
-    fn build_final_output(self) -> R::Out {
+    async fn build_final_output(self) -> R::Out {
         self.0.unwrap()
     }
 }
@@ -402,7 +406,7 @@ where
                                             run_context.write().drop_permits(DropIf::Always);
 
                                             debug!("done in {i} steps");
-                                            return Ok(contexts.input.build_final_output());
+                                            return Ok(contexts.input.build_final_output().await);
                                         }
                                     }
                                     Err(te) => {
