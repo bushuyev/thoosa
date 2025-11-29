@@ -210,8 +210,6 @@ where
             .await?;
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(dist)))
-
-
     }
 }
 

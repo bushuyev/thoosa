@@ -624,7 +624,7 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
 
         loader: Arc<TestTensorLoader>,
         clc_task: Arc<ClcTask>,
-        clc_oom_runner: ClcOOMRunner<ClcTask, LoadedRange>,
+        clc_oom_runner: ClcOOMRunner<ClcTask, LoadedRange, SingleDimTensorOutputBuilder<ClcTaskOutput>>,
     }
 
     impl Stage for LoadAndClcTask {
@@ -715,7 +715,7 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
             k: impl Into<Scalar>,
             fail_until: Vec<FailUntil>,
             dim: MonoMetrics<1, 2>,
-            oom_runner: ClcOOMRunner<ClcTask, LoadedRange>,
+            oom_runner: ClcOOMRunner<ClcTask, LoadedRange, SingleDimTensorOutputBuilder<ClcTaskOutput>>,
             kind: Kind,
             device: Device,
             use_matmul: bool,
@@ -849,13 +849,13 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
             ClcOOMRunner::new(
                 OOMRunnerConfig::Permits { max: 20, step: 10 },
                 Box::new(move |id| {
-                    Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
                         1,
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    ))
+                    )
                 }),
             ),
             Float,
@@ -938,13 +938,13 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
             ClcOOMRunner::new(
                 OOMRunnerConfig::Permits { max: 20, step: 10 },
                 Box::new(move |id| {
-                    Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
                         1,
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    ))
+                    )
                 }),
             ),
             Float,
@@ -989,13 +989,13 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
                     step: *PermitStep::TEN,
                 },
                 Box::new(move |id| {
-                    Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
                         1,
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    ))
+                    )
                 }),
             ),
             Float,
@@ -1037,13 +1037,13 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
             ClcOOMRunner::new(
                 OOMRunnerConfig::Splits {},
                 Box::new(move |id| {
-                    Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
                         1,
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    ))
+                    )
                 }),
             ),
             Float,
@@ -1093,13 +1093,13 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
                     step: *PermitStep::TEN,
                 },
                 Box::new(move |id| {
-                    Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
                         1,
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    ))
+                    )
                 }),
             ),
             Float,
@@ -1144,13 +1144,13 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
             ClcOOMRunner::new(
                 OOMRunnerConfig::DumpedToCpu {},
                 Box::new(move |id| {
-                    Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
                         1,
                         &[3, 100],
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    ))
+                    )
                 }),
             ),
             Float,
@@ -1194,13 +1194,13 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
             ClcOOMRunner::new(
                 OOMRunnerConfig::DumpedToCpu {},
                 Box::new(move |id| {
-                    Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
                         1,
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    ))
+                    )
                 }),
             ),
             Float,
@@ -1334,13 +1334,13 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
             ClcOOMRunner::new(
                 OOMRunnerConfig::DumpedToCpu {},
                 Box::new(move |id| {
-                    Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
                         1,
                         &[dim_1, 1],
                         (init_type, Device::Cuda(0)),
                         BuildAs::Sum,
-                    ))
+                    )
                 }),
             ),
             Kind::Int64,
