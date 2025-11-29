@@ -109,13 +109,13 @@ where
     output_builder: B, //Box<dyn OutputBuilder<O = <R as Stage>::Out>>,
 }
 
-impl<'a, R, B> InputContext<'a, R> for SplitsAdjusterContextImpl<'a, R, B>
+impl<'a, 'b, R, B> InputContext<'a, R> for SplitsAdjusterContextImpl<'b, R, B>
 where
     R:Stage + Adjustable + 'a,
     B:OutputBuilder<O = <R as Stage>::Out>,
-    <R as Stage>::In<'a>: Data,
-    <<R as Stage>::In<'a> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'a> as Data>::Metrics>,
-    <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
+    <R as Stage>::In<'b>: Data,
+    <<R as Stage>::In<'b> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'b> as Data>::Metrics>,
+    <<R as Stage>::In<'b> as Data>::Metrics: PartialOrd,
 {
     fn add_partial_output(&mut self, o: R::Out){
         self.output_builder.add_partial_output(o);

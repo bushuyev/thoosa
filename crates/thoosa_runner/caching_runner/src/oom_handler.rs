@@ -83,7 +83,9 @@ pub mod mock_input_context {
         }
 
         pub fn with_build_final_output(mut self, inp: super::test_types::TestOutput) -> Self {
-            self.mock.expect_build_final_output().return_once(|| Ok(inp));
+            self.mock
+                .expect_build_final_output()
+                .return_once(move || Ok(inp));
             self
         }
 
@@ -393,7 +395,7 @@ where
 
                                 match run_result {
                                     Ok(v) => {
-                                        
+
                                         contexts.input.add_partial_output(v);
 
                                         let all_done = contexts.input.all_done();
@@ -404,8 +406,7 @@ where
                                             run_context.write().drop_permits(DropIf::Always);
 
                                             debug!("done in {i} steps");
-
-                                            return contexts.input.build_final_output().await;
+                                            return Ok(contexts.input.build_final_output().await);
                                         }
                                     }
                                     Err(te) => {
