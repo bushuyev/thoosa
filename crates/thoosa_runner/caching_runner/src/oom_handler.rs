@@ -406,7 +406,7 @@ where
                                             run_context.write().drop_permits(DropIf::Always);
 
                                             debug!("done in {i} steps");
-                                            return Ok(contexts.input.build_final_output().await);
+                                            return contexts.input.build_final_output().await;
                                         }
                                     }
                                     Err(te) => {

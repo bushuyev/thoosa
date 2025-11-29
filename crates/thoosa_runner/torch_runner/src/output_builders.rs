@@ -87,6 +87,7 @@ mod tests {
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use thoosa_common::dims::{AnyMetrics, AnySub, Dims};
+    use thoosa_shared::ThoosaError;
     use thoosa_shared::traits::SimpleId;
 
     #[derive(Debug, Clone)]
@@ -95,8 +96,8 @@ mod tests {
         type Metrics = AnyMetrics;
     }
 
-    #[test]
-    fn test_append() {
+    #[tokio::test]
+    async fn test_append() -> Result<(), ThoosaError>{
         let mut builder: Box<SingleDimTensorOutputBuilder<TestDims>> = Box::new(
             SingleDimTensorOutputBuilder::new("test".into(), 0, &[10], FLOAT_CPU, BuildAs::Append),
         );
@@ -106,7 +107,7 @@ mod tests {
         builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8])));
         builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[9])));
 
-        let out = builder.build();
+        let out = builder.build().await?;
 
         debug!("out=\n{}", out.t_ref());
 
@@ -116,10 +117,12 @@ mod tests {
             0.01,
             false
         ));
+
+        Ok(())
     }
 
-    #[test]
-    fn test_sum() {
+    #[tokio::test]
+    async fn test_sum() -> Result<(), ThoosaError>{
         let mut builder: Box<SingleDimTensorOutputBuilder<TestDims>> = Box::new(
             SingleDimTensorOutputBuilder::new("test".into(), 0, &[3], FLOAT_CPU, BuildAs::Sum),
         );
@@ -128,7 +131,7 @@ mod tests {
         builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5])));
         builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8])));
 
-        let out = builder.build();
+        let out = builder.build().await?;
 
         debug!("out=\n{}", out.t_ref());
 
@@ -138,5 +141,7 @@ mod tests {
             0.01,
             false
         ));
+
+        Ok(())
     }
 }
