@@ -108,6 +108,7 @@ where
     output_builder: Box<dyn OutputBuilder<O = <R as Stage>::Out>>,
 }
 
+#[async_trait]
 impl<'a, R: Stage + Adjustable + 'a> InputContext<'a, R> for SplitsAdjusterContextImpl<'a, R>
 where
     <R as Stage>::In<'a>: Data,
@@ -130,7 +131,7 @@ where
     //     &self.input_len
     // }
 
-    fn build_final_output(self) -> R::Out {
+    async fn build_final_output(self) -> R::Out {
         self.output_builder.build()
     }
 }
