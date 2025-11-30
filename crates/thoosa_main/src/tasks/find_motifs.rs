@@ -143,7 +143,8 @@ where
 
                 let filter = run_config.slices_filter.clone();
 
-                let cross_unfold_clc: CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoosaError> + Send + Sync >,
+                let cross_unfold_clc: CrossUnfoldClc<
+                    Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoosaError> + Send + Sync>,
                     DistsMask,
                     MeanDistsCtx,
                     C,
