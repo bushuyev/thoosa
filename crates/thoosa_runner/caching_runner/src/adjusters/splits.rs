@@ -77,7 +77,7 @@ where
         (*adjust_context.split_len_mut()) /= 2; //TODO configure degrade step
 
 
-        let can_degrade = adjust_context.split_len() > &self.min_split_len;
+        let can_degrade = adjust_context.split_len() >= &self.min_split_len;
 
         debug!("SplitsAdjuster::degrade: 1. adjust_context={adjust_context:?} self.min_split_len={:?} can_degrade={can_degrade}", self.min_split_len);
 
@@ -122,7 +122,7 @@ where
 
         self.done_to += &self.split_len.clone();
 
-        debug!("SplitsAdjusterAcontextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}",self.done_to, self.split_len);
+        debug!("SplitsAdjusterContextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}",self.done_to, self.split_len);
     }
 
     fn all_done(&self) -> bool {
