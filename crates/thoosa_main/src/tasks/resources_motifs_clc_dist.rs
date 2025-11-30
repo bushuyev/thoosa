@@ -394,7 +394,7 @@ impl<'a> Input for ClcResourcesMotifsDistInput<'a> {}
 
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistOutput {
-    id: SimpleId,
+    pub id: SimpleId,
     pub select_motifs_run_id: RunId,
     pub channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<DataId>)>>,
     pub resources_iter: SlicesIter,
@@ -411,6 +411,28 @@ impl ClcResourcesMotifsDistOutput {
             select_motifs_run_id: select_motifs_run_config_id,
             channel_masks_dists_ids,
             resources_iter,
+        }
+    }
+
+    pub async fn to_cpu(self) -> ClcResourcesMotifsDistOutput {
+        ClcResourcesMotifsDistOutput {
+            id: self.id,
+            select_motifs_run_id: self.select_motifs_run_id,
+            channel_masks_dists_ids: futures::stream::iter(self.channel_masks_dists_ids.into_iter())
+                .map( |op|{
+                    async {
+                        match op {
+                            None => None,
+                            Some((dists_mask, data_ids)) => {
+                                Some((dists_mask.to_cpu().await, data_ids))
+                            }
+                        }
+                    }
+                })
+                .buffered(10)//TODO
+                .collect::<Vec<_>>()
+                .await,
+            resources_iter: self.resources_iter,
         }
     }
 }
