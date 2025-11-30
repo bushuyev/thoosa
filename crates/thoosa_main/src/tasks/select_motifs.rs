@@ -176,6 +176,8 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         });
 
         let channel_masks_dists_ids = channel_masks_motif_ids.0.into_iter().zip(channel_masks_motif_ids.1).map(|channel_masks_motif_ids|{
+            debug!("SelectMotifsSavableResultBuilder::build: channel_masks_motif_ids={channel_masks_motif_ids:?}");
+
             if channel_masks_motif_ids.0.is_empty() {
                 None
             } else {
@@ -1367,7 +1369,7 @@ pub mod tests {
                             DistsMask::new(
                                 //3 channels, 5 motifs, 7 resource slices
                                 Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5),
-                                Some(Tensor::rand(&[3, 5, 7], FLOAT_CUDA)),
+                                None,
                                 false,
                                 None,
                             ),
@@ -1383,6 +1385,36 @@ pub mod tests {
                 ])
             )
         );
+
+        output_builder.add_partial_output(
+            ClcResourcesMotifsDistOutput::new(
+                0,
+                vec![
+                    Some(
+                        (
+                            DistsMask::new(
+                                //3 channels, 5 motifs, 7 resource slices
+                                Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5),
+                                None,
+                                false,
+                                None,
+                            ),
+                            vec![
+                                0.into()
+                            ]
+                        )
+                    )
+                ],
+                SlicesIter::new(100, vec![
+                    (0u32, 100),
+                    (1u32, 100)
+                ])
+            )
+        );
+
+        let output = output_builder.build().await?;
+
+        debug!("output={output:?}");
 
         Ok(())
     }
