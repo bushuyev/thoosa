@@ -14,7 +14,7 @@ use tch::Kind::{Float, Uint8};
 use tch::{IndexOp, Kind, Tensor};
 use tch::kind::FLOAT_CUDA;
 use tokio::io::AsyncWriteExt;
-use tokio::task::JoinSet;
+use tokio::task::{JoinHandle, JoinSet};
 use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
@@ -110,7 +110,7 @@ where
 #[derive(Debug)]
 struct SelectMotifsSavableResultBuilder {
     id:SimpleId,
-    output:JoinSet<Result<ClcResourcesMotifsDistOutput, ThoosaError>>,//TODO TempCache
+    output:Vec<JoinHandle<Result<ClcResourcesMotifsDistOutput, ThoosaError>>>,//TODO TempCache
     channels:u32
 }
 
@@ -120,7 +120,7 @@ impl SelectMotifsSavableResultBuilder {
 
         Self {
             id,
-            output: JoinSet::new(),
+            output: vec![],
             channels
         }
     }
@@ -132,9 +132,9 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
     fn add_partial_output(&mut self, o: Self::O) {
         debug!("SelectMotifsSavableResultBuilder::add_partial_output: o={o:?}");
 
-       self.output.spawn(async {
-           Ok(o)
-       });
+       self.output.push (tokio::spawn(async {
+           Ok(o.to_cpu().await) //TODO copy_d2h_from_ptr should return Result
+       }));
     }
 
     async fn build(self) -> Result<Self::O, ThoosaError> {
@@ -144,25 +144,62 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         let step = 0; //self.output[0].resources_iter.step;
         let select_motifs_run_config_id = 0; //self.output[0].select_motifs_run_id.clone();
 
-        // for out in self.output {
-        //     let ClcRresourcesMotifsDistOutput {
-        //         id,
-        //         select_motifs_run_id,
-        //         channel_masks_dists_ids,
-        //         resources_iter,
-        //     }  = out;
-        //
-        //     for  (acc_masks_dists, mut_masks_dists) in acc_channel_masks_dists_ids.iter_mut().zip(channel_masks_dists_ids.into_iter()) {
-        //
-        //         let (mut acc_dist_mask, acc_data_ids) = acc_masks_dists;
-        //
-        //     }
-        // }
 
+        let output:Vec<ClcResourcesMotifsDistOutput> = futures::future::try_join_all(self.output).await?
+            .into_iter()
+            .collect::<Result<Vec<_>, ThoosaError>>()?;
+
+        // partial output contains masks for
+        // motif_c0_0, motif_c0_1... motif_c0_n.
+        // motif_c1_0, motif_c1_1... motif_c1_n
+        // x
+        // unfolded resource_partN_0, unfolded resource_partN_1, ...
+        //
+        //if a chanel has no motifs then all partial outputs will contain None and corresponding vec in channel_masks will be empty.
+
+        let channel_masks_motif_ids = output.into_iter().fold(
+            (
+                (0..self.channels).map(|c|vec![]).collect::<Vec<Vec<Tensor>>>(),
+                (0..self.channels).map(|c|vec![]).collect::<Vec<Vec<DataId>>>()
+            ),
+
+            |mut channel_masks, partial_output|{
+
+            for (c, mask_op) in partial_output.channel_masks_dists_ids.into_iter().enumerate(){
+                if let Some(mask) = mask_op {
+                    channel_masks.0[c].push(mask.0.unpack().0);
+                    channel_masks.1[c].extend(mask.1);//TODO collect dists, needed for dumping plots only
+                }
+            };
+
+            channel_masks
+        });
+
+        let channel_masks_dists_ids = channel_masks_motif_ids.0.into_iter().zip(channel_masks_motif_ids.1).map(|channel_masks_motif_ids|{
+            debug!("SelectMotifsSavableResultBuilder::build: channel_masks_motif_ids={channel_masks_motif_ids:?}");
+
+            if channel_masks_motif_ids.0.is_empty() {
+                None
+            } else {
+                Some(
+                    (
+                        DistsMask::new(
+                            Tensor::concat(&channel_masks_motif_ids.0, 1),//1 dim - resources
+                            None,
+                            false,
+                            None
+                        ),
+                     channel_masks_motif_ids.1
+                    ),
+                )
+            }
+
+        })
+        .collect::<Vec<_>>();
 
         Ok(ClcResourcesMotifsDistOutput::new(
             select_motifs_run_config_id,
-            vec![], //acc_channel_masks_dists_ids,
+            channel_masks_dists_ids,
             SlicesIter::new(step, resource_ids_sizes)
         ))
     }
@@ -275,7 +312,7 @@ where
                         Arc::clone(&find_motifs_run_config),
                         Arc::new(select_motifs_run_config.clone())
                     ))),
-                                                                                       Arc::clone(&ctx)
+                     Arc::clone(&ctx)
                 ).await?);
             }
         }
@@ -1332,7 +1369,7 @@ pub mod tests {
                             DistsMask::new(
                                 //3 channels, 5 motifs, 7 resource slices
                                 Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5),
-                                Some(Tensor::rand(&[3, 5, 7], FLOAT_CUDA)),
+                                None,
                                 false,
                                 None,
                             ),
@@ -1348,6 +1385,36 @@ pub mod tests {
                 ])
             )
         );
+
+        output_builder.add_partial_output(
+            ClcResourcesMotifsDistOutput::new(
+                0,
+                vec![
+                    Some(
+                        (
+                            DistsMask::new(
+                                //3 channels, 5 motifs, 7 resource slices
+                                Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5),
+                                None,
+                                false,
+                                None,
+                            ),
+                            vec![
+                                0.into()
+                            ]
+                        )
+                    )
+                ],
+                SlicesIter::new(100, vec![
+                    (0u32, 100),
+                    (1u32, 100)
+                ])
+            )
+        );
+
+        let output = output_builder.build().await?;
+
+        debug!("output={output:?}");
 
         Ok(())
     }
