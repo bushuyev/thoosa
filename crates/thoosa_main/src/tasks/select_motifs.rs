@@ -564,7 +564,7 @@ pub mod tests {
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![resource_a.clone()])),
                 ])
-                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))
+                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
                 .build()));
 
         debug!("test_single_label_one_motif: resource_a_t={resource_a_t:?} resource_a_intervals={resource_a_intervals:?}");
@@ -640,7 +640,7 @@ pub mod tests {
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![resource_a.clone(), resource_b.clone()])),
                 ])
-                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- tested
+                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
                 .build()));
 
         // debug!("test_single_label_one_motif: resource_a_t={resource_a_t:?} resource_a_intervals={resource_a_intervals:?}");
@@ -718,7 +718,7 @@ pub mod tests {
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![resource_a.clone()])),
                 ])
-                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &motifs_ids, &resources_channels_intervals))//<-- tested
+                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &motifs_ids, &resources_channels_intervals))//<-- assert
                 .build()));
 
 
@@ -853,7 +853,7 @@ pub mod tests {
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![resource_a.clone(), resource_b.clone(), resource_c.clone()])),
                 ])
-                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- tested
+                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
                 .build()));
 
 
@@ -1145,8 +1145,52 @@ pub mod tests {
             folded_mask,
         );
 
+    }
+
+    #[test]
+    fn test_fold_mask_two_dims(){
+        let mask_0 = Tensor::from_slice(&[
+            false, true,   false, false, false, //1
+            false, true,   false, false, false, //1
+            false, false,  false, false, false, //1
+
+            false, false,  true,  false, false, //2
+            false, false,  false, false, false, //2
+        ] ).view((1, 5, -1));
+        let mask_1 = Tensor::from_slice(&[
+            false, false,  true,  false, false, //1
+            false, false,  true,  false, false, //1
+            false, false,  false, false, false, //1
+
+            false, false,  false,  false, false, //2
+            false, true,  false, false, false, //2
+        ] ).view((1, 5, -1));
+        let mask = Tensor::cat(&[mask_0, mask_1], 0);
+        debug!("mask: \n{mask}");
+
+
+        let ids = vec![1, 1, 1, 2, 2];
+
+        let folded_mask = fold_mask(mask, &ids, 1);
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                false, true,   false, false, false, //1
+                false, false,  true,  false, false, //2
+            ] ).view((1, 2, -1)),
+            folded_mask.narrow(0, 0, 1),
+        );
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                false, false,  true, false, false, //1
+                false, true,   false,  false, false, //2
+            ] ).view((1, 2, -1)),
+            folded_mask.narrow(0, 1, 1),
+        );
 
     }
+
 
 
     #[test]
@@ -1412,9 +1456,21 @@ pub mod tests {
             )
         );
 
-        let output = output_builder.build().await?;
+        let ClcResourcesMotifsDistOutput {
+            channel_masks_dists_ids,
+            ..
+        } = output_builder.build().await?;
 
-        debug!("output={output:?}");
+        for masks_dists_ids in channel_masks_dists_ids {
+            match masks_dists_ids {
+                None => {}
+                Some(v) => {
+                    let (mask, _) = v.0.unpack();
+                    debug!("mask=\t{mask}");
+                }
+            }
+        }
+
 
         Ok(())
     }
