@@ -249,13 +249,15 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SimpleId>], unfold_para
         .iter()
         .filter(|t| t.size()[1] >= unfold_params.size) //TODO use metrics's size
         .map(|t| {
-            debug!("CrossUnfoldClc::do_run: 0. t.size={:?} self.unfold_params={:?}", t.size(), unfold_params);
+
 
             let unfolded = t.t_ref().unfold(
                 unfold_params.dimension,
                 unfold_params.size,
                 unfold_params.step,
             );
+            debug!("CrossUnfoldClc::do_run: 0. t.size={:?} self.unfold_params={:?} unfolded.size()={:?}", t.size(), unfold_params, unfolded.size());
+
             batch_0_sizes.push(unfolded.size()[1]); //number of blocks
             unfolded
         })
