@@ -139,10 +139,10 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
 
     async fn build(self) -> Result<Self::O, ThoosaError> {
 
-        let resource_ids_sizes = vec![];
+        let mut resource_ids_sizes = vec![];
 
-        let step = 0; //self.output[0].resources_iter.step;
-        let select_motifs_run_config_id = 0; //self.output[0].select_motifs_run_id.clone();
+        let step = 1; //self.output[0].resources_iter.step;
+        let select_motifs_run_config_id = 1; //self.output[0].select_motifs_run_id.clone();
 
 
         let output:Vec<ClcResourcesMotifsDistOutput> = futures::future::try_join_all(self.output).await?
@@ -150,7 +150,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
             .collect::<Result<Vec<_>, ThoosaError>>()?;
 
         // partial output contains masks for
-        // motif_c0_0, motif_c0_1... motif_c0_n.
+        // motif_c0_0, motif_c0_1... motif_c0_m.
         // motif_c1_0, motif_c1_1... motif_c1_n
         // x
         // unfolded resource_partN_0, unfolded resource_partN_1, ...
@@ -165,15 +165,27 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
 
             |mut channel_masks, partial_output|{
 
-            for (c, mask_op) in partial_output.channel_masks_dists_ids.into_iter().enumerate(){
-                if let Some(mask) = mask_op {
-                    channel_masks.0[c].push(mask.0.unpack().0);
-                    channel_masks.1[c].extend(mask.1);//TODO collect dists, needed for dumping plots only
-                }
-            };
+                debug!("SelectMotifsSavableResultBuilder::build: partial_output={partial_output:?}");
 
-            channel_masks
-        });
+                assert_eq!(partial_output.channel_masks_dists_ids.len() as u32, self.channels);
+
+                for (c, mask_op) in partial_output.channel_masks_dists_ids.into_iter().enumerate(){
+                    debug!("SelectMotifsSavableResultBuilder::build: c={c} mask_op={mask_op:?}");
+
+                    if let Some(mask) = mask_op {
+                        let mask_t = mask.0.unpack().0;
+
+                        debug!("SelectMotifsSavableResultBuilder::build: c={c} mask_t=\n{mask_t}");
+
+                        channel_masks.0[c].push(mask_t);
+                        channel_masks.1[c] = mask.1;//TODO collect dists, needed for dumping plots only
+                    }
+                };
+
+                resource_ids_sizes.extend(partial_output.resources_iter.resource_ids_sizes);
+
+                channel_masks
+            });
 
         let channel_masks_dists_ids = channel_masks_motif_ids.0.into_iter().zip(channel_masks_motif_ids.1).map(|channel_masks_motif_ids|{
             debug!("SelectMotifsSavableResultBuilder::build: channel_masks_motif_ids={channel_masks_motif_ids:?}");
@@ -184,12 +196,12 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
                 Some(
                     (
                         DistsMask::new(
-                            Tensor::concat(&channel_masks_motif_ids.0, 1),//1 dim - resources
+                            Tensor::concat(&channel_masks_motif_ids.0, 1), //1 dim - resources
                             None,
                             false,
                             None
                         ),
-                     channel_masks_motif_ids.1
+                        channel_masks_motif_ids.1
                     ),
                 )
             }
@@ -371,9 +383,7 @@ where
                     debug!("SelectMotifsStage::run: clc_resources_input={clc_resources_input:?}");
                     // let output_builder = (self.output_builder)(SimpleId("zzz"));
                     async move {
-                        let output_builder = SelectMotifsSavableResultBuilder::new(SimpleId("zzz"), num_channels as u32, 0).await;
-
-                       let out_id = Arc::new(SimpleId("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
+                        let out_id = Arc::new(SimpleId("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
 
                         let required_ids = HashMap::new();
 
@@ -386,7 +396,7 @@ where
                             vec![
                                 Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, out_id.clone())))),
                                 Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                                Adjusters::Input(Box::new(SplitsAdjuster::<ClcResourcesMotifsDistInputDeviceWrapperSelector, i64>::new(t_1_batch_len as i64))), //TODO
+                                Adjusters::Input(Box::new(SplitsAdjuster::<ClcResourcesMotifsDistInputDeviceWrapperSelector, i64>::new(1))), //TODO
                             ], None)
                             .run(
                                 &clc_stage,
@@ -394,7 +404,7 @@ where
                                 ctx_clone,
                                 Contexts::new(
                                     // NoopInputContext(None),
-                                    SplitsAdjusterContextImpl::new(t_1_batch_len as i64, output_builder),
+                                    SplitsAdjusterContextImpl::new(t_1_batch_len as i64, SelectMotifsSavableResultBuilder::new(SimpleId("zzz"), num_channels as u32, 0).await),
                                     NoopRunnableContext {},
                                     PermitsAndDumpToCpuAdjustableContex::new(
                                         PermitsAdjustContextImpl::new(ctx_name),
@@ -425,6 +435,8 @@ where
                                 debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
 
                                 let (cpu_mask, _) = mask_dists_ids.0.to_cpu().await?.unpack();
+
+                                trace!("SelectMotifsStage::run: channel={channel} cpu_mask=\n{cpu_mask}");
 
                                 let mut mask_in_channel = BoolTensorIterator::from(&cpu_mask);
                                 for motif_id in mask_dists_ids.1 {
@@ -564,7 +576,7 @@ pub mod tests {
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![resource_a.clone()])),
                 ])
-                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
+                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
                 .build()));
 
         debug!("test_single_label_one_motif: resource_a_t={resource_a_t:?} resource_a_intervals={resource_a_intervals:?}");
@@ -640,7 +652,7 @@ pub mod tests {
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![resource_a.clone(), resource_b.clone()])),
                 ])
-                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
+                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
                 .build()));
 
         // debug!("test_single_label_one_motif: resource_a_t={resource_a_t:?} resource_a_intervals={resource_a_intervals:?}");
@@ -718,7 +730,7 @@ pub mod tests {
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![resource_a.clone()])),
                 ])
-                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &motifs_ids, &resources_channels_intervals))//<-- assert
+                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(run_id, &motifs_ids, &resources_channels_intervals))//<-- assert
                 .build()));
 
 
@@ -761,7 +773,7 @@ pub mod tests {
         Ok(())
     }
 
-    fn resources_add_slices_to_motif_expectations_2(run_id: RunId, channel_0_motifs_ids: &[usize], resources_channel_intervals: &[(&Resource,&[&[usize]], &Vec<Vec<Vec<Interval>>>)]) -> Vec<(RunId, u32, i64, HashSet<IdSlice>)> {
+    fn resources_add_slices_to_motif_expectations(run_id: RunId, channel_0_motifs_ids: &[usize], resources_channel_intervals: &[(&Resource, &[&[usize]], &Vec<Vec<Vec<Interval>>>)]) -> Vec<(RunId, u32, i64, HashSet<IdSlice>)> {
 
         let mut motif_hash = HashMap::new();
         for (resource, channel_0_motifs_ids, channel_intervals) in resources_channel_intervals {
@@ -812,17 +824,17 @@ pub mod tests {
 
         let (resource_a_t, resource_a_intervals) = resource_tensor(resource_a.length() as usize, &[
             vec![(3, 100, MotifKind::Pulse)],
-            vec![(3, 100, MotifKind::Sin)],
+            vec![(2, 100, MotifKind::Sin)],
             vec![]
         ], 100)?;
         let (resource_b_t, resource_b_intervals) = resource_tensor(resource_b.length() as usize, &[
-            vec![(3, 100, MotifKind::Pulse)],
-            vec![(3, 100, MotifKind::Sin)],
+            vec![(2, 100, MotifKind::Pulse)],
+            vec![(1, 100, MotifKind::Sin)],
             vec![]
         ], 100)?;
         let (resource_c_t, resource_c_intervals) = resource_tensor(resource_c.length() as usize, &[
-            vec![(3, 100, MotifKind::Triangle)],
-            vec![(3, 100, MotifKind::Sin)],
+            vec![(2, 100, MotifKind::Triangle)],
+            vec![(1, 100, MotifKind::Sin)],
             vec![]
         ], 100)?;
 
@@ -837,6 +849,9 @@ pub mod tests {
 
         debug!("test_3_resources_2_labels_3_channels_3_motifs: resources_channels_intervals={resources_channels_intervals:?}");
 
+        let expected_add_slices_to_motif_calls = resources_add_slices_to_motif_expectations(run_id, &channel_0_motifs_ids, &resources_channels_intervals);
+        debug!("test_3_resources_2_labels_3_channels_3_motifs: expected_add_slices_to_motif_calls={expected_add_slices_to_motif_calls:?}");
+
         let mut store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
                 .with_list_run_config_values(
@@ -845,15 +860,15 @@ pub mod tests {
                 )
                 .with_list_motifs([
                     (find_motifs_run_id as RunId, Ok(vec![
-                        channel_0_motif_0 as usize,
-                        channel_0_motif_1 as usize,
-                        channel_1_motif_0 as usize
+                        channel_0_motif_0,
+                        channel_0_motif_1,
+                        channel_1_motif_0
                     ]))
                 ])
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![resource_a.clone(), resource_b.clone(), resource_c.clone()])),
                 ])
-                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations_2(run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
+                .with_add_slices_to_motif(expected_add_slices_to_motif_calls)//<-- assert
                 .build()));
 
 
