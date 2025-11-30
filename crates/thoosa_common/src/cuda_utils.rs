@@ -245,7 +245,7 @@ pub async fn copy_d2h_from_ptr(
 ) -> Tensor {
     match copy_d2h_from_ptr_result(init_type, buf_size_bytes, bufs_pool, src_ptr, src_size).await {
         Ok(t) => t,
-        Err(e) => panic!("copy_d2h_from_ptr: {e:?}"),
+        Err(e) => panic!("copy_d2h_from_ptr: {e:?}"),//TODO return Result
     }
 }
 
