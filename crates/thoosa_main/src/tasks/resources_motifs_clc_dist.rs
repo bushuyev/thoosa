@@ -102,6 +102,11 @@ where
 
         let (batch_1_t, batch_1_sizes) = unfold_and_cat(input.batch, &unfold_params)?;
         debug!("ClcResourcesMotifsDist::do_run: batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} avg_dists.size={:?} input.resource_ids={:?}",batch_1_t.size(), batch_1_t.device(), input.stacked_motifs_output.motifs.data().t_ref().size(), input.stacked_motifs_output.motifs_avg_dists.t_ref().size(), input.resource_ids);
+        #[cfg(test)]
+        if batch_1_t.size()[1] > 801 {
+            debug!("ClcResourcesMotifsDist::do_run: triggering OOM");
+            return Err(ThoosaError::oom());
+        }
 
         let resource_ids_sizes = input
             .resource_ids
@@ -150,6 +155,7 @@ where
 
             let (mask, dists) = mask_dists_result?;
 
+            //motif ids are channel-specific so have to build DistsMask from folded
             (0..self.num_channels)
                 .map(|c| {
                     let ids = &input.stacked_motifs_output.motifs.extra().0[c];
@@ -302,7 +308,8 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
         debug!("ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref: selector={selector:?}");
 
 
-        let t_1_batch= self.batch[selector.resources_batch_range.start as usize .. selector.resources_batch_range.end as usize].to_vec();
+        let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
+        let t_1_batch= self.batch[range.clone()].to_vec();
         let stacked_motifs_output = Arc::clone(&self.stacked_motifs_output);
 
         with_data!(to_device_idx, [t_1_batch], stacked_motifs_output;
@@ -312,12 +319,11 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
             |{
                 let inpt = ClcResourcesMotifsDistInput::new(
                     &batch_v,
-                    self.resource_ids.clone(),
+                    self.resource_ids[range].to_vec(),
                     stacked_motifs_output,
                 );
 
                 do_run(&inpt)
-
         })
     }
 }

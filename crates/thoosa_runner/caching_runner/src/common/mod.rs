@@ -138,7 +138,7 @@ pub mod mock_run_ctx {
     pub fn default(device_idx: usize) -> MockRunCtx {
         build()
             .with_device_idx(device_idx)
-            .with_acquired_permits(1)
+            .with_acquired_permits(100)
             .with_add_permits()
             .with_drop_permits(vec![IfNotMax])
             .with_cache_area(0)

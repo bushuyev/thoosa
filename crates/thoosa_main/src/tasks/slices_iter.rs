@@ -4,7 +4,7 @@ use thoosa_shared::resource::ResourceId;
 #[derive(Debug, Clone)] //TODO clone? reset idx
 pub struct SlicesIter {
     pub step: usize,//TODO pub
-    resource_ids_sizes: Vec<(ResourceId, usize)>,
+    pub resource_ids_sizes: Vec<(ResourceId, usize)>,
     outer_idx: usize, // which (ResourceId, len) we're on
     inner_idx: usize, // position within the current len
 }
