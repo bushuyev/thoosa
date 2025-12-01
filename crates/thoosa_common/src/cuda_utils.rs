@@ -153,7 +153,9 @@ pub async fn move_d2h(
     let src_ptr: usize = src_t.data_ptr() as usize;
     let src_size = src_t.size();
 
-    copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size).await
+    let res = copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size).await;
+    drop(src_t); // keep source alive until the copy finishes
+    res
 }
 
 
@@ -288,7 +290,7 @@ pub async fn move_h2d(
     let src_ptr = src_t.data_ptr() as usize; // CPU mem
     let src_size = src_t.size();
 
-    copy_h2d_from_ptr(
+    let res = copy_h2d_from_ptr(
         init_type,
         buf_size,
         bufs_pool,
@@ -296,7 +298,9 @@ pub async fn move_h2d(
         src_ptr,
         &src_size,
     )
-        .await
+    .await;
+    drop(src_t); // keep source alive until the copy finishes
+    res
 }
 
 
