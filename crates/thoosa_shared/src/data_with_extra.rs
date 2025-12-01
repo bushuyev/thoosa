@@ -27,11 +27,11 @@ impl<D:Data+CopyToDevice+WithId, E:Clone+Debug> DataWithExtra<D, E> {
 
 #[async_trait]
 impl <D:Data+CopyToDevice+WithId + Sync, E:Clone+Debug+Sync> CopyToDevice for DataWithExtra<D, E> {
-    async fn copy_to_device(&self, dst_device: usize) -> Self{
-        DataWithExtra {
-            data: self.data.copy_to_device(dst_device).await,
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError>{
+        Ok(DataWithExtra {
+            data: self.data.copy_to_device(dst_device).await?,
             extra: self.extra.clone(),
-        }
+        })
     }
 }
 

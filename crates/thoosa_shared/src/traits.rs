@@ -516,8 +516,8 @@ pub trait Data: Debug {
 
 #[async_trait]
 impl CopyToDevice for MockData {
-    async fn copy_to_device(&self, _dst_device: usize) -> Self {
-        MockData::new()
+    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+        Ok(MockData::new())
     }
 }
 

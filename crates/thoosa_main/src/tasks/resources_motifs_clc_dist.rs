@@ -353,7 +353,7 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
 
 #[async_trait]
 impl <'a> CopyToDevice for ClcResourcesMotifsDistInput<'a> {
-    async fn copy_to_device(&self, dst_device: usize) -> Self{
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError>{
         !unimplemented!()
     }
 }

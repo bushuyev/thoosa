@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use std::fmt::{Debug, Display};
 use std::pin::Pin;
 use thoosa_shared::applicables_runner::CachableId;
-use thoosa_shared::CopyToDevice;
+use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{Metrics, MonoMetrics, Named};
 
 pub trait Dims: Send + Sync + Clone + Debug {
@@ -120,7 +120,7 @@ pub struct AnySub {}
 
 #[async_trait]
 impl CopyToDevice for AnySub {
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
         todo!()
     }
 }

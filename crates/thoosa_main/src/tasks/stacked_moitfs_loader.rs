@@ -77,12 +77,12 @@ impl StackedMotifsOutput {
 
 #[async_trait]
 impl CopyToDevice for StackedMotifsOutput {
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
-        StackedMotifsOutput {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+        Ok(StackedMotifsOutput {
             id:self.id.clone(),
-            motifs: self.motifs.copy_to_device(dst_device).await,
-            motifs_avg_dists: self.motifs_avg_dists.copy_to_device(dst_device).await,
-        }
+            motifs: self.motifs.copy_to_device(dst_device).await?,
+            motifs_avg_dists: self.motifs_avg_dists.copy_to_device(dst_device).await?,
+        })
 
     }
 }

@@ -20,8 +20,8 @@ impl From<Vec<f32>> for DummyTensor {
 
 #[async_trait]
 impl CopyToDevice for DummyTensor {
-    async fn copy_to_device(&self, _dst_device: usize) -> Self {
-        self.clone()
+    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+        Ok(self.clone())
     }
 }
 
@@ -123,7 +123,7 @@ impl Data for MockDataWithId {
 #[cfg(test)]
 #[async_trait]
 impl CopyToDevice for MockDataWithId {
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
-        MockDataWithId::for_device_and_id(dst_device, self.id().0)
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+        Ok(MockDataWithId::for_device_and_id(dst_device, self.id().0))
     }
 }
