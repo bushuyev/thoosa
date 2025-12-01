@@ -436,14 +436,14 @@ impl SeqBuilder {
         &mut self,
         out_feats: u32,
         config: LinearConfig,
-        #[cfg(debug_assertions)] descr: String,
+        #[cfg(debug_assertions)] descr: &str,
     ) -> &mut Self {
         self.elts.push(Node::Linear {
             in_feats: self.num_features,
             out_feats,
             config: Some(config),
             #[cfg(debug_assertions)]
-            descr,
+            descr: descr.into(),
         });
         self.num_features = out_feats;
 

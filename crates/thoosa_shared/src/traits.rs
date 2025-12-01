@@ -154,7 +154,7 @@ impl From<&'static str> for SimpleId {
 
 impl From<String> for SimpleId {
     fn from(value: String) -> Self {
-        SimpleId(value.leak())
+        SimpleId(value.leak())//TODO remove it
     }
 }
 
