@@ -79,28 +79,28 @@ impl DistsMask {
     }
 
 
-    pub async fn to_cpu(self) -> Self  {
+    pub async fn to_cpu(self) -> Result<Self, ThoosaError>  {
 
         if self.mask.device().eq(&Cpu) {
-            self
+            Ok(self)
         } else {
             if let Some(stream) = self.stream_to_sync {
                 stream.synchronize();
             }
 
 
-            Self {
+            Ok(Self {
 
                 mask: if self.sizes.is_some() {
-                    CopyCtx::instance().move_t(self.mask, 0, Uint8).await
+                    CopyCtx::instance().move_t(self.mask, 0, Uint8).await?
                 } else {
-                    CopyCtx::instance().move_t(self.mask, 0, Bool).await
+                    CopyCtx::instance().move_t(self.mask, 0, Bool).await?
                 },
 
                 dists: None,
                 sizes: self.sizes,
                 stream_to_sync:None
-            }
+            })
         }
     }
 

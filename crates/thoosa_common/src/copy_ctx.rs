@@ -7,6 +7,7 @@ use std::sync::{Arc, OnceLock};
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
 use tokio_utils::Pool;
+use thoosa_shared::ThoosaError;
 
 pub struct CopyCtx {
     _cu_ctx: Arc<ThoCudaContext>,
@@ -106,7 +107,7 @@ impl CopyCtx {
         buf_size
     }
 
-    pub async fn move_t(&self, src_t: Tensor, dst_device: usize, kind: Kind) -> Tensor {
+    pub async fn move_t(&self, src_t: Tensor, dst_device: usize, kind: Kind) -> Result<Tensor, ThoosaError> {
         if dst_device == 0 {
             move_d2h(kind, src_t, self.buf_size, &self.bufs_pool).await
         } else {
@@ -114,7 +115,7 @@ impl CopyCtx {
         }
     }
 
-    pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_device: usize, kind: Kind) -> Tensor {
+    pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_device: usize, kind: Kind) -> Result<Tensor, ThoosaError> {
         if dst_device == 0 {
             copy_d2h(kind, src_t, self.buf_size, &self.bufs_pool).await
         } else {
@@ -128,7 +129,7 @@ impl CopyCtx {
         src_size: &[i64],
         dst_device: usize,
         kind: Kind,
-    ) -> Tensor {
+    ) -> Result<Tensor, ThoosaError> {
         let t = if dst_device == 0 {
             copy_d2h_from_ptr(kind, self.buf_size, &self.bufs_pool, src_ptr, src_size).await
         } else {

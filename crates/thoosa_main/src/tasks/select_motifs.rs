@@ -379,7 +379,7 @@ where
 
                                 debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
 
-                                let (cpu_mask, _) = mask_dists_ids.0.to_cpu().await.unpack();
+                                let (cpu_mask, _) = mask_dists_ids.0.to_cpu().await?.unpack();
 
                                 let mut mask_in_channel = BoolTensorIterator::from(&cpu_mask);
                                 for motif_id in mask_dists_ids.1 {
