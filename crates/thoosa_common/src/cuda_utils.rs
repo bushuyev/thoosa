@@ -126,7 +126,7 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
     src_t: &R,
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
-) -> Tensor {
+) -> Result<Tensor, ThoosaError> {
 
     assert!(src_t.as_ref().device().ne(&Device::Cpu));
 
@@ -142,7 +142,7 @@ pub async fn move_d2h(
     src_t: Tensor,
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
-) -> Tensor {
+) -> Result<Tensor, ThoosaError> {
 
     assert!(src_t.as_ref().device().ne(&Device::Cpu));
 
@@ -242,11 +242,8 @@ pub async fn copy_d2h_from_ptr(
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
     src_ptr: usize,
     src_size: &[i64],
-) -> Tensor {
-    match copy_d2h_from_ptr_result(init_type, buf_size_bytes, bufs_pool, src_ptr, src_size).await {
-        Ok(t) => t,
-        Err(e) => panic!("copy_d2h_from_ptr: {e:?}"),
-    }
+) -> Result<Tensor, ThoosaError> {
+    copy_d2h_from_ptr_result(init_type, buf_size_bytes, bufs_pool, src_ptr, src_size).await
 }
 
 
@@ -256,7 +253,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
     dst_device_idx: usize,
-) -> Tensor {
+) -> Result<Tensor, ThoosaError> {
     assert!(src_t.as_ref().device().eq(&Cpu));
     assert!(dst_device_idx > 0);
 
@@ -281,7 +278,7 @@ pub async fn move_h2d(
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
     dst_device_idx: usize,
-) -> Tensor {
+) -> Result<Tensor, ThoosaError> {
     assert!(src_t.as_ref().device().eq(&Cpu));
     assert!(dst_device_idx > 0);
 
@@ -308,7 +305,7 @@ pub async fn copy_h2d_from_ptr(
     dst_device_idx: usize,
     src_ptr: usize,
     size: &[i64],
-) -> Tensor {
+) -> Result<Tensor, ThoosaError> {
     let tensor_mem_size = tensor_mem_size(init_type, &size);
     // debug!(
     //     "copy_h2d: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",
@@ -400,7 +397,7 @@ pub async fn copy_h2d_from_ptr(
         .await;
     }
 
-    dst_t
+    Ok(dst_t)
 }
 
 //TODO Result< + OOM handling
@@ -568,7 +565,7 @@ mod tests {
                     ctx,
                 )
             })
-            .collect::<JoinSet<()>>()
+            .collect::<JoinSet<Result<(), ThoosaError>>>()
             .join_all()
             .await;
 
@@ -593,7 +590,7 @@ mod tests {
         d2h_time: Arc<AtomicU64>,
         h2d_time: Arc<AtomicU64>,
         ctx: &CopyCtx,
-    ) {
+    ) ->Result<(), ThoosaError>{
         let dim_0 = random_range(0.5 * input_n as f64..1.5 * input_n as f64) as i64;
         // println!("run_copy_: dim_0={dim_0} dim_1={dim_1}");
         let mut src_t = Tensor::rand([dim_0, dim_1], (Float, Cpu));
@@ -603,7 +600,7 @@ mod tests {
         for _t in 0..runs {
             // println!("run_copy_: thread_i={thread_i} t={t} src_t.size={:?}", src_t.size());
             let inst_0 = Instant::now();
-            let tensor = ctx.copy_from_ptr(src_ptr, &src_size, 1, init_type).await;
+            let tensor = ctx.copy_from_ptr(src_ptr, &src_size, 1, init_type).await?;
             h2d_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
 
             (src_ptr, src_size) = (tensor.data_ptr() as usize, tensor.size());
@@ -611,7 +608,7 @@ mod tests {
             // println!("run_copy_: thread_i={thread_i} t={t} copy_d2h done in {}", inst_0.elapsed().as_millis());
 
             let inst_0 = Instant::now();
-            let tensor = ctx.copy_from_ptr(src_ptr, &src_size, 0, init_type).await;
+            let tensor = ctx.copy_from_ptr(src_ptr, &src_size, 0, init_type).await?;
             d2h_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
 
             (src_ptr, src_size) = (tensor.data_ptr() as usize, tensor.size());
@@ -620,10 +617,12 @@ mod tests {
             print!(".");
             src_t = tensor;
         }
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn test_small_one_copy_types() {
+    async fn test_small_one_copy_types() ->Result<(), ThoosaError>{
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -669,8 +668,8 @@ mod tests {
                 &bufs_pool,
                 src_t.data_ptr() as usize,
                 &src_t.size(),
-            )
-            .await;
+            ).await?;
+
             println!("dst=\t{dst}");
 
             let dst = copy_h2d_from_ptr(
@@ -680,15 +679,15 @@ mod tests {
                 1,
                 dst.data_ptr() as usize,
                 &dst.size(),
-            )
-            .await;
+            ).await?;
 
             assert!(src_t.allclose(&dst, 0.01, 0.01, false));
         }
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn heavy_one_copy_types() {
+    async fn heavy_one_copy_types() -> Result<(), ThoosaError>{
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -734,8 +733,8 @@ mod tests {
                 &bufs_pool,
                 src_t.data_ptr() as usize,
                 &src_t.size(),
-            )
-            .await;
+            ).await?;
+
             println!("dst=\t{dst}");
 
             let dst = copy_h2d_from_ptr(
@@ -745,11 +744,12 @@ mod tests {
                 1,
                 dst.data_ptr() as usize,
                 &dst.size(),
-            )
-            .await;
+            ).await?;
 
             assert!(src_t.allclose(&dst, 0.01, 0.01, false));
         }
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -813,7 +813,7 @@ mod tests {
 
                         let cuda_t = copy_ctx
                             .copy_from_ptr(t.data_ptr() as usize, &t.size(), 1, t.kind())
-                            .await;
+                            .await?;
                         let unfolded = cuda_t.unfold(1, 100, 10).contiguous();
 
                         copy_unfold_time += t_0.elapsed().as_millis();
@@ -888,7 +888,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_pack_unpack_copy() {
+    async fn roundtrip_pack_unpack_copy() -> Result<(), ThoosaError>{
         use tch::{Device, Kind, Tensor};
 
         unsafe {
@@ -903,7 +903,7 @@ mod tests {
         let channels = 20;
         let mask = Tensor::randint( 2, [channels * n], (Kind::Bool, Cuda(0))).view((channels, n));
         let size = mask.size();
-        let packed = CopyCtx::instance().copy(&pack_bits_bool(&mask), 0, Uint8).await;
+        let packed = CopyCtx::instance().copy(&pack_bits_bool(&mask), 0, Uint8).await?;
 
         let mask_size = mask.numel()*mask.kind().elt_size_in_bytes();
         let packed_size = packed.numel()*packed.kind().elt_size_in_bytes();
@@ -920,6 +920,8 @@ mod tests {
 
         assert!(mask.to_device(Cpu).allclose(&unpacked, 0.01, 0.01, false), "roundtrip mismatch");
         // assert!(mask.allclose(&unpack_bits_u8(&packed, None), 0.01, 0.01, false), "roundtrip mismatch");
+
+        Ok(())
     }
 
 

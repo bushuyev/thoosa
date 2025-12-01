@@ -224,7 +224,7 @@ where
                         receiver,
                         fixed_config.max_chunk_size as usize,
                         |batch|{
-                            async {batch.to_cpu().await}.boxed()
+                            async {batch.to_cpu().await.unwrap()}.boxed()//TODO unwrap
                         },
                         |receiver| {
                             let dists_tracker = Arc::clone(receiver);

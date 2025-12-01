@@ -607,7 +607,7 @@ where
         let copy =
             if tensor_mem_size(self.t.kind(), &self.t.size()) < CopyCtx::instance().buf_size() {
                 self.t
-                    .to_device(ThoDevice::from(dst_device).deref().clone())
+                    .f_to_device(ThoDevice::from(dst_device).deref().clone())?
             } else {
                 assert!(self.t.is_contiguous());
                 CopyCtx::instance()
@@ -616,8 +616,7 @@ where
                         &self.t.size(),
                         dst_device,
                         self.t.kind(),
-                    )
-                    .await
+                    ).await?
             };
 
         // debug!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
