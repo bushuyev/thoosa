@@ -333,7 +333,6 @@ where
                         error!("Can't load select_motifs_run_config: e={e:?} select_motifs_run_config={select_motifs_run_config:?}")
                     }
                 }
-
             }
         }
 
@@ -443,6 +442,8 @@ where
                                 debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
 
                                 let (cpu_mask, _) = mask_dists_ids.0.to_cpu().await?.unpack();
+
+                                trace!("SelectMotifsStage::run: channel={channel} cpu_mask=\n{cpu_mask}");
 
                                 trace!("SelectMotifsStage::run: channel={channel} cpu_mask=\n{cpu_mask}");
 
