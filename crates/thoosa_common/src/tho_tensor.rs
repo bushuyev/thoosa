@@ -18,7 +18,7 @@ use torch_sys::IntList;
 use log::debug;
 
 // #[derive(Debug)]
-// pub struct ThoTensor<D: Dims, Id: Named + Clone> {
+// pub struct ThoTensor<D: Dims, Id: Named + Debug + Clone> {
 //     id: Id,        //TODO move to wrappers (RawChannels etc)?
 //     pub t: Tensor, // attach the actual tensor
 //     pub _pd: PhantomData<D>,
@@ -27,12 +27,12 @@ use log::debug;
 //     tracking: parking_lot::RwLock<Vec<&'static str>>,
 // }
 
-impl<D: Dims, Id: Named + Clone> Dimensional for ThoTensor<D, Id> {
+impl<D: Dims, Id: Named + Debug + Clone> Dimensional for ThoTensor<D, Id> {
     type Dimensions = D;
 }
 
 //TODO remove, it should be in DevicesWrap between async
-unsafe impl<D: Dims, Id: Named + Clone> Sync for ThoTensor<D, Id> {}
+unsafe impl<D: Dims, Id: Named + Debug + Clone> Sync for ThoTensor<D, Id> {}
 
 // impl<D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
 //     fn from(tensor: Tensor) -> Self {
@@ -128,7 +128,7 @@ impl<D: Dims> ThoTensor<D, CachableId> {
     // }
 }
 
-impl<D: Dims, Id: Named + Clone> ThoTensor<D, Id> {
+impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     // pub fn new(id: Id, tensor: Tensor) -> Self {
     //     Self {
     //         id,
@@ -293,7 +293,7 @@ impl<D: Dims> Display for ThoTensor<D, CachableId> {
 // #[async_trait]
 // impl<D: Dims, Id> CopyToDevice for ThoTensor<D, Id>
 // where
-//     Id: Named + Clone, //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
+//     Id: Named + Debug + Clone, //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
 // {
 //     async fn copy_to_device(&self, dst_device: usize) -> Self {
 //         let copy =
@@ -318,15 +318,15 @@ impl<D: Dims> Display for ThoTensor<D, CachableId> {
 //     }
 // }
 
-pub struct ThoTensorMut<'a, D: Dims, Id: Named + Clone> {
+pub struct ThoTensorMut<'a, D: Dims, Id: Named + Debug + Clone> {
     _id: &'a Id,
     t: &'a mut Tensor,
     pd: PhantomData<D>,
 }
-unsafe impl<'a, D: Dims, Id: Named + Clone> Send for ThoTensorMut<'a, D, Id> {}
+unsafe impl<'a, D: Dims, Id: Named + Debug + Clone> Send for ThoTensorMut<'a, D, Id> {}
 // (no Sync)
 
-impl<'a, D: Dims, Id: Named + Clone> ThoTensorMut<'a, D, Id> {
+impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
     pub fn new(id: &'a Id, t: &'a mut Tensor) -> Self {
         Self {
             _id: id,
@@ -362,7 +362,7 @@ impl<'a, D: Dims, Id: Named + Clone> ThoTensorMut<'a, D, Id> {
     }
 }
 
-pub struct ThoTensor<D: Dims, Id: Named + Clone> {
+pub struct ThoTensor<D: Dims, Id: Named + Debug + Clone> {
     id: Id,//TODO remove
     pub t: Tensor,
 
@@ -396,9 +396,9 @@ impl<D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
 
 
 
-impl <D:Dims, Id:Named + Clone + Send> Adjustable for ThoTensor<D, Id> {}
+impl <D:Dims, Id:Named  + Debug + Clone + Send> Adjustable for ThoTensor<D, Id> {}
 
-impl<D: Dims, Id: Named + Clone> Data for ThoTensor<D, Id> {
+impl<D: Dims, Id: Named + Debug + Clone> Data for ThoTensor<D, Id> {
     type Metrics = D::Metrics;
 
 
@@ -421,7 +421,7 @@ impl<D: Dims, Id: Named + Clone> Data for ThoTensor<D, Id> {
     }
 }
 
-impl<D: Dims, Id: Named + Clone> Debug for ThoTensor<D, Id> {
+impl<D: Dims, Id: Named + Debug + Clone> Debug for ThoTensor<D, Id> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("")
             .field("id.name", &self.id.name())
@@ -430,7 +430,7 @@ impl<D: Dims, Id: Named + Clone> Debug for ThoTensor<D, Id> {
     }
 }
 
-impl<D: Dims, Id: Named + Clone> ThoTensor<D, Id> {
+impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     pub fn new(id: Id, tensor: Tensor) -> Self {
         Self {
             id,
@@ -576,7 +576,7 @@ impl<D: Dims, Id: Named + Clone> ThoTensor<D, Id> {
     }
 }
 
-// impl<D: Dims, Id: Named + Clone> Display for ThoTensor<D, Id> {
+// impl<D: Dims, Id: Named + Debug + Clone> Display for ThoTensor<D, Id> {
 //     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
 //         std::fmt::Display::fmt(&self.t, f)
 //     }
@@ -594,16 +594,22 @@ where
 }
 
 // impl<D: Dims, Id> Input for ThoTensor<D, Id> where
-//     Id: Named + Clone + std::fmt::Debug + Send + Sync + Eq + std::hash::Hash + 'static
+//     Id: Named + Debug + Clone + std::fmt::Debug + Send + Sync + Eq + std::hash::Hash + 'static
 // {
 // }
 
 #[async_trait]
 impl<D: Dims, Id> CopyToDevice for ThoTensor<D, Id>
 where
-    Id: Named + Clone, //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
+    Id: Named + Debug + Clone, //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
 {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+        debug!("CopyToDevice for ThoTensor: self.id={:?} self.t.size={:?} self.t.device={:?} dst_device={dst_device}", self.id, self.t.size(), self.t.device());
+        //should not copy device to itself
+        assert!(
+            !ThoDevice::from(dst_device).eq(&ThoDevice::from(self.t.device()))
+        );
+
         let copy =
             if tensor_mem_size(self.t.kind(), &self.t.size()) < CopyCtx::instance().buf_size() {
                 self.t.f_to_device(ThoDevice::from(dst_device).deref().clone())?
@@ -625,21 +631,21 @@ where
 }
 
 impl<D: Dims, Id> Output for ThoTensor<D, Id> where
-    Id: Named + Clone + std::fmt::Debug + Send + Sync + Eq + std::hash::Hash + 'static
+    Id: Named + Debug + Clone + std::fmt::Debug + Send + Sync + Eq + std::hash::Hash + 'static
 {
 }
 
-// unsafe impl<D: Dims, Id: Named + Clone> Sync for ThoTensor<D, Id> {}
+// unsafe impl<D: Dims, Id: Named + Debug + Clone> Sync for ThoTensor<D, Id> {}
 
-pub struct ThoTensorMut2<'a, D: Dims, Id: Named + Clone> {
+pub struct ThoTensorMut2<'a, D: Dims, Id: Named + Debug + Clone> {
     _id: &'a Id,
     t: &'a mut Tensor,
     pd: PhantomData<D>,
 }
 
-unsafe impl<'a, D: Dims, Id: Named + Clone> Send for ThoTensorMut2<'a, D, Id> {}
+unsafe impl<'a, D: Dims, Id: Named + Debug + Clone> Send for ThoTensorMut2<'a, D, Id> {}
 
-impl<'a, D: Dims, Id: Named + Clone> ThoTensorMut2<'a, D, Id> {
+impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut2<'a, D, Id> {
     pub fn new(id: &'a Id, t: &'a mut Tensor) -> Self {
         Self {
             _id: id,

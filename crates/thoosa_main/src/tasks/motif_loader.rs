@@ -369,9 +369,9 @@ where
         Tensor::f_cat(tensors.as_slice(), 0)?,
     );
 
-    debug!("MotifLoader::run: motif of size {:?} is built for motif_id={motif_id}", motif.size());
+    debug!("MotifLoader::run: motif of size {:?} is built for motif_id={motif_id} device={:?}", motif.size(), motif.t.device());
 
-    Ok((window, motif.copy_to_device(device_idx).await?))
+    Ok((window, motif))
 }
 
 

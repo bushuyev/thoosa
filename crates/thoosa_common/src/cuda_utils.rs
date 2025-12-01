@@ -174,7 +174,6 @@ pub async fn copy_d2h_from_ptr_result(
 
     let last = tensor_mem_size % buf_size_bytes;
 
-    // println!("chunks={chunks} last={last}");
     let dst_t = Tensor::empty(src_size, (init_type, Cpu));
     unsafe {
         let dst_ptr: usize = dst_t.data_ptr() as usize;
@@ -186,8 +185,7 @@ pub async fn copy_d2h_from_ptr_result(
         let iter = if last == 0 {
             Box::new(iter) as Box<dyn Iterator<Item = (usize, usize)>>
         } else {
-            Box::new(iter.chain(iter::once((chunks, last))))
-                as Box<dyn Iterator<Item = (usize, usize)>>
+            Box::new(iter.chain(iter::once((chunks, last)))) as Box<dyn Iterator<Item = (usize, usize)>>
         };
 
         iter.map(|(i, c_buf_size)| {
@@ -212,21 +210,18 @@ pub async fn copy_d2h_from_ptr_result(
                 );
                 let r: sys::CUresult = std::mem::transmute(raw);
                 if r != sys::CUresult::CUDA_SUCCESS {
-                    return Err(MyError::SomethingElse(format!("cuMemcpyDtoHAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")).into());
+                    return Err(MyError::SomethingElse(format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")).into());
                 }
 
                 buf_stream.1.synchronize();
 
-                // from pinned buffer into the destination tensor
-                // task::spawn_blocking(move || {
+
                 std::ptr::copy_nonoverlapping(
                     buf_ptr as *mut _,
                     dst_off_ptr as *mut u8,
                     c_buf_size,
                 );
-                // })
-                //     .await
-                //     .unwrap();
+
 
                 drop(buf_stream);
                 Ok(())
@@ -314,7 +309,7 @@ pub async fn copy_h2d_from_ptr(
     size: &[i64],
 ) -> Result<Tensor, ThoosaError> {
     let tensor_mem_size = tensor_mem_size(init_type, &size);
-    debug!("copy_h2d: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",size);
+    debug!("copy_h2d_from_ptr: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",size);
 
     // chunk layout
     let chunks = tensor_mem_size / buf_size;
@@ -380,9 +375,7 @@ pub async fn copy_h2d_from_ptr(
                 );
                 let r: sys::CUresult = std::mem::transmute(raw);
                 if r != sys::CUresult::CUDA_SUCCESS {
-                    panic!(
-                        "cuMemcpyHtoDAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}"
-                    );
+                    panic!("cuMemcpyHtoDAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}");
                 }
 
 
@@ -494,6 +487,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering::Relaxed;
+    use futures_util::StreamExt;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Float, Int64, Uint8};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
@@ -502,7 +496,11 @@ mod tests {
     use tokio::task::JoinSet;
     use tokio::time::Instant;
     use tokio_utils::Pool;
+    use thoosa_shared::applicables_runner::Output;
+    use thoosa_shared::traits::SimpleId;
     use thoosa_shims::{context::ThoCudaContext, stream::ThoCudaStream};
+    use crate::dims::AnyDims;
+    use crate::tho_tensor::ThoTensor;
 
     #[ctor::ctor]
     fn init() {
@@ -526,14 +524,25 @@ mod tests {
                         ctx.as_mut().unwrap().get_mut().rebuild(mem_k, buffs)
                     }
 
-                    run_test_copy_from_ptr(&*ctx.as_ref().unwrap().get()).await;
+                    run_test_copy_from_ptr(&*ctx.as_ref().unwrap().get(), 3, 3).await;
                 }
             }
         }
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
+    async fn test_copy_from_ptr_once() {
+        unsafe {
+            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        }
+
+        let ctx:&'static CopyCtx = Box::leak(Box::new(CopyCtx::make_instance(0.2, 16)));
+
+        run_test_copy_from_ptr(ctx, 3, 3).await;
+    }
+
     #[allow(dead_code)]
-    async fn run_test_copy_from_ptr(ctx: &'static CopyCtx) {
+    async fn run_test_copy_from_ptr(ctx: &'static CopyCtx, threads: u8, runs: u8) {
         let (free_mem, _total_mem) = cuda_mem();
 
         let init_type = Float;
@@ -545,8 +554,6 @@ mod tests {
         let d2h_time = Arc::new(AtomicU64::new(0));
         let h2d_time = Arc::new(AtomicU64::new(0));
 
-        let threads = 3;
-        let runs = 3;
 
         (0..threads)
             .map(|thread_i| {
@@ -976,6 +983,27 @@ mod tests {
         }
 
 
+
+    }
+
+
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    async fn test_1() -> Result<(), ThoosaError>{
+        use thoosa_shared::CopyToDevice;
+
+        futures::stream::iter(0..3)
+            .map(|i|{
+                async {
+                    let tt:ThoTensor<AnyDims, SimpleId> = ThoTensor::new("zzz".into(), Tensor::rand(&[1006642, 1000], FLOAT_CPU));
+                    drop(tt.copy_to_device(1).await.unwrap());
+                    ()
+                }
+            })
+            .buffer_unordered(16)
+            .collect::<Vec<_>>().await;
+
+        Ok(())
 
     }
 
