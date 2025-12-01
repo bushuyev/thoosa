@@ -300,14 +300,16 @@ where
 
         if !selector.ranges.is_empty() {
 
-            let mut gpu_purged = false;
-            loop {
+            let mut try_count = 0;
+            loop {//TODO move into OOMHandler as util fn
                 match raw_tensor.with_selected_data(device_idx, selector.clone(), |tt| {
-                    trace!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t_ref());
+                    debug!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id} try_count={try_count} resource_id={resource_id}  tt.size={:?}", tt.size());
+                    trace!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id}  try_count={try_count} resource_id={resource_id}  t={}", tt.t_ref());
                     if tt.size() == &[0] {
-                        warn!("MotifLoader::run/with_data:  resource_id={resource_id}  got empty motif for motif_id={motif_id}");
+                        warn!("MotifLoader::run: motif_id={motif_id} resource_id={resource_id}  got empty motif");
                     } else {
                         tmp_cache.insert(tt);
+                        debug!("MotifLoader::run: motif_id={motif_id} resource_id={resource_id} added to tmp_cache");
                     }
 
                     Ok(())
@@ -316,7 +318,9 @@ where
                         break
                     }
                     Err(e) => {
-                        if !gpu_purged {
+                        debug!("MotifLoader::run: motif_id={motif_id} purge gpu done");
+
+                        if try_count < 1 {
                             let out_key = {
                                 let out_id = SimpleId::from(format!("{motif_id}_tmp_cache"));
                                 Arc::new(out_id) as Arc<dyn CachableIdTr>
@@ -329,12 +333,15 @@ where
                                     .await?;
                                 ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
                             }
-                            info!("Got {e:?}, acquired MAX_PERMITS, purging gpu({device_idx}) for motif_id={motif_id}");
+                            debug!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id}  try_count={try_count} got {e:?}, acquired MAX_PERMITS, purging gpu({device_idx})");
                             tmp_cache.purge_gpu(device_idx).await?;
-                            gpu_purged = true;
+
+                            debug!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id} purge gpu done");
+
+                            try_count +=1;
 
                         } else {
-                            error!("Can't load for resource_id={resource_id} for motif_id={motif_id} e={e:?}");
+                            error!("Can't load for resource_id={resource_id} resource_id={resource_id}  for motif_id={motif_id} e={e:?}");
                             break
                         }
                     }
@@ -346,18 +353,25 @@ where
         }
     }
 
+    debug!("MotifLoader::run: motif_id={motif_id} taking tmp_cache");
+
     let tensors: Vec<Tensor> = tmp_cache
         .take_all(device_idx)
-        .await
+        .await?
         .into_iter()
         .map(|tt| tt.t())
         .collect();
 
+    debug!("MotifLoader::run: loaded {} tensors for motif_id={motif_id} ", tensors.len());
+
     let motif = ThoTensor::new(
-        motif_id,
-        Tensor::cat(tensors.as_slice(), 0),
+        motif_id.clone(),
+        Tensor::f_cat(tensors.as_slice(), 0)?,
     );
-    Ok((window, motif.copy_to_device(device_idx).await))
+
+    debug!("MotifLoader::run: motif of size {:?} is built for motif_id={motif_id}", motif.size());
+
+    Ok((window, motif.copy_to_device(device_idx).await?))
 }
 
 

@@ -310,10 +310,7 @@ pub async fn copy_h2d_from_ptr(
     size: &[i64],
 ) -> Result<Tensor, ThoosaError> {
     let tensor_mem_size = tensor_mem_size(init_type, &size);
-    // debug!(
-    //     "copy_h2d: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",
-    //     size
-    // );
+    debug!("copy_h2d: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",size);
 
     // chunk layout
     let chunks = tensor_mem_size / buf_size;
@@ -325,7 +322,6 @@ pub async fn copy_h2d_from_ptr(
 
     unsafe {
         // base pointers
-
         let dst_ptr = dst_t.data_ptr() as usize; // GPU mem
 
         // CUdriver needs CUdeviceptr for the destination side
@@ -344,7 +340,7 @@ pub async fn copy_h2d_from_ptr(
             let off = i * buf_size;
 
             // raw pointers for this chunk
-            let src_off_ptr = src_ptr.add(off as usize) as usize;
+            let src_off_ptr = src_ptr.add(off);
             let dst_off_ptr = dst_base + off as u64; // CUdeviceptr is a u64
 
             // clone the pool inside the async block
@@ -362,20 +358,16 @@ pub async fn copy_h2d_from_ptr(
                 // 1. copy   CPU-tensor  →  pinned host buffer   (memcpy)
                 //----------------------------------------------------------
                 debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={c_buf_size} thread_name={:?}", os_thread_id());
-                // task::spawn_blocking(move || {
                 std::ptr::copy_nonoverlapping(
                     src_off_ptr as *const u8,
                     buf_ptr as *mut u8,
                     c_buf_size,
                 );
-                // })
-                //     .await
-                //     .unwrap();
+
 
                 //----------------------------------------------------------
                 // 2. copy   pinned host buffer  →  GPU tensor   (CUDA)
                 //----------------------------------------------------------
-                // task::spawn_blocking(move || {
                 let raw = thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
                     dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
                     buf_ptr as *const c_void,
@@ -388,9 +380,7 @@ pub async fn copy_h2d_from_ptr(
                         "cuMemcpyHtoDAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}"
                     );
                 }
-                // })
-                // .await
-                // .unwrap();
+
 
                 // wait for GPU work to finish before recycling buffer
                 buf_stream.1.synchronize();

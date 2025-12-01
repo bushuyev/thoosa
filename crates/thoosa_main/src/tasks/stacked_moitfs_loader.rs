@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt, TryStreamExt};
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use parking_lot::RwLock;
 use tch::Kind::Float;
 use tch::{IndexOp, Tensor};
@@ -204,7 +204,7 @@ where
 
                 async move {
                     let motif_id_wrap = Arc::new(DevicesWrap::wrap_cpu((motif_id as u32).into()));
-                    let mut motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx).await?;
+                    let motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx).await?;
 
 
                     let avg_motif_dist = load_and_clc_avg_dist_clone
@@ -222,8 +222,19 @@ where
                 }
             })
             .buffered/*_unordered*/(10)//TODO buffered- to keep motif ids order consistent, try buffer_unordered and then sort?
-            .try_collect::<Vec<_>>()
-            .await?;
+            .filter_map(|r| async move {
+                match r {
+                    Ok(v) => {
+                        Some(v)
+                    }
+                    Err(e) => {
+                        warn!("Can't load motif: {e:?}");
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
 
         with_data!(device_idx, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
 
