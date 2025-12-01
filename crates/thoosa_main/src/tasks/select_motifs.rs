@@ -141,6 +141,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
 
         let mut resource_ids_sizes = vec![];
 
+        //TODO
         let step = 1; //self.output[0].resources_iter.step;
         let select_motifs_run_config_id = 1; //self.output[0].select_motifs_run_id.clone();
 
@@ -318,14 +319,21 @@ where
             )?);
 
             for select_motifs_run_config in self.run_configs.iter() {
-
-                stacked_motifs.push(Arc::clone(&self.stacked_motifs_loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(
+                match Arc::clone(&self.stacked_motifs_loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(
                     StackedMotifsInput::new(
                         Arc::clone(&find_motifs_run_config),
                         Arc::new(select_motifs_run_config.clone())
                     ))),
-                     Arc::clone(&ctx)
-                ).await?);
+                                                                                Arc::clone(&ctx)
+                ).await {
+                    Ok(motif_data) => {
+                        stacked_motifs.push(motif_data);
+                    }
+                    Err(e) => {
+                        error!("Can't load select_motifs_run_config: e={e:?} select_motifs_run_config={select_motifs_run_config:?}")
+                    }
+                }
+
             }
         }
 

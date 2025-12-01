@@ -50,7 +50,7 @@ impl<D: Data + CopyToDevice +WithId + Output + Debug + Send + Sync + 'static> Tm
         self.map.get(id).map(|reff| Arc::clone(reff.value()))
     }
 
-    pub async fn take_all(mut self, device:usize) -> Vec<D> {
+    pub async fn take_all(mut self, device:usize) -> Result<Vec<D>, ThoosaError> {
         let mut res = vec![];
         for (key, val) in mem::take(&mut self.map).into_iter() {
 
@@ -61,6 +61,8 @@ impl<D: Data + CopyToDevice +WithId + Output + Debug + Send + Sync + 'static> Tm
                     error!("can't take {key:?} from cache: count={count}");
                 }
                 Some(val) => {
+                    val.load_from_any_device(device).await?;
+
                     res.push(
                         val.take_data(device).await.expect(&format!("can't take from cache for {key:?}"))
                     );
@@ -68,7 +70,7 @@ impl<D: Data + CopyToDevice +WithId + Output + Debug + Send + Sync + 'static> Tm
             }
         }
 
-        res
+        Ok(res)
     }
     pub fn clone_to_arcs_vec(&self) -> Vec<Arc<DevicesWrap<D>>> {
         self
@@ -262,7 +264,7 @@ mod tests {
         GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await?;
 
 
-        let all = tmp_cache.take_all(1).await;
+        let all = tmp_cache.take_all(1).await?;
 
         println!("{:?}", all);
 
