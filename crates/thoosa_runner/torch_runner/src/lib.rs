@@ -254,8 +254,8 @@ mod tests {
 
     #[async_trait]
     impl CopyToDevice for LoaderInput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Self {
-            self.clone()
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+            Ok(self.clone())
         }
     }
 

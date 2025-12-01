@@ -27,7 +27,7 @@ pub fn derive_dummy_data(input: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let copy_body = match mode {
-        DummyDataMode::Clone => quote! { self.clone() },
+        DummyDataMode::Clone => quote! { Ok(self.clone()) },
         DummyDataMode::NoClone => quote! { unimplemented!() },
     };
 
@@ -35,7 +35,7 @@ pub fn derive_dummy_data(input: TokenStream) -> TokenStream {
         #[automatically_derived]
         #[async_trait::async_trait]
         impl #impl_generics ::thoosa_shared::CopyToDevice for #ident #ty_generics #where_clause {
-            async fn copy_to_device(&self, _dst_device: usize) -> Self {
+            async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
                 #copy_body
             }
         }

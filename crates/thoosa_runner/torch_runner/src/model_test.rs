@@ -152,8 +152,8 @@ mod tests {
 
     #[async_trait]
     impl CopyToDevice for FileInput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Self {
-            self.clone()
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+            Ok(self.clone())
         }
     }
 
@@ -796,11 +796,11 @@ mod tests {
 
     #[async_trait]
     impl CopyToDevice for FileListInput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Self {
-            Self {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+            Ok(Self {
                 files: self.files.clone(),
                 id: self.id.clone(),
-            }
+            })
         }
     }
 

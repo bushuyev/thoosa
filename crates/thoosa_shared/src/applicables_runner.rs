@@ -32,7 +32,7 @@ pub trait Input: Debug {
 pub trait Output: WithId + Debug {
     async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
         todo!()
-    }
+    }//TODO remove
 }
 
 impl <O> WithId for Arc<O>  where O:WithId + Debug {

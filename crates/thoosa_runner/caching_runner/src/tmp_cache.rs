@@ -210,7 +210,7 @@ mod tests {
         impl Output for Foo {}
 
         let foo = Foo(SimpleId::from("foo"));
-        let cloned = foo.copy_to_device(0).await;
+        let cloned = foo.copy_to_device(0).await?;
 
         assert_eq!(foo.0, cloned.0);
         Ok(())

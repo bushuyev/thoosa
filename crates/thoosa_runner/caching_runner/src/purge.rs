@@ -117,7 +117,7 @@ mod tests {
 
     #[async_trait]
     impl CopyToDevice for DummyOutput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Self {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
             let cur = self.purge_active.fetch_add(1, Ordering::SeqCst) + 1;
             loop {
                 let prev = self.max_purge.load(Ordering::SeqCst);
@@ -135,7 +135,7 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
             self.purge_active.fetch_sub(1, Ordering::SeqCst);
-            self.clone()
+            Ok(self.clone())
         }
     }
 

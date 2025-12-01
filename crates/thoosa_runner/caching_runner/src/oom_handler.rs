@@ -523,11 +523,11 @@ pub(crate) mod test_types {
 
     #[async_trait]
     impl CopyToDevice for TestInput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Self {
-            TestInput {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+            Ok(TestInput {
                 id: self.id.clone(),
                 data: DummyTensor(self.data.0.clone()),
-            }
+            })
         }
     }
 
@@ -588,18 +588,18 @@ pub(crate) mod test_types {
 
     #[async_trait]
     impl CopyToDevice for TestData {
-        async fn copy_to_device(&self, _dst_device: usize) -> Self {
-            *self
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+            Ok(*self)
         }
     }
 
     #[async_trait]
     impl CopyToDevice for TestOutput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Self {
-            TestOutput {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+            Ok(TestOutput {
                 id: self.id.clone(),
                 v: self.v.clone(),
-            }
+            })
         }
     }
 
