@@ -1411,7 +1411,7 @@ where
 DI: Dims + Send + 'static,
 DO: Dims + Send + 'static {
 
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
 
         debug!("ThoModuleWithStore::copy_to_device: has module_factory={}", self.module_factory.is_some());
 
@@ -1428,7 +1428,7 @@ DO: Dims + Send + 'static {
 
         var_store.freeze();
 
-        Self::with_factory(self.id.clone(), module, var_store, Some(Arc::clone(builder)))
+        Ok(Self::with_factory(self.id.clone(), module, var_store, Some(Arc::clone(builder))))
     }
 }
 
@@ -3065,7 +3065,7 @@ impl Output for LoadMotifNetOutput {
                     async {
                         (
                             params.clone(),
-                            net.copy_to_device(0).await
+                            net.copy_to_device(0).await.unwrap()
                         )
                     }
                 })
@@ -4542,7 +4542,7 @@ mod train_tests {
         assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
 
 
-        let cuda_module = loaded_module.copy_to_device(1).await;
+        let cuda_module = loaded_module.copy_to_device(1).await?;
         let _ = cuda_module.tho_forward(
             &Tensor::rand([11, 3 * 19, 100], FLOAT_CUDA).into(),
             false,

@@ -546,11 +546,11 @@ mod tests {
 
     #[async_trait]
     impl CopyToDevice for DLoadedTensor {
-        async fn copy_to_device(&self, dst_device: usize) -> Self {
-            DLoadedTensor {
+        async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+            Ok(DLoadedTensor {
                 id: self.id.clone(),
-                data: self.data.copy_to_device(dst_device).await,
-            }
+                data: self.data.copy_to_device(dst_device).await?,
+            })
         }
     }
 
@@ -598,8 +598,8 @@ mod tests {
 
     #[async_trait]
     impl CopyToDevice for DLoaderInput {
-        async fn copy_to_device(&self, dst_device: usize) -> Self {
-           self.clone()
+        async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+           Ok(self.clone())
         }
     }
 
@@ -784,11 +784,11 @@ mod tests {
 
     #[async_trait]
     impl CopyToDevice for DMulTaskOutput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Self {
-            DMulTaskOutput {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+            Ok(DMulTaskOutput {
                 id: self.id.clone(),
                 data: self.data.clone(),
-            }
+            })
         }
     }
 

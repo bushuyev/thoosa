@@ -256,11 +256,11 @@ impl DataWithLabels {
 #[async_trait]
 impl CopyToDevice for DataWithLabels {
 
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
-        DataWithLabels {
-            slices: self.slices.copy_to_device(dst_device).await,
-            labels: self.labels.copy_to_device(dst_device).await,
-        }
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+        Ok(DataWithLabels {
+            slices: self.slices.copy_to_device(dst_device).await?,
+            labels: self.labels.copy_to_device(dst_device).await?,
+        })
     }
 }
 
