@@ -606,8 +606,7 @@ where
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
         let copy =
             if tensor_mem_size(self.t.kind(), &self.t.size()) < CopyCtx::instance().buf_size() {
-                self.t
-                    .f_to_device(ThoDevice::from(dst_device).deref().clone())?
+                self.t.f_to_device(ThoDevice::from(dst_device).deref().clone())?
             } else {
                 assert!(self.t.is_contiguous());
                 CopyCtx::instance()
