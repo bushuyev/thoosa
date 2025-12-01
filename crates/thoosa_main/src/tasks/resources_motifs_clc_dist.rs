@@ -430,7 +430,7 @@ impl ClcResourcesMotifsDistOutput {
                         match op {
                             None => None,
                             Some((dists_mask, data_ids)) => {
-                                Some((dists_mask.to_cpu().await, data_ids))
+                                Some((dists_mask.to_cpu().await.unwrap(), data_ids))//TODO unwrap
                             }
                         }
                     }

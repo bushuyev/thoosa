@@ -653,6 +653,8 @@ impl Store for SqlStore {
         _keys: &str,
         properties_vals: HashMap<String, Val>,
     ) -> Result<RunId, ThoosaError> {
+        debug!("SqlStore::save_run_config: input_run_id={input_run_id:?} run_config_type={run_config_type} descr={descr}");
+
         let mut conn_guard = self.conn.lock();
         let t = conn_guard
             .transaction()
@@ -706,8 +708,9 @@ impl Store for SqlStore {
 
                 let q_str = q.into_iter().collect::<String>();
 
-                t.execute(&q_str, rusqlite::params_from_iter(params.into_iter()))
-                    .unwrap();
+                debug!("SqlStore::save_run_config: params={params:?}");
+
+                t.execute(&q_str, rusqlite::params_from_iter(params.into_iter()))?;
             }
         }
 
@@ -727,7 +730,7 @@ impl Store for SqlStore {
         run_id: RunId,
         input_type: Option<&dyn Display>,
     ) -> Result<Vec<RunId>, ThoosaError> {
-        debug!("get_input_run_ids: run_id={run_id} input_type={:?}",input_type.map(|v| v.to_string()));
+        debug!("SqlStore::get_input_run_ids: run_id={run_id} input_type={:?}",input_type.map(|v| v.to_string()));
 
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
