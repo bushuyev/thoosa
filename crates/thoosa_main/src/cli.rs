@@ -400,7 +400,7 @@ where
                         motif_loader,
                         run_configs,
                         select_motifs_args.find_motifs_run_ids.clone(),
-                        1000
+                        100_000//TODO config
                     ))
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "select motifs"))),
