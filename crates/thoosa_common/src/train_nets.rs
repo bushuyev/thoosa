@@ -3879,7 +3879,7 @@ mod train_tests {
                     bias: false,
                 },
                 #[cfg(debug_assertions)]
-                descr.to_string(),
+                descr,
             )
             .end_seq()
             .build_tch_module(&vs.root())
@@ -5751,7 +5751,7 @@ mod train_tests {
                     bias: false,
                 },
                 #[cfg(debug_assertions)]
-                "test_motif_model".to_string(),
+                "test_motif_model",
             )
             .end_seq()
             .build_tch_module(&vs_0.root())?;

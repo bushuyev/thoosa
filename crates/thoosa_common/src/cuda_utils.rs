@@ -3,6 +3,7 @@ use std::ffi::c_void;
 use std::ops::Add;
 use std::sync::Arc;
 use std::{iter, usize};
+use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
 use log::debug;
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
@@ -10,6 +11,7 @@ use thoosa_shared::{MyError, ThoosaError};
 use tokio::task::JoinSet;
 use tokio_utils::Pool;
 use thoosa_shims::context::ThoCudaContext;
+use thoosa_shims::memcpy::CuResult;
 use thoosa_shims::stream::ThoCudaStream;
 use crate::utils::os_thread_id;
 
@@ -18,12 +20,13 @@ pub struct PinnedHostBuffer {
     len: usize,
 }
 
+
 impl PinnedHostBuffer {
     pub fn new(len: usize) -> Result<Self, ThoosaError> {
         use cudarc::driver::sys::CUresult::CUDA_SUCCESS;
 
         let mut raw: *mut c_void = std::ptr::null_mut();
-        let flags = sys::CU_MEMHOSTALLOC_WRITECOMBINED;
+        let flags = CU_MEMHOSTALLOC_WRITECOMBINED;
         let res = unsafe {
             thoosa_shims::memcpy::tho_cu_mem_host_alloc(&mut raw, len, flags)
         };
@@ -188,7 +191,7 @@ pub async fn copy_d2h_from_ptr_result(
         iter.map(|(i, c_buf_size)| {
             let off = i * buf_size_bytes;
 
-            let src_off_ptr = src_ptr.add(off as usize) as sys::CUdeviceptr;
+            let src_off_ptr = src_ptr.add(off as usize) as thoosa_shims::memcpy::CuDevicePtr;
             let dst_off_ptr: usize = dst_ptr.add(off as usize);
 
             let pool = Arc::clone(&bufs_pool);
@@ -326,7 +329,7 @@ pub async fn copy_h2d_from_ptr(
         let dst_ptr = dst_t.data_ptr() as usize; // GPU mem
 
         // CUdriver needs CUdeviceptr for the destination side
-        let dst_base: sys::CUdeviceptr = dst_ptr as sys::CUdeviceptr;
+        let dst_base = dst_ptr as thoosa_shims::memcpy::CuDevicePtr;
 
         // iterator over all full-sized + optional tail chunk
         let iter = (0..=chunks).zip(iter::repeat(buf_size).take(chunks));
@@ -348,7 +351,8 @@ pub async fn copy_h2d_from_ptr(
             let pool = Arc::clone(bufs_pool);
 
             async move {
-                debug!("starting {i} thread_name={:?}", os_thread_id());
+                debug!("copy_h2d_from_ptr: starting {i} thread_name={:?}", os_thread_id());
+
                 // grab (pinned slice, stream) from the pool
                 let buf_stream = pool.acquire().await;
                 let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
@@ -357,6 +361,7 @@ pub async fn copy_h2d_from_ptr(
                 //----------------------------------------------------------
                 // 1. copy   CPU-tensor  →  pinned host buffer   (memcpy)
                 //----------------------------------------------------------
+                debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={c_buf_size} thread_name={:?}", os_thread_id());
                 // task::spawn_blocking(move || {
                 std::ptr::copy_nonoverlapping(
                     src_off_ptr as *const u8,
@@ -513,7 +518,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
     #[cfg_attr(miri, ignore)]
     #[allow(dead_code)]
-    async fn heavy_test_copy_cudarc() {
+    async fn heavy_test_copy_from_ptr() {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
 
@@ -527,14 +532,14 @@ mod tests {
                         ctx.as_mut().unwrap().get_mut().rebuild(mem_k, buffs)
                     }
 
-                    run_test_copy_cudarc(&*ctx.as_ref().unwrap().get()).await;
+                    run_test_copy_from_ptr(&*ctx.as_ref().unwrap().get()).await;
                 }
             }
         }
     }
 
     #[allow(dead_code)]
-    async fn run_test_copy_cudarc(ctx: &'static CopyCtx) {
+    async fn run_test_copy_from_ptr(ctx: &'static CopyCtx) {
         let (free_mem, _total_mem) = cuda_mem();
 
         let init_type = Float;

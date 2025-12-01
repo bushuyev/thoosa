@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{format, Debug, Formatter};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use async_trait::async_trait;
-use log::{debug, trace, warn};
+use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
 use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
@@ -19,7 +19,7 @@ use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{CopyToDevice, TensorIdSliceIdx, ThoosaError};
-use thoosa_shared::traits::{Data, DataId, Select, SimpleId, WithId};
+use thoosa_shared::traits::{CachableIdTr, Data, DataId, Select, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
@@ -30,6 +30,7 @@ use crate::tasks::tensor_loader::{RawTensorLoader};
 use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use caching_runner::permits::MAX_PERMITS;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::traits::Adjustable;
 use thoosa_shared::data_with_extra::DataWithExtra;
@@ -130,7 +131,7 @@ where
         Ok(Arc::new(DevicesWrap::wrap(
             DataWithExtra::new(
                 motif,
-                MotifMeta{channel, find_motifs_run_id: find_motifs_run_id, window },
+                MotifMeta{channel, find_motifs_run_id, window },
             ),
             cache_area,
         )))
@@ -285,7 +286,7 @@ where
             ranges: slices
                 .into_iter()
                 .filter(|slice| {
-                    let r = MonoMetrics::from([channel + 1, (slice + window) as i64]) < *size;
+                    let r = MonoMetrics::from([channel + 1, (slice + window) as i64]) <= *size;
                     if !r {
                         warn!("MotifLoader::run: slice={slice:?} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id}");
                     }
@@ -298,16 +299,48 @@ where
         };
 
         if !selector.ranges.is_empty() {
-            raw_tensor.with_selected_data(device_idx, selector, |tt| {
-                trace!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t_ref());
-                if tt.size() == &[0] {
-                    warn!("MotifLoader::run/with_data:  resource_id={resource_id}  got empty motif for motif_id={motif_id}");
-                } else {
-                    tmp_cache.insert(tt);
-                }
 
-                Ok(())
-            }).await?;
+            let mut gpu_purged = false;
+            loop {
+                match raw_tensor.with_selected_data(device_idx, selector.clone(), |tt| {
+                    trace!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t_ref());
+                    if tt.size() == &[0] {
+                        warn!("MotifLoader::run/with_data:  resource_id={resource_id}  got empty motif for motif_id={motif_id}");
+                    } else {
+                        tmp_cache.insert(tt);
+                    }
+
+                    Ok(())
+                }).await {
+                    Ok(_) => {
+                        break
+                    }
+                    Err(e) => {
+                        if !gpu_purged {
+                            let out_key = {
+                                let out_id = SimpleId::from(format!("{motif_id}_tmp_cache"));
+                                Arc::new(out_id) as Arc<dyn CachableIdTr>
+                            };
+
+                            let acquired_permits = ctx.read().acquired_permits();
+                            if acquired_permits < MAX_PERMITS {
+                                let result = GlobalCtx::global()
+                                    .acquire_many(device_idx, MAX_PERMITS - acquired_permits, out_key)
+                                    .await?;
+                                ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
+                            }
+                            info!("Got {e:?}, acquired MAX_PERMITS, purging gpu({device_idx}) for motif_id={motif_id}");
+                            tmp_cache.purge_gpu(device_idx).await?;
+                            gpu_purged = true;
+
+                        } else {
+                            error!("Can't load for resource_id={resource_id} for motif_id={motif_id} e={e:?}");
+                            break
+                        }
+                    }
+                };
+            }
+
         } else {
             warn!("Empty selector for resource_id={resource_id}  got empty motif for motif_id={motif_id}");
         }
@@ -324,7 +357,7 @@ where
         motif_id,
         Tensor::cat(tensors.as_slice(), 0),
     );
-    Ok((window, motif))
+    Ok((window, motif.copy_to_device(device_idx).await))
 }
 
 

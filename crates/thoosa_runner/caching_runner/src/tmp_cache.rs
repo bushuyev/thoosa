@@ -117,6 +117,10 @@ impl<D: Data + CopyToDevice +WithId + Output + Debug + Send + Sync + 'static> Tm
         }
 
     }
+
+    pub async fn purge_gpu(&self, device_idx:usize) -> Result<(), ThoosaError>{
+        self.map.purge_gpu(None, device_idx).await
+    }
 }
 
 #[async_trait]

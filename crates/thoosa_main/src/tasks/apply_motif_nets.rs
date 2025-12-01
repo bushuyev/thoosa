@@ -335,9 +335,6 @@ impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNe
             Ok(v)
         }).await?;
 
-
-
-
         let __with_data_device = to_device_idx;
 
         let __device_idx = __with_data_device;
