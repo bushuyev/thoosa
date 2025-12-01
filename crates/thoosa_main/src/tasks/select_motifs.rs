@@ -342,7 +342,9 @@ where
 
         let mut skip_0_i = 0;
 
-        let num_resources = resources.len(); //.iter().map(|label_resources|label_resources.1.len()).sum::<usize>();
+        let num_resources = resources.len();
+        let total_size  = resources.iter().map(|resource|resource.length() as usize).sum::<usize>();
+        let mut total_processed_size = 0;
 
 
         let mut good_motif_ids = vec![];
@@ -354,13 +356,15 @@ where
                 .await?;
 
             t_1_batch_dim_0_size += t_0.size().dim_1();
+            total_processed_size += t_0.size().dim_1();
+
             t_1_batch.push(t_0);
             t_1_batch_resources.push(resource_0);
 
             if t_1_batch_dim_0_size < self.max_batch && i_0 < num_resources -1 {
                 continue;
             }
-            info!("running batch {} length", t_1_batch.len());
+            info!("running batch {} length done {}%", t_1_batch.len(), ((total_processed_size as f32/total_size as f32) * 100.0) as u32 );
 
             let t_1_batch_len = t_1_batch.len();
 
@@ -490,7 +494,7 @@ where
 
         debug!("SelectMotifsStage::run: good_motif_ids={good_motif_ids:?}");
 
-        Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(0, self.run_configs[0].clone(), good_motif_ids))))
+        Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(&self.find_motifs_run_ids, self.run_configs[0].clone(), good_motif_ids))))
     }
 }
 
