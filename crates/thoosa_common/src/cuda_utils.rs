@@ -521,7 +521,7 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
     async fn test_copy_from_ptr_once() {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");

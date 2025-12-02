@@ -857,7 +857,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use crate::common::{DropIf, MockRunCtx, OutId, ThoosaError};
+    use crate::common::{mock_run_ctx, DropIf, MockRunCtx, OutId, ThoosaError};
     use crate::global_ctx::{MockGlobalCtx, mock_global_ctx};
     use crate::*;
     use log::debug;
@@ -867,6 +867,7 @@ mod tests {
     use thoosa_shared::traits::{Adjustable, WithId};
     use thoosa_with_data::with_data;
     use crate::common::cachable::{DevicesWrap, WithDataRef};
+    use crate::common::mock_run_ctx::MockRunCtxBuilder;
     use crate::common::runnable::{Stage, SyncStage};
     use crate::oom_handler::{mock_input_context, Adjusters, Contexts, MockRunCtxContext, MockRunnableContext, OOMHandler};
     use crate::oom_handler::test_types::{TestInput, TestOutput};
@@ -951,6 +952,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dump_to_cpu() -> Result<(), ThoosaError> {
+
         let global_ctx = MockGlobalCtx::global_context();
         global_ctx.expect().returning(|| {
             Box::leak(Box::new(
@@ -964,11 +966,11 @@ mod tests {
 
         tested
             .with_data_ref(1,
-                           Arc::clone(&Arc::new(RwLock::new(MockRunCtx::default()))), None, |data_on_1: &MockDataWithId| {
-                                           assert_eq!(data_on_1.device(), &1);
+               Arc::clone(&Arc::new(RwLock::new(mock_run_ctx::default(1)))), None, |data_on_1: &MockDataWithId| {
+                   assert_eq!(data_on_1.device(), &1);
 
-                                           Ok(())
-                                       })
+                   Ok(())
+               })
             .await?;
 
         assert!(tested.cached_data[1].read().await.is_some());

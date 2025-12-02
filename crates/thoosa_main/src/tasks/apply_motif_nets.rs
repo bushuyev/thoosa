@@ -634,18 +634,19 @@ mod tests {
     }
 
 
+    ///builds net initialized to detect provided pattern
     pub fn test_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
         num_features: u32,
         k: f64,
         device: Device,
         descr: &str,
-        template:&Tensor,
+        pattern:&Tensor,
     ) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoosaError> {
-        assert_eq!(template.size().len(), 1, "template must be 1-D");
-        let l = template.size()[0];
+        assert_eq!(pattern.size().len(), 1, "template must be 1-D");
+        let l = pattern.size()[0];
 
         // mean-center and unit-norm the template (helps with DC/scale variations)
-        let t = template
+        let t = pattern
             .to_device(device)
             .to_kind(Kind::Float);
         let t = &t - t.mean(Kind::Float);

@@ -208,6 +208,14 @@ mod tests {
         }
     }
 
+    impl From<Range<ABMetrics>> for ABRange {
+        fn from(value: Range<ABMetrics>) -> Self {
+            ABRange {
+                range:value
+            }
+        }
+    }
+
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
     struct ABMetrics {
         dim_0: i64,
@@ -894,51 +902,51 @@ mod tests {
             // ));
             //**********************
 
-//             let result = OOMHandler::new(
-//                 vec![
-//                     Adjusters::RunContext(Box::new(PermitsAdjuster::new(
-//                         MAX_PERMITS,
-//                         *PermitStep::TEN,
-//                         move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
-//                     ))),
-//                     Adjusters::Input(Box::new(
-//                         SplitsAdjuster::<ThoTensor2<ABData, SimpleId>, ABRange>::new(min_split_len),
-//                     )),
-//                 ],
-//                 None,
-//             )
-//             .run(
-//                 &self.clf,
-//                 batched,
-//                 Arc::clone(&ctx),
-//                 Contexts::new(
-//                     SplitsAdjusterContextImpl::new(
-//                         size,
-//                         Box::new(SingleDimTensorOutputBuilder::<ClsOut>::new(
-//                             out_id,
-//                             1,
-//                             &[1, 1],
-//                             (Kind::Float, ThoDevice::from(device_idx).deref().clone()),
-//                             BuildAs::Sum,
-//                         )),
-//                     ),
-//                     NoopRunnableContext {},
-//                     PermitsAdjustContextImpl::new(ctx_name),
-//                 ),
-//             )
-//             .await?;
-//
-//             let (final_device_idx, cache_area) = {
-//                 let guard = ctx.read();
-//                 (guard.device_idx(), guard.cache_area())
-//             };
-//             let num_devices = GlobalCtx::global().device_count();
-//
-//             Ok(Arc::new(DevicesWrap::wrap(
-//                 result,
-//                 cache_area,
-//             )))
-            todo!()
+            let result = OOMHandler::new(
+                vec![
+                    Adjusters::RunContext(Box::new(PermitsAdjuster::new(
+                        MAX_PERMITS,
+                        *PermitStep::TEN,
+                        move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
+                    ))),
+                    Adjusters::Input(Box::new(
+                        SplitsAdjuster::<ABRange, ABMetrics>::new(min_split_len),
+                    )),
+                ],
+                None,
+            )
+            .run(
+                &self.clf,
+                batched,
+                Arc::clone(&ctx),
+                Contexts::new(
+                    SplitsAdjusterContextImpl::new(
+                        size,
+                        SingleDimTensorOutputBuilder::<ClsOut>::new(
+                            out_id,
+                            1,
+                            &[1, 1],
+                            (Kind::Float, ThoDevice::from(device_idx).deref().clone()),
+                            BuildAs::Sum,
+                        ),
+                    ),
+                    NoopRunnableContext {},
+                    PermitsAdjustContextImpl::new(ctx_name),
+                ),
+            )
+            .await?;
+
+            let (final_device_idx, cache_area) = {
+                let guard = ctx.read();
+                (guard.device_idx(), guard.cache_area())
+            };
+            let num_devices = GlobalCtx::global().device_count();
+
+            Ok(Arc::new(DevicesWrap::wrap(
+                result,
+                cache_area,
+            )))
+            // todo!()
         }
     }
 
@@ -1060,6 +1068,8 @@ mod tests {
         init_ctx_once();
         let ctx = Arc::new(RwLock::new(TorchRunCtx::new(1, 0, "test")));
 
+
+
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         // Require MAX_PERMITS to proceed and also enforce MemLimit until splits reduce size
         let clf = Arc::new(Classifier::new(
@@ -1099,6 +1109,8 @@ mod tests {
         let acc = Arc::clone(&join_and_cls)
             .run_cached(input_cache, Arc::clone(&ctx))
             .await?;
+
+        ctx.write().add_permit(GlobalCtx::global().acquire_many(1, 1, Arc::new(SimpleId("zzz"))).await?);
 
         acc.with_data_ref(1,
                           Arc::clone(&ctx), None, |acc: &ThoTensor<ClsOut, SimpleId>| {

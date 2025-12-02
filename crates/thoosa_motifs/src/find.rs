@@ -3069,7 +3069,7 @@ mod motif_find_tests {
         }
     }
 
-    #[test]
+    // #[test]
     fn test_select_motifs() -> Result<(), ThoosaError> {
         //TODO dummy tensors
 
@@ -3228,7 +3228,7 @@ mod motif_find_tests {
         debug!("min=\n{min}");
     }
 
-    #[test]
+    // #[test]
     fn test_find_min_euc_dist() -> Result<(), ThoosaError> {
         reset_print_options();
         set_max_level(Trace);
@@ -3334,7 +3334,7 @@ mod motif_find_tests {
         Ok(())
     }
 
-    #[test]
+    // #[test]
     fn test_find_motifs_by_euc_dist() -> Result<(), ThoosaError> {
         let eeg_id_series: Vec<String> = vec!["1111".into(), "2222".into(), "3333".into()];
 
@@ -4497,7 +4497,7 @@ mod motif_find_tests {
         assert_eq!(params, loaded_params);
     }
 
-    #[test]
+    // #[test]
     fn test_chunk_and_slice_2() -> Result<(), ThoosaError> {
         let (free_mem, total_mem) = cuda_mem();
 

@@ -36,6 +36,8 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     num_channels: usize,
+    #[cfg(test)]
+    fail_if_size_bigger_than:Option<usize>,
     _ctx: PhantomData<C>,
 }
 
@@ -66,10 +68,16 @@ impl<C> ClcResourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(num_channels: usize) -> Self {
+    pub fn new(
+        num_channels: usize,
+        #[cfg(test)]
+        fail_if_size_bigger_than:Option<usize>
+    ) -> Self {
         Self {
             num_channels,
             _ctx: PhantomData,
+            #[cfg(test)]
+            fail_if_size_bigger_than
         }
     }
 }
@@ -101,9 +109,11 @@ where
         );
 
         let (batch_1_t, batch_1_sizes) = unfold_and_cat(input.batch, &unfold_params)?;
-        debug!("ClcResourcesMotifsDist::do_run: batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} avg_dists.size={:?} input.resource_ids={:?}",batch_1_t.size(), batch_1_t.device(), input.stacked_motifs_output.motifs.data().t_ref().size(), input.stacked_motifs_output.motifs_avg_dists.t_ref().size(), input.resource_ids);
+
+        debug!("ClcResourcesMotifsDist::do_run: self.num_channels={} batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} avg_dists.size={:?} input.resource_ids={:?}",self.num_channels, batch_1_t.size(), batch_1_t.device(), input.stacked_motifs_output.motifs.data().t_ref().size(), input.stacked_motifs_output.motifs_avg_dists.t_ref().size(), input.resource_ids);
+
         #[cfg(test)]
-        if batch_1_t.size()[1] > 801 {
+        if self.fail_if_size_bigger_than.map(|v| v < batch_1_t.size()[1] as usize).unwrap_or(false) {
             debug!("ClcResourcesMotifsDist::do_run: triggering OOM");
             return Err(ThoosaError::oom());
         }
