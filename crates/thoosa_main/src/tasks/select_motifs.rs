@@ -414,7 +414,6 @@ where
                                 Arc::clone(&clc_resources_input),
                                 ctx_clone,
                                 Contexts::new(
-                                    // NoopInputContext(None),
                                     SplitsAdjusterContextImpl::new(t_1_batch_len as i64, SelectMotifsSavableResultBuilder::new(SimpleId("zzz"), num_channels as u32, 0).await),
                                     NoopRunnableContext {},
                                     PermitsAndDumpToCpuAdjustableContex::new(
@@ -481,8 +480,17 @@ where
                     }
                 })
                 .buffer_unordered(10)
-                .try_collect::<Vec<_>>()
-                .await?;
+                .filter_map(|v| async {match v{
+                    Ok(v) => {
+                        Some(v)
+                    }
+                    Err(e) => {
+                        error!("SelectMotifsStage: failed to select slices for {stacked_motifs:?} and {t_1_batch:?}");
+                        None
+                    }
+                }})
+                .collect::<Vec<_>>()
+                .await;
 
             good_motif_ids.extend(expanded_motif_ids.into_iter().flat_map(|v|v.into_iter()).map(|motif_id|(*motif_id, 1.0)));//TODO rate
 

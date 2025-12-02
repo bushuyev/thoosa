@@ -159,7 +159,7 @@ pub async fn move_d2h(
 }
 
 
-pub async fn copy_d2h_from_ptr_result(
+pub async fn copy_d2h_from_ptr(
     init_type: Kind,
     buf_size_bytes: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
@@ -234,16 +234,6 @@ pub async fn copy_d2h_from_ptr_result(
         .collect::<Result<(), MyError>>()?;
     }
     Ok(dst_t)
-}
-
-pub async fn copy_d2h_from_ptr(
-    init_type: Kind,
-    buf_size_bytes: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
-    src_ptr: usize,
-    src_size: &[i64],
-) -> Result<Tensor, ThoosaError> {
-    copy_d2h_from_ptr_result(init_type, buf_size_bytes, bufs_pool, src_ptr, src_size).await
 }
 
 
@@ -333,6 +323,7 @@ pub async fn copy_h2d_from_ptr(
         } else {
             Box::new(iter.chain(iter::once((chunks, last))))
         };
+        
 
         // launch one asynchronous task per chunk
         iter.map(|(i, c_buf_size)| {
@@ -782,7 +773,7 @@ mod tests {
         let bogus_cpu_tensor = Tensor::zeros([4], (Kind::Int, Cpu));
         let bogus_device_ptr = bogus_cpu_tensor.data_ptr() as usize; // not a CUdeviceptr
 
-        let res = super::copy_d2h_from_ptr_result(
+        let res = super::copy_d2h_from_ptr(
             Kind::Int,
             buf_size,
             &bufs_pool,
