@@ -2009,12 +2009,12 @@ impl Store for SqlStore {
             generated.push(TensorIdSliceIdx(ctx.resource.id(), candidate as u32));
         }
 
-        if generated.len() < desired_count {
+        /*if generated.len() < desired_count {
             return Err(ThoosaError::new(format!(
                 "list_random_slices: unable to build {desired_count} slices for motif {motif_id}, produced {} candidates",
                 generated.len()
             )));
-        }
+        }*/
 
         t.commit()?;
 

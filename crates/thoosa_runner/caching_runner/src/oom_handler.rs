@@ -152,7 +152,7 @@ where
 pub enum Adjusters<'a, R, IC, RC, RCC, S>
 where
     R: Stage + 'a,
-    <R as Stage>::In<'a>: /*Data +*/ Select<S> + Debug,
+    <R as Stage>::In<'a>: /*Data + Select<S> +*/ Debug,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
@@ -169,7 +169,7 @@ where
     R: Stage + 'a,
     IC: InputContext<'a, R>,
     R: Adjustable,
-    <R as Stage>::In<'a>: /*Data + */Select<S> + Debug,
+    <R as Stage>::In<'a>: /*Data + Select<S> +*/ Debug,
     RC: RunnableContext,
     RCC: RunCtxContext,
     <R as Stage>::Ctx: Adjustable,
@@ -230,7 +230,7 @@ where
     RC: RunnableContext,
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default,
-    <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
+    // <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId
 {
@@ -248,7 +248,7 @@ where
     RC: RunnableContext,
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default+ 'static,//S - for Select<Selector>, 'static is for Any in WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
-    <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
+    // <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId,
 {

@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
-use log::{debug, trace};
+use log::{debug, error, trace};
 use parking_lot::RwLock;
 use plotters::prelude::BLACK;
 use tch::Device::{Cpu, Cuda};
@@ -170,75 +170,80 @@ where
         };
 
 
-        Ok(Arc::new(DevicesWrap::wrap_cpu(TrainMotifsNetsResult::new(0, futures::stream::iter(select_motifs_run_ids)
-        .flat_map(|select_motifs_run_id|{
+        let out = futures::stream::iter(select_motifs_run_ids.into_iter().flat_map(|select_motifs_run_id|{
+            let selected_motifs = self.store.read().list_selected_motifs(select_motifs_run_id, channels).unwrap();
 
-                let selected_motifs = self.store.read().list_selected_motifs(select_motifs_run_id, channels).unwrap();
+            debug!("TrainMotifNets::run: select_motifs_run_id={select_motifs_run_id} selected_motifs={selected_motifs:?}");
 
-                futures::stream::iter(
-                    selected_motifs.into_iter()
-                        .flat_map( move |channels_motifs|
-                            channels_motifs.into_iter().map(move |v|(v, select_motifs_run_id)))
-                )
-                .map(|(motif_id_rate, select_motifs_run_id)| {
-                    let motif_loader = Arc::clone(&self.motif_loader);
-                    let random_slices_loader = Arc::clone(&self.random_slices_loader);
+            selected_motifs.into_iter()
+                .flat_map(move |channels_motifs|
+                    channels_motifs.into_iter().map(move |v| (v, select_motifs_run_id)))
+        }))
+        .map(|(motif_id_rate, select_motifs_run_id)|{
+            let motif_loader = Arc::clone(&self.motif_loader);
+            let random_slices_loader = Arc::clone(&self.random_slices_loader);
 
-                    let ctx = Arc::clone(&ctx);
-                    let opt_config = Arc::clone(&opt_config);
-                    let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
-                    let store = Arc::clone(&self.store);
-                    let out_key = Arc::clone(&out_key);
+            let ctx = Arc::clone(&ctx);
+            let opt_config = Arc::clone(&opt_config);
+            let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
+            let store = Arc::clone(&self.store);
+            let out_key = Arc::clone(&out_key);
 
-
-                    async move {
-
-                        let motif = motif_loader.run(Arc::new(DevicesWrap::wrap_cpu(motif_id_rate.0.into())), Arc::clone(&ctx)).await?;
-                        let random_slices = random_slices_loader.run(Arc::new(DevicesWrap::wrap_cpu(SlicesLoaderInput::new(motif_id_rate.0.into(), 100))), Arc::clone(&ctx)).await?;
+            tokio::spawn(async move {
+                let motif = motif_loader.run(Arc::new(DevicesWrap::wrap_cpu(motif_id_rate.0.into())), Arc::clone(&ctx)).await?;
+                let random_slices = random_slices_loader.run(Arc::new(DevicesWrap::wrap_cpu(SlicesLoaderInput::new(motif_id_rate.0.into(), 100))), Arc::clone(&ctx)).await?;
 
 
-                        // let batch_ref = &batch;
-                        opt_train_2(
+                // let batch_ref = &batch;
+                opt_train_2(
+                    opt_config,
+                    async |vs: &VarStore, run_config: TrainMotifsNetsRunConfig, _listener| {
+                        if ctx.read().acquired_permits() == 0 { //TODO move to with_data!
+                            let result = GlobalCtx::global()
+                                .acquire_many(device_idx, 1, out_key.clone())
+                                .await?;
+                            ctx.write().add_permit(result); //permits can be dropped only from OOM handler or when context is dropped
+                        }
 
-                            opt_config,
-                            async |vs: &VarStore, run_config: TrainMotifsNetsRunConfig, _listener| {
-                                if ctx.read().acquired_permits() == 0 { //TODO move to with_data!
-                                    let result = GlobalCtx::global()
-                                        .acquire_many(device_idx, 1, out_key.clone())
-                                        .await?;
-                                    ctx.write().add_permit(result); //permits can be dropped only from OOM handler or when context is dropped
-                                }
+                        let batch = MotifsBatch::new(Arc::clone(&motif), Arc::clone(&random_slices), run_config.common_training_args.batch_size as i64, device_idx, cache_area).await?;
 
-                                let batch = MotifsBatch::new(Arc::clone(&motif), Arc::clone(&random_slices), run_config.common_training_args.batch_size as i64, device_idx, cache_area).await?;
-
-                                run_train_motif_net_2(batch.motif_meta.window, &run_config, &Cuda(0), &batch, vs, &mut DummyListener).await
-                            },
-                            train_motifs_nodes_run_configs,
-                            ThoDevice::from(device_idx).into(),
-                            "motifs"
-
-                        ).await.map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)| {
-                            debug!("TrainMotifNet::run: motif_node_params={motif_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
-                            let (channel, find_motifs_run_id) = store.read().get_motif_meta(motif_id_rate.0)?;
-
-                            Ok::<_, ThoosaError>(TrainMotifsNetResult::new(
-                                min_loss,
-                                channel as u32,
-                                motif_id_rate.0,
-                                var_store,
-                                select_motifs_run_id,
-                                motif_node_params,
-                                train_motifs_nets_run_config
-                            ))
-                        }).expect("TODO opt_train failed")
-                    }
+                        run_train_motif_net_2(batch.motif_meta.window, &run_config, &Cuda(0), &batch, vs, &mut DummyListener).await
+                    },
+                    train_motifs_nodes_run_configs,
+                    ThoDevice::from(device_idx).into(),
+                    "motifs",
+                ).await.map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)| {
+                    debug!("TrainMotifNet::run: motif_node_params={motif_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
+                    store.read().get_motif_meta(motif_id_rate.0).and_then(|(channel, find_motifs_run_id)|{
+                        Ok(TrainMotifsNetResult::new(
+                            min_loss,
+                            channel as u32,
+                            motif_id_rate.0,
+                            var_store,
+                            select_motifs_run_id,
+                            motif_node_params,
+                            train_motifs_nets_run_config,
+                        ))
+                    })
                 })
+            })
 
         })
         .buffer_unordered(10)
-        .try_collect::<Vec<_>>()
-        .await?))))
-        // todo!()
+        .filter_map(|join_res| async move {
+            match join_res {
+                Ok(opt_i) => opt_i.ok().and_then(|v|v.ok()),
+                Err(e) => {
+                    error!("train motif failed: {e}");
+                    None
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+
+        Ok(Arc::new(DevicesWrap::wrap_cpu(TrainMotifsNetsResult::new(0, out))))
     }
 
 }
