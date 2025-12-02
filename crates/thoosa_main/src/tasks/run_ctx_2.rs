@@ -12,7 +12,7 @@ use caching_runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Named, SimpleId};
 use torch_runner::TorchPermsCtx;
-use crate::tasks::stacked_moitfs_loader::StackedMotifsLoader;
+use crate::tasks::stacked_moitfs_loader::{StackedMotifsLoader, StackedMotifsOutputId};
 use crate::tasks::motif_loader::MotifLoader;
 use crate::tasks::tensor_loader::RawTensorLoader;
 
@@ -25,7 +25,7 @@ pub struct RunCtx2 {
     perms: TorchPermsCtx,
 
     loaded_raw_tensors:Vec<SimpleId>,
-    batched_motifs_id:Vec<SimpleId>
+    batched_motifs_id:Vec<StackedMotifsOutputId>
 }
 
 impl Adjustable for RunCtx2 {}
@@ -108,13 +108,13 @@ impl RunCtx for RunCtx2 {
 
 
 pub trait MotifsCtx {
-    fn add_batched_motifs_id(&mut self, id:SimpleId);
+    fn add_stacked_motifs_id(&mut self, id:StackedMotifsOutputId);
     fn add_loaded_raw_tensor_id(&mut self, id:SimpleId);
 }
 
 
 impl MotifsCtx for RunCtx2 {
-    fn add_batched_motifs_id(&mut self, id: SimpleId) {
+    fn add_stacked_motifs_id(&mut self, id: StackedMotifsOutputId) {
         self.batched_motifs_id.push(id);
     }
 
@@ -125,7 +125,7 @@ impl MotifsCtx for RunCtx2 {
 
 //TODO move to real mock
 impl MotifsCtx for MockRunCtx {
-    fn add_batched_motifs_id(&mut self, id: SimpleId) {
+    fn add_stacked_motifs_id(&mut self, id: StackedMotifsOutputId) {
 
     }
 
