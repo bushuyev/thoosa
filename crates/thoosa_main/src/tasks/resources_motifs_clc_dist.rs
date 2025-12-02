@@ -388,15 +388,6 @@ impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
     }
 }
 
-impl <'a> Select<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInput<'a> {
-    type Output =  ClcResourcesMotifsDistInput<'a>;
-
-    fn subview(&self, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector) -> Result<Self::Output, ThoosaError> {
-        debug!("ClcResourcesMotifsDistInput::subview: selector={selector:?}");
-
-        unimplemented!()
-    }
-}
 
 impl<'a> WithId for ClcResourcesMotifsDistInput<'a> {
     type ID = SimpleId;

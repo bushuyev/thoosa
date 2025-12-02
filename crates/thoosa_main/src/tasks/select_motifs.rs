@@ -336,7 +336,7 @@ where
                         stacked_motifs.push((Arc::clone(&find_motifs_run_config), select_motifs_run_config, motif_data));
                     }
                     Err(e) => {
-                        //TODO dump to CPU if OOM
+                        //TODO switch to CPU if OOM ctx.to_cpu...
                         error!("Can't load select_motifs_run_config: e={e:?} select_motifs_run_config={select_motifs_run_config:?}")
                     }
                 }

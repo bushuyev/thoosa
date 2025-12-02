@@ -8,6 +8,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::lock_api::RwLock;
 use tch::IndexOp;
+use tokio::task::JoinError;
 use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
@@ -221,7 +222,7 @@ where
                 let ctx = Arc::clone(&ctx);
                 let apply_motif_net = Arc::clone(&self.apply_motif_net);
 
-                async move {
+                tokio::spawn(async move {
                     let wrapper = Arc::new(ApplyMotifNetInputDeviceWrapper::new(input, motif_net));
                     let output_builder = MotifsProbabilitiesOutputBuilder::new();
 
@@ -246,10 +247,13 @@ where
                             ),
                         ),
                     ).await
-                }
+                })
             })
             .buffered(10)//TODO config, TODO - use buffer_unordered and then sort by motif_id?
-            .try_collect::<Vec<_>>().await?;
+            // .map(|r|r.and_then(|r|r))
+            .try_collect::<Vec<_>>().await?
+            .into_iter().
+            collect::<Result<Vec<_>, ThoosaError>>()?;
 
         debug!("ApplyMotifNets::run: matches={matches:?}");
 
@@ -440,15 +444,6 @@ impl <'a> WithId for ApplyMotifNetInput<'a> {
         &()
     }
 }
-
-impl Select<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNetInput<'_> {
-    type Output = Self;
-
-    fn subview(&self, selector: ApplyMotifNetInputDeviceWrapperSelector) -> Result<Self::Output, ThoosaError> {
-        todo!()
-    }
-}
-
 
 #[derive(Debug)]
 struct ApplyMotifNet<C>
