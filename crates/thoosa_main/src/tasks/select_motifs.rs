@@ -234,6 +234,8 @@ where
         run_configs:Vec<SelectMotifsRunConfig>,
         find_motifs_run_ids:Vec<RunId>,
         max_batch: i64,
+        #[cfg(test)]
+        fail_if_size_bigger_than:Option<usize>
     ) -> Self {
         let load_and_clc_avg_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
             Arc::clone(&motif_loader), // as Arc<dyn MotifLoaderStage<Output = <AverageEuclideanDistanceStage as Stage>::In<'static>>>,
@@ -241,7 +243,11 @@ where
         ));
 
         let batched_motifs_loader = Arc::new(StackedMotifsLoader::new(Arc::clone(ws), Arc::clone(&motif_loader), Arc::clone(&load_and_clc_avg_dist), Arc::clone(store)));
-        let clc_resources_motifs_dist = Arc::new(ClcResourcesMotifsDist::<C>::new(ws.read().channels() as usize));
+        let clc_resources_motifs_dist = Arc::new(ClcResourcesMotifsDist::<C>::new(
+            ws.read().channels() as usize,
+             #[cfg(test)]
+             fail_if_size_bigger_than
+        ));
         let channels = ws.read().channels();
         Self {
             id: "SelectMotifsStage".into(),
@@ -626,10 +632,11 @@ pub mod tests {
             vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
             vec![find_motifs_run_id],
             1000,
+            None,
         ));
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))))), Arc::new(RwLock::new(mock_run_ctx::default(0))),
+            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))))), Arc::new(RwLock::new(mock_run_ctx::default(1))),
         ).await?;
 
         Ok(())
@@ -704,6 +711,7 @@ pub mod tests {
             vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
             vec![find_motifs_run_id],
             1000,
+            None
         ));
 
         let result = select_motifs_stage.run(
@@ -784,6 +792,7 @@ pub mod tests {
             vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
             vec![find_motifs_run_id],
             1000,
+            None
         ));
 
 
@@ -919,6 +928,7 @@ pub mod tests {
             vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
             vec![find_motifs_run_id],
             10000,//TODO fails with max_batch 1000
+            Some(801)//TODO check if ran through OOMHandler
         ));
 
 
@@ -1418,6 +1428,7 @@ pub mod tests {
             vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
             vec![find_motifs_run_id],
             30_000_000,//slices
+            None
         ));
 
         let ctx =         build()
@@ -1440,6 +1451,7 @@ pub mod tests {
         let num_channels = 3;
         let mut output_builder = Box::new(SelectMotifsSavableResultBuilder::new(SimpleId("zzz"), num_channels as u32, 0).await);
 
+        let mask_0 = Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5);
         output_builder.add_partial_output(
             ClcResourcesMotifsDistOutput::new(
                 0,
@@ -1448,7 +1460,7 @@ pub mod tests {
                         (
                             DistsMask::new(
                                 //3 channels, 5 motifs, 7 resource slices
-                                Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5),
+                                mask_0,
                                 None,
                                 false,
                                 None,
@@ -1457,7 +1469,9 @@ pub mod tests {
                                 0.into()
                             ]
                         )
-                    )
+                    ),
+                    None,
+                    None
                 ],
                 SlicesIter::new(100, vec![
                     (0u32, 100),
@@ -1466,6 +1480,7 @@ pub mod tests {
             )
         );
 
+        let mask_1 = Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5);
         output_builder.add_partial_output(
             ClcResourcesMotifsDistOutput::new(
                 0,
@@ -1474,7 +1489,7 @@ pub mod tests {
                         (
                             DistsMask::new(
                                 //3 channels, 5 motifs, 7 resource slices
-                                Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5),
+                                mask_1,
                                 None,
                                 false,
                                 None,
@@ -1483,7 +1498,9 @@ pub mod tests {
                                 0.into()
                             ]
                         )
-                    )
+                    ),
+                    None,
+                    None
                 ],
                 SlicesIter::new(100, vec![
                     (0u32, 100),
@@ -1502,7 +1519,7 @@ pub mod tests {
                 None => {}
                 Some(v) => {
                     let (mask, _) = v.0.unpack();
-                    debug!("mask=\t{mask}");
+                    debug!("mask=\t{mask}");//TODO check mask - should be concat mask_0  mask_1
                 }
             }
         }

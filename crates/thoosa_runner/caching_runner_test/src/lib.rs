@@ -358,6 +358,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock};
+    use tokio::sync::{OwnedSemaphorePermit, Semaphore};
     use cached_derive::Cached;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
@@ -439,13 +440,15 @@ mod tests {
     impl Adjustable for DummyRunCtx {}
     impl DummyRunCtx {
         pub fn new(device_idx: usize, cache_area: u64, name: &'static str) -> Self {
+            let mut ctx = DummyPermsCtx::new(name);
+            ctx.add_permit(RunnerPerm::new(Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap()));
             Self {
                 device_idx,
                 loaded_tensors_cached: vec![],
                 multed_tensors_cached: vec![],
                 cache_area,
                 name,
-                perms_ctx: DummyPermsCtx::new(name),
+                perms_ctx: ctx,
             }
         }
     }
@@ -991,11 +994,11 @@ mod tests {
         debug!("loaded_tensor_1_0={loaded_tensor_1_0:?}");
         loaded_tensor_1_0
             .with_data_ref(1,
-                           Arc::clone(&ctx_device_1), None, |data: &DLoadedTensor| {
-                                           assert_eq!(data.data.0, [0.0, 1.0, 2.0]);
+           Arc::clone(&ctx_device_1), None, |data: &DLoadedTensor| {
+                           assert_eq!(data.data.0, [0.0, 1.0, 2.0]);
 
-                                           Ok(())
-                                       })
+                           Ok(())
+                       })
             .await?;
 
         // assert!(loaded_tensor_1_0.is_ok());

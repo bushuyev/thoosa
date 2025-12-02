@@ -26,5 +26,5 @@ tracing-subscriber.workspace = true
 log.workspace = true
 simplelog.workspace = true
 [dev-dependencies]
-
+libloading.workspace = true
 console-subscriber.workspace = true

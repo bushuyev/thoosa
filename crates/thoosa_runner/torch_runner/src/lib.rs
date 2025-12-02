@@ -774,6 +774,8 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
             "device_1_ctx",
         )));
 
+        ctx_device_0.write().add_permit(GlobalCtx::global().acquire_many(loader_ctx_device, 1, Arc::new(SimpleId("zzz"))).await?);
+
         let (ctx_device_idx, cache_area) = {
             let guard = ctx_device_0.read();
             (guard.device_idx(), guard.cache_area())

@@ -109,34 +109,6 @@ mod demo {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-    #[test]
-    fn gen_demo() {
-        let (sig, ivals) = generate_series_with_motif(
-            20_000, 4000, 2, 300, 0.4, (0.8, 1.8), None, &MotifKind::Triangle,
-        ).expect("motifs should fit");
-        debug!("len={} intervals={:?}", sig.len(), ivals);
-
-        let test_dir = Path::new("/tmp/random_sigs");//.join(cdt_for_dir());
-        // plot_series_with_lanes(
-        //     vec![
-        //         (format!("sig"), BLACK, sig.into_iter().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
-        //     ],
-        //     format!("sig").as_str(),
-        //     (2000, 1000),
-        //     &test_dir.join(&format!("sig_{}.png", cdt_for_dir())),
-        //     &[(0, 1000)]
-        // ).unwrap();
-
-        draw_function_plot(
-            &test_dir.join(&format!("sig_{}.png", cdt_for_dir())),
-            (2000, 1000),
-            &sig.into_iter().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>(),
-            &ivals.into_iter().map(|v|v.into()).collect::<Vec<(f32, f32)>>(),
-            "sig"
-        ).unwrap();
-
-        println!("saved to {test_dir:?}");
-    }
 
     #[test]
     fn generate_series_with_motif_places_everything_when_space_allows() {
