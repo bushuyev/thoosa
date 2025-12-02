@@ -249,7 +249,7 @@ where
                         "window is not same: find_motifs_run_config.window={} item.extra().window={}item.extra().window, motif_id={:?}", input.find_motifs_run_config.window, item.extra().window, item.data().id()
                     );
 
-                    if item.size().dim_0() < 1000 {
+                    if item.size().dim_0() < 1000 {//TODO config + sample random 1000
 
                         acc[item.extra().channel as usize].push(item.data());
                     }
@@ -295,14 +295,18 @@ where
 
                 } else {
                     //building dists tensors for each channel to compare matches with
-                    let channel_avg_dists_tensors = channel_motifs.iter().map(|motif|  {
+                    let channel_avg_dists_tensors = channel_motifs.iter()
+                    .filter_map(|motif|  {
                         let read_guard = motif_avg_dists.read();
-                        let avg_dist = read_guard.get(&motif.id()).unwrap();
+                        read_guard.get(&motif.id()).map(|avg_dist|{
+                             debug!("SelectMotifsStage::run: motif.id={} dist={avg_dist}", motif.id());
 
-                        debug!("SelectMotifsStage::run: motif.id={} dist={avg_dist}", motif.id());
+                             Some(Tensor::from_slice(vec![*avg_dist; motif.size()[0] as usize].as_slice()))
+                        })
 
-                        Tensor::from_slice(vec![*avg_dist; motif.size()[0] as usize].as_slice())
-                    }).collect::<Vec<_>>();
+                    })
+                    .map(|v|v.unwrap())
+                    .collect::<Vec<_>>();
 
                     let channel_t = Tensor::cat(&channel_motifs_tensors, 0);
                     let motif_avg_dists_t = Tensor::cat(&channel_avg_dists_tensors, 0).to_device(ThoDevice::from(device_idx).into());
