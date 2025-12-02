@@ -1,4 +1,6 @@
+use std::any::Any;
 use std::collections::HashMap;
+use std::hash::Hasher;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -19,11 +21,11 @@ use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRun
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, Named, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -60,15 +62,30 @@ impl WithId for StackedMotifsInput {
     }
 }
 
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct StackedMotifsOutputId {
+    pub(crate)  find_motifs_run_id:RunId,
+    pub(crate)  select_motifs_run_id:RunId
+}
+
+impl StackedMotifsOutputId {
+    pub fn new(find_motifs_run_id: RunId, select_motifs_run_id: RunId) -> Self {
+        Self { find_motifs_run_id, select_motifs_run_id }
+    }
+}
+
+impl Named for StackedMotifsOutputId {}
+
+
 #[derive(Debug)]
 pub struct StackedMotifsOutput {
-    id:SimpleId,
+    id:StackedMotifsOutputId,
     pub motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Arc<SelectMotifsRunConfig>)>,
     pub motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SimpleId>
 }
 
 impl StackedMotifsOutput {
-    pub fn new(id: SimpleId, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Arc<SelectMotifsRunConfig>)>, motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SimpleId>) -> Self {
+    pub fn new(id: StackedMotifsOutputId, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Arc<SelectMotifsRunConfig>)>, motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SimpleId>) -> Self {
         Self { id, motifs, motifs_avg_dists }
     }
 
@@ -100,7 +117,7 @@ impl Data for StackedMotifsOutput {
 }
 
 impl WithId for StackedMotifsOutput {
-    type ID = SimpleId;
+    type ID = StackedMotifsOutputId;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -129,7 +146,8 @@ ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, 
 C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        format!("BatchedMotifsLoader_{}",  input_id).into()
+        // format!("BatchedMotifsLoader_{}",  input_id).into()
+        StackedMotifsOutputId::new(0, 0)
     }
 }
 
@@ -340,9 +358,12 @@ where
             trace!("SelectMotifsStage::run: channels_motif_avg_dists_t=\n{channels_motif_avg_dists_t}");
             trace!("SelectMotifsStage::run: channels_motifs_t=\n{channels_motifs_t}");
 
-            let find_and_select_motifs_id = SimpleId(format!("{}_{}", input.find_motifs_run_config.id.expect("no id in find_motifs_run_config"), input.select_motifs_run_config.id.expect("no id in select_motifs_run_config")).leak());
+            let find_motifs_run_id = input.find_motifs_run_config.id.expect("no id in find_motifs_run_config");
+            let select_motifs_run_id = input.select_motifs_run_config.id.expect("no id in select_motifs_run_config");
+            let find_and_select_motifs_id = SimpleId(format!("{find_motifs_run_id}_{select_motifs_run_id}").leak());
+
             Ok(Arc::new(DevicesWrap::wrap(StackedMotifsOutput::new(
-                "".into(),
+                StackedMotifsOutputId::new(find_motifs_run_id, select_motifs_run_id),
                 DataWithExtra::new(
                     ThoTensor::new(
                         find_and_select_motifs_id.clone(),
@@ -364,6 +385,6 @@ where
     where
         Self: 'a
     {
-        ctx.write().add_batched_motifs_id(self.out_id(input.id()));
+        ctx.write().add_stacked_motifs_id(self.out_id(input.id()));
     }
 }
