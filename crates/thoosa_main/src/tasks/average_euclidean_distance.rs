@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::average_euclidean_distance;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{panic_to_err, ThoosaError};
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::Adjustable;
@@ -108,7 +108,10 @@ where
     C: RunCtx + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
-        input.data().run_inner(|t| Ok(AverageDistanceValue::new("todo".into(), average_euclidean_distance(t)?)))
+        Ok(AverageDistanceValue::new(
+            "todo".into(),
+            panic_to_err!(average_euclidean_distance(input.data().t_ref()))?
+        ))
     }
 }
 

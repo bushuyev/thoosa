@@ -10,7 +10,7 @@ use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
 use tch::Tensor;
 use cached_derive::Cached;
-use caching_runner::common::{OutId, RunCtx};
+use caching_runner::common::{DropIf, OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::tmp_cache::TmpCached;
@@ -270,6 +270,19 @@ where
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config);
 
     for (resource_id, slices) in resource_ids_slices {
+        let out_key = {
+            let out_id = SimpleId::from(format!("{motif_id}_{resource_id}_tmp_cache"));
+            Arc::new(out_id) as Arc<dyn CachableIdTr>
+        };
+
+
+        if ctx.read().acquired_permits() == 0 {
+            let result = GlobalCtx::global()
+                .acquire_many(device_idx, 1, out_key.clone())
+                .await?;
+            ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
+        }
+
         let resource = resources_map
             .get(&resource_id)
             .cloned()
@@ -301,7 +314,10 @@ where
         if !selector.ranges.is_empty() {
 
             let mut try_count = 0;
-            loop {//TODO move into OOMHandler as util fn
+            loop {
+                let out_key = out_key.clone();
+
+                //TODO move into OOMHandler as util fn
                 match raw_tensor.with_selected_data(device_idx, selector.clone(), |tt| {
                     debug!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id} try_count={try_count} resource_id={resource_id}  tt.size={:?}", tt.size());
                     trace!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id}  try_count={try_count} resource_id={resource_id}  t={}", tt.t_ref());
@@ -321,10 +337,6 @@ where
                         debug!("MotifLoader::run: motif_id={motif_id} purge gpu done");
 
                         if try_count < 1 {
-                            let out_key = {
-                                let out_id = SimpleId::from(format!("{motif_id}_tmp_cache"));
-                                Arc::new(out_id) as Arc<dyn CachableIdTr>
-                            };
 
                             let acquired_permits = ctx.read().acquired_permits();
                             if acquired_permits < MAX_PERMITS {
@@ -335,6 +347,8 @@ where
                             }
                             debug!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id}  try_count={try_count} got {e:?}, acquired MAX_PERMITS, purging gpu({device_idx})");
                             tmp_cache.purge_gpu(device_idx).await?;
+
+                            ctx.write().drop_permits(DropIf::Always);
 
                             debug!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id} purge gpu done");
 
