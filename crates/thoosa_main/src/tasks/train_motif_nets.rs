@@ -155,10 +155,12 @@ where
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
-        let (select_motifs_run_ids, opt_config) = input.with_data_ref(0,
-                                                                      Arc::clone(&ctx), None, |input|{
-                                                                                  Ok((input.select_motifs_run_id.clone(), input.opt_config.clone()))
-                                                                              }).await?;
+        let (select_motifs_run_ids, opt_config) = input.with_data_ref(
+            0,
+            Arc::clone(&ctx), None, |input| {
+                Ok((input.select_motifs_run_id.clone(), input.opt_config.clone()))
+            },
+        ).await?;
 
         let channels = self.ws.read().channels();
 

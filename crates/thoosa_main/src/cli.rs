@@ -400,7 +400,9 @@ where
                         motif_loader,
                         run_configs,
                         select_motifs_args.find_motifs_run_ids.clone(),
-                        100_000//TODO config
+                        100_000,//TODO config
+                        #[cfg(test)]
+                        None
                     ))
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "select motifs"))),
@@ -445,26 +447,7 @@ where
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "select motifs"))),
             ).await?;
-            // let run_ids = run_opt_step::<
-            //     TrainMotifsNetsRunConfig,
-            //     TrainMotifsNetsRunConfigRangeOrValue,
-            //     OptConfig,
-            //     Empty,
-            //     _,
-            // >(
-            //     Some(train_motif_nets_args.select_motifs_run_id.clone()),
-            //     train_motif_nets_run_config_range_or_value,
-            //     &train_motif_nets_args.fixed_config,
-            //     &train_motif_nets_args.resource_config(),
-            //     run_train_motif_nodes_on_motif_selection,
-            //     &ws,
-            //     &store,
-            //     &loader,
-            //     devices.clone(),
-            //     "TrainMotifsNets2",
-            // )?;
 
-            // info!("TrainMotifsNets done, run_ids={run_ids:?}");
         }
 
         Some(Commands::TrainLabelNets(train_label_nets_args)) => {

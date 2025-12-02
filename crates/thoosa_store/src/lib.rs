@@ -696,8 +696,8 @@ impl Store for SqlStore {
                     q.push("(?, ?)");
                     q.push(",");
 
-                    params.push(Value::Integer(run_id as i64)); //resource id
-                    params.push(Value::Integer(*v as i64)); //label id
+                    params.push(Value::Integer(run_id as i64));
+                    params.push(Value::Integer(*v as i64)); //input_run_id
                     //
                     (q, params)
                 },
@@ -2121,10 +2121,7 @@ impl Store for SqlStore {
         run_id: RunId,
         selected_motifs: Vec<(u32, f64)>,
     ) -> Result<RunId, ThoosaError> {
-        debug!(
-            "save_selected_motifs: selected_motifs={:?}",
-            selected_motifs
-        );
+        debug!("save_selected_motifs: selected_motifs={:?}",selected_motifs);
 
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
@@ -3237,8 +3234,8 @@ mod store_tests {
             ]),
         )?;
 
-        let select_motifs_run_id = store.write().save_selected_motifs(
-            find_motifs_run_id,
+        let _select_motifs_run_id = store.write().save_selected_motifs(
+            select_motifs_run_id,
             vec![
                 (motif_slices_444[0].motif_id, 0.1),  //motif_id corr
                 (motif_slices_1111[0].motif_id, 0.2), //motif_id corr
