@@ -978,57 +978,6 @@ pub fn run_opt_train_label_nets(
     })
 }
 
-// pub async fn train_label_net_2<
-//     DI: Dims + Send + 'static,
-//     DO: Dims + Send + 'static,
-//     B: AsyncDataBatch<DI>,
-// >(
-//     net: &Box<dyn ThoModule<Batch<DI>, DO>>,
-//     run_config: &TrainLabelNetsRunConfig,
-//     batch: &mut B,
-//     var_store: &VarStore,
-//     device: &Device,
-// ) -> Result<f32, ThoosaError> {
-//     debug!("train_label_net:  ");
-// 
-//     let device = device.clone();
-// 
-//     let optimizer = AdamW::default().amsgrad(true);
-// 
-//     //TODO
-//     // if let Some(adam_w) = run_config.common_training_args.adam_w {
-//     //     debug!("train_label_nodes: setting adam_w={adam_w:?}");
-//     //     optimizer = optimizer.beta1(adam_w.beta1).beta2(adam_w.beta2);
-//     // }
-// 
-//     debug!("train_label_net: cuda_mem={:?}", cuda_mem());
-// 
-//     let loss = train_2(
-//         &device,
-//         batch as &mut dyn AsyncDataBatch<DI>,
-//         net,
-//         |pred: &Tensor, target: &Tensor| {
-//             debug!("train_label_net: pred.size={:?}", pred.size());
-//             let pred_y = pred.squeeze();
-//             debug!("train_label_net: pred_y={:?} target={:?} kind={:?}",pred_y.size(),target.size(),target.kind());
-//             pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
-//         },
-//         run_config.common_training_args.cycles as usize,
-//         optimizer.build(&var_store, run_config.common_training_args.lr)?,
-//         |t| {
-//             debug!(
-//                 "train_label_net: t.size={:?} cuda_mem={:?}",
-//                 t.size(),
-//                 cuda_mem()
-//             );
-//             t
-//         },
-//         None,
-//     )
-//     .await?;
-// 
-//     Ok(loss)
-// }
 
 pub fn train_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, B: DataBatch<DI>>(
     net: &Box<dyn ThoModule<Batch<DI>, DO>>,
@@ -2446,7 +2395,7 @@ impl TrainListener for PlotVecf32 {
 
 #[derive(Debug)]
 pub struct TrainMotifsNetResult {
-    loss: f32,
+    pub loss: f32, //TODO pub
     channel: u32,
     motif_id: u32,
     vs: VarStore,
@@ -2482,7 +2431,7 @@ impl TrainMotifsNetResult {
 #[dummy_data(no_clone)]
 pub struct TrainMotifsNetsResult {
     id:RunId,
-    train_motif_nets_results:Vec<TrainMotifsNetResult>
+    pub train_motif_nets_results:Vec<TrainMotifsNetResult>
 }
 
 impl TrainMotifsNetsResult {
