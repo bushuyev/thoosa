@@ -373,6 +373,11 @@ mock! {
             limit:u32
         ) -> Result<Vec<Resource>, ThoosaError>;
 
+        fn list_resources_not_labled(
+            &self,
+            label: &str,
+        ) -> Result<Vec<Resource>, ThoosaError>;
+
     }
 }
 
@@ -636,6 +641,36 @@ impl ResourceStore for SqlStore {
 
         Ok(group_sets)
 
+    }
+
+    fn list_resources_not_labled(
+        &self,
+        label: &str,
+    ) -> Result<Vec<Resource>, ThoosaError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        let resources = {
+            let mut stmt = t.prepare("SELECT r.id, r.import_id, r.key, r.length FROM resources AS r WHERE NOT EXISTS ( SELECT 1 FROM labeled_resources AS lr JOIN labels AS l ON l.id = lr.label_id WHERE lr.resource_id = r.id AND l.label = ? ) ORDER BY RANDOM()")?;
+
+            let vec = stmt
+                .query_map([label], |row| {
+                    Ok(Resource::new(
+                        row.get::<usize, u32>(0)?,
+                        row.get::<usize, u32>(1)?,
+                        row.get::<usize, String>(2)?,
+                        row.get::<usize, u32>(3)?,
+                    ))
+                })?
+                .map(|v| v.unwrap())
+                .collect();
+
+            vec
+        };
+
+        t.commit()?;
+
+        Ok(resources)
     }
 
 }
@@ -3076,6 +3111,54 @@ mod store_tests {
     }
 
     #[test]
+    fn test_list_resources_not_labled() -> Result<(), ThoosaError> {
+        let mut store = SqlStore::in_mem()?;
+
+        let mut guard = store.conn().lock();
+        let t = guard.transaction()?;
+
+        let import_id = store.save_import("test".to_string(), &t)?;
+        store.save_label("aaa", &t)?;
+        store.save_label("bbb", &t)?;
+
+        store.save_resources_labels(
+            &HashMap::from([
+                (
+                    "aaa_only".to_string(),
+                    (ResourceStats::new(vec![1, 10]), vec![("aaa".into(), 1.0)]),
+                ),
+                (
+                    "bbb_only".to_string(),
+                    (ResourceStats::new(vec![1, 10]), vec![("bbb".into(), 1.0)]),
+                ),
+                (
+                    "both".to_string(),
+                    (
+                        ResourceStats::new(vec![1, 10]),
+                        vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)],
+                    ),
+                ),
+            ]),
+            import_id,
+            &t,
+        )?;
+
+        t.commit()?;
+
+        drop(guard);
+
+        let mut not_aaa = store.list_resources_not_labled("aaa")?;
+        not_aaa.sort_by(|a, b| a.file_stem().cmp(b.file_stem()));
+        assert_eq!(vec!["bbb_only"], not_aaa.into_iter().map(|r| r.file_stem().to_string()).collect::<Vec<_>>());
+
+        let mut not_bbb = store.list_resources_not_labled("bbb")?;
+        not_bbb.sort_by(|a, b| a.file_stem().cmp(b.file_stem()));
+        assert_eq!(vec!["aaa_only"], not_bbb.into_iter().map(|r| r.file_stem().to_string()).collect::<Vec<_>>());
+
+        Ok(())
+    }
+
+    #[test]
     fn test_save_slices() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
@@ -3886,6 +3969,17 @@ impl MockStoreBuilder {
                 map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()
             });
 
+
+        self
+    }
+
+    pub fn with_list_resources_not_labled<D:IntoIterator<Item=(&'static str, Result<Vec<Resource>, ThoosaError>)>>(mut self, data:D) -> Self {
+        let map :HashMap<&'static str, Result<Vec<Resource>, ThoosaError>> = HashMap::from_iter(data.into_iter());
+
+        self.store.expect_list_resources_not_labled()
+            .returning(move |label| {
+                map.get(label).expect(&format!("no mock data for {label} configured in list_resources_not_labled")).clone()
+            });
 
         self
     }
