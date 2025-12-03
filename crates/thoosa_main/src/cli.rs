@@ -88,6 +88,7 @@ use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEucl
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
+use crate::tasks::train_label_nets::{TrainLabelNets, TrainLabelNetsInput};
 use crate::tasks::train_motif_nets::{TrainMotifNets, TrainMotifNetInput};
 
 #[derive(Parser, Clone, Debug)]
@@ -369,8 +370,7 @@ where
         Some(SelectMotifs(select_motifs_args)) => {
             debug!("SelectMotifs2: select_motifs_args.run_config_cnt={:?}",select_motifs_args.run_config_cnt);
 
-            let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue =
-                serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
+            let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue = serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
 
             let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
                 ResourcesConfigInput::new(
@@ -413,12 +413,8 @@ where
 
         Some(TrainMotifsNets(train_motif_nets_args)) => {
             debug!("TrainMotifsNets2: train_motif_nets_args.run_config_cnt={:?}",train_motif_nets_args.run_config_cnt);
-            let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue =
-                serde_json5::from_str(&train_motif_nets_args.run_config_cnt)
-                    .expect("TrainMotifsNets2");
 
-            let train_motifs_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue =
-                serde_json5::from_str(&train_motif_nets_args.run_config_cnt).expect("SelectMotifs2");
+            let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = serde_json5::from_str(&train_motif_nets_args.run_config_cnt).expect("TrainMotifsNets2");
 
             let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
                 // ResourcesConfigInput::new(
@@ -435,26 +431,58 @@ where
                 &ws,
                 &store,
                 true,
-                |run_configs| {
+                async |run_configs| {
 
-                    Arc::new(TrainMotifNets::<_, RunCtx2>::new(
+                    Ok(Arc::new(TrainMotifNets::<_, RunCtx2>::new(
                         loader_2,
                         &ws,
                         &store,
                         run_configs,
-                        // select_motifs_args.find_motifs_run_ids.clone()
-                    ))
+                    )))
                 },
-                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "select motifs"))),
+                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train motif nets"))),
             ).await?;
 
         }
 
         Some(Commands::TrainLabelNets(train_label_nets_args)) => {
-            debug!(
-                "TrainMotifsNets2: train_motif_nets_args.run_config_cnt={:?}",
-                train_label_nets_args.run_config_cnt
-            );
+            debug!("TrainLabelNets: train_label_nets_args.run_config_cnt={:?}",train_label_nets_args.run_config_cnt);
+
+            let train_motif_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = serde_json5::from_str(&train_label_nets_args.run_config_cnt).expect("TrainLabelNets");
+
+            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
+                ResourcesConfigInput::new(
+                    SimpleId::from("resources"),
+                    train_label_nets_args.resource_config(),
+                )
+            ));
+
+            let opt_config = Arc::new(train_label_nets_args.fixed_config.clone());
+
+
+            let run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
+                None,
+                train_motif_nets_run_config_range_or_value,
+                input_wrapper,
+                &ws,
+                &store,
+                true,
+                async |run_configs| {
+
+
+                    TrainLabelNets::<_, RunCtx2>::new(
+                        train_label_nets_args.select_motifs_run_id.clone(),
+                        loader_2,
+                        run_configs,
+                        &ws,
+                        &store,
+                        Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "init label nets"))),
+                        opt_config
+                    ).await.map(|v|Arc::new(v))
+                },
+                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train label nets"))),
+            ).await?;
+
             // let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue =
             //     serde_json5::from_str(&train_label_nets_args.run_config_cnt).expect(
             //         "TrainLabelNets2\
@@ -484,10 +512,7 @@ where
         }
 
         Some(TrainFinalNet(train_final_net_args)) => {
-            debug!(
-                "TrainFinalNet: train_motif_nets_args.run_config_cnt={:?}",
-                train_final_net_args.run_config_cnt
-            );
+            debug!("TrainFinalNet: train_motif_nets_args.run_config_cnt={:?}",train_final_net_args.run_config_cnt);
             // let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = serde_json5::from_str(&train_final_net_args.run_config_cnt).expect("TrainFinalNet");
             //
             // run_opt_step::<TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, OptConfig, NetResources<Logits>, _>(
@@ -1079,10 +1104,7 @@ pub async fn run_train_label_nets_2(
     runner: &Arc<ThoRunner>,
     devices: Vec<Device>,
 ) -> Result<Vec<Box<dyn SavableResult>>, ThoosaError> {
-    debug!(
-        "run_train_label_nodes: run_configs={run_configs:?} resource_config={resource_config:?} cuda_mem={:?}",
-        cuda_mem()
-    );
+    debug!("run_train_label_nodes: run_configs={run_configs:?} resource_config={resource_config:?} cuda_mem={:?}",cuda_mem());
 
     let (train_labels_resource_keys, valid_label_resource_keys) =
         resource_config.to_resources(store)?;
@@ -1116,9 +1138,7 @@ pub async fn run_train_label_nets_2(
     let selected_motifs_for_label_run_ids: &Vec<RunId> =
         selected_motifs_for_label_run_ids.expect("select_motifs_for_label_run_ids");
 
-    debug!(
-        "run_train_label_nodes: select_motifs_for_label_run_ids={selected_motifs_for_label_run_ids:?} run_configs={run_configs:?} devices={devices:?}"
-    );
+    debug!("run_train_label_nodes: select_motifs_for_label_run_ids={selected_motifs_for_label_run_ids:?} run_configs={run_configs:?} devices={devices:?}");
 
     let selected_motifs_for_label_applicable = Arc::new(
         join_all(selected_motifs_for_label_run_ids.iter().map(
@@ -2421,16 +2441,16 @@ pub async fn run_opt</*ResConf, */RCRV, F, RC, ST, CtxF>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
     presave: bool,
-    f: F,
+    init_stage: F,
     ctx_f: CtxF,
 ) -> Result<Vec<RunId>, ThoosaError>
 where
-    F: FnOnce(OptRunConfigs<
+    F: AsyncFnOnce(OptRunConfigs<
         Vec<NamedVal<<RCRV as OptRunConfigSource>::P>>,
         Vec<NamedRange<<RCRV as OptRunConfigSource>::P>>,
         Vec<Hyperparameter<<RCRV as OptRunConfigSource>::P>>,
         <RCRV as OptRunConfigSource>::P,
-    >) -> Arc<ST>,
+    >) -> Result<Arc<ST>, ThoosaError>,
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
     + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
@@ -2446,7 +2466,7 @@ where
     // let mut run_configs: Vec<RC> = opt_run_configs.to_run_configs();
 
 
-    let stage = f(opt_run_configs);
+    let stage = init_stage(opt_run_configs).await?;
 
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
 

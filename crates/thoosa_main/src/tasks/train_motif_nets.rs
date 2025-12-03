@@ -164,7 +164,7 @@ where
 
         let channels = self.ws.read().channels();
 
-        let out_key = {//TODO move to with_data!
+        let out_key = {
             let out_id = self.out_id(input.id());
             Arc::new(out_id) as Arc<dyn CachableIdTr>
         };
@@ -191,7 +191,7 @@ where
 
             tokio::spawn(async move {
                 let motif = motif_loader.run(Arc::new(DevicesWrap::wrap_cpu(motif_id_rate.0.into())), Arc::clone(&ctx)).await?;
-                let random_slices = random_slices_loader.run(Arc::new(DevicesWrap::wrap_cpu(SlicesLoaderInput::new(motif_id_rate.0.into(), 100))), Arc::clone(&ctx)).await?;
+                let random_slices = random_slices_loader.run(Arc::new(DevicesWrap::wrap_cpu(SlicesLoaderInput::new(motif_id_rate.0.into(), motif.size().dim_0() as u32))), Arc::clone(&ctx)).await?;
 
 
                 // let batch_ref = &batch;
@@ -207,7 +207,7 @@ where
 
                         let batch = MotifsBatch::new(Arc::clone(&motif), Arc::clone(&random_slices), run_config.common_training_args.batch_size as i64, device_idx, cache_area).await?;
 
-                        run_train_motif_net_2(batch.motif_meta.window, &run_config, &Cuda(0), &batch, vs, &mut DummyListener).await
+                        run_train_motif_net_2(batch.motif_meta.window, &run_config, &ThoDevice::from(device_idx), &batch, vs, &mut DummyListener).await
                     },
                     train_motifs_nodes_run_configs,
                     ThoDevice::from(device_idx).into(),
@@ -229,7 +229,7 @@ where
             })
 
         })
-        .buffer_unordered(10)
+        .buffer_unordered(10)//TODO config
         .filter_map(|join_res| async move {
             match join_res {
                 Ok(opt_i) => opt_i.ok().and_then(|v|v.ok()),
@@ -294,10 +294,10 @@ impl Data for DataWithLabels {
 #[derive(Debug)]
 pub struct MotifsBatch {
     batch_size: u32,
-    // train_motifs: Vec<DevicesWrap<DataWithLabels>>,
-    // valid_motifs: Vec<DevicesWrap<DataWithLabels>>,
+
     train_motifs:Arc<DevicesWrap<ThoTensor<MotifSlices, SimpleId>>>,
     valid_motifs:Arc<DevicesWrap<ThoTensor<MotifSlices, SimpleId>>>,
+    
     random_slices:Arc<DevicesWrap<ThoTensor<MotifSlices, DataId>>>,
     motif_meta:MotifMeta,
     device_idx:usize
@@ -408,7 +408,7 @@ mod tests {
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::dims::{Batch, MotifProbability, Slice};
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifNetParams, OptConfig, ThoModuleWithStore, TrainMotifsNetsRunConfigFields};
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifNetParams, OptConfig, ThoModuleWithStore, TrainMotifsNetsResult, TrainMotifsNetsRunConfigFields};
     use thoosa_common::utils::{reset_print_options, test_net};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
@@ -424,8 +424,8 @@ mod tests {
     use crate::tasks::train_motif_nets::{TrainMotifNets, TrainMotifNetInput};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_num_layers_opt() -> Result<(), ThoosaError> {
-        let test_dir = Path::new("/tmp/test_single_label_one_motif");//.join(cdt_for_dir());
+    async fn test_train_motif_nets() -> Result<(), ThoosaError> {
+        let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
         log::set_max_level(Debug);
@@ -511,8 +511,6 @@ mod tests {
             ],
         );
 
-
-
         let loader = Arc::new(
             mock_tensor_loader::build()
                 .with_out_id()
@@ -532,9 +530,11 @@ mod tests {
 
         let r = train_motif_net.run(input, Arc::new(RwLock::new(mock_run_ctx::default(1)))).await?;
 
-        with_data!(0, r; |r|{
+        with_data!(0, r; |r:&TrainMotifsNetsResult|{
 
             debug!("test_num_layers_opt: result={r:?}");
+
+            assert!(r.train_motif_nets_results[0].loss < 0.1);
 
             Ok::<_, ThoosaError>(())
         })?;

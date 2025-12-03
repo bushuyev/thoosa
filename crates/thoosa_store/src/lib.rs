@@ -370,6 +370,7 @@ mock! {
         fn list_resources_not_in_group(
             &self,
             group_descr: &str,
+            limit:u32
         ) -> Result<Vec<Resource>, ThoosaError>;
 
     }
@@ -603,12 +604,17 @@ impl ResourceStore for SqlStore {
     fn list_resources_not_in_group(
         &self,
         group_descr: &str,
+        limit:u32
     ) -> Result<Vec<Resource>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let group_sets = {
-            let mut stmt = t.prepare("SELECT r.id, r.import_id, r.key, r.length FROM resources AS r WHERE NOT EXISTS ( SELECT 1 FROM resource_resources_set AS rrs JOIN resource_set        AS rs  ON rs.id = rrs.set_id JOIN resource_set_group  AS g   ON g.id = rs.group_id WHERE rrs.resource_id = r.id AND g.descr = ? )")?;
+            let mut stmt = t.prepare(
+                "SELECT r.id, r.import_id, r.key, r.length FROM resources AS r WHERE NOT EXISTS \
+                (SELECT 1 FROM resource_resources_set AS rrs JOIN resource_set AS rs  ON rs.id = rrs.set_id JOIN resource_set_group  AS g   ON g.id = rs.group_id WHERE rrs.resource_id = r.id AND g.descr = ? )\
+                 ORDER BY RANDOM()  limit ?"
+            )?;
 
             let vec = stmt
                 .query_map([group_descr], |row| {
@@ -3287,7 +3293,7 @@ mod store_tests {
         slices.sort();
 
 
-        let resources = store.read().list_resources_not_in_group("pure group 10");
+        let resources = store.read().list_resources_not_in_group("pure group 10", 10);
         debug!("resources={resources:?}");
 
         let (channel, run_id_, mut slices, resources_map) =
@@ -3876,7 +3882,7 @@ impl MockStoreBuilder {
         let map :HashMap<&'static str, Result<Vec<Resource>, ThoosaError>> = HashMap::from_iter(data.into_iter());
 
         self.store.expect_list_resources_not_in_group()
-            .returning(move |group| {
+            .returning(move |group, _limit| {
                 map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()
             });
 

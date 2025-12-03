@@ -66,7 +66,7 @@ impl ResourcesConfig for Simple {
             }
             ResourceType::NotInGroup(descr) => store
                 .read()
-                .list_resources_not_in_group(descr)
+                .list_resources_not_in_group(descr, 1000)//TODO limit
                 .expect("list_resource_set_resources"),
 
             })

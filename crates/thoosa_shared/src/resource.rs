@@ -42,6 +42,7 @@ pub trait ResourceStore {
     fn list_resources_not_in_group(
         &self,
         group_descr: &str,
+        limit: u32,
     ) -> Result<Vec<Resource>, ThoosaError>;
 
 }
