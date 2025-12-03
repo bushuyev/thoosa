@@ -58,7 +58,7 @@ use crate::tasks::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResourc
 pub use crate::tasks::resources_motifs_clc_dist::{fold_dists, fold_mask};
 use crate::tasks::slices_iter::SlicesIter;
 
-pub struct SelectMotifsStage<L, ML, C>
+pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
@@ -483,6 +483,7 @@ where
                                 }
                             }
                         }
+                        //TODO select motif_ids?
 
                         Ok::<Vec<DataId>, ThoosaError>(motif_ids)
 
