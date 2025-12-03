@@ -73,7 +73,7 @@ pub struct TrainLabelNetsArgs {
     pub select_motifs_run_id: Vec<RunId>,
 
     #[arg(long)]
-    train_resource_group: String,
+    pub train_resource_group: String,
 
     #[arg(long)]
     valid_resource_group: String,

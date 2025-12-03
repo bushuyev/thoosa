@@ -1830,7 +1830,6 @@ where
             let (x_t_0, y_t) = data.valid_batch().await?;
 
             if let Some(rs) = tch::no_grad(||{
-                // debug!("train: x_t_0.size={:?}", x_t_0.size());
 
                 let x_t = x_f(x_t_0);
 

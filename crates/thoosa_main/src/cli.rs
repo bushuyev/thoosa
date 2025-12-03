@@ -452,7 +452,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
                 ResourcesConfigInput::new(
-                    SimpleId::from("resources"),
+                    SimpleId::from(train_label_nets_args.train_resource_group.to_string()),//TODO the group is needed to load resouces not belonging to label being trained
                     train_label_nets_args.resource_config(),
                 )
             ));
@@ -1194,11 +1194,11 @@ pub async fn run_train_label_nets_2(
 
                 let train_labels_resources = Arc::new(vec![
                     (1, resource_keys.clone()),
-                    (0, store.read().list_resource_random_not_label(label.as_str(), train_resource_keys_len as i64).expect("list_resource_random_not_label for train"))
+                    (0, store.read().list_resource_random_not_labeled(label.as_str(), train_resource_keys_len as u32).expect("list_resource_random_not_label for train"))
                 ]);
                 let valid_labels_resources = Arc::new(vec![
                     (1, valid_resource_keys),
-                    (0, store.read().list_resource_random_not_label(label.as_str(), valid_resource_keys_len as i64).expect("list_resource_random_not_label for valid"))
+                    (0, store.read().list_resource_random_not_labeled(label.as_str(), valid_resource_keys_len as u32).expect("list_resource_random_not_label for valid"))
                 ]);
 
                 debug!("run_train_label_nodes: label={label} \ntrain_labels_resource_rc[0]={:?} \ntrain_labels_resource_rc[1]={:?} cuda_mem={:?}", train_labels_resources[0], valid_labels_resources[1], cuda_mem());
@@ -1344,11 +1344,11 @@ pub fn run_train_label_nets(
 
                 let train_labels_resource_rc = Rc::new(vec![
                     (1, resource_keys.clone()),
-                    (0, store.read().list_resource_random_not_label(label.as_str(), train_resource_keys_len as i64).expect("list_resource_random_not_label for train"))
+                    (0, store.read().list_resource_random_not_labeled(label.as_str(), train_resource_keys_len as u32).expect("list_resource_random_not_label for train"))
                 ]);
                 let valid_labels_resources_rc = Rc::new(vec![
                     (1, valid_resource_keys),
-                    (0, store.read().list_resource_random_not_label(label.as_str(), valid_resource_keys_len as i64).expect("list_resource_random_not_label for valid"))
+                    (0, store.read().list_resource_random_not_labeled(label.as_str(), valid_resource_keys_len as u32).expect("list_resource_random_not_label for valid"))
                 ]);
 
                 debug!("run_train_label_nodes: label={label} \ntrain_labels_resource_rc[0]={:?} \ntrain_labels_resource_rc[1]={:?} cuda_mem={:?}", train_labels_resource_rc[0], train_labels_resource_rc[1], cuda_mem());
