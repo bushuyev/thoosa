@@ -247,7 +247,7 @@ pub fn labeled_tensors_by_descr<'a>(
         (
             0,
             store_lock
-                .list_resource_random_not_label(label.as_str(), 100)
+                .list_resource_random_not_labeled(label.as_str(), 100)
                 .expect("list_resource_random_not_label"),
         ),
     ]
