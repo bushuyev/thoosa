@@ -133,10 +133,10 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         &self,
         file_stem: &Vec<ResourceId>,
     ) -> Result<Vec<Resource>, ThoosaError>;
-    fn list_resource_random_not_label(
+    fn list_resource_random_not_labeled(
         &self,
         label: &str,
-        limit: i64,
+        limit: u32,
     ) -> Result<Vec<Resource>, ThoosaError>;
 
     fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoosaError>;
@@ -245,10 +245,10 @@ mock! {
             &self,
             file_stem: &Vec<ResourceId>,
         ) -> Result<Vec<Resource>, ThoosaError>;
-        fn list_resource_random_not_label(
+        fn list_resource_random_not_labeled(
             &self,
             label: &str,
-            limit: i64,
+            limit: u32,
         ) -> Result<Vec<Resource>, ThoosaError>;
         fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoosaError>;
         fn list_labels(&self) -> Result<Vec<String>, ThoosaError>;
@@ -371,11 +371,6 @@ mock! {
             &self,
             group_descr: &str,
             limit:u32
-        ) -> Result<Vec<Resource>, ThoosaError>;
-
-        fn list_resources_not_labled(
-            &self,
-            label: &str,
         ) -> Result<Vec<Resource>, ThoosaError>;
 
     }
@@ -643,35 +638,6 @@ impl ResourceStore for SqlStore {
 
     }
 
-    fn list_resources_not_labled(
-        &self,
-        label: &str,
-    ) -> Result<Vec<Resource>, ThoosaError> {
-        let mut guard = self.conn.lock();
-        let t = guard.transaction()?;
-
-        let resources = {
-            let mut stmt = t.prepare("SELECT r.id, r.import_id, r.key, r.length FROM resources AS r WHERE NOT EXISTS ( SELECT 1 FROM labeled_resources AS lr JOIN labels AS l ON l.id = lr.label_id WHERE lr.resource_id = r.id AND l.label = ? ) ORDER BY RANDOM()")?;
-
-            let vec = stmt
-                .query_map([label], |row| {
-                    Ok(Resource::new(
-                        row.get::<usize, u32>(0)?,
-                        row.get::<usize, u32>(1)?,
-                        row.get::<usize, String>(2)?,
-                        row.get::<usize, u32>(3)?,
-                    ))
-                })?
-                .map(|v| v.unwrap())
-                .collect();
-
-            vec
-        };
-
-        t.commit()?;
-
-        Ok(resources)
-    }
 
 }
 
@@ -1268,17 +1234,17 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn list_resource_random_not_label(
+    fn list_resource_random_not_labeled(
         &self,
         label: &str,
-        limit: i64,
+        limit: u32,
     ) -> Result<Vec<Resource>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let r = t.prepare(
-            "SELECT r.id, r.import_id, r.key, r.length FROM resources r INNER JOIN labeled_resources lr ON r.id=lr.resource_id INNER JOIN labels l ON l.id=lr.label_id WHERE l.label != ? ORDER BY RANDOM() limit ?;"
-        )?.query_map([Value::Text(label.to_string()), Value::Integer(limit)], |row| { //TODO move group_slices out, not for store
+            "SELECT r.id, r.import_id, r.key, r.length FROM resources AS r WHERE NOT EXISTS ( SELECT 1 FROM labeled_resources AS lr JOIN labels AS l ON l.id = lr.label_id WHERE lr.resource_id = r.id AND l.label = ? ) ORDER BY RANDOM() limit ?;"
+        )?.query_map([Value::Text(label.to_string()), Value::Integer(limit as i64)], |row| { //TODO move group_slices out, not for store
             Ok(Resource::new(
                 row.get::<usize, u32>(0)?,
                 row.get::<usize, u32>(1)?,
@@ -3147,11 +3113,11 @@ mod store_tests {
 
         drop(guard);
 
-        let mut not_aaa = store.list_resources_not_labled("aaa")?;
+        let mut not_aaa = store.list_resource_random_not_labeled("aaa", 10)?;
         not_aaa.sort_by(|a, b| a.file_stem().cmp(b.file_stem()));
         assert_eq!(vec!["bbb_only"], not_aaa.into_iter().map(|r| r.file_stem().to_string()).collect::<Vec<_>>());
 
-        let mut not_bbb = store.list_resources_not_labled("bbb")?;
+        let mut not_bbb = store.list_resource_random_not_labeled("bbb", 10)?;
         not_bbb.sort_by(|a, b| a.file_stem().cmp(b.file_stem()));
         assert_eq!(vec!["aaa_only"], not_bbb.into_iter().map(|r| r.file_stem().to_string()).collect::<Vec<_>>());
 
@@ -3973,11 +3939,11 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_list_resources_not_labled<D:IntoIterator<Item=(&'static str, Result<Vec<Resource>, ThoosaError>)>>(mut self, data:D) -> Self {
+    pub fn with_list_resource_random_not_labeled<D:IntoIterator<Item=(&'static str, Result<Vec<Resource>, ThoosaError>)>>(mut self, data:D) -> Self {
         let map :HashMap<&'static str, Result<Vec<Resource>, ThoosaError>> = HashMap::from_iter(data.into_iter());
 
-        self.store.expect_list_resources_not_labled()
-            .returning(move |label| {
+        self.store.expect_list_resource_random_not_labeled()
+            .returning(move |label, _limit| {
                 map.get(label).expect(&format!("no mock data for {label} configured in list_resources_not_labled")).clone()
             });
 

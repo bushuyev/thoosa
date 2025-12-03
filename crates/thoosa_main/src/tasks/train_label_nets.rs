@@ -33,6 +33,7 @@ use thoosa_with_data::with_data;
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::run_ctx_2::MotifsCtx;
+use rand::{seq::SliceRandom, rng};
 
 #[derive(Debug)]
 pub struct TrainLabelNets<L, C>
@@ -197,6 +198,7 @@ where
         let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
         let ctx = Arc::clone(&ctx);
         let store = Arc::clone(&self.store);
+
         async move {
             let (mut train_labels_resource_keys, mut valid_label_resource_keys) = with_data!(0, input; |input:&ResourcesConfigInput<NetResources<Labeled>>|{
                 Ok::<_, ThoosaError>(input.resources_config().to_resources(&self.store)?)
@@ -210,13 +212,48 @@ where
             // train_labels_resource_keys.sort_by(|a, b|a.0.cmp(&b.0));
             // valid_label_resource_keys.sort_by(|a, b|a.0.cmp(&b.0));
 
+            let mut labels_others_train_valid_resources:HashMap<String, (Vec<&Resource>, Vec<&Resource>)> = train_labels_resource_keys.iter().fold(HashMap::new(), |mut a, v|{
+                assert!(a.insert(v.0.clone(), (vec![], vec![])).is_none());
+                a
+            });
 
             let labels_tain_and_valid_sets = train_labels_resource_keys.into_iter().zip(valid_label_resource_keys.into_iter()).fold(HashMap::new(), |mut a,(train, valid)|{
                 assert_eq!(train.0, valid.0);//train and valid labels should come in same order from db
+
                 assert!(a.insert(train.0, (train.1, valid.1)).is_none());
                 a
             });
 
+
+            for (other_label, train_valid_resources) in labels_others_train_valid_resources.iter_mut(){
+                for (label, resources) in &labels_tain_and_valid_sets {
+                    if label.ne(other_label) {
+                        train_valid_resources.0.extend(resources.0.iter());
+                        train_valid_resources.1.extend(resources.1.iter());
+                    }
+                }
+            }
+
+            //collecting resources not belonging to the label, shuffling and taking as many as in the label.
+            let labels_others_train_valid_resources = Arc::new(labels_others_train_valid_resources.into_iter().map(|(label, resources)|{
+                let mut train_resources = resources.0;
+                train_resources.shuffle(&mut rng());
+                train_resources.truncate(labels_tain_and_valid_sets.get(&label).expect(&format!("no {label} for train resources")).0.len());
+
+
+                let mut valid_resources = resources.1;
+                valid_resources.shuffle(&mut rng());
+                valid_resources.truncate(labels_tain_and_valid_sets.get(&label).expect(&format!("no {label} for valid resources")).1.len());
+
+                (
+                    label,
+                    (
+                    train_resources.into_iter().map(|r|r.clone()).collect::<Vec<_>>(),
+                    valid_resources.into_iter().map(|r|r.clone()).collect::<Vec<_>>()
+                    )
+                )
+            }).collect::<HashMap<String, (Vec<Resource>, Vec<Resource>)>>());
+            debug!("TrainLabelNets::run: labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
 
             let out_key = {
                 let out_id = SimpleId("todo");  //self.out_id(input.id());
@@ -224,8 +261,7 @@ where
             };
 
 
-
-            futures::stream::iter(labels_tain_and_valid_sets)
+            futures::stream::iter(labels_tain_and_valid_sets.clone())
             .map(|label_tain_and_valid_sets|{
 
 
@@ -235,12 +271,14 @@ where
                 let train_motifs_nodes_run_configs = Arc::clone(&train_motifs_nodes_run_configs);
                 let store = Arc::clone(&self.store);
 
+                let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
 
                 tokio::spawn(async move {
                     let (label, resources) = label_tain_and_valid_sets;
                     debug!("TrainLabelNets::run: label={label} resources={resources:?}");
 
-                    let resources_x = store.read().list_resources_not_in_group("zzz", resources.0.len() as u32)?;
+                    let resources_x = labels_others_train_valid_resources.get(&label).expect(&format!("no resources not belonging to {label}"));
+                    debug!("TrainLabelNets::run: label={label} resources_x={resources_x:?}");
 
                     opt_train_2(
                         opt_config,
@@ -252,7 +290,7 @@ where
                                     .await?;
                                 ctx.write().add_permit(result); //permits can be dropped only from OOM handler or when context is dropped
                             }
-                            let resources_batch = ResourcesBatch::new();
+                            let resources_batch = ResourcesBatch::new(resources.0.clone());
 
                             // let batch = MotifsBatch::new(Arc::clone(&motif), Arc::clone(&random_slices), run_config.common_training_args.batch_size as i64, device_idx, cache_area).await?;
                             //
@@ -299,7 +337,7 @@ struct ResourcesBatch {
 
 
 impl ResourcesBatch {
-    pub fn new() -> Self {
+    pub fn new(resources:Vec<Resource>) -> Self {
         Self {}
     }
 }
@@ -509,14 +547,14 @@ mod tests {
             ])
             .with_list_group_labeled_resources_sets([
                 (train_group, Ok(vec![
-                    ("Lable_A".to_string(), "train_resource_set_for_label_a".to_string()),
-                    ("Lable_B".to_string(), "train_resource_set_for_label_b".to_string()),
-                    ("Lable_C".to_string(), "train_resource_set_for_label_c".to_string())
+                    ("Label_A".to_string(), "train_resource_set_for_label_a".to_string()),
+                    ("Label_B".to_string(), "train_resource_set_for_label_b".to_string()),
+                    ("Label_C".to_string(), "train_resource_set_for_label_c".to_string())
                 ])),
                 (valid_group, Ok(vec![
-                    ("Lable_A".to_string(), "valid_resource_set_for_label_a".to_string()),
-                    ("Lable_B".to_string(), "valid_resource_set_for_label_b".to_string()),
-                    ("Lable_C".to_string(), "valid_resource_set_for_label_c".to_string())
+                    ("Label_A".to_string(), "valid_resource_set_for_label_a".to_string()),
+                    ("Label_B".to_string(), "valid_resource_set_for_label_b".to_string()),
+                    ("Label_C".to_string(), "valid_resource_set_for_label_c".to_string())
                 ]))
 
             ])
@@ -531,7 +569,7 @@ mod tests {
                 ("valid_resource_set_for_label_c", Ok(resources_c.clone())),
 
             ])
-            .with_list_resources_not_in_group([
+            .with_list_resource_random_not_labeled([
                 (train_group, Ok(resources_x.clone())),
                 (valid_group, Ok(resources_x.clone())),
             ])

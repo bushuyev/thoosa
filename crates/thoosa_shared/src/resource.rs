@@ -45,10 +45,6 @@ pub trait ResourceStore {
         limit: u32,
     ) -> Result<Vec<Resource>, ThoosaError>;
 
-    fn list_resources_not_labled(
-        &self,
-        label: &str,
-    ) -> Result<Vec<Resource>, ThoosaError>;
 
 }
 
