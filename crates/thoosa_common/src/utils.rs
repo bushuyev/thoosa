@@ -1778,6 +1778,103 @@ pub enum ListenerResponse {
     Nope,
 }
 
+pub async fn train_3<F, DI: Dims, DO: Dims>(
+    device: &Device,
+    data: &dyn AsyncDataBatch<DI, DO>,
+    net: Box<dyn ThoModule<Batch<DI>, Batch<DO>>>,
+    loss_fn: LossFp,
+    cycles: usize,
+    mut opt: Optimizer,
+    x_f: F,
+    mut listener: Option<&mut dyn TrainListener>,
+) -> Result<f32, ThoosaError>
+where
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI>,
+{
+    debug!("train: device={:?} cycles={}", device, cycles);
+    debug!("train: opt={opt:?} optimizer_size={}",optimizer_mem_size(&opt));
+
+    let mut last_valid_loss = [0f32; 3];
+
+    for idx in 1..cycles {
+        debug!("train:  0. cuda_mem={:?}", cuda_mem());
+        let mut batches = data.train_batch_stream().await;
+        debug!("train:  1. cuda_mem={:?}", cuda_mem());
+        while let Some(Ok((x_t_0,expected_y))) = batches.next().await {
+            debug!("train: device={:?} x_t_0.size={:?} expected_y.size={:?}", device, x_t_0.size(), expected_y.size());
+            debug!("train: 0. cuda_mem={:?}", cuda_mem());
+
+            let x_t = x_f(x_t_0);
+
+            debug!("train: device={:?}  x_t.size={:?}",device,x_t.size());
+
+            let predicted_y = net.tho_forward(&x_t, true);
+            debug!("train: 1. cuda_mem={:?}", cuda_mem());
+            trace!("train: x_t=\n{x_t}");
+            x_t.drop();
+            // unsafe { at_autocast_clear_cache(); }
+
+            let loss = loss_fn(predicted_y.as_ref(), &expected_y.as_ref());
+
+            debug!("train: 2. cuda_mem={:?}", cuda_mem());
+            trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
+
+            predicted_y.drop();
+            drop(expected_y);
+            debug!("train: 2.1 cuda_mem={:?}", cuda_mem());
+            let t1 = Instant::now();
+
+            opt.backward_step(&loss);
+
+            debug!("train: 3. cuda_mem={:?}  optimizer_size={}",cuda_mem(),optimizer_mem_size(&opt));
+            debug!("train: device={:?}  backward_step done in {}",device,t1.elapsed().as_millis());
+        }
+
+
+
+        if idx % 10 == 0 || idx == cycles - 1 {
+
+            debug!("train:  0. cuda_mem={:?}", cuda_mem());
+            let mut batches = data.valid_batch_stream().await;
+            debug!("train:  1. cuda_mem={:?}", cuda_mem());
+            while let Some(Ok((x_t_0,y_t))) = batches.next().await {
+                if let Some(rs) = tch::no_grad(||{
+
+                    let x_t = x_f(x_t_0);
+
+                    let pred_y = net.tho_forward(&x_t, true);
+
+                    let valid_loss = loss_fn(&pred_y.as_ref(), &y_t.as_ref());
+                    let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
+
+                    last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
+                    debug!("train: last_valid_loss={last_valid_loss:?}  valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+
+                    listener.as_mut().map(|l|l.on_valid_cycle(idx, valid_loss_f32))
+
+                }).take() {
+                    match rs {
+                        ListenerResponse::Stop => {
+                            break;
+                        }
+                        ListenerResponse::UpdateLR(lr) => {
+                            opt.set_lr(lr);
+                        }
+                        ListenerResponse::Nope => {}
+                    }
+                }
+            }
+
+        }
+
+        std::io::stdout().flush()?;
+    }
+    debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+
+    Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
+}
+
+
 pub async fn train_2<F, DI: Dims, DO: Dims>(
     device: &Device,
     data: &dyn AsyncDataBatch<DI, DO>,
@@ -1797,10 +1894,7 @@ where
     let mut last_valid_loss = [0f32; 3];
 
     for idx in 1..cycles {
-        let mut batches = data.train_batch_iter().await;
-        while let Some(Ok((x,y))) = batches.next().await {
 
-        }
 
         debug!("train:  cuda_mem={:?}", cuda_mem());
         let (x_t_0, expected_y) = data.train_batch().await?;

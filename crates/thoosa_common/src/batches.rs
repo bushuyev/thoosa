@@ -60,11 +60,11 @@ pub trait AsyncDataBatch<DX: Dims, DY: Dims>: Send + Sync {
     async fn train_batch(&self) -> Result<(ThoBatch<DX>, Tensor), ThoosaError>;
     async fn valid_batch(&self) -> Result<(ThoBatch<DX>, Tensor), ThoosaError>;
 
-    async fn train_batch_iter(&self) -> BoxStream<'_, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoosaError>> {
+    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoosaError>> {
         todo!()
     }
 
-    async fn valid_batch_iter(&self) -> Result<ThoBatchIter<DX, DY>, ThoosaError> {
+    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoosaError>> {
         todo!()
     }
 }

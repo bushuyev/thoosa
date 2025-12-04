@@ -25,7 +25,7 @@ use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, LabelProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
 use thoosa_common::train_nets::{flat_label_node, opt_train_2, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
-use thoosa_common::utils::{mix_x_binary_with_labels, train_2};
+use thoosa_common::utils::{mix_x_binary_with_labels, train_2, train_3};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::{shuffle_and_chunk_with_rng, CopyToDevice, ThoosaError};
@@ -219,9 +219,6 @@ where
                 Arc::new(out_id) as Arc<dyn CachableIdTr>
             };
 
-
-
-
             futures::stream::iter(labels_tain_and_valid_sets.clone())
             .map(|label_tain_and_valid_sets|{
 
@@ -241,8 +238,10 @@ where
                     let resources_0 = labels_others_train_valid_resources.get(&label).expect(&format!("no resources not belonging to {label}"));
                     debug!("TrainLabelNets::run: label={label} resources_x={resources_0:?}");
 
-                    let resources_1 = Arc::new(resources_1);
-                    let resources_0 = Arc::new(resources_0.clone());
+                    let resources_1_train = Arc::new(resources_1.0);
+                    let resources_1_valid = Arc::new(resources_1.1);
+                    let resources_0_train = Arc::new(resources_0.0.clone());
+                    let resources_0_valid = Arc::new(resources_0.1.clone());
 
                     opt_train_2(
                         opt_config,
@@ -257,13 +256,13 @@ where
                             let resources_batch = ResourcesBatch::new(
                                 Arc::clone(&loader),
                                 run_config.common_training_args.batch_size,
-                                Arc::clone(&resources_0),
-                                Arc::clone(&resources_1),
+                                Arc::clone(&resources_1_train),
+                                Arc::clone(&resources_1_valid),
+                                Arc::clone(&resources_0_train),
+                                Arc::clone(&resources_0_valid),
                                 Arc::clone(&ctx)
                             );
 
-                            // let batch = MotifsBatch::new(Arc::clone(&motif), Arc::clone(&random_slices), run_config.common_training_args.batch_size as i64, device_idx, cache_area).await?;
-                            //
                             train_label_net_2(&run_config, &resources_batch,  &ThoDevice::from(device_idx), vs).await?;
                             Ok((0.0, LabelNetParams::new(20, 2, 10, 100, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()))))
                         },
@@ -375,11 +374,12 @@ where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C:RunCtx+'static,
 {
-    train_len:usize,
-    valid_len:usize,
+
     half_batch_size: u32,
-    resources_1:Arc<(Vec<Resource>, Vec<Resource>)>,
-    resources_0:Arc<(Vec<Resource>, Vec<Resource>)>,
+    resources_1_train:Arc<Vec<Resource>>,
+    resources_1_valid:Arc<Vec<Resource>>,
+    resources_0_train:Arc<Vec<Resource>>,
+    resources_0_valid:Arc<Vec<Resource>>,
     loader: Arc<L>,
     ctx: Arc<RwLock<C>>
 }
@@ -390,25 +390,35 @@ where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C:RunCtx+'static
 {
-    pub fn new(loader: Arc<L>, batch_size: u32, resources_1:Arc<(Vec<Resource>, Vec<Resource>)>, resources_0:Arc<(Vec<Resource>, Vec<Resource>)>, ctx: Arc<RwLock<C>>) -> Self {
-        debug!("ResourcesBatch::new: resources_1={resources_1:?}");
-        debug!("ResourcesBatch::new: resources_0={resources_0:?}");
+    pub fn new(
+        loader: Arc<L>,
+        batch_size: u32,
+        resources_1_train:Arc<Vec<Resource>>,
+        resources_1_valid:Arc<Vec<Resource>>,
+        resources_0_train:Arc<Vec<Resource>>,
+        resources_0_valid:Arc<Vec<Resource>>,
+        ctx: Arc<RwLock<C>>
+    ) -> Self {
+        debug!("ResourcesBatch::new: resources_1_train={resources_1_train:?}");
+        debug!("ResourcesBatch::new: resources_1_valid={resources_1_valid:?}");
+        debug!("ResourcesBatch::new: resources_0_train={resources_0_train:?}");
+        debug!("ResourcesBatch::new: resources_0_valid={resources_0_valid:?}");
 
-        assert_eq!(resources_1.0.len(), resources_0.0.len());//train
-        assert_eq!(resources_1.1.len(), resources_0.1.len());//valid
+        assert_eq!(resources_1_train.len(), resources_0_train.len());//train
+        assert_eq!(resources_1_valid.len(), resources_0_valid.len());//valid
 
         //TODO replacement?
         let half_batch_size = batch_size / 2;
-        assert!(half_batch_size <= resources_1.0.len() as u32);
-        assert!(half_batch_size <= resources_1.1.len() as u32);
-        assert!(half_batch_size <= resources_0.0.len() as u32);
-        assert!(half_batch_size <= resources_0.1.len() as u32);
+        assert!(half_batch_size <= resources_1_train.len() as u32);
+        assert!(half_batch_size <= resources_1_valid.len() as u32);
+        assert!(half_batch_size <= resources_0_train.len() as u32);
+        assert!(half_batch_size <= resources_0_valid.len() as u32);
 
         Self {
-            train_len:resources_1.0.len(),
-            valid_len:resources_1.1.len(),
-            resources_1,
-            resources_0,
+            resources_1_train,
+            resources_1_valid,
+            resources_0_train,
+            resources_0_valid,
             half_batch_size,
             loader,
             ctx
@@ -430,21 +440,46 @@ where
         todo!()
     }
 
-    async fn train_batch_iter(&self) -> BoxStream<'_, Result<(ThoBatch<ChannelsData2>, ThoBatch<LabelProbability>), ThoosaError>> {
+    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<ChannelsData2>, ThoBatch<LabelProbability>), ThoosaError>> {
         //TODO if self.batch_size > train_len?
-        let mut batches = shuffle_and_chunk_with_rng(self.train_len, self.half_batch_size, &mut rng());
+        let mut batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
 
 
-        let loader = Arc::clone(&self.loader);
-        let ctx = Arc::clone(&self.ctx);
-        let x_1 = Arc::clone(&self.resources_1);
-        let x_0 = Arc::clone(&self.resources_0);
+        Self::build_batch_stream(
+            batches,
+            Arc::clone(&self.loader),
+            Arc::clone(&self.ctx),
+            Arc::clone(&self.resources_1_train),
+            Arc::clone(&self.resources_0_train)
+        )
+    }
 
+    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<ChannelsData2>, ThoBatch<LabelProbability>), ThoosaError>> {
+        let mut batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
+
+        debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
+
+
+        Self::build_batch_stream(
+            batches,
+            Arc::clone(&self.loader),
+            Arc::clone(&self.ctx),
+            Arc::clone(&self.resources_1_valid),
+            Arc::clone(&self.resources_0_valid)
+        )
+    }
+}
+
+impl<L, C> ResourcesBatch<L, C>
+where
+    C: 'static + RunCtx,
+    L: 'static + OutId + for<'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C>,
+{
+    fn build_batch_stream<'a>(mut batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: Arc<RwLock<C>>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<ChannelsData2>, ThoBatch<LabelProbability>), ThoosaError>> {
         futures_util::stream::iter(batches)
             .map(move |batch_keys| {
-
                 let loader = Arc::clone(&loader);
                 let ctx = Arc::clone(&ctx);
                 let x_1 = Arc::clone(&x_1);
@@ -462,21 +497,19 @@ where
                             let ctx = Arc::clone(&ctx);
 
                             async move {
-                                 try_join!(
-                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_1.0[index].clone())), Arc::clone(&ctx)),
-                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_0.0[index].clone())), Arc::clone(&ctx))
+                                try_join!(
+                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_1[index].clone())), Arc::clone(&ctx)),
+                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_0[index].clone())), Arc::clone(&ctx))
                                 )
                             }
-
                         })
                         .buffered(10)
                         .try_collect::<Vec<_>>()
                         .await?
                         .into_iter()
-                        .fold((vec![], vec![]), |mut a, v|{
-
-                            a.0.push(v.0);//1
-                            a.1.push(v.1);//0
+                        .fold((vec![], vec![]), |mut a, v| {
+                            a.0.push(v.0); //1
+                            a.1.push(v.1); //0
                             a
                         });
 
@@ -496,7 +529,6 @@ where
             })
             .buffered(10)
             .boxed()
-
     }
 }
 
@@ -521,7 +553,7 @@ pub async fn train_label_net_2(
     debug!("train_label_net: cuda_mem={:?}", cuda_mem());
 
     let params = LabelNetParams::new(0, 0, 3, 10, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
-    let loss = train_2(
+    let loss = train_3(
         &device,
         batch,
         flat_label_node(&params, 0).build_tch_module::<Batch<ChannelsData2>, Batch<LabelProbability>>(&vs.root())?,
@@ -774,30 +806,34 @@ mod tests {
     async fn test_resources_batch() -> Result<(), ThoosaError> {
         GlobalCtx::init_devices(2);
 
-        let resources_1: Arc<(Vec<Resource>, Vec<Resource>)> = Arc::new((vec![
+        let resources_1_train = Arc::new(vec![
             Resource::new(0, 1, "aaa_1_tr", 10),
             Resource::new(1, 1, "bbb_1_tr", 10),
             Resource::new(2, 1, "ccc_1_tr", 10)
-        ], vec![
+        ]);
+        let resources_1_valid = Arc::new(vec![
             Resource::new(3, 1, "aaa_1_vl", 10),
             Resource::new(4, 1, "bbb_1_vl", 10),
             Resource::new(4, 1, "ccc_1_vl", 10),
-        ]));
-        let resources_0: Arc<(Vec<Resource>, Vec<Resource>)> = Arc::new((vec![
+        ]);
+
+
+        let resources_0_train = Arc::new(vec![
             Resource::new(5, 1, "aaa_0_tr", 10),
             Resource::new(6, 1, "bbb_0_tr", 10),
             Resource::new(7, 1, "ccc_0_tr", 10)
-        ], vec![
+        ]);
+        let resources_0_valid = Arc::new(vec![
             Resource::new(8, 1, "aaa_0_vl", 10),
             Resource::new(9, 1, "bbb_0_vl", 10),
             Resource::new(9, 1, "ccc_0_vl", 10),
-        ]));
+        ]);
 
         let loader = Arc::new(
             mock_tensor_loader::build()
                 .with_out_id()
                 .with_run_cached(HashMap::<Resource, Tensor>::from_iter(
-                    resources_1.0.iter().chain(resources_1.1.iter()).chain(resources_0.0.iter()).chain(resources_0.1.iter()).map(|r|{
+                    resources_1_train.iter().chain(resources_1_valid.iter()).chain(resources_0_train.iter()).chain(resources_0_valid.iter()).map(|r|{
                         if r.file_stem().contains("_1_") {
                              (r.clone(), Tensor::ones(&[1, 10], FLOAT_CPU))
                         } else {
@@ -810,11 +846,16 @@ mod tests {
         );
 
 
-        let resource_batch = ResourcesBatch::new(loader, 6, resources_1, resources_0, Arc::new(RwLock::new(mock_run_ctx::default(1))));
+        let resource_batch = ResourcesBatch::new(loader, 6, resources_1_train, resources_1_valid, resources_0_train, resources_0_valid, Arc::new(RwLock::new(mock_run_ctx::default(1))));
 
-        let mut batch = resource_batch.train_batch_iter().await;
+        let mut batch = resource_batch.train_batch_stream().await;
         let (batch_x, batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
+
+        let mut batch = resource_batch.valid_batch_stream().await;
+        let (batch_x, batch_y) = batch.next().await.expect("no batch").expect("batch failed");
+        assert!(batch.next().await.is_none()); //should be only one
+
 
 
         Ok(())
