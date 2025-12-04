@@ -22,11 +22,32 @@ use thoosa_shared::applicables_runner::CachableId;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
 
+
+pub struct ThoBatchIter<DX:Dims, DY:Dims> {
+    pd:PhantomData<(DX, DY)>
+}
+
+impl <DX:Dims, DY:Dims> Iterator for ThoBatchIter<DX, DY> {
+    type Item = (ThoBatch<DX>, ThoBatch<DY>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
+}
+
 #[async_trait]
-pub trait AsyncDataBatch<D: Dims>: Send + Sync {
+pub trait AsyncDataBatch<DX: Dims, DY: Dims>: Send + Sync {
     /// returns (inputs, labels)
-    async fn train_batch(&self) -> Result<(ThoBatch<D>, Tensor), ThoosaError>;
-    async fn valid_batch(&self) -> Result<(ThoBatch<D>, Tensor), ThoosaError>;
+    async fn train_batch(&self) -> Result<(ThoBatch<DX>, Tensor), ThoosaError>;
+    async fn valid_batch(&self) -> Result<(ThoBatch<DX>, Tensor), ThoosaError>;
+
+    async fn train_batch_iter(&self) -> Result<ThoBatchIter<DX, DY>, ThoosaError> {
+        todo!()
+    }
+
+    async fn valid_batch_iter(&self) -> Result<ThoBatchIter<DX, DY>, ThoosaError> {
+        todo!()
+    }
 }
 
 /**
@@ -281,7 +302,7 @@ impl<
     DI: Dims + Sync,
     DO: Dims + Send + Sync,
     F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync,
-> AsyncDataBatch<DO> for AsyncLoadingTensorsDataBatch<DI, DO, F>
+> AsyncDataBatch<DO, AnyDims> for AsyncLoadingTensorsDataBatch<DI, DO, F>
 {
     async fn train_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
         let next_ctx = self.runner.next_ctx();
@@ -429,7 +450,7 @@ impl<DI: Dims, DO: Dims /*F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/>
 impl<
     DI: Dims + Sync,
     DO: Dims + Send + Sync, /*, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/
-> AsyncDataBatch<DO> for AsyncClassTensorsLoaderData<DI, DO /*, F*/>
+> AsyncDataBatch<DO, AnyDims> for AsyncClassTensorsLoaderData<DI, DO /*, F*/>
 {
     async fn train_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
         let next_ctx = self.runner.next_ctx();
@@ -568,7 +589,7 @@ impl<DI: Dims, DO: Dims /* F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/>
 //batch transform, for the single tensor transform pass transform_fn to the batch impl
 pub struct AsyncBatchTransform<DI: Dims, DO: Dims, B, BF>
 where
-    B: AsyncDataBatch<DI> + Debug,
+    B: AsyncDataBatch<DI, AnyDims> + Debug,
     BF: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     inner: Arc<Box<B>>,
@@ -579,7 +600,7 @@ where
 
 impl<DI: Dims, DO: Dims, B, F> Debug for AsyncBatchTransform<DI, DO, B, F>
 where
-    B: AsyncDataBatch<DI> + Debug,
+    B: AsyncDataBatch<DI, AnyDims> + Debug,
     F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -591,7 +612,7 @@ where
 
 impl<DI: Dims, DO: Dims, B, F> AsyncBatchTransform<DI, DO, B, F>
 where
-    B: AsyncDataBatch<DI> + Debug,
+    B: AsyncDataBatch<DI, AnyDims> + Debug,
     F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     pub fn new(inner: Arc<Box<B>>, transform_fn: F) -> Self {
@@ -613,9 +634,9 @@ where
 }
 
 #[async_trait]
-impl<DI: Dims, DO: Dims, B, F> AsyncDataBatch<DO> for AsyncBatchTransform<DI, DO, B, F>
+impl<DI: Dims, DO: Dims, B, F> AsyncDataBatch<DO, AnyDims> for AsyncBatchTransform<DI, DO, B, F>
 where
-    B: AsyncDataBatch<DI> + Debug,
+    B: AsyncDataBatch<DI,AnyDims> + Debug,
     F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     async fn train_batch(&self) -> Result<(ThoBatch<DO>, Tensor), ThoosaError> {
@@ -631,7 +652,7 @@ where
 
 impl<DI: Dims, DO: Dims + Send, B, F> Splittable<1> for AsyncBatchTransform<DI, DO, B, F>
 where
-    B: SplittableDataBatch<DI> + Debug + AsyncDataBatch<DI>,
+    B: SplittableDataBatch<DI> + Debug + AsyncDataBatch<DI, AnyDims>,
     F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     fn split(&self) -> Option<[Self; 1]>
@@ -646,10 +667,4 @@ where
             Arc::clone(&self.transform_fn),
         )])
     }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_0() {}
 }

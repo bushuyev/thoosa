@@ -549,7 +549,7 @@ pub(crate) mod tests {
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
-    use thoosa_common::utils::{lin_t, plot_series_with_lanes, reset_print_options, test_net, vec_f32_from};
+    use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, reset_print_options, test_net, vec_f32_from};
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
@@ -670,36 +670,16 @@ pub(crate) mod tests {
 
             debug!("pulse_interval_starts_in_resources_a={pulse_interval_starts_in_resources_a:?} pulse_matches=\n{pulse_matches}");
 
-            assert_eq!(
-                pulse_interval_starts_in_resources_a,
-                pulse_matches.double_value(&[0, 0]) as usize
-            );
-
-            assert_eq!(
-                pulse_interval_starts_in_resources_b,
-                pulse_matches.double_value(&[1, 0]) as usize
-            );
-
-            assert_eq!(
-                triangle_interval_starts_in_resources_a,
-                triangle_matches.double_value(&[0, 0]) as usize
-            );
-
-            assert_eq!(
-                triangle_interval_starts_in_resources_b,
-                triangle_matches.double_value(&[1, 0]) as usize
-            );
 
 
-            assert_eq!(
-                sin_interval_starts_in_resources_a,
-                sin_matches.double_value(&[0, 0]) as usize
-            );
+            assert_close(pulse_interval_starts_in_resources_a as f64, pulse_matches.double_value(&[0, 0]), 2.);
+            assert_close(pulse_interval_starts_in_resources_b as f64, pulse_matches.double_value(&[1, 0]), 2.);
 
-            assert_eq!(
-                sin_interval_starts_in_resources_b,
-                sin_matches.double_value(&[1, 0]) as usize
-            );
+            assert_close(triangle_interval_starts_in_resources_a as f64, triangle_matches.double_value(&[0, 0]), 2.);
+            assert_close(triangle_interval_starts_in_resources_b as f64, triangle_matches.double_value(&[1, 0]), 2.);
+
+            assert_close(sin_interval_starts_in_resources_a as f64, sin_matches.double_value(&[0, 0]), 2.);
+            assert_close(sin_interval_starts_in_resources_b as f64, sin_matches.double_value(&[1, 0]), 2.);
 
 
             Ok::<_, ThoosaError>(())

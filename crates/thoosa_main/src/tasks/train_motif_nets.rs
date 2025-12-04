@@ -18,7 +18,7 @@ use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::global_ctx::GlobalCtx;
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::batches::AsyncDataBatch;
-use thoosa_common::dims::{Batch, Dims, Slice, ThoBatch};
+use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
 use thoosa_common::train_nets::{opt_train_2, run_train_motif_net, run_train_motif_net_2, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsResult, TrainMotifsNetResult};
@@ -371,7 +371,7 @@ impl MotifsBatch {
 }
 
 #[async_trait]
-impl AsyncDataBatch<Slice> for MotifsBatch {
+impl AsyncDataBatch<Slice, MotifProbability> for MotifsBatch {
     async fn train_batch(&self) -> Result<(ThoBatch<Slice>, Tensor), ThoosaError> {
         debug!("MotifsBatch::train_batch: self.device_idx={}", self.device_idx);
 
