@@ -200,59 +200,12 @@ where
         let store = Arc::clone(&self.store);
 
         async move {
-            let (mut train_labels_resource_keys, mut valid_label_resource_keys) = with_data!(0, input; |input:&ResourcesConfigInput<NetResources<Labeled>>|{
+            let (train_labels_resource_keys, valid_label_resource_keys) = with_data!(0, input; |input:&ResourcesConfigInput<NetResources<Labeled>>|{
                 Ok::<_, ThoosaError>(input.resources_config().to_resources(&self.store)?)
             })?;
-            debug!("TrainLabelNets::run: train_labels_resource_keys={train_labels_resource_keys:?}");
-            debug!("TrainLabelNets::run: valid_label_resource_keys={train_labels_resource_keys:?}");
-
-            assert_eq!(train_labels_resource_keys.len(), valid_label_resource_keys.len());
-
-            //should not be needed
-            // train_labels_resource_keys.sort_by(|a, b|a.0.cmp(&b.0));
-            // valid_label_resource_keys.sort_by(|a, b|a.0.cmp(&b.0));
-
-            let mut labels_others_train_valid_resources:HashMap<String, (Vec<&Resource>, Vec<&Resource>)> = train_labels_resource_keys.iter().fold(HashMap::new(), |mut a, v|{
-                assert!(a.insert(v.0.clone(), (vec![], vec![])).is_none());
-                a
-            });
-
-            let labels_tain_and_valid_sets = train_labels_resource_keys.into_iter().zip(valid_label_resource_keys.into_iter()).fold(HashMap::new(), |mut a,(train, valid)|{
-                assert_eq!(train.0, valid.0);//train and valid labels should come in same order from db
-
-                assert!(a.insert(train.0, (train.1, valid.1)).is_none());
-                a
-            });
 
 
-            for (other_label, train_valid_resources) in labels_others_train_valid_resources.iter_mut(){
-                for (label, resources) in &labels_tain_and_valid_sets {
-                    if label.ne(other_label) {
-                        train_valid_resources.0.extend(resources.0.iter());
-                        train_valid_resources.1.extend(resources.1.iter());
-                    }
-                }
-            }
-
-            //collecting resources not belonging to the label, shuffling and taking as many as in the label.
-            let labels_others_train_valid_resources = Arc::new(labels_others_train_valid_resources.into_iter().map(|(label, resources)|{
-                let mut train_resources = resources.0;
-                train_resources.shuffle(&mut rng());
-                train_resources.truncate(labels_tain_and_valid_sets.get(&label).expect(&format!("no {label} for train resources")).0.len());
-
-
-                let mut valid_resources = resources.1;
-                valid_resources.shuffle(&mut rng());
-                valid_resources.truncate(labels_tain_and_valid_sets.get(&label).expect(&format!("no {label} for valid resources")).1.len());
-
-                (
-                    label,
-                    (
-                    train_resources.into_iter().map(|r|r.clone()).collect::<Vec<_>>(),
-                    valid_resources.into_iter().map(|r|r.clone()).collect::<Vec<_>>()
-                    )
-                )
-            }).collect::<HashMap<String, (Vec<Resource>, Vec<Resource>)>>());
+            let (labels_tain_and_valid_sets, labels_others_train_valid_resources) = Self::build_resource_maps(train_labels_resource_keys, valid_label_resource_keys);
             debug!("TrainLabelNets::run: labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
 
             let out_key = {
@@ -274,11 +227,14 @@ where
                 let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
 
                 tokio::spawn(async move {
-                    let (label, resources) = label_tain_and_valid_sets;
-                    debug!("TrainLabelNets::run: label={label} resources={resources:?}");
+                    let (label, resources_1) = label_tain_and_valid_sets;
+                    debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
-                    let resources_x = labels_others_train_valid_resources.get(&label).expect(&format!("no resources not belonging to {label}"));
-                    debug!("TrainLabelNets::run: label={label} resources_x={resources_x:?}");
+                    let resources_0 = labels_others_train_valid_resources.get(&label).expect(&format!("no resources not belonging to {label}"));
+                    debug!("TrainLabelNets::run: label={label} resources_x={resources_0:?}");
+
+                    let resources_1 = Arc::new(resources_1);
+                    let resources_0 = Arc::new(resources_0.clone());
 
                     opt_train_2(
                         opt_config,
@@ -290,7 +246,7 @@ where
                                     .await?;
                                 ctx.write().add_permit(result); //permits can be dropped only from OOM handler or when context is dropped
                             }
-                            let resources_batch = ResourcesBatch::new(resources.0.clone());
+                            let resources_batch = ResourcesBatch::new(Arc::clone(&resources_1), Arc::clone(&resources_0));
 
                             // let batch = MotifsBatch::new(Arc::clone(&motif), Arc::clone(&random_slices), run_config.common_training_args.batch_size as i64, device_idx, cache_area).await?;
                             //
@@ -329,6 +285,76 @@ where
     }
 }
 
+impl<L, C> TrainLabelNets<L, C>
+where
+    C: 'static + Adjustable + MotifsCtx + RunCtx,
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C>,
+{
+    fn build_resource_maps(train_labels_resource_keys:  Vec<(String, Vec<Resource>)>, valid_label_resource_keys: Vec<(String, Vec<Resource>)>) -> (HashMap<String, (Vec<Resource>, Vec<Resource>)>, Arc<HashMap<String, (Vec<Resource>, Vec<Resource>)>>) {
+        debug!("TrainLabelNets::run: train_labels_resource_keys={train_labels_resource_keys:?}");
+        debug!("TrainLabelNets::run: valid_label_resource_keys={train_labels_resource_keys:?}");
+
+        assert_eq!(train_labels_resource_keys.len(), valid_label_resource_keys.len());
+
+        //should not be needed
+        // train_labels_resource_keys.sort_by(|a, b|a.0.cmp(&b.0));
+        // valid_label_resource_keys.sort_by(|a, b|a.0.cmp(&b.0));
+
+        let mut labels_others_train_valid_resources: HashMap<String, (Vec<&Resource>, Vec<&Resource>)> = train_labels_resource_keys.iter().fold(HashMap::new(), |mut a, v| {
+            assert!(a.insert(v.0.clone(), (vec![], vec![])).is_none());
+            a
+        });
+
+        let mut num_resources = None::<(usize, usize)>;
+        for (label, (train_resources, valid_resource)) in &labels_others_train_valid_resources {
+            if let Some(num_resources) = num_resources.as_ref() {
+                assert_eq!(num_resources.0, train_resources.len(), "uneven number of train resources in {labels_others_train_valid_resources:?}");
+                assert_eq!(num_resources.1, valid_resource.len(), "uneven number of valid resources in {labels_others_train_valid_resources:?}");
+            } else {
+                num_resources = Some((train_resources.len(), valid_resource.len()));
+            }
+        }
+
+        let labels_tain_and_valid_sets = train_labels_resource_keys.into_iter().zip(valid_label_resource_keys.into_iter()).fold(HashMap::new(), |mut a, (train, valid)| {
+            assert_eq!(train.0, valid.0); //train and valid labels should come in same order from db
+
+            assert!(a.insert(train.0, (train.1, valid.1)).is_none());
+            a
+        });
+
+
+        for (other_label, train_valid_resources) in labels_others_train_valid_resources.iter_mut() {
+            for (label, resources) in &labels_tain_and_valid_sets {
+                if label.ne(other_label) {
+                    train_valid_resources.0.extend(resources.0.iter());
+                    train_valid_resources.1.extend(resources.1.iter());
+                }
+            }
+        }
+
+        //collecting resources not belonging to the label, shuffling and taking as many as in the label.
+        let labels_others_train_valid_resources = Arc::new(labels_others_train_valid_resources.into_iter().map(|(label, resources)| {
+            let mut train_resources = resources.0;
+            train_resources.shuffle(&mut rng());
+            train_resources.truncate(labels_tain_and_valid_sets.get(&label).expect(&format!("no {label} for train resources")).0.len());
+
+
+            let mut valid_resources = resources.1;
+            valid_resources.shuffle(&mut rng());
+            valid_resources.truncate(labels_tain_and_valid_sets.get(&label).expect(&format!("no {label} for valid resources")).1.len());
+
+            (
+                label,
+                (
+                    train_resources.into_iter().map(|r| r.clone()).collect::<Vec<_>>(),
+                    valid_resources.into_iter().map(|r| r.clone()).collect::<Vec<_>>()
+                )
+            )
+        }).collect::<HashMap<String, (Vec<Resource>, Vec<Resource>)>>());
+        (labels_tain_and_valid_sets, labels_others_train_valid_resources)
+    }
+}
+
 
 #[derive(Debug)]
 struct ResourcesBatch {
@@ -337,13 +363,14 @@ struct ResourcesBatch {
 
 
 impl ResourcesBatch {
-    pub fn new(resources:Vec<Resource>) -> Self {
+    pub fn new(resources_1:Arc<(Vec<Resource>, Vec<Resource>)>, resources_0:Arc<(Vec<Resource>, Vec<Resource>)>) -> Self {
+
         Self {}
     }
 }
 
 #[async_trait]
-impl AsyncDataBatch<ChannelsData2> for ResourcesBatch {
+impl AsyncDataBatch<ChannelsData2, LabelProbability> for ResourcesBatch {
     async fn train_batch(&self) -> Result<(ThoBatch<ChannelsData2>, Tensor), ThoosaError> {
         todo!()
     }
@@ -355,7 +382,7 @@ impl AsyncDataBatch<ChannelsData2> for ResourcesBatch {
 
 pub async fn train_label_net_2(
     run_config: &TrainLabelNetsRunConfig,
-    batch: &dyn AsyncDataBatch<ChannelsData2>,
+    batch: &dyn AsyncDataBatch<ChannelsData2, LabelProbability>,
     device: &Device,
     vs: &VarStore,
 ) -> Result<f32, ThoosaError> {
@@ -430,7 +457,7 @@ mod tests {
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::select_motifs::tests::{motifs_tensor, resource_tensor};
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::train_label_nets::{TrainLabelNets, TrainLabelNetsInput};
+    use crate::tasks::train_label_nets::{ResourcesBatch, TrainLabelNets, TrainLabelNetsInput};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_0() -> Result<(), ThoosaError> {
@@ -614,6 +641,16 @@ mod tests {
         ));
 
         train_label_nets.run(input, Arc::new(RwLock::new(mock_run_ctx::default(1)))).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_resources_batch() -> Result<(), ThoosaError> {
+        let resources_1:Arc<(Vec<Resource>, Vec<Resource>)> = Arc::new((vec![], vec![]));
+        let resources_0:Arc<(Vec<Resource>, Vec<Resource>)> = Arc::new((vec![], vec![]));
+
+        let resource_batch = ResourcesBatch::new(resources_1, resources_0);
 
         Ok(())
     }
