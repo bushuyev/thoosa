@@ -1,7 +1,7 @@
 use std::cell::RefMut;
 use std::collections::VecDeque;
 
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::io::Write;
 use std::iter::Map;
 
@@ -1779,8 +1779,8 @@ pub enum ListenerResponse {
 
 pub async fn train_2<F, DI: Dims, DO: Dims>(
     device: &Device,
-    data: &dyn AsyncDataBatch<DI>,
-    net: Box<dyn ThoModule<Batch<DI>, DO>>,
+    data: &dyn AsyncDataBatch<DI, DO>,
+    net: Box<dyn ThoModule<Batch<DI>, Batch<DO>>>,
     loss_fn: LossFp,
     cycles: usize,
     mut opt: Optimizer,
@@ -1796,6 +1796,10 @@ where
     let mut last_valid_loss = [0f32; 3];
 
     for idx in 1..cycles {
+        for (x, y) in data.train_batch_iter().await? {
+
+        }
+
         debug!("train:  cuda_mem={:?}", cuda_mem());
         let (x_t_0, expected_y) = data.train_batch().await?;
         debug!("train: device={:?} x_t_0.size={:?} expected_y.size={:?}", device, x_t_0.size(), expected_y.size());
@@ -1826,7 +1830,7 @@ where
         debug!("train: 3. cuda_mem={:?}  optimizer_size={}",cuda_mem(),optimizer_mem_size(&opt));
         debug!("train: device={:?}  backward_step done in {}",device,t1.elapsed().as_millis());
 
-        if idx % 10 == 0 {
+        if idx % 10 == 0 || idx == cycles - 1 {
             let (x_t_0, y_t) = data.valid_batch().await?;
 
             if let Some(rs) = tch::no_grad(||{
@@ -2226,4 +2230,14 @@ pub fn motif_test_net(
             *test_net(motif_width, k, device, "test_motif_net").unwrap()
         }),
     )
+}
+
+pub fn assert_close<A:Into<f64> + Display, B:Into<f64> + Display>(val_0: A, val_1: B, max_diff: f64) {
+    let a = <A as Into<f64>>::into(val_0);
+    let b = <B as Into<f64>>::into(val_1);
+    let diff = (a - b).abs();
+    assert!(
+        diff <= max_diff,
+        "values not close enough: {a} vs {b} (diff={diff}, max_diff={max_diff})"
+    );
 }

@@ -1143,7 +1143,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
     }
 }
 
-pub async fn train_final_net_2<B: AsyncDataBatch<LabelNetsProbabilities>>(
+pub async fn train_final_net_2<B: AsyncDataBatch<LabelNetsProbabilities, LabelsProbabilities>>(
     run_config_values: &TrainFinalNetRunConfig,
     label_nets_num: u32,
     labels_num: u32,
@@ -2721,7 +2721,7 @@ pub async fn run_train_motif_net_2(
     motif_width: u32,
     run_config: &TrainMotifsNetsRunConfig,
     device: &Device,
-    batch: &dyn AsyncDataBatch<Slice>,
+    batch: &dyn AsyncDataBatch<Slice, MotifProbability>,
     vs: &VarStore,
     listener: &mut dyn TrainListener,
 ) -> Result<(f32, MotifNetParams), ThoosaError> {
