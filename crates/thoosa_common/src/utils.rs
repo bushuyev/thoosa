@@ -18,7 +18,7 @@ use plotters::prelude::*;
 use rand::prelude::ThreadRng;
 use rand::Rng;
 use std::panic::AssertUnwindSafe;
-
+use std::pin::pin;
 use parking_lot::lock_api::{RawRwLock, RwLock};
 use std::sync::Arc;
 use tch::display::PrinterOptions;
@@ -36,6 +36,7 @@ use crate::my_tch::{LossFp, ThoModule};
 use crate::batches::AsyncDataBatch;
 use crate::builder::SeqBuilder;
 use crate::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
+use futures_util::StreamExt;
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -770,7 +771,7 @@ impl TrainListener for DummyListener {
 pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{hist_1_dim, mix_ab_with_labels, CompositeReducer, Splittable, SplittableTensor, TrainListener};
+    use crate::utils::{hist_1_dim, mix_x_binary_with_labels, CompositeReducer, Splittable, SplittableTensor, TrainListener};
     use clap::{arg, command, Args, Parser, Subcommand};
 
     use log::debug;
@@ -1623,7 +1624,7 @@ pub mod tests {
         let a = Tensor::from_slice(&va).reshape(&[m, n]);
         let b = Tensor::from_slice(&vb).reshape(&[m, n]);
 
-        let (x, y) = mix_ab_with_labels(&a, &b);
+        let (x, y) = mix_x_binary_with_labels(&a, &b);
         debug!("mix_basic_shapes_and_labels: x=\n{x} y=\n{y}");
 
         // Shapes
@@ -1796,7 +1797,8 @@ where
     let mut last_valid_loss = [0f32; 3];
 
     for idx in 1..cycles {
-        for (x, y) in data.train_batch_iter().await? {
+        let mut batches = data.train_batch_iter().await;
+        while let Some(Ok((x,y))) = batches.next().await {
 
         }
 
@@ -2136,22 +2138,22 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
 }
 
 //TODO check GPT
-pub fn mix_ab_with_labels(a: &Tensor, b: &Tensor) -> (Tensor, Tensor) {
-    let (ma, na) = a.size2().expect("A must be 2D [m, n]");
-    let (mb, nb) = b.size2().expect("B must be 2D [m, n]");
-    assert_eq!((na, nb), (na, na), "A and B must have same n");
-    assert_eq!(ma, mb, "A and B must have same m");
-    assert_eq!(a.device(), b.device(), "A and B must be on the same device");
+pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> (Tensor, Tensor) {
+    let [ma, na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
+    let [mb, nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
+    // assert_eq!((na, nb), (na, na), "X1 and X0 must have same n");
+    // assert_eq!(ma, mb, "X1 and X0 must have same m");
+    assert_eq!(x_0.device(), x_1.device(), "A and B must be on the same device");
 
-    let device = a.device();
+    let device = x_0.device();
     let two_m = ma * 2;
 
     // X0 = [A; B]
-    let x0 = Tensor::cat(&[a, b], 0);
+    let x0 = Tensor::cat(&[x_1, x_0], 0);
 
     // Choose a reasonable dtype for Y (float if A is floating, else Float)
-    let y_kind = match a.kind() {
-        Kind::Double | Kind::Float | Kind::Half | Kind::BFloat16 => a.kind(),
+    let y_kind = match x_0.kind() {
+        Kind::Double | Kind::Float | Kind::Half | Kind::BFloat16 => x_0.kind(),
         _ => Kind::Float,
     };
 
