@@ -16,24 +16,43 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::{fmt, thread};
+use std::async_iter::AsyncIterator;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use tch::Kind::Float;
 use tch::{Device, Tensor};
 use thoosa_shared::applicables_runner::CachableId;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
+use futures::Stream;
+use futures::stream::{BoxStream, StreamExt};
 
 
-pub struct ThoBatchIter<DX:Dims, DY:Dims> {
-    pd:PhantomData<(DX, DY)>
+pub struct ThoBatchIter<'a, DX:Dims, DY:Dims> {
+    pd:PhantomData<&'a (DX, DY)>,
+    next_fn:Box<dyn Fn()-> Box<dyn Stream<Item=(ThoBatch<DX>, ThoBatch<DY>)>>>
 }
 
-impl <DX:Dims, DY:Dims> Iterator for ThoBatchIter<DX, DY> {
-    type Item = (ThoBatch<DX>, ThoBatch<DY>);
+impl <'a, DX:Dims, DY:Dims> ThoBatchIter<'a, DX, DY> {
+    pub fn new(next_fn:Box<dyn Fn()-> Box<dyn Stream<Item=(ThoBatch<DX>, ThoBatch<DY>)>>>) -> Self {
+        Self {
+            pd:PhantomData,
+            next_fn
+        }
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+    fn train_batches(&self) -> Box<dyn Stream<Item=(ThoBatch<DX>, ThoBatch<DY>)>> {
+        (self.next_fn)()
     }
 }
+
+// impl <'a, DX:Dims, DY:Dims> Iterator for ThoBatchIter<'a, DX, DY> {
+//     type Item = Box<dyn Future<Output=Option<(ThoBatch<DX>, ThoBatch<DY>)>>>;
+//
+//     fn next(&mut self) -> Option<Self::Item> {
+//         (self.next_fn)()
+//     }
+// }
 
 #[async_trait]
 pub trait AsyncDataBatch<DX: Dims, DY: Dims>: Send + Sync {
@@ -41,7 +60,7 @@ pub trait AsyncDataBatch<DX: Dims, DY: Dims>: Send + Sync {
     async fn train_batch(&self) -> Result<(ThoBatch<DX>, Tensor), ThoosaError>;
     async fn valid_batch(&self) -> Result<(ThoBatch<DX>, Tensor), ThoosaError>;
 
-    async fn train_batch_iter(&self) -> Result<ThoBatchIter<DX, DY>, ThoosaError> {
+    async fn train_batch_iter(&self) -> BoxStream<'_, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoosaError>> {
         todo!()
     }
 

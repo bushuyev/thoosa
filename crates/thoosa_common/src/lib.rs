@@ -1,4 +1,4 @@
-#![feature(async_fn_traits, fn_traits, unboxed_closures)]
+#![feature(async_fn_traits, fn_traits, unboxed_closures,  async_iterator)]
 extern crate core;
 
 use tch::Device;
