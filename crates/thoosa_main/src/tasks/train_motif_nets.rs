@@ -22,7 +22,7 @@ use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
 use thoosa_common::train_nets::{opt_train_2, run_train_motif_net, run_train_motif_net_2, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsResult, TrainMotifsNetResult};
-use thoosa_common::utils::{mix_ab_with_labels, plot_series_with_lanes, vec_f32_from, DataBatch, DummyListener};
+use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, vec_f32_from, DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_run_config_args::OptRunConfigSource;
@@ -360,7 +360,7 @@ impl MotifsBatch {
             ).unwrap();
             */
 
-            let (x,y) = mix_ab_with_labels(&motifs, &random);
+            let (x,y) = mix_x_binary_with_labels(&motifs, &random);
 
             debug!("MotifsBatch::train_batch: motifs={:?} random={:?}", motifs.device(), random.device());
             debug!("MotifsBatch::train_batch: x={:?} y={:?}", x.device(), y.device());

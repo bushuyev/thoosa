@@ -12,7 +12,7 @@ use chrono::SecondsFormat;
 use lazy_static::lazy_static;
 use log::{debug, error, trace};
 use num_traits::PrimInt;
-use rand::Rng;
+use rand::{Rng, SeedableRng};
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::backtrace::Backtrace;
@@ -31,6 +31,7 @@ use std::{fmt, fs};
 use async_trait::async_trait;
 use ambassador::delegatable_trait;
 use mockall::automock;
+use rand::prelude::{SliceRandom, StdRng};
 use time_series_generator::{generate_sine_wave, generate_triangle_wave};
 
 pub mod repeat_iter;
@@ -1888,3 +1889,36 @@ macro_rules! panic_to_err {
 }
 
 
+pub fn shuffle_and_chunk_with_rng<R: rand::Rng + ?Sized>(
+    n: usize,
+    batch_size:u32,
+    rng: &mut R,
+) -> Vec<Box<[usize]>> {
+
+    let mut vals: Vec<usize> = (0..n).collect();
+    vals.shuffle(rng);
+
+    let usable_len = n / batch_size as usize * batch_size as usize;
+    vals.truncate(usable_len);
+
+    vals.chunks_exact(batch_size as usize)
+        .map(|chunk| chunk.to_vec().into_boxed_slice())
+        .collect()
+}
+
+#[cfg(test)]
+#[test]
+pub fn test_shuffle_and_chunk_with_rng(){
+    const B: usize = 3;
+    let mut rng = StdRng::seed_from_u64(42);
+
+    let chunks = shuffle_and_chunk_with_rng(10,3, &mut rng);
+
+
+    assert_eq!(
+        vec![[8, 6, 3].to_vec().into_boxed_slice(),
+             [2, 1, 5].to_vec().into_boxed_slice(),
+             [9, 7, 4].to_vec().into_boxed_slice()],
+        chunks
+    )
+}
