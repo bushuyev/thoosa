@@ -1535,7 +1535,7 @@ impl OptConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct MotifNetParams {
-    num_features: u32,
+    pub num_features: u32,
     num_layers: u32,
 }
 
@@ -1985,7 +1985,7 @@ pub struct LabelNetParams {
     channels: u32,
     motif_nets: u32,
     motif_layers: u32,
-    slices_len: u32,
+    pub slices_len: u32,
     net_type: LabelNetTypeParams,
 }
 
@@ -2245,10 +2245,10 @@ impl LabelNetParams {
     }
 }
 
-pub fn flat_label_node(params: &LabelNetParams, slices_len: u32) -> Node {
+pub fn flat_label_node(params: &LabelNetParams) -> Node {
     debug!("flat_label_node: params={params:?}");
-    let num_features = 3 * 901; //params.motif_nets * slices_len;
-    let mut builder = SeqBuilder::new(slices_len, None);
+    let num_features = params.motif_nets * params.slices_len; //params.motif_nets * slices_len;
+    let mut builder = SeqBuilder::new(0, None);
 
     builder
         .closure(

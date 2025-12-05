@@ -58,9 +58,11 @@ where
         TrainLabelNetsRunConfigFields,
     >>,
     loader: Arc<L>,
+    ws: Arc<RwLock<Box<dyn Workspace>>>,
     apply_motif_nets:Arc<ApplyMotifNets<C>>,
     store: Arc<RwLock<Box<dyn Store>>>,
-    opt_config:Arc<OptConfig>
+    opt_config:Arc<OptConfig>,
+    slice_step: u32//TODO move to config
 }
 
 impl <L, C> TrainLabelNets<L, C>
@@ -75,7 +77,8 @@ where
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
         stage_ctx:Arc<parking_lot::RwLock<R>>,
-        opt_config:Arc<OptConfig>
+        opt_config:Arc<OptConfig>,
+        slice_step: u32
     ) -> Result<Self, ThoosaError>
 where
     R:RunCtx + MotifsCtx + Adjustable + 'static
@@ -84,11 +87,14 @@ where
         Ok(Self {
             run_configs: Arc::new(run_configs),
             loader,
-            apply_motif_nets: Arc::new(ApplyMotifNets::new("".into(), ws, store, select_motifs_run_id, stage_ctx).await?),
+            ws:Arc::clone(&ws),
+            apply_motif_nets: Arc::new(ApplyMotifNets::new("".into(), ws, store, select_motifs_run_id, stage_ctx, slice_step).await?),
             store: Arc::clone(store),
-            opt_config
+            opt_config,
+            slice_step
         })
     }
+
 }
 
 #[derive(Debug)]
@@ -210,6 +216,13 @@ where
         let ctx = Arc::clone(&ctx);
         let store = Arc::clone(&self.store);
         let cache_area = cache_area.clone();
+        let channels = self.ws.read().channels() as i64;
+        let max_input = self.ws.read().max_input() as i64;
+        let slices_len = (max_input as u32 - self.apply_motif_nets.motif_width)/self.slice_step + 1;
+        let num_nets = self.apply_motif_nets.num_nets() as u32;
+
+        debug!("TrainLabelNets::run: channels={channels} max_input={max_input} self.slice_step={} slices_len={slices_len}", self.slice_step);
+
         async move {
             let (train_labels_resource_keys, valid_label_resource_keys) = with_data!(0, input; |input:&ResourcesConfigInput<NetResources<Labeled>>|{
                 Ok::<_, ThoosaError>(input.resources_config().to_resources(&self.store)?)
@@ -277,11 +290,11 @@ where
                                             debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
 
                                             let x_1 = Tensor::stack(&x_1.into_iter().map(|v|{
-                                                Ok(pad_to_2(v.as_ref(), &[3, 1000], true)?.copy())//TODO
+                                                Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())//TODO
                                             }).collect::<Result<Vec<_>, ThoosaError>>()?, 0);
 
                                             let x_0 = Tensor::stack(&x_0.into_iter().map(|v|{
-                                                Ok(pad_to_2(v.as_ref(), &[3, 1000], true)?.copy())
+                                                Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())
                                             }).collect::<Result<Vec<_>, ThoosaError>>()?, 0);
 
                                             Ok::<_, ThoosaError>(mix_x_binary_with_labels(&x_1, &x_0))
@@ -307,8 +320,10 @@ where
                                 Arc::clone(&ctx)
                             );
 
-                            train_label_net_2(&run_config, &resources_batch, &ThoDevice::from(device_idx), vs, LabelNetParams::new(3, 3, 3, 10, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()))).await?;
-                            Ok((0.0, LabelNetParams::new(3, 3, 10, 100, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()))))
+                            let params = LabelNetParams::new(channels as u32, num_nets, 3, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
+                            let loss = train_label_net_2(&run_config, &resources_batch, &ThoDevice::from(device_idx), vs, params.clone()).await?;
+
+                            Ok((loss, params))
                         },
                         train_motifs_nodes_run_configs,
                         ThoDevice::from(device_idx).into(),
@@ -622,7 +637,7 @@ pub async fn train_label_net_2(
     let loss = train_3(
         &device,
         batch,
-        flat_label_node(&net_params, 3).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?,
+        flat_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?,
         |pred: &Tensor, target: &Tensor| {
             debug!("train_label_net: pred.size={:?}", pred.size());
             let pred_y = pred.squeeze();
@@ -692,7 +707,7 @@ mod tests {
         reset_print_options();
         GlobalCtx::init_devices(2);
 
-        let input_n_0 = 2000;
+        let input_n_0 = 1000;
         let find_motifs_run_id:RunId = 1;
         let select_motifs_run_id:RunId = 2;
         let motif_width = 100;
@@ -830,7 +845,7 @@ mod tests {
         let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
-                    NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(3)),
+                    NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(1)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(8)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.001)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MaxLoss), Val::Real(0.01)),
@@ -855,7 +870,8 @@ mod tests {
             &ws,
             &store,
             Arc::new(RwLock::new(mock_run_ctx::default(1))),
-            Arc::new(OptConfig::new(10, 3))
+            Arc::new(OptConfig::new(10, 3)),
+            3
         ).await?);
 
 
