@@ -1535,7 +1535,7 @@ impl OptConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct MotifNetParams {
-    num_features: u32,
+    pub num_features: u32,
     num_layers: u32,
 }
 
@@ -1985,7 +1985,7 @@ pub struct LabelNetParams {
     channels: u32,
     motif_nets: u32,
     motif_layers: u32,
-    slices_len: u32,
+    pub slices_len: u32,
     net_type: LabelNetTypeParams,
 }
 
@@ -2245,19 +2245,18 @@ impl LabelNetParams {
     }
 }
 
-pub fn flat_label_node(params: &LabelNetParams, slices_len: u32) -> Node {
-    debug!("motif_node: params={params:?}");
-    let num_features = params.channels * params.motif_nets * slices_len;
-    let mut builder = SeqBuilder::new(slices_len, None);
+pub fn flat_label_node(params: &LabelNetParams) -> Node {
+    debug!("flat_label_node: params={params:?}");
+    let num_features = params.motif_nets * params.slices_len; //params.motif_nets * slices_len;
+    let mut builder = SeqBuilder::new(0, None);
+
     builder
         .closure(
             Arc::new(Box::new(move |t: &Tensor| {
-                let t_0 = t.flatten(1, 3);
-                debug!(
-                    "label_node flatten t.size={:?} t_0.size={:?}",
-                    t.size(),
-                    t_0.size()
-                );
+                debug!("flat_label_node flatten t.size={:?}", t.size());
+                //batch x motifs x dists
+                let t_0 = t.flatten(1, 2);// - channels removed
+                debug!("flat_label_node flatten t.size={:?} t_0.size={:?}",t.size(),t_0.size());
 
                 t_0
             })),
