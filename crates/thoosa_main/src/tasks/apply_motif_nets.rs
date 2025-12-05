@@ -112,7 +112,7 @@ where
                 load_motif_net.run_cached(Arc::new(DevicesWrap::wrap_cpu(LoadMotifNetInput::new(motif_id, channel as u32))), stage_ctx).await
             }
         })
-            .buffer_unordered(10)
+            .buffered(10)//TODO config order is important to keep output tensor same
             .try_collect::<Vec<_>>().await?;
 
 
@@ -642,7 +642,13 @@ pub(crate) mod tests {
             vec![(1, 100, MotifKind::Pulse), (1, 100, MotifKind::Triangle)],
             vec![(1, 100, MotifKind::Sin)],
         ], 200)?;
-        let batch = Tensor::stack(&[resource_a_t, resource_b_t], 0);
+
+        let (resource_c_t, resource_c_intervals) = resource_tensor(input_n_0, &[
+            vec![],
+            vec![],
+        ], 200)?;
+
+        let batch = Tensor::stack(&[resource_a_t, resource_b_t, resource_c_t], 0);
 
         let out = apply_motif_nets.run(
             Arc::new(DevicesWrap::wrap(ThoTensor::new("test_batch".into(), batch), 0)),
@@ -663,23 +669,22 @@ pub(crate) mod tests {
         let sin_interval_starts_in_resources_b = resource_b_intervals[1][0][0].start;
 
         with_data!(0, out; |r:&ApplyMotifNetsOutput|{
+            debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r.matches);
 
-            let pulse_matches = &r.matches[0].t_ref().topk(1i64, 1, true, true).1;
-            let triangle_matches = &r.matches[1].t_ref().topk(1i64, 1, true, true).1;
-            let sin_matches = &r.matches[2].t_ref().topk(1i64, 1, true, true).1;
+            let (pulse_matches_vals, pulse_matches_idx) = &r.matches[0].t_ref().topk(1i64, 1, true, true);
+            let (triangle_matches_vals, triangle_matches_idx) = &r.matches[1].t_ref().topk(1i64, 1, true, true);
+            let (sin_matches_vals, sin_matches_idx) = &r.matches[2].t_ref().topk(1i64, 1, true, true);
 
-            debug!("pulse_interval_starts_in_resources_a={pulse_interval_starts_in_resources_a:?} pulse_matches=\n{pulse_matches}");
+            debug!("test_apply_motif_nets_3_channels_1_motif:  pulse_matches_vals=\n{pulse_matches_vals} pulse_matches_idx=\n{pulse_matches_idx} \ntriangle_matches_vals=\n{triangle_matches_vals} triangle_matches_idx=\n{triangle_matches_idx} \nsin_matches_vals=\n{sin_matches_vals} sin_matches_idx=\n{sin_matches_idx}");
 
+            assert_close(pulse_interval_starts_in_resources_a as f64, pulse_matches_idx.double_value(&[0, 0]), 2.);
+            assert_close(pulse_interval_starts_in_resources_b as f64, pulse_matches_idx.double_value(&[1, 0]), 2.);
 
+            assert_close(triangle_interval_starts_in_resources_a as f64, triangle_matches_idx.double_value(&[0, 0]), 2.);
+            assert_close(triangle_interval_starts_in_resources_b as f64, triangle_matches_idx.double_value(&[1, 0]), 2.);
 
-            assert_close(pulse_interval_starts_in_resources_a as f64, pulse_matches.double_value(&[0, 0]), 2.);
-            assert_close(pulse_interval_starts_in_resources_b as f64, pulse_matches.double_value(&[1, 0]), 2.);
-
-            assert_close(triangle_interval_starts_in_resources_a as f64, triangle_matches.double_value(&[0, 0]), 2.);
-            assert_close(triangle_interval_starts_in_resources_b as f64, triangle_matches.double_value(&[1, 0]), 2.);
-
-            assert_close(sin_interval_starts_in_resources_a as f64, sin_matches.double_value(&[0, 0]), 2.);
-            assert_close(sin_interval_starts_in_resources_b as f64, sin_matches.double_value(&[1, 0]), 2.);
+            assert_close(sin_interval_starts_in_resources_a as f64, sin_matches_idx.double_value(&[0, 0]), 2.);
+            assert_close(sin_interval_starts_in_resources_b as f64, sin_matches_idx.double_value(&[1, 0]), 2.);
 
 
             Ok::<_, ThoosaError>(())

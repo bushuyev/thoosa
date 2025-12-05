@@ -2200,7 +2200,11 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
         {
-            let mut stmt = t.prepare("SELECT DISTINCT sm.motif_id, sm.rate, m.channel_id FROM selected_motifs sm LEFT JOIN motifs AS m ON m.id=sm.motif_id WHERE sm.run_id=?")?;
+            let mut stmt = t.prepare(
+                "SELECT DISTINCT sm.motif_id, sm.rate, m.channel_id \
+                FROM selected_motifs sm LEFT JOIN motifs AS m ON m.id=sm.motif_id \
+                WHERE sm.run_id=? ORDER BY motif_id" //ORDER BY motif_id - apply_motif_nets returns results in the same order
+            )?;
 
             stmt.query_map([motif_selection_id], |row| {
                 Ok((
