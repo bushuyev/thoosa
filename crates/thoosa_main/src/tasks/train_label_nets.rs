@@ -4,6 +4,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::Stream;
 use futures_util::{StreamExt, TryStreamExt};
+use futures_util::future::BoxFuture;
+use futures::FutureExt;
 use futures_util::stream::BoxStream;
 use log::debug;
 use parking_lot::RwLock;
@@ -22,7 +24,7 @@ use caching_runner::global_ctx::GlobalCtx;
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch, ThoBatchIter};
 use thoosa_common::cuda_utils::cuda_mem;
-use thoosa_common::dims::{Batch, LabelProbability, ThoBatch};
+use thoosa_common::dims::{Batch, Dims, LabelProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
 use thoosa_common::train_nets::{flat_label_node, opt_train_2, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{mix_x_binary_with_labels, train_2, train_3};
@@ -261,6 +263,22 @@ where
                                 Arc::clone(&resources_1_valid),
                                 Arc::clone(&resources_0_train),
                                 Arc::clone(&resources_0_valid),
+                                |x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>,  x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>, ctx: Arc<RwLock<C>>|{
+                                    async move {
+                                        with_data!(ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<ChannelsData2, SimpleId>], x_0:&[&ThoTensor<ChannelsData2, SimpleId>]|{
+                                            debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
+                                            let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.as_ref().copy()).collect::<Vec<_>>(), 0);
+                                            let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.as_ref().copy()).collect::<Vec<_>>(), 0);
+
+                                            let (x,y) = mix_x_binary_with_labels(&x_1, &x_0);
+
+                                             Ok((
+                                                ThoTensor::<Batch<ChannelsData2>, SimpleId>::new("".into(), x),
+                                                ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y),
+                                            ))
+                                        })
+                                    }.boxed()
+                                },
                                 Arc::clone(&ctx)
                             );
 
@@ -274,7 +292,7 @@ where
 
                         debug!("TrainLabelNet::run: label_node_params={label_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
                         TrainLabelNetsRunConfigResult::new(
-                            0,
+                            0,//TODO
                             label,
                             min_loss,
                             label_node_params,
@@ -286,7 +304,7 @@ where
                 })
 
             })
-                .buffer_unordered(10)
+                .buffer_unordered(10)//TODO config
                 .try_collect::<Vec<_>>().await?
                 .into_iter()
                 .collect::<Result<Vec<_>, ThoosaError>>()?;
@@ -368,12 +386,14 @@ where
     }
 }
 
+type BuildBatchFn<LD:Dims+ 'static, C> = fn(Vec<Arc<DevicesWrap<ThoTensor<LD, SimpleId>>>>,  Vec<Arc<DevicesWrap<ThoTensor<LD, SimpleId>>>>, ctx: Arc<RwLock<C>>) -> BoxFuture<'static, Result<(ThoTensor<Batch<LD>, SimpleId>, ThoTensor<Batch<LabelProbability>, SimpleId>), ThoosaError>>;
 
 #[derive(Debug)]
-struct ResourcesBatch<L, C>
+struct ResourcesBatch<L, C, LD>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LD, SimpleId>, Ctx=C> + OutId + 'static,
     C:RunCtx+'static,
+    LD:Dims+ 'static
 {
 
     half_batch_size: u32,
@@ -382,14 +402,16 @@ where
     resources_0_train:Arc<Vec<Resource>>,
     resources_0_valid:Arc<Vec<Resource>>,
     loader: Arc<L>,
+    build_batch_fn: BuildBatchFn<LD, C>,
     ctx: Arc<RwLock<C>>
 }
 
 
-impl <L, C> ResourcesBatch<L, C>
+impl <L, C, LD> ResourcesBatch<L, C, LD>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
-    C:RunCtx+'static
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LD, SimpleId>, Ctx=C> + OutId + 'static,
+    C:RunCtx+'static,
+    LD:Dims+ 'static
 {
     pub fn new(
         loader: Arc<L>,
@@ -398,6 +420,7 @@ where
         resources_1_valid:Arc<Vec<Resource>>,
         resources_0_train:Arc<Vec<Resource>>,
         resources_0_valid:Arc<Vec<Resource>>,
+        build_batch_fn:BuildBatchFn<LD, C>,
         ctx: Arc<RwLock<C>>
     ) -> Self {
         debug!("ResourcesBatch::new: resources_1_train={resources_1_train:?}");
@@ -422,26 +445,28 @@ where
             resources_0_valid,
             half_batch_size,
             loader,
+            build_batch_fn,
             ctx
         }
     }
 }
 
 #[async_trait]
-impl <L,C> AsyncDataBatch<ChannelsData2, LabelProbability> for ResourcesBatch<L, C>
+impl <L,C, LD> AsyncDataBatch<LD, LabelProbability> for ResourcesBatch<L, C, LD>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
-    C:RunCtx+'static
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LD, SimpleId>, Ctx=C> + OutId + 'static,
+    C:RunCtx+'static,
+    LD:Dims+ 'static
 {
-    async fn train_batch(&self) -> Result<(ThoBatch<ChannelsData2>, Tensor), ThoosaError> {
+    async fn train_batch(&self) -> Result<(ThoBatch<LD>, Tensor), ThoosaError> {
         todo!()
     }
 
-    async fn valid_batch(&self) -> Result<(ThoBatch<ChannelsData2>, Tensor), ThoosaError> {
+    async fn valid_batch(&self) -> Result<(ThoBatch<LD>, Tensor), ThoosaError> {
         todo!()
     }
 
-    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<ChannelsData2>, ThoBatch<LabelProbability>), ThoosaError>> {
+    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LD>, ThoBatch<LabelProbability>), ThoosaError>> {
         //TODO if self.batch_size > train_len?
         let mut batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
 
@@ -449,6 +474,7 @@ where
 
 
         Self::build_batch_stream(
+            &self.build_batch_fn,
             batches,
             Arc::clone(&self.loader),
             Arc::clone(&self.ctx),
@@ -457,13 +483,14 @@ where
         )
     }
 
-    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<ChannelsData2>, ThoBatch<LabelProbability>), ThoosaError>> {
+    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LD>, ThoBatch<LabelProbability>), ThoosaError>> {
         let mut batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
 
 
         Self::build_batch_stream(
+            &self.build_batch_fn,
             batches,
             Arc::clone(&self.loader),
             Arc::clone(&self.ctx),
@@ -473,12 +500,13 @@ where
     }
 }
 
-impl<L, C> ResourcesBatch<L, C>
+impl<L, C, LD> ResourcesBatch<L, C, LD>
 where
     C: 'static + RunCtx,
-    L: 'static + OutId + for<'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C>,
+    L: 'static + OutId + for<'i> Cached<In<'i>=Resource, Out=ThoTensor<LD, SimpleId>, Ctx=C>+ 'static,
+    LD:Dims+ 'static
 {
-    fn build_batch_stream<'a>(mut batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: Arc<RwLock<C>>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<ChannelsData2>, ThoBatch<LabelProbability>), ThoosaError>> {
+    fn build_batch_stream<'a>(build_batch_fn:&'a BuildBatchFn<LD, C>, mut batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: Arc<RwLock<C>>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<LD>, ThoBatch<LabelProbability>), ThoosaError>> {
         futures_util::stream::iter(batches)
             .map(move |batch_keys| {
                 let loader = Arc::clone(&loader);
@@ -512,22 +540,26 @@ where
                             a
                         });
 
-                    with_data!(ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<ChannelsData2, SimpleId>], x_0:&[&ThoTensor<ChannelsData2, SimpleId>]|{
-                        debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
-                        let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.as_ref().copy()).collect::<Vec<_>>(), 0);
-                        let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.as_ref().copy()).collect::<Vec<_>>(), 0);
-
-                        let (x,y) = mix_x_binary_with_labels(&x_1, &x_0);
-
-                         Ok((
-                            ThoTensor::<Batch<ChannelsData2>, SimpleId>::new("".into(), x),
-                            ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y),
-                        ))
-                    })
+                    build_batch_fn(x_1_wrapped, x_0_wrapped, ctx).await
                 }
             })
             .buffered(10)
             .boxed()
+    }
+
+    async fn build_batch(x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<LD, SimpleId>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<LD, SimpleId>>>>, ctx: Arc<RwLock<C>>) -> Result<(ThoTensor<Batch<LD>, SimpleId>, ThoTensor<Batch<LabelProbability>, SimpleId>), ThoosaError> {
+        with_data!(ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<LD, SimpleId>], x_0:&[&ThoTensor<LD, SimpleId>]|{
+            debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
+            let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.as_ref().copy()).collect::<Vec<_>>(), 0);
+            let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.as_ref().copy()).collect::<Vec<_>>(), 0);
+
+            let (x,y) = mix_x_binary_with_labels(&x_1, &x_0);
+
+             Ok((
+                ThoTensor::<Batch<LD>, SimpleId>::new("".into(), x),
+                ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y),
+            ))
+        })
     }
 }
 
@@ -587,6 +619,7 @@ mod tests {
     use std::path::Path;
     use std::sync::{Arc};
     use futures_util::StreamExt;
+    use futures::FutureExt;
     use log::debug;
     use log::LevelFilter::Debug;
     use parking_lot::RwLock;
@@ -594,22 +627,26 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
     use caching_runner::common::cachable::DevicesWrap;
-    use caching_runner::common::mock_run_ctx;
+    use caching_runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use caching_runner::common::runnable::AsyncStage;
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::batches::AsyncDataBatch;
+    use thoosa_common::dims::{Batch, LabelProbability};
     use thoosa_common::runs::{Labeled, NetResources};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, FixedNumSlicesNetArgsFields, LabelNetTypeArgsFields, OptConfig, TrainLabelNetsRunConfigFields};
-    use thoosa_common::utils::reset_print_options;
+    use thoosa_common::utils::{mix_x_binary_with_labels, reset_print_options};
     use thoosa_common::ws::{mock_ws_simp, WsMockBuilder};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::traits::SimpleId;
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::MockStoreBuilder;
+    use thoosa_with_data::with_data;
     use crate::tasks::apply_motif_nets::tests::motif_test_net_;
+    use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::select_motifs::tests::{motifs_tensor, resource_tensor};
     use crate::tasks::tensor_loader::mock_tensor_loader;
@@ -845,7 +882,31 @@ mod tests {
         );
 
 
-        let resource_batch = ResourcesBatch::new(loader, 6, resources_1_train, resources_1_valid, resources_0_train, resources_0_valid, Arc::new(RwLock::new(mock_run_ctx::default(1))));
+        let resource_batch = ResourcesBatch::new(
+            loader,
+            6,
+            resources_1_train,
+            resources_1_valid,
+            resources_0_train,
+            resources_0_valid,
+            |x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>,  x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>, ctx: Arc<RwLock<MockRunCtx>>|{
+                async move {
+                    with_data!(ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<ChannelsData2, SimpleId>], x_0:&[&ThoTensor<ChannelsData2, SimpleId>]|{
+                        debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
+                        let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.as_ref().copy()).collect::<Vec<_>>(), 0);
+                        let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.as_ref().copy()).collect::<Vec<_>>(), 0);
+
+                        let (x,y) = mix_x_binary_with_labels(&x_1, &x_0);
+
+                         Ok((
+                            ThoTensor::<Batch<ChannelsData2>, SimpleId>::new("".into(), x),
+                            ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y),
+                        ))
+                    })
+                }.boxed()
+            },
+            Arc::new(RwLock::new(mock_run_ctx::default(1)))
+        );
 
         let mut batch = resource_batch.train_batch_stream().await;
         let (batch_x, batch_y) = batch.next().await.expect("no batch").expect("batch failed");
