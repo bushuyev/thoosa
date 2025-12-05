@@ -195,6 +195,7 @@ where
 
 
                 // let batch_ref = &batch;
+                //TODO async OOM
                 opt_train_2(
                     opt_config,
                     async |vs: &VarStore, run_config: TrainMotifsNetsRunConfig, _listener| {
