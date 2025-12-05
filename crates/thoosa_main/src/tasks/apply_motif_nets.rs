@@ -648,7 +648,11 @@ pub(crate) mod tests {
             vec![],
         ], 200)?;
 
+        debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_t={resource_a_t:?} resource_b_t={resource_b_t:?} resource_c_t={resource_c_t:?}");
+
         let batch = Tensor::stack(&[resource_a_t, resource_b_t, resource_c_t], 0);
+
+        debug!("test_apply_motif_nets_3_channels_1_motif: batch={batch:?}");
 
         let out = apply_motif_nets.run(
             Arc::new(DevicesWrap::wrap(ThoTensor::new("test_batch".into(), batch), 0)),

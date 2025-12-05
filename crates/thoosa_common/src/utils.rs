@@ -419,6 +419,61 @@ pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoosaError> {
     Ok(input.pad(pad_idx.as_slice(), "constant", 0.))
 }
 
+pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tensor, ThoosaError> {
+    debug!("pad_to: input.size={:?}, to_size={:?}", input.size(), to_size);
+
+    if input.size().len() != to_size.len() {
+        return Err(ThoosaError::new(format!(
+            "dimensions don't match: {:?} vs {:?}",
+            input.size(),
+            to_size
+        )));
+    }
+
+    let mut result = input.shallow_clone();
+    let mut cur_size = result.size();
+
+    if truncate {
+        // for each dimension where from > to, keep only the first `to` elements.
+        for (dim, (&from, &to)) in cur_size.iter().zip(to_size.iter()).enumerate() {
+            if from > to {
+                debug!("pad_to: truncating dim {dim} from {from} to {to}");
+                result = result.narrow(dim as i64, 0, to);
+            }
+        }
+        cur_size = result.size();
+    } else {
+        // in pure pad mode treat from > to as an error.
+        for (dim, (&from, &to)) in cur_size.iter().zip(to_size.iter()).enumerate() {
+            if from > to {
+                return Err(ThoosaError::new(format!(
+                    "from {from} > to {to} at dim {dim}"
+                )));
+            }
+        }
+    }
+
+    // build pad spec: last dimension first, [left, right, left, right, ...].
+    let mut from_rev = cur_size.clone();
+    from_rev.reverse();
+    let mut to_rev = to_size.to_vec();
+    to_rev.reverse();
+
+    let mut pad_idx = Vec::with_capacity(from_rev.len() * 2);
+    for (i, (&from, &to)) in from_rev.iter().zip(to_rev.iter()).enumerate() {
+        if from > to {
+            // should not happen if truncate == true and the above logic ran.
+            return Err(ThoosaError::new(format!(
+                "after truncation: from {from} > to {to} at reversed dim {i}"
+            )));
+        }
+        pad_idx.push(0);          // pad on the "left"
+        pad_idx.push(to - from);  // pad on the "right"
+    }
+
+    Ok(result.pad(pad_idx.as_slice(), "constant", 0.0))
+}
+
 pub fn load_tensor(
     base_path: &str,
     tensor_id: &str,
@@ -771,7 +826,7 @@ impl TrainListener for DummyListener {
 pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{hist_1_dim, mix_x_binary_with_labels, CompositeReducer, Splittable, SplittableTensor, TrainListener};
+    use crate::utils::{hist_1_dim, mix_x_binary_with_labels, pad_to_2, CompositeReducer, Splittable, SplittableTensor, TrainListener};
     use clap::{arg, command, Args, Parser, Subcommand};
 
     use log::debug;
@@ -893,9 +948,38 @@ pub mod tests {
                 Tensor::from_slice(&[3., 4., 0.]),
                 Tensor::from_slice(&[0., 0., 0.]),
             ]),
-            super::pad_to(&t, &[3, 3])?
+            super::pad_to_2(&t, &[3, 3], false)?
         );
 
+        assert_eq!(
+            Tensor::vstack(&[
+                Tensor::from_slice(&[1., 2., 0.]),
+                Tensor::from_slice(&[3., 4., 0.]),
+                Tensor::from_slice(&[0., 0., 0.]),
+            ]),
+            super::pad_to_2(&t, &[3, 3], true)?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pad_to_truncate_and_pad() -> Result<(), ThoosaError> {
+        let t = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 2., 3.]),
+            Tensor::from_slice(&[4., 5., 6.]),
+        ]);
+
+        let expected = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 2.]),
+            Tensor::from_slice(&[4., 5.]),
+            Tensor::from_slice(&[0., 0.]),
+        ]);
+
+        // from shape [2, 3] to [3, 2] with truncation enabled
+        let actual = pad_to_2(&t, &[3, 2], true)?;
+
+        assert_eq!(expected, actual);
         Ok(())
     }
 

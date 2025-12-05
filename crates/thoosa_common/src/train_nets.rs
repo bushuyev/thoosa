@@ -2246,18 +2246,17 @@ impl LabelNetParams {
 }
 
 pub fn flat_label_node(params: &LabelNetParams, slices_len: u32) -> Node {
-    debug!("motif_node: params={params:?}");
-    let num_features = params.channels * params.motif_nets * slices_len;
+    debug!("flat_label_node: params={params:?}");
+    let num_features = 3 * 901; //params.motif_nets * slices_len;
     let mut builder = SeqBuilder::new(slices_len, None);
+
     builder
         .closure(
             Arc::new(Box::new(move |t: &Tensor| {
-                let t_0 = t.flatten(1, 3);
-                debug!(
-                    "label_node flatten t.size={:?} t_0.size={:?}",
-                    t.size(),
-                    t_0.size()
-                );
+                debug!("flat_label_node flatten t.size={:?}", t.size());
+                //batch x motifs x dists
+                let t_0 = t.flatten(1, 2);// - channels removed
+                debug!("flat_label_node flatten t.size={:?} t_0.size={:?}",t.size(),t_0.size());
 
                 t_0
             })),
