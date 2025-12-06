@@ -1901,6 +1901,7 @@ where
             let loss = loss_fn(predicted_y.as_ref(), &expected_y.as_ref());
 
             debug!("train: 2. cuda_mem={:?}", cuda_mem());
+            debug!("train: loss={loss}");
             trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
 
             predicted_y.drop();

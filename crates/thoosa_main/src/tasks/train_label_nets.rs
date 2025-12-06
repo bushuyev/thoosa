@@ -8,7 +8,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use futures_util::future::BoxFuture;
 use futures::FutureExt;
 use futures_util::stream::BoxStream;
-use log::debug;
+use log::{debug, trace};
 use parking_lot::RwLock;
 use polars_arrow::io::iterator::StreamingIterator;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
@@ -640,8 +640,9 @@ pub async fn train_label_net_2(
         flat_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?,
         |pred: &Tensor, target: &Tensor| {
             debug!("train_label_net: pred.size={:?}", pred.size());
-            let pred_y = pred.squeeze();
+            let pred_y = pred;//.squeeze();
             debug!("train_label_net: pred_y={:?} target={:?} kind={:?}",pred_y.size(),target.size(),target.kind());
+            trace!("train_label_net: pred_y=\n{pred_y} target=\n{target} kind={:?}",target.kind());
             pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
         },
         run_config.common_training_args.cycles as usize,
@@ -667,7 +668,7 @@ mod tests {
     use futures_util::StreamExt;
     use futures::FutureExt;
     use log::debug;
-    use log::LevelFilter::Debug;
+    use log::LevelFilter::{Debug, Trace};
     use parking_lot::RwLock;
     use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
@@ -703,7 +704,7 @@ mod tests {
         let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
-        log::set_max_level(Debug);
+        log::set_max_level(Trace);
         reset_print_options();
         GlobalCtx::init_devices(2);
 
@@ -845,9 +846,8 @@ mod tests {
         let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
-                    NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(1)),
+                    NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(100)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(8)),
-                    NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.001)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MaxLoss), Val::Real(0.01)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptMaxEvals), Val::Int(10)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptNInit), Val::Int(10)),
@@ -859,7 +859,7 @@ mod tests {
                 ],
             ),
             vec![
-                Hyperparameter::UniformFloat{name: TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 3., upper: 4.}
+                Hyperparameter::UniformFloat{name: TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.0001, upper: 0.001}
             ],
         );
 
@@ -871,7 +871,7 @@ mod tests {
             &store,
             Arc::new(RwLock::new(mock_run_ctx::default(1))),
             Arc::new(OptConfig::new(10, 3)),
-            3
+            1
         ).await?);
 
 
