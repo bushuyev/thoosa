@@ -213,7 +213,7 @@ impl<R: ResourcesConfig> Display for NetResources<R> {
 }
 
 pub trait SavableResult: Sync + Send + Debug {
-    fn value(&self) -> f32;
+    fn value(&self) -> f32;//TODO remove
     fn save(
         &mut self,
         store: &Arc<RwLock<Box<dyn Store>>>,

@@ -170,7 +170,7 @@ where
         };
 
 
-        let out = futures::stream::iter(select_motifs_run_ids.into_iter().flat_map(|select_motifs_run_id|{
+        let results = futures::stream::iter(select_motifs_run_ids.into_iter().flat_map(|select_motifs_run_id|{
             let selected_motifs = self.store.read().list_selected_motifs(select_motifs_run_id, channels).unwrap();
 
             debug!("TrainMotifNets::run: select_motifs_run_id={select_motifs_run_id} selected_motifs={selected_motifs:?}");
@@ -244,7 +244,7 @@ where
         .await;
 
 
-        Ok(Arc::new(DevicesWrap::wrap_cpu(TrainMotifsNetsResult::new(0, out))))
+        Ok(Arc::new(DevicesWrap::wrap_cpu(TrainMotifsNetsResult::new(0, results))))
     }
 
 }
