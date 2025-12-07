@@ -2462,12 +2462,6 @@ impl WithId for Box<TrainMotifsNetsResult> {
     }
 }
 
-#[async_trait]
-impl Output for Box<TrainMotifsNetsResult> {
-    async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
-        todo!() //TODO not needed for not cachable Outputs
-    }
-}
 
 impl WithId for TrainMotifsNetsResult {
     type ID = RunId;
@@ -2564,7 +2558,7 @@ where
                     format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(),
                 ); //motif_id ?
 
-                let (loss, node_params) = match panic_to_err_async!(
+                let (loss, node_params) = panic_to_err_async!(
                     train_clone
                         .async_call_mut((
                             &vs,
@@ -2572,13 +2566,10 @@ where
                             &mut listener /*Arc::new(Mutex::new(Box::new(listener)))*/
                         ))
                         .await
-                ) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        warn!("opt_train failed with {e:?} on {run_config:?} ");
-                        (f32::MAX, Default::default())
-                    }
-                };
+                ).unwrap_or_else(|e| {
+                    warn!("opt_train failed with {e:?} on {run_config:?} ");
+                    (f32::MAX, Default::default())
+                });
                 listener.plot();
 
                 debug!("opt_train: run_config_values={run_config:?} loss={loss} "); //descr={descr}

@@ -143,7 +143,8 @@ impl WithId for TrainLabelNetsInput {
 
 #[derive(Debug)]
 pub struct TrainLabelNetsOutput {
-    id:SimpleId
+    id:SimpleId,
+    results: Vec<TrainLabelNetsRunConfigResult>
 }
 impl WithId for TrainLabelNetsOutput {
     type ID = SimpleId;
@@ -162,7 +163,12 @@ impl SavableResult for TrainLabelNetsOutput {
     }
 
     fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
-        todo!()
+       for result in &mut self.results {
+
+           result.save(store, ws)?;
+       }
+
+        Ok(0)
     }
 }
 
@@ -186,8 +192,8 @@ impl Data for TrainLabelNetsOutput {
 }
 
 impl TrainLabelNetsOutput {
-    pub fn new(id: SimpleId) -> Self {
-        Self { id }
+    pub fn new(id: SimpleId, results: Vec<TrainLabelNetsRunConfigResult>) -> Self {
+        Self { id, results }
     }
 }
 
@@ -237,7 +243,7 @@ where
                 Arc::new(out_id) as Arc<dyn CachableIdTr>
             };
 
-            futures::stream::iter(labels_tain_and_valid_sets.clone())
+            let results = futures::stream::iter(labels_tain_and_valid_sets.clone())
             .map(|label_tain_and_valid_sets|{
 
 
@@ -349,7 +355,7 @@ where
                 .into_iter()
                 .collect::<Result<Vec<_>, ThoosaError>>()?;
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new("".into()), cache_area)))
+            Ok(Arc::new(DevicesWrap::wrap_cpu(TrainLabelNetsOutput::new("".into(), results))))
         }
     }
 }
