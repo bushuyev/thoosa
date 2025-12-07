@@ -69,14 +69,10 @@ where
     store: Arc<RwLock<Box<dyn Store>>>,
     ws:Arc<RwLock<Box<dyn Workspace>>>,
     loader:Arc<L>,
-    motif_loader:Arc<ML>,
     stacked_motifs_loader:Arc<StackedMotifsLoader<ML, C>>,
-    pd:PhantomData<C>,
     run_configs:Vec<SelectMotifsRunConfig>,
     find_motifs_run_ids:Vec<RunId>,
-    load_and_clc_avg_dist:Arc<LoadMotifAndClcDistanceStage<ML, AverageEuclideanDistanceStage<C>, C>>,
     clc_resources_motifs_dist:Arc<ClcResourcesMotifsDist<C>>,
-    // output_builder: fn(<Self as WithId>::ID) -> Box<dyn OutputBuilder<O = ClcRresourcesMotifsDistOutput>> + Send + Sync>,
     max_batch:i64//TODO to SelectMotifsSFixedConfig
 }
 
@@ -234,31 +230,24 @@ where
         #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>
     ) -> Self {
-        let load_and_clc_avg_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
-            Arc::clone(&motif_loader), // as Arc<dyn MotifLoaderStage<Output = <AverageEuclideanDistanceStage as Stage>::In<'static>>>,
-            Arc::new(AverageEuclideanDistanceStage::<C>::new()),
-        ));
 
-        let batched_motifs_loader = Arc::new(StackedMotifsLoader::new(Arc::clone(ws), Arc::clone(&motif_loader), Arc::clone(&load_and_clc_avg_dist), Arc::clone(store)));
-        let clc_resources_motifs_dist = Arc::new(ClcResourcesMotifsDist::<C>::new(
-            ws.read().channels() as usize,
-             #[cfg(test)]
-             fail_if_size_bigger_than
-        ));
-        let channels = ws.read().channels();
+
         Self {
             id: "SelectMotifsStage".into(),
             store: Arc::clone(store),
             ws: Arc::clone(ws),
             loader,
-            motif_loader,
-            stacked_motifs_loader: batched_motifs_loader,
+            stacked_motifs_loader: Arc::new(StackedMotifsLoader::new(Arc::clone(ws), Arc::clone(&motif_loader), Arc::clone(&Arc::new(LoadMotifAndClcDistanceStage::new(
+                Arc::clone(&motif_loader),
+                Arc::new(AverageEuclideanDistanceStage::<C>::new()),
+            ))), Arc::clone(store))),
             run_configs,
             find_motifs_run_ids,
-            load_and_clc_avg_dist,
-            clc_resources_motifs_dist,
-            pd: Default::default(),
-            // output_builder: Box::new(move |id| Box::new(SelectMotifsSavableResultBuilder::new(id, channels))),
+            clc_resources_motifs_dist: Arc::new(ClcResourcesMotifsDist::<C>::new(
+                ws.read().channels() as usize,
+                 #[cfg(test)]
+                 fail_if_size_bigger_than
+            )),
             max_batch
         }
     }
@@ -278,7 +267,7 @@ where
     type Out = SelectMotifsSavableResult;
 }
 
-// #[async_trait]
+
 impl <L, ML, C> AsyncStage  for  SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
@@ -305,7 +294,7 @@ where
         debug!("SelectMotifsStage::run: resources={resources:?}");
         if resources.is_empty() {
             warn!("SelectMotifsStage::run: no labels resources");
-            return Err("Nothing to do ".into())
+            return Err(format!("No resources found in  {input:?}").into())
         }
 
 
@@ -336,42 +325,41 @@ where
                         })
                 })
         )
-            .then(|(find_motifs_run_config, select_motifs_run_config)| {
-                let loader = Arc::clone(&stacked_motifs_loader);
-                let ctx = Arc::clone(&ctx_for_loader);
+        .then(|(find_motifs_run_config, select_motifs_run_config)| {
+            let stacked_motifs_loader = Arc::clone(&stacked_motifs_loader);
+            let ctx = Arc::clone(&ctx_for_loader);
 
-                async move {
-                    let stacked_motifs_input = Arc::new(DevicesWrap::wrap_cpu(
-                        StackedMotifsInput::new(
-                            Arc::clone(&find_motifs_run_config),
-                            Arc::new(select_motifs_run_config.clone())
-                        )
-                    ));
+            async move {
+                let stacked_motifs_input = Arc::new(DevicesWrap::wrap_cpu(
+                    StackedMotifsInput::new(
+                        Arc::clone(&find_motifs_run_config),
+                        Arc::new(select_motifs_run_config.clone())
+                    )
+                ));
 
-                    match loader.run_cached(stacked_motifs_input, Arc::clone(&ctx)).await {
-                        Ok(motif_data) => Ok((find_motifs_run_config, select_motifs_run_config, motif_data)),
-                        Err(e) => Err((e, select_motifs_run_config))
-                    }
+                match stacked_motifs_loader.run_cached(stacked_motifs_input, Arc::clone(&ctx)).await {
+                    Ok(motif_data) => Ok((find_motifs_run_config, select_motifs_run_config, motif_data)),
+                    Err(e) => Err((e, select_motifs_run_config))
                 }
-            })
-            .filter_map(|result| async move {
-                match result {
-                    Ok(tuple) => Some(tuple),
-                    Err((e, select_motifs_run_config)) => {
-                        //TODO switch to CPU if OOM ctx.to_cpu...
-                        error!("Can't load select_motifs_run_config: e={e:?} select_motifs_run_config={select_motifs_run_config:?}");
-                        None
-                    }
+            }
+        })
+        .filter_map(|result| async move {
+            match result {
+                Ok(tuple) => Some(tuple),
+                Err((e, select_motifs_run_config)) => {
+                    //TODO switch to CPU if OOM ctx.to_cpu...
+                    error!("Can't load select_motifs_run_config: e={e:?} select_motifs_run_config={select_motifs_run_config:?}");
+                    None
                 }
-            })
-            .collect::<Vec<_>>()
-            .await;
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
 
         let mut t_1_batch: Vec<_> = vec![];
         let mut t_1_batch_resources: Vec<_> = vec![];
         let mut t_1_batch_dim_0_size = 0;
 
-        let mut skip_0_i = 0;
 
         let num_resources = resources.len();
         let total_size  = resources.iter().map(|resource|resource.length() as usize).sum::<usize>();

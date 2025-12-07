@@ -186,11 +186,6 @@ where
 
         debug!("LoadMotifAndClcDistanceStage::run: out_id={} motif_size={motif_size:?}", out_id);
 
-        let (device_idx, cache_area) = {
-            let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area())
-        };
-        let num_devices = GlobalCtx::global().device_count();
 
         let dist = OOMHandler::new(
             vec![
