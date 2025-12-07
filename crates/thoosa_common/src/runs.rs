@@ -66,7 +66,7 @@ impl ResourcesConfig for Simple {
             }
             ResourceType::NotInGroup(descr) => store
                 .read()
-                .list_resources_not_in_group(descr)
+                .list_resources_not_in_group(descr, 1000)//TODO limit
                 .expect("list_resource_set_resources"),
 
             })
@@ -213,9 +213,9 @@ impl<R: ResourcesConfig> Display for NetResources<R> {
 }
 
 pub trait SavableResult: Sync + Send + Debug {
-    fn value(&self) -> f32;
+    fn value(&self) -> f32;//TODO remove
     fn save(
-        &mut self,
+        &mut self,//TODO consume
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoosaError>;

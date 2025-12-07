@@ -80,7 +80,7 @@ where
 pub struct MotifNetMeta {
     motif_id:u32,
     channel:u32,
-    motif_net_params:MotifNetParams
+    pub motif_net_params:MotifNetParams
 }
 
 impl MotifNetMeta {

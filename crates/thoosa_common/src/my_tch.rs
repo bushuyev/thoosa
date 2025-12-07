@@ -43,12 +43,7 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
     }
 
     fn run_layers(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
-        debug!(
-            "MySequential::forward: t.size={:?} device={:?} self.layers[0]={:?}",
-            t.as_ref().size(),
-            t.device(),
-            self.layers[0]
-        );
+        debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}",t.as_ref().size(),t.device(),self.layers[0]);
 
         let output_t = self.layers[0].tho_forward(&t.as_ref().shallow_clone().into(), train);
 
@@ -57,12 +52,7 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
             .skip(1)
             .enumerate()
             .fold(output_t, |output_t, (i, layer)| {
-                debug!(
-                    "MySequential::layer={i} output_t.size={:?} output_t.device={:?} layer={:?}",
-                    output_t.size(),
-                    output_t.device(),
-                    layer
-                );
+                debug!("MySequential::run_layers={i} output_t.size={:?} output_t.device={:?} layer={:?}",output_t.size(),output_t.device(),layer);
 
                 layer.tho_forward(&output_t, train)
             })
@@ -87,10 +77,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
                 None => self.run_layers(t, train),
                 Some((dim, num_features)) => {
                     let splits = t.as_ref().split(num_features, dim);
-                    debug!(
-                        "MySequential::tho_forward splits.sizes={:?} num_features={num_features} dim={dim}",
-                        splits.iter().map(|t| t.size()).collect::<Vec<_>>()
-                    );
+                    debug!("MySequential::tho_forward splits.sizes={:?} num_features={num_features} dim={dim}",splits.iter().map(|t| t.size()).collect::<Vec<_>>());
 
                     let split_r = Tensor::concat(
                         splits
@@ -98,22 +85,15 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
                             .enumerate()
                             .filter_map(|(i, split)| {
                                 if split.size()[dim as usize] == num_features {
-                                    debug!(
-                                        "MySequential::tho_forward i={i} split={:?}",
-                                        split.size()
-                                    );
+                                    debug!("MySequential::tho_forward i={i} split={:?}",split.size());
+
                                     let r = self.run_layers(&split.into(), train);
-                                    debug!(
-                                        "MySequential::tho_forward i={i} r.size()={:?}",
-                                        r.size()
-                                    );
+                                    debug!("MySequential::tho_forward i={i} r.size()={:?}",r.size());
+
                                     Some(r.as_ref().shallow_clone())
                                 } else {
                                     //TODO ok skipping?
-                                    debug!(
-                                        "MySequential::tho_forward skipping i={i} split.size={:?}",
-                                        split.size()
-                                    );
+                                    debug!("MySequential::tho_forward skipping i={i} split.size={:?}",split.size());
 
                                     None
                                 }
@@ -125,11 +105,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
 
                     let mean_r = split_r.mean_dim(1, false, None).unsqueeze(1);
 
-                    debug!(
-                        "MySequential::tho_forward split_r.size()={:?} mean_r.size()={:?}",
-                        split_r.size(),
-                        mean_r.size()
-                    );
+                    debug!("MySequential::tho_forward split_r.size()={:?} mean_r.size()={:?}",split_r.size(),mean_r.size());
 
                     mean_r.into()
                 }
