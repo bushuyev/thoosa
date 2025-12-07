@@ -215,7 +215,7 @@ impl<R: ResourcesConfig> Display for NetResources<R> {
 pub trait SavableResult: Sync + Send + Debug {
     fn value(&self) -> f32;//TODO remove
     fn save(
-        &mut self,
+        &mut self,//TODO consume
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoosaError>;
