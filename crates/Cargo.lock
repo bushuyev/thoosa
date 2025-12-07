@@ -4682,6 +4682,7 @@ name = "thoosa_common"
 version = "0.1.0"
 dependencies = [
  "ambassador",
+ "anyhow",
  "argmin",
  "argmin-math",
  "async-trait",
