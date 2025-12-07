@@ -205,16 +205,8 @@ where
                     UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
                 );
 
-                let receiver = Arc::new(DistsTracker::<C>::new(
-                    ws,
-                    store,
-                    &run_config,
-                    &fixed_config,
-                    None,//TODO
-                ));
-
-               
                 let configured_loader = config_to_stage(&loader, &run_config);
+                let run_config_clone = run_config.clone();
 
                 FindMotifsStages::new(
                     run_config,
@@ -222,7 +214,22 @@ where
                         configured_loader,
                         &store,
                         Arc::new(cross_unfold_clc),
-                        receiver,
+                        {
+                            let ws = Arc::clone(ws);
+                            let store = Arc::clone(store);
+                            let run_config = run_config_clone.clone();
+                            let fixed_config = fixed_config.clone();
+                            move |resources: &[Arc<Resource>]| {
+                                // let total_seq_len = resources.iter().map(|r|r.length() as u64).sum::<u64>();
+                                Arc::new(DistsTracker::<C>::new(
+                                    &ws,
+                                    &store,
+                                    &run_config,
+                                    &fixed_config,
+                                    Some(resources.len() as u32 * 2),//TODO
+                                ))
+                            }
+                        },
                         fixed_config.max_chunk_size as usize,
                         |batch|{
                             async {batch.to_cpu().await.unwrap()}.boxed()//TODO unwrap
