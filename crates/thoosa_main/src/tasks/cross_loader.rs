@@ -57,7 +57,7 @@ where
     loader: Arc<L>,
     store: Arc<RwLock<Box<dyn Store>>>,
     batch_clc: Arc<CLC>,
-    receiver: Arc<RSV>,
+    receiver_factory: Box<dyn Fn(&[Arc<Resource>]) -> Arc<RSV> + Send + Sync>,
     chunk_size: usize,
     on_batch_done: Box<dyn Fn(R) -> BoxFuture<'static, R> + Sync + Send>,
     on_all_done: Box<dyn Fn(&Arc<RSV>) -> BoxFuture<'static, ()> + Sync + Send>,
@@ -89,16 +89,17 @@ where
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     C: RunCtx + 'static,
 {
-    pub fn new<OnAllDone, OnBatchDone>(
+    pub fn new<ReceiverFactory, OnAllDone, OnBatchDone>(
         loader: Arc<L>,
         store: &Arc<RwLock<Box<dyn Store>>>,
         batch_clc: Arc<CLC>,
-        receiver: Arc<RSV>,
+        receiver_factory: ReceiverFactory,
         chunk_size: usize,
         on_batch_done:OnBatchDone,
         on_all_done: OnAllDone,
     ) -> Self
     where
+        ReceiverFactory: Fn(&[Arc<Resource>]) -> Arc<RSV> + Sync + Send + 'static,
         OnBatchDone: Fn(R) -> BoxFuture<'static, R> + Sync + Send + 'static,
         OnAllDone: Fn(&Arc<RSV>) -> BoxFuture<'static, ()> + Sync + Send + 'static,
     {
@@ -106,7 +107,7 @@ where
             loader,
             store: Arc::clone(store),
             batch_clc,
-            receiver,
+            receiver_factory: Box::new(receiver_factory),
             chunk_size,
             on_batch_done: Box::new(on_batch_done),
             on_all_done: Box::new(on_all_done),
@@ -237,6 +238,8 @@ where
 
         debug!("CrossLoader::run  max_batch={max_batch} resources={}",resources.len());
 
+        let receiver = (self.receiver_factory)(resources.as_slice());
+
         let mut t_0_batch: Vec<_> = vec![];
         let mut t_0_batch_resources: Vec<_> = vec![];
         let mut t_0_batch_len = 0;
@@ -306,7 +309,7 @@ where
 
                 let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await;
 
-                let receiver_arc = Arc::clone(&self.receiver);
+                let receiver_arc = Arc::clone(&receiver);
                 let ctx_arc = Arc::clone(&ctx);
 
                 receiver_arc.consume(cross_clc_output, ctx_arc)?;
@@ -325,7 +328,7 @@ where
 
         }
 
-        (self.on_all_done)(&self.receiver).await;
+        (self.on_all_done)(&receiver).await;
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(CrossResult::new(self.out_id(WithId::id(input.as_ref()))))))
     }
@@ -683,19 +686,25 @@ mod tests {
             UnfoldParams::new(1, 2, 1),
         ));
 
-        let receiver = Arc::new(DistsTracker::<RunCtx2>::new(
-            &ws,
-            &store,
-            &run_config,
-            &fixed_config,
-            None,
-        ));
-
         let cross_loader = Arc::new(CrossLoader::new(
             loader,
             &store,
             batch_clc,
-            receiver,
+            {
+                let ws = Arc::clone(&ws);
+                let store = Arc::clone(&store);
+                let run_config = run_config.clone();
+                let fixed_config = fixed_config.clone();
+                move |_resources: &[Arc<Resource>]| {
+                    Arc::new(DistsTracker::<RunCtx2>::new(
+                        &ws,
+                        &store,
+                        &run_config,
+                        &fixed_config,
+                        None,
+                    ))
+                }
+            },
             20,
             |batch|{
                 async {batch}.boxed()
@@ -782,16 +791,6 @@ mod tests {
         let received_outputs = Arc::new(Mutex::new(Vec::<TestBatchOutput>::new()));
         let receiver_observed = Arc::clone(&received_outputs);
 
-        let receiver = Arc::new(
-            mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<TestBatchOutput>, MockRunCtx>()
-                .with_receive_fn(move |out, _ctx| {
-                    let result = out.clc_result();
-                    receiver_observed.lock().unwrap().push(result);
-                    Ok(())
-                })
-                .finish(),
-        );
-
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
 
         let mut mocked_store = Arc::new(RwLock::new(
@@ -807,7 +806,23 @@ mod tests {
             loader,
             &mocked_store,
             batch_clc,
-            receiver,
+            {
+                let receiver_observed = Arc::clone(&receiver_observed);
+                move |_resources: &[Arc<Resource>]| {
+                    Arc::new(
+                        mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<TestBatchOutput>, MockRunCtx>()
+                            .with_receive_fn({
+                                let receiver_observed = Arc::clone(&receiver_observed);
+                                move |out, _ctx| {
+                                    let result = out.clc_result();
+                                    receiver_observed.lock().unwrap().push(result);
+                                    Ok(())
+                                }
+                            })
+                            .finish(),
+                    )
+                }
+            },
             2,
             |batch|{
                 async {batch}.boxed()
