@@ -43,6 +43,7 @@ use crate::tasks::run_ctx_2::MotifsCtx;
 use rand::{seq::SliceRandom, rng};
 use tch::kind::FLOAT_CPU;
 use tokio::{join, try_join};
+use thoosa_dummy_data_derive::DummyData;
 use crate::tasks::stages_seq::ABStage;
 
 #[derive(Debug)]
@@ -141,7 +142,8 @@ impl WithId for TrainLabelNetsInput {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, DummyData)]
+#[dummy_data(no_clone)]
 pub struct TrainLabelNetsOutput {
     id:SimpleId,
     results: Vec<TrainLabelNetsRunConfigResult>
@@ -169,25 +171,6 @@ impl SavableResult for TrainLabelNetsOutput {
        }
 
         Ok(0)
-    }
-}
-
-#[async_trait]
-impl CopyToDevice for TrainLabelNetsOutput {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> where Self:Sized {
-        todo!()
-    }
-}
-
-impl Data for TrainLabelNetsOutput {
-    type Metrics = ();
-
-    fn size(&self) -> Self::Metrics {
-        ()
-    }
-
-    fn device(&self) -> usize {
-        0
     }
 }
 

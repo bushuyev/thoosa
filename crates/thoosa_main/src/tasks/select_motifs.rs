@@ -457,8 +457,6 @@ where
 
                                 trace!("SelectMotifsStage::run: channel={channel} cpu_mask=\n{cpu_mask}");
 
-                                trace!("SelectMotifsStage::run: channel={channel} cpu_mask=\n{cpu_mask}");
-
                                 let mut mask_in_channel = BoolTensorIterator::from(&cpu_mask);
                                 for motif_id in mask_dists_ids.1 {
                                     let resources_iter= resources_iter.clone();
