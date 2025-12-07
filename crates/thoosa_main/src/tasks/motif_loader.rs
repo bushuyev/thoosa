@@ -317,7 +317,7 @@ where
             loop {
                 let out_key = out_key.clone();
 
-                //TODO move into OOMHandler as util fn
+                //TODO async OOM: move into OOMHandler as util fn
                 match raw_tensor.with_selected_data(device_idx, selector.clone(), |tt| {
                     debug!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id} try_count={try_count} resource_id={resource_id}  tt.size={:?}", tt.size());
                     trace!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id}  try_count={try_count} resource_id={resource_id}  t={}", tt.t_ref());

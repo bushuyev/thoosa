@@ -73,7 +73,7 @@ pub struct TrainLabelNetsArgs {
     pub select_motifs_run_id: Vec<RunId>,
 
     #[arg(long)]
-    train_resource_group: String,
+    pub train_resource_group: String,
 
     #[arg(long)]
     valid_resource_group: String,
@@ -978,57 +978,6 @@ pub fn run_opt_train_label_nets(
     })
 }
 
-// pub async fn train_label_net_2<
-//     DI: Dims + Send + 'static,
-//     DO: Dims + Send + 'static,
-//     B: AsyncDataBatch<DI>,
-// >(
-//     net: &Box<dyn ThoModule<Batch<DI>, DO>>,
-//     run_config: &TrainLabelNetsRunConfig,
-//     batch: &mut B,
-//     var_store: &VarStore,
-//     device: &Device,
-// ) -> Result<f32, ThoosaError> {
-//     debug!("train_label_net:  ");
-// 
-//     let device = device.clone();
-// 
-//     let optimizer = AdamW::default().amsgrad(true);
-// 
-//     //TODO
-//     // if let Some(adam_w) = run_config.common_training_args.adam_w {
-//     //     debug!("train_label_nodes: setting adam_w={adam_w:?}");
-//     //     optimizer = optimizer.beta1(adam_w.beta1).beta2(adam_w.beta2);
-//     // }
-// 
-//     debug!("train_label_net: cuda_mem={:?}", cuda_mem());
-// 
-//     let loss = train_2(
-//         &device,
-//         batch as &mut dyn AsyncDataBatch<DI>,
-//         net,
-//         |pred: &Tensor, target: &Tensor| {
-//             debug!("train_label_net: pred.size={:?}", pred.size());
-//             let pred_y = pred.squeeze();
-//             debug!("train_label_net: pred_y={:?} target={:?} kind={:?}",pred_y.size(),target.size(),target.kind());
-//             pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
-//         },
-//         run_config.common_training_args.cycles as usize,
-//         optimizer.build(&var_store, run_config.common_training_args.lr)?,
-//         |t| {
-//             debug!(
-//                 "train_label_net: t.size={:?} cuda_mem={:?}",
-//                 t.size(),
-//                 cuda_mem()
-//             );
-//             t
-//         },
-//         None,
-//     )
-//     .await?;
-// 
-//     Ok(loss)
-// }
 
 pub fn train_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, B: DataBatch<DI>>(
     net: &Box<dyn ThoModule<Batch<DI>, DO>>,
@@ -1194,7 +1143,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
     }
 }
 
-pub async fn train_final_net_2<B: AsyncDataBatch<LabelNetsProbabilities>>(
+pub async fn train_final_net_2<B: AsyncDataBatch<LabelNetsProbabilities, LabelsProbabilities>>(
     run_config_values: &TrainFinalNetRunConfig,
     label_nets_num: u32,
     labels_num: u32,
@@ -1586,7 +1535,7 @@ impl OptConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct MotifNetParams {
-    num_features: u32,
+    pub num_features: u32,
     num_layers: u32,
 }
 
@@ -2036,7 +1985,7 @@ pub struct LabelNetParams {
     channels: u32,
     motif_nets: u32,
     motif_layers: u32,
-    slices_len: u32,
+    pub slices_len: u32,
     net_type: LabelNetTypeParams,
 }
 
@@ -2296,19 +2245,18 @@ impl LabelNetParams {
     }
 }
 
-pub fn flat_label_node(params: &LabelNetParams, slices_len: u32) -> Node {
-    debug!("motif_node: params={params:?}");
-    let num_features = params.channels * params.motif_nets * slices_len;
-    let mut builder = SeqBuilder::new(slices_len, None);
+pub fn flat_label_node(params: &LabelNetParams) -> Node {
+    debug!("flat_label_node: params={params:?}");
+    let num_features = params.motif_nets * params.slices_len; //params.motif_nets * slices_len;
+    let mut builder = SeqBuilder::new(0, None);
+
     builder
         .closure(
             Arc::new(Box::new(move |t: &Tensor| {
-                let t_0 = t.flatten(1, 3);
-                debug!(
-                    "label_node flatten t.size={:?} t_0.size={:?}",
-                    t.size(),
-                    t_0.size()
-                );
+                debug!("flat_label_node flatten t.size={:?}", t.size());
+                //batch x motifs x dists
+                let t_0 = t.flatten(1, 2);// - channels removed
+                debug!("flat_label_node flatten t.size={:?} t_0.size={:?}",t.size(),t_0.size());
 
                 t_0
             })),
@@ -2446,7 +2394,7 @@ impl TrainListener for PlotVecf32 {
 
 #[derive(Debug)]
 pub struct TrainMotifsNetResult {
-    loss: f32,
+    pub loss: f32, //TODO pub
     channel: u32,
     motif_id: u32,
     vs: VarStore,
@@ -2482,7 +2430,7 @@ impl TrainMotifsNetResult {
 #[dummy_data(no_clone)]
 pub struct TrainMotifsNetsResult {
     id:RunId,
-    train_motif_nets_results:Vec<TrainMotifsNetResult>
+    pub train_motif_nets_results:Vec<TrainMotifsNetResult>
 }
 
 impl TrainMotifsNetsResult {
@@ -2514,12 +2462,6 @@ impl WithId for Box<TrainMotifsNetsResult> {
     }
 }
 
-#[async_trait]
-impl Output for Box<TrainMotifsNetsResult> {
-    async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
-        todo!() //TODO not needed for not cachable Outputs
-    }
-}
 
 impl WithId for TrainMotifsNetsResult {
     type ID = RunId;
@@ -2616,7 +2558,7 @@ where
                     format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(),
                 ); //motif_id ?
 
-                let (loss, node_params) = match panic_to_err_async!(
+                let (loss, node_params) = panic_to_err_async!(
                     train_clone
                         .async_call_mut((
                             &vs,
@@ -2624,13 +2566,10 @@ where
                             &mut listener /*Arc::new(Mutex::new(Box::new(listener)))*/
                         ))
                         .await
-                ) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        warn!("opt_train failed with {e:?} on {run_config:?} ");
-                        (f32::MAX, Default::default())
-                    }
-                };
+                ).unwrap_or_else(|e| {
+                    warn!("opt_train failed with {e:?} on {run_config:?} ");
+                    (f32::MAX, Default::default())
+                });
                 listener.plot();
 
                 debug!("opt_train: run_config_values={run_config:?} loss={loss} "); //descr={descr}
@@ -2772,7 +2711,7 @@ pub async fn run_train_motif_net_2(
     motif_width: u32,
     run_config: &TrainMotifsNetsRunConfig,
     device: &Device,
-    batch: &dyn AsyncDataBatch<Slice>,
+    batch: &dyn AsyncDataBatch<Slice, MotifProbability>,
     vs: &VarStore,
     listener: &mut dyn TrainListener,
 ) -> Result<(f32, MotifNetParams), ThoosaError> {

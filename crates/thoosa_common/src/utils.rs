@@ -1,7 +1,7 @@
 use std::cell::RefMut;
 use std::collections::VecDeque;
 
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::io::Write;
 use std::iter::Map;
 
@@ -18,7 +18,7 @@ use plotters::prelude::*;
 use rand::prelude::ThreadRng;
 use rand::Rng;
 use std::panic::AssertUnwindSafe;
-
+use std::pin::pin;
 use parking_lot::lock_api::{RawRwLock, RwLock};
 use std::sync::Arc;
 use tch::display::PrinterOptions;
@@ -36,6 +36,7 @@ use crate::my_tch::{LossFp, ThoModule};
 use crate::batches::AsyncDataBatch;
 use crate::builder::SeqBuilder;
 use crate::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
+use futures_util::StreamExt;
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -418,6 +419,61 @@ pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoosaError> {
     Ok(input.pad(pad_idx.as_slice(), "constant", 0.))
 }
 
+pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tensor, ThoosaError> {
+    debug!("pad_to: input.size={:?}, to_size={:?}", input.size(), to_size);
+
+    if input.size().len() != to_size.len() {
+        return Err(ThoosaError::new(format!(
+            "dimensions don't match: {:?} vs {:?}",
+            input.size(),
+            to_size
+        )));
+    }
+
+    let mut result = input.shallow_clone();
+    let mut cur_size = result.size();
+
+    if truncate {
+        // for each dimension where from > to, keep only the first `to` elements.
+        for (dim, (&from, &to)) in cur_size.iter().zip(to_size.iter()).enumerate() {
+            if from > to {
+                debug!("pad_to: truncating dim {dim} from {from} to {to}");
+                result = result.narrow(dim as i64, 0, to);
+            }
+        }
+        cur_size = result.size();
+    } else {
+        // in pure pad mode treat from > to as an error.
+        for (dim, (&from, &to)) in cur_size.iter().zip(to_size.iter()).enumerate() {
+            if from > to {
+                return Err(ThoosaError::new(format!(
+                    "from {from} > to {to} at dim {dim}"
+                )));
+            }
+        }
+    }
+
+    // build pad spec: last dimension first, [left, right, left, right, ...].
+    let mut from_rev = cur_size.clone();
+    from_rev.reverse();
+    let mut to_rev = to_size.to_vec();
+    to_rev.reverse();
+
+    let mut pad_idx = Vec::with_capacity(from_rev.len() * 2);
+    for (i, (&from, &to)) in from_rev.iter().zip(to_rev.iter()).enumerate() {
+        if from > to {
+            // should not happen if truncate == true and the above logic ran.
+            return Err(ThoosaError::new(format!(
+                "after truncation: from {from} > to {to} at reversed dim {i}"
+            )));
+        }
+        pad_idx.push(0);          // pad on the "left"
+        pad_idx.push(to - from);  // pad on the "right"
+    }
+
+    Ok(result.pad(pad_idx.as_slice(), "constant", 0.0))
+}
+
 pub fn load_tensor(
     base_path: &str,
     tensor_id: &str,
@@ -770,7 +826,7 @@ impl TrainListener for DummyListener {
 pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{hist_1_dim, mix_ab_with_labels, CompositeReducer, Splittable, SplittableTensor, TrainListener};
+    use crate::utils::{hist_1_dim, mix_x_binary_with_labels, pad_to_2, CompositeReducer, Splittable, SplittableTensor, TrainListener};
     use clap::{arg, command, Args, Parser, Subcommand};
 
     use log::debug;
@@ -892,9 +948,38 @@ pub mod tests {
                 Tensor::from_slice(&[3., 4., 0.]),
                 Tensor::from_slice(&[0., 0., 0.]),
             ]),
-            super::pad_to(&t, &[3, 3])?
+            super::pad_to_2(&t, &[3, 3], false)?
         );
 
+        assert_eq!(
+            Tensor::vstack(&[
+                Tensor::from_slice(&[1., 2., 0.]),
+                Tensor::from_slice(&[3., 4., 0.]),
+                Tensor::from_slice(&[0., 0., 0.]),
+            ]),
+            super::pad_to_2(&t, &[3, 3], true)?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pad_to_truncate_and_pad() -> Result<(), ThoosaError> {
+        let t = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 2., 3.]),
+            Tensor::from_slice(&[4., 5., 6.]),
+        ]);
+
+        let expected = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 2.]),
+            Tensor::from_slice(&[4., 5.]),
+            Tensor::from_slice(&[0., 0.]),
+        ]);
+
+        // from shape [2, 3] to [3, 2] with truncation enabled
+        let actual = pad_to_2(&t, &[3, 2], true)?;
+
+        assert_eq!(expected, actual);
         Ok(())
     }
 
@@ -1623,7 +1708,7 @@ pub mod tests {
         let a = Tensor::from_slice(&va).reshape(&[m, n]);
         let b = Tensor::from_slice(&vb).reshape(&[m, n]);
 
-        let (x, y) = mix_ab_with_labels(&a, &b);
+        let (x, y) = mix_x_binary_with_labels(&a, &b);
         debug!("mix_basic_shapes_and_labels: x=\n{x} y=\n{y}");
 
         // Shapes
@@ -1777,10 +1862,10 @@ pub enum ListenerResponse {
     Nope,
 }
 
-pub async fn train_2<F, DI: Dims, DO: Dims>(
+pub async fn train_3<F, DI: Dims, DO: Dims>(
     device: &Device,
-    data: &dyn AsyncDataBatch<DI>,
-    net: Box<dyn ThoModule<Batch<DI>, DO>>,
+    data: &dyn AsyncDataBatch<DI, DO>,
+    net: Box<dyn ThoModule<Batch<DI>, Batch<DO>>>,
     loss_fn: LossFp,
     cycles: usize,
     mut opt: Optimizer,
@@ -1796,6 +1881,106 @@ where
     let mut last_valid_loss = [0f32; 3];
 
     for idx in 1..cycles {
+        debug!("train:  0. cuda_mem={:?}", cuda_mem());
+        let mut batches = data.train_batch_stream().await;
+        debug!("train:  1. cuda_mem={:?}", cuda_mem());
+        while let Some(Ok((x_t_0,expected_y))) = batches.next().await {
+            debug!("train: device={:?} x_t_0.size={:?} expected_y.size={:?}", device, x_t_0.size(), expected_y.size());
+            debug!("train: 0. cuda_mem={:?}", cuda_mem());
+
+            let x_t = x_f(x_t_0);
+
+            debug!("train: device={:?}  x_t.size={:?}",device,x_t.size());
+
+            let predicted_y = net.tho_forward(&x_t, true);
+            debug!("train: 1. cuda_mem={:?}", cuda_mem());
+            trace!("train: x_t=\n{x_t}");
+            x_t.drop();
+            // unsafe { at_autocast_clear_cache(); }
+
+            let loss = loss_fn(predicted_y.as_ref(), &expected_y.as_ref());
+
+            debug!("train: 2. cuda_mem={:?}", cuda_mem());
+            debug!("train: loss={loss}");
+            trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
+
+            predicted_y.drop();
+            drop(expected_y);
+            debug!("train: 2.1 cuda_mem={:?}", cuda_mem());
+            let t1 = Instant::now();
+
+            opt.backward_step(&loss);
+
+            debug!("train: 3. cuda_mem={:?}  optimizer_size={}",cuda_mem(),optimizer_mem_size(&opt));
+            debug!("train: device={:?}  backward_step done in {}",device,t1.elapsed().as_millis());
+        }
+
+
+
+        if idx % 10 == 0 || idx == cycles - 1 {
+
+            debug!("train:  0. cuda_mem={:?}", cuda_mem());
+            let mut batches = data.valid_batch_stream().await;
+            debug!("train:  1. cuda_mem={:?}", cuda_mem());
+            while let Some(Ok((x_t_0,y_t))) = batches.next().await {
+                if let Some(rs) = tch::no_grad(||{
+
+                    let x_t = x_f(x_t_0);
+
+                    let pred_y = net.tho_forward(&x_t, true);
+
+                    let valid_loss = loss_fn(&pred_y.as_ref(), &y_t.as_ref());
+                    let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
+
+                    last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
+                    debug!("train: last_valid_loss={last_valid_loss:?}  valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+
+                    listener.as_mut().map(|l|l.on_valid_cycle(idx, valid_loss_f32))
+
+                }).take() {
+                    match rs {
+                        ListenerResponse::Stop => {
+                            break;
+                        }
+                        ListenerResponse::UpdateLR(lr) => {
+                            opt.set_lr(lr);
+                        }
+                        ListenerResponse::Nope => {}
+                    }
+                }
+            }
+
+        }
+
+        std::io::stdout().flush()?;
+    }
+    debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+
+    Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
+}
+
+
+pub async fn train_2<F, DI: Dims, DO: Dims>(
+    device: &Device,
+    data: &dyn AsyncDataBatch<DI, DO>,
+    net: Box<dyn ThoModule<Batch<DI>, Batch<DO>>>,
+    loss_fn: LossFp,
+    cycles: usize,
+    mut opt: Optimizer,
+    x_f: F,
+    mut listener: Option<&mut dyn TrainListener>,
+) -> Result<f32, ThoosaError>
+where
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI>,
+{
+    debug!("train: device={:?} cycles={}", device, cycles);
+    debug!("train: opt={opt:?} optimizer_size={}",optimizer_mem_size(&opt));
+
+    let mut last_valid_loss = [0f32; 3];
+
+    for idx in 1..cycles {
+
+
         debug!("train:  cuda_mem={:?}", cuda_mem());
         let (x_t_0, expected_y) = data.train_batch().await?;
         debug!("train: device={:?} x_t_0.size={:?} expected_y.size={:?}", device, x_t_0.size(), expected_y.size());
@@ -1826,11 +2011,10 @@ where
         debug!("train: 3. cuda_mem={:?}  optimizer_size={}",cuda_mem(),optimizer_mem_size(&opt));
         debug!("train: device={:?}  backward_step done in {}",device,t1.elapsed().as_millis());
 
-        if idx % 10 == 0 {
+        if idx % 10 == 0 || idx == cycles - 1 {
             let (x_t_0, y_t) = data.valid_batch().await?;
 
             if let Some(rs) = tch::no_grad(||{
-                // debug!("train: x_t_0.size={:?}", x_t_0.size());
 
                 let x_t = x_f(x_t_0);
 
@@ -2133,22 +2317,22 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
 }
 
 //TODO check GPT
-pub fn mix_ab_with_labels(a: &Tensor, b: &Tensor) -> (Tensor, Tensor) {
-    let (ma, na) = a.size2().expect("A must be 2D [m, n]");
-    let (mb, nb) = b.size2().expect("B must be 2D [m, n]");
-    assert_eq!((na, nb), (na, na), "A and B must have same n");
-    assert_eq!(ma, mb, "A and B must have same m");
-    assert_eq!(a.device(), b.device(), "A and B must be on the same device");
+pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> (Tensor, Tensor) {
+    let [ma, na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
+    let [mb, nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
+    // assert_eq!((na, nb), (na, na), "X1 and X0 must have same n");
+    // assert_eq!(ma, mb, "X1 and X0 must have same m");
+    assert_eq!(x_0.device(), x_1.device(), "A and B must be on the same device");
 
-    let device = a.device();
+    let device = x_0.device();
     let two_m = ma * 2;
 
     // X0 = [A; B]
-    let x0 = Tensor::cat(&[a, b], 0);
+    let x0 = Tensor::cat(&[x_1, x_0], 0);
 
     // Choose a reasonable dtype for Y (float if A is floating, else Float)
-    let y_kind = match a.kind() {
-        Kind::Double | Kind::Float | Kind::Half | Kind::BFloat16 => a.kind(),
+    let y_kind = match x_0.kind() {
+        Kind::Double | Kind::Float | Kind::Half | Kind::BFloat16 => x_0.kind(),
         _ => Kind::Float,
     };
 
@@ -2227,4 +2411,14 @@ pub fn motif_test_net(
             *test_net(motif_width, k, device, "test_motif_net").unwrap()
         }),
     )
+}
+
+pub fn assert_close<A:Into<f64> + Display, B:Into<f64> + Display>(val_0: A, val_1: B, max_diff: f64) {
+    let a = <A as Into<f64>>::into(val_0);
+    let b = <B as Into<f64>>::into(val_1);
+    let diff = (a - b).abs();
+    assert!(
+        diff <= max_diff,
+        "values not close enough: {a} vs {b} (diff={diff}, max_diff={max_diff})"
+    );
 }
