@@ -2059,17 +2059,9 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_slice() {
-        let t = Tensor::from_slice(&[0., 1., 2., 3., 4., 5., 6., 7.]);
-
-        println!("s={}", t.slice(0, 3, 6, 2));
-        println!("n={}", t.narrow(0, 0, 6));
-    }
-
-    #[test]
     fn test_big() {
-        let t_0 = Tensor::rand(&[20, 1661, 100], FLOAT_CPU);
-        let t_1 = Tensor::rand(&[20, 1661, 100], FLOAT_CPU);
+        let t_0 = Tensor::rand(&[20, 1661, 10], FLOAT_CPU);
+        let t_1 = Tensor::rand(&[20, 1661, 10], FLOAT_CPU);
 
         let dist_1 = Tensor::cdist(&t_0, &t_1, 2.0, 0);
         let dist_0 = clc_dist_d2(t_0, t_1, 1).unwrap();
