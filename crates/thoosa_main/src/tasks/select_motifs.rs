@@ -312,36 +312,60 @@ where
         let num_channels = self.ws.read().channels() as usize;
 
 
-        let mut stacked_motifs = vec![];
+        let stacked_motifs_loader = Arc::clone(&self.stacked_motifs_loader);
+        let ctx_for_loader = Arc::clone(&ctx);
 
-        // Loading motifs into GPU hoping everything fits. If not, data will be dumped to CPU either right here or when clc_stage fails with OOM.
-        for find_motifs_run_id in &self.find_motifs_run_ids {
+        let find_motifs_run_configs = self.find_motifs_run_ids
+            .iter()
+            .map(|find_motifs_run_id| -> Result<_, ThoosaError> {
+                Ok(Arc::new(FindMotifsRunConfig::from_properties_map__(
+                    *find_motifs_run_id,
+                    &self.store.read().list_run_config_values(*find_motifs_run_id)?,
+                )?))
+            })
+            .collect::<Result<Vec<_>, ThoosaError>>()?;
 
-            let find_motifs_run_config = Arc::new(FindMotifsRunConfig::from_properties_map__(
-                *find_motifs_run_id,
-                &self.store.read().list_run_config_values(*find_motifs_run_id)?,
-            )?);
+        let stacked_motifs = futures::stream::iter(
+            find_motifs_run_configs
+                .into_iter()
+                .flat_map(|find_motifs_run_config| {
+                    self.run_configs
+                        .iter()
+                        .map(move |select_motifs_run_config| {
+                            (Arc::clone(&find_motifs_run_config), select_motifs_run_config)
+                        })
+                })
+        )
+            .then(|(find_motifs_run_config, select_motifs_run_config)| {
+                let loader = Arc::clone(&stacked_motifs_loader);
+                let ctx = Arc::clone(&ctx_for_loader);
 
-            for select_motifs_run_config in self.run_configs.iter() {
+                async move {
+                    let stacked_motifs_input = Arc::new(DevicesWrap::wrap_cpu(
+                        StackedMotifsInput::new(
+                            Arc::clone(&find_motifs_run_config),
+                            Arc::new(select_motifs_run_config.clone())
+                        )
+                    ));
 
-
-                match Arc::clone(&self.stacked_motifs_loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(
-                    StackedMotifsInput::new(
-                        Arc::clone(&find_motifs_run_config),
-                        Arc::new(select_motifs_run_config.clone())
-                    ))),
-                    Arc::clone(&ctx)
-                ).await {
-                    Ok(motif_data) => {
-                        stacked_motifs.push((Arc::clone(&find_motifs_run_config), select_motifs_run_config, motif_data));
-                    }
-                    Err(e) => {
-                        //TODO switch to CPU if OOM ctx.to_cpu...
-                        error!("Can't load select_motifs_run_config: e={e:?} select_motifs_run_config={select_motifs_run_config:?}")
+                    match loader.run_cached(stacked_motifs_input, Arc::clone(&ctx)).await {
+                        Ok(motif_data) => Ok((find_motifs_run_config, select_motifs_run_config, motif_data)),
+                        Err(e) => Err((e, select_motifs_run_config))
                     }
                 }
-            }
-        }
+            })
+            .filter_map(|result| async move {
+                match result {
+                    Ok(tuple) => Some(tuple),
+                    Err((e, select_motifs_run_config)) => {
+                        //TODO switch to CPU if OOM ctx.to_cpu...
+                        error!("Can't load select_motifs_run_config: e={e:?} select_motifs_run_config={select_motifs_run_config:?}");
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
 
         let mut t_1_batch: Vec<_> = vec![];
         let mut t_1_batch_resources: Vec<_> = vec![];
@@ -1532,4 +1556,3 @@ pub mod tests {
     }
 
 }
-
