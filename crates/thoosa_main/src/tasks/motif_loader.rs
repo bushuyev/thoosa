@@ -150,7 +150,7 @@ where
         let (channel, find_motifs_run_id, slices, resources_map) =
             self.store
                 .read()
-                .list_motif_slices(motif_id_value, None, None)?;
+                .list_motif_slices(motif_id_value, None, None, None)?;
 
         let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), None, None, &ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area).await?;
 
@@ -553,7 +553,7 @@ mod tests {
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
         let resource_b = Resource::new(2, 1, "tensor_b", 1000);
         let mut store = MockStoreBuilder::new()
-            .with_list_motif_slices(10u32, None, None, Ok((0i64, run_id, vec![
+            .with_list_motif_slices(10u32, None, None, None, Ok((0i64, run_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
                 TensorIdSliceIdx(2, 100)

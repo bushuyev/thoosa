@@ -1676,7 +1676,7 @@ fn motifs_to_tensor_cmd(
     let t = motifs_to_tensor(
         store
             .read()
-            .list_motifs_slices(find_motif_run_id, vec![find_motif_run_id])?,
+            .list_motifs_slices(find_motif_run_id, None)?,
         loader,
         &find_motifs_run_config,
         20,
@@ -1926,7 +1926,7 @@ async fn run_train_motif_nets_2(
         );
 
         let (channel, run_id, slices, resources_map) =
-            store.read().list_motif_slices(motif_id, None, None)?;
+            store.read().list_motif_slices(motif_id, None, None, None)?;
 
         assert_eq!(run_id, find_motifs_run_id);
 
@@ -1951,6 +1951,7 @@ async fn run_train_motif_nets_2(
 
         let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(
             motif_id,
+            None,
             Some(all_slices_1.len() as u32),
             Some((find_motifs_run_id, channel as u32)),
         )?;
@@ -2035,7 +2036,7 @@ fn run_train_motif_nets(
     motifs.into_iter().map(|motif_id| {
         let (all_slices_0, all_slices_1, channel) = {
 
-            let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(*motif_id, None, None)?;
+            let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(*motif_id, None, None, None)?;
 
             assert_eq!(run_id, find_motifs_run_id);
 
@@ -2047,7 +2048,7 @@ fn run_train_motif_nets(
             );
 
             //list motifs which are NOT motif_id and NOT from run_id
-            let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(*motif_id, Some(all_slices_1.len() as u32), Some((find_motifs_run_id, channel as u32)))?;
+            let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(*motif_id, None, Some(all_slices_1.len() as u32), Some((find_motifs_run_id, channel as u32)))?;
 
             debug!("train_on_motif: 0. channel={channel}, run_id={run_id}, slices.len={}", slices.len());
             trace!("train_on_motif: 0. slices={slices:?}, resources_map={resources_map:?}");
@@ -2779,7 +2780,7 @@ mod cli_tests {
 
         let mut slices = store
             .read()
-            .list_motifs_slices(run_ids[0], vec![run_ids[0]])?;
+            .list_motifs_slices(run_ids[0], None)?;
 
         debug!("slices={slices:?}");
 
