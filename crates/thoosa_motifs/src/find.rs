@@ -2243,7 +2243,7 @@ pub async fn select_motifs_for_label_2(
     let find_motifs_run_config_motifs_tensors:Result<Vec<(FindMotifsRunConfig, (MotifsTensors, HashMap<String, SyncWrapper<Tensor>>))>, ThoosaError> = async move {
         let mut find_motifs_run_config_motifs_tensors: Vec<(FindMotifsRunConfig, (MotifsTensors, HashMap<String, SyncWrapper<Tensor>>))> = try_join_all(find_motif_run_ids.expect("input_run_ids").iter().map(async |find_motif_run_id| {
             let resource_id_motif_slices =
-                store.read().list_motifs_slices(*find_motif_run_id, vec![*find_motif_run_id])?;
+                store.read().list_motifs_slices(*find_motif_run_id, None)?;
             trace!("select_motifs_for_label: resource_id_motif_slices={resource_id_motif_slices:?}");
 
             // let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(*find_motif_run_id, store.read().list_run_config_values(*find_motif_run_id)?);
@@ -2406,7 +2406,7 @@ pub fn select_motifs_for_label(
     let mut find_motifs_run_config_motifs_tensors = find_motif_run_ids.expect("input_run_ids").iter().map(|find_motif_run_id|{
 
         let resource_id_motif_slices =
-            store.read().list_motifs_slices(*find_motif_run_id, vec![*find_motif_run_id])?;
+            store.read().list_motifs_slices(*find_motif_run_id, None)?;
         trace!("select_motifs_for_label: resource_id_motif_slices={resource_id_motif_slices:?}");
 
         // let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(*find_motif_run_id, store.read().list_run_config_values(*find_motif_run_id)?);
@@ -3446,7 +3446,7 @@ mod motif_find_tests {
         // debug!("{:?}", store.read().list_run_resources(1)?);
         let slices = store
             .read()
-            .list_motifs_slices(run_ids[0], vec![run_ids[0]])?;
+            .list_motifs_slices(run_ids[0], None)?;
 
         debug!("run_ids={run_ids:?} slices: {slices:?}");
         debug!("0: {:?}", slices.get(&resources[0]));
@@ -3596,7 +3596,7 @@ mod motif_find_tests {
             vec![Cpu],
         )?;
 
-        let slices = store.read().list_motifs_slices(id, vec![id])?;
+        let slices = store.read().list_motifs_slices(id, None)?;
 
         let motif_id_set = slices
             .iter()
@@ -3883,7 +3883,7 @@ mod motif_find_tests {
         debug!("run_ids={:?}", run_ids);
 
         debug!("{:?}", store.read().list_run_resources(1)?);
-        let slices = store.read().list_motifs_slices(id, vec![id])?;
+        let slices = store.read().list_motifs_slices(id, None)?;
         debug!("0: {:?}", slices.get(&resources[0]));
         debug!("1: {:?}", slices.get(&resources[1]));
         debug!("2: {:?}", slices.get(&resources[2]));
@@ -4009,7 +4009,7 @@ mod motif_find_tests {
         )?;
 
         debug!("{:?}", store.read().list_run_resources(1)?);
-        let eeg_slices = store.read().list_motifs_slices(1, vec![1])?;
+        let eeg_slices = store.read().list_motifs_slices(1, None)?;
 
         debug!("eeg_slices={eeg_slices:?}");
         //TODO
@@ -4111,7 +4111,7 @@ mod motif_find_tests {
         )?;
 
         debug!("{:?}", store.read().list_run_resources(1)?);
-        let motif_slices = store.read().list_motifs_slices(1, vec![1])?;
+        let motif_slices = store.read().list_motifs_slices(1, None)?;
 
         assert!(motif_slices.len() >= 3); //may not be able to find all matches
 
@@ -5136,7 +5136,7 @@ pub fn plot_motif_slices(
     device: &Device,
 ) -> Result<(), ThoosaError> {
     let (channel, run_id, slices, resources_map) =
-        store.read().list_motif_slices(motif_id, limit, None)?;
+        store.read().list_motif_slices(motif_id, None, limit, None)?;
     let slices_len = slices.len();
     // if slices_len < 3 {
     //     return Ok(())
