@@ -1676,7 +1676,7 @@ fn motifs_to_tensor_cmd(
     let t = motifs_to_tensor(
         store
             .read()
-            .list_motifs_slices(find_motif_run_id, vec![find_motif_run_id])?,
+            .list_motifs_slices(find_motif_run_id, None)?,
         loader,
         &find_motifs_run_config,
         20,
@@ -2779,7 +2779,7 @@ mod cli_tests {
 
         let mut slices = store
             .read()
-            .list_motifs_slices(run_ids[0], vec![run_ids[0]])?;
+            .list_motifs_slices(run_ids[0], None)?;
 
         debug!("slices={slices:?}");
 
