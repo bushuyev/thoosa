@@ -319,6 +319,8 @@ impl MotifsBatch {
             let num_validation_slices = if num_validation_slices < 0 {1} else {num_validation_slices};
             let split = num_motif_slices - num_validation_slices;
 
+            debug!("MotifsBatch::new: motif={:?} num_motif_slices={num_motif_slices} num_validation_slices={num_validation_slices} split={split}", motif.extra());
+
             let motifs_t = motif.data().t_ref();
             let train_motifs = motifs_t.i((0..split, .. ));
             let valid_motifs = motifs_t.i((split.., .. ));
@@ -345,7 +347,7 @@ impl MotifsBatch {
 
         with_data!(self.device_idx, motifs, random_slices; |motifs:&ThoTensor<MotifSlices, SimpleId>, random_slices:&ThoTensor<MotifSlices, DataId>|{
 
-            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?.set_requires_grad(true);
+            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?.set_requires_grad(true);//TODO config
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?.set_requires_grad(true);
 
            /*

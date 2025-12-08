@@ -1,3 +1,4 @@
+use log::debug;
 use tch::{Tensor, Kind, Device, Result as TchResult};
 
 /// Controls mixup+jitter behavior when N is small.
@@ -20,31 +21,32 @@ impl Default for MixupJitterCfg {
 }
 
 /// Convenience wrapper with defaults.
-pub fn make_batch(x: &Tensor, batch_size: i64) -> TchResult<Tensor> {
-    make_batch_with(x, batch_size, MixupJitterCfg::default())
+pub fn make_batch(in_tensor: &Tensor, batch_size: i64) -> TchResult<Tensor> {
+    make_batch_with(in_tensor, batch_size, MixupJitterCfg::default())
 }
 
-/// Main entry. Expects `x` of shape [N, M], float dtype.
-pub fn make_batch_with(x: &Tensor, batch_size: i64, cfg: MixupJitterCfg) -> TchResult<Tensor> {
-    let (n, m) = x.size2()?; // ensures 2-D and returns (N, M)
-    let device = x.device();
-    let kind = x.kind();
+/// Main entry. Expects `x` of shape [num_records X seq_len], float dtype.
+pub fn make_batch_with(in_tensor: &Tensor, batch_size: i64, cfg: MixupJitterCfg) -> TchResult<Tensor> {
+    debug!("make_batch_with: in_tensor.size={:?}", in_tensor.size());
+    let (num_records, seq_len) = in_tensor.size2()?; // ensures 2-D and returns (N, M)
+    let device = in_tensor.device();
+    let kind = in_tensor.kind();
     debug_assert!(matches!(kind, Kind::Float | Kind::BFloat16 | Kind::Half | Kind::Double));
 
     // Case 1: enough data — sample without replacement.
-    if n > 2 * batch_size {
-        let idx = Tensor::randperm(n, (Kind::Int64, device)).narrow(0, 0, batch_size);
-        return Ok(x.index_select(0, &idx));
+    if num_records > 2 * batch_size {
+        let idx = Tensor::randperm(num_records, (Kind::Int64, device)).narrow(0, 0, batch_size);
+        return Ok(in_tensor.index_select(0, &idx));
     }
 
     // Case 2: data paucity — build a batch via sampling with replacement,
     // then mixup (optional) and jitter (optional).
-    let base_idx = Tensor::randint(n, &[batch_size], (Kind::Int64, device));
-    let mut out = x.index_select(0, &base_idx).to_kind(Kind::Float);
+    let base_idx = Tensor::randint(num_records, &[batch_size], (Kind::Int64, device));
+    let mut out = in_tensor.index_select(0, &base_idx).to_kind(Kind::Float);
 
     if cfg.do_mixup {
-        let perm_idx = Tensor::randint(n, &[batch_size], (Kind::Int64, device));
-        let partner = x.index_select(0, &perm_idx).to_kind(Kind::Float);
+        let perm_idx = Tensor::randint(num_records, &[batch_size], (Kind::Int64, device));
+        let partner = in_tensor.index_select(0, &perm_idx).to_kind(Kind::Float);
         let lam = beta_tensor(cfg.alpha, batch_size, device)?.to_kind(out.kind()); // [B]
         let w = lam.unsqueeze(1); // [B,1] to broadcast over M
         out = &w * out + (1.0 - &w) * partner;
@@ -87,6 +89,7 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
     use tch::{Device, IndexOp, Kind, Tensor};
+    use tch::kind::FLOAT_CPU;
 
     fn row_matrix(n: i64, m: i64) -> Tensor {
         // Rows encode their index so we can check uniqueness/bounds.
