@@ -617,7 +617,7 @@ impl ResourceStore for SqlStore {
             )?;
 
             let vec = stmt
-                .query_map([group_descr], |row| {
+                .query_map([Value::Text(group_descr.to_string()), Value::Integer(limit as i64)], |row| {
                     //TODO move group_slices out, not for store
                     Ok(Resource::new(
                         row.get::<usize, u32>(0)?,
@@ -1443,7 +1443,7 @@ impl Store for SqlStore {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
-        debug!("save_slices_groups_as_motifs_from_file: run_id={run_id:?}, channel={channel:?}");
+        debug!("save_slices_groups_as_motifs_from_file: run_id={run_id:?}, channel={channel:?} slices.len={}", slices.len());
 
         {
             let mut slices_chunks = slices.into_iter().array_chunks::<500>();

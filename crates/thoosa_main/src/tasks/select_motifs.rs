@@ -445,17 +445,18 @@ where
                             )
                             .await?;
 
-                        // let ClcRresourcesMotifsDistOutput {
-                        //     select_motifs_run_id: find_motifs_run_config_id,
-                        //     channel_masks_dists_ids,
-                        //     resources_iter,
-                        //     ..
-                        // } = clc_resources_input.with_data_ref(
-                        //     1,
-                        //       Arc::clone(&ctx_clone), None, |v|{
-                        //           clc_stage.do_run(v, ctx_clone)
-                        //       }
-                        // ).await?;
+                        /* run without OOM handling
+                        let ClcRresourcesMotifsDistOutput {
+                            select_motifs_run_id: find_motifs_run_config_id,
+                            channel_masks_dists_ids,
+                            resources_iter,
+                            ..
+                        } = clc_resources_input.with_data_ref(
+                            1,
+                              Arc::clone(&ctx_clone), None, |v|{
+                                  clc_stage.do_run(v, ctx_clone)
+                              }
+                        ).await?;*/
 
 
                         debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");
@@ -486,7 +487,7 @@ where
                                         }
                                     }
 
-                                    if !slices.is_empty() /*&& slices.len() < num_resources * 3*/{//TODO move to a Stage and use both from find_motifs and here
+                                    if !slices.is_empty() && slices.len() < num_resources * 3{//TODO move to a Stage and use both from find_motifs and here
                                         motif_ids.push(motif_id.clone());
                                         store.write().add_slices_to_motif(find_motifs_run_config_id, *motif_id, channel as i64, slices)?;
                                     }
