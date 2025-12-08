@@ -390,7 +390,7 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
     use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
-    use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
+    use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::cross_dims::MotifSlices;
     use crate::tasks::average_euclidean_distance::AverageDistanceValue;
     use crate::tasks::select_motifs::SelectMotifsStage;
@@ -596,7 +596,7 @@ mod tests {
             let cache_area_loop = ctx.read().cache_area();
             let num_devices_loop = GlobalCtx::global().device_count();
             let motif_id_value = DataId::from(&(motif_id_raw as u32));
-            let motif_id = Arc::new(DevicesWrap::wrap_cpu(motif_id_value.clone()));
+            let motif_id = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new(motif_id_value.clone())));
 
             let motif = Arc::clone(&motif_loader_impl).run(
                 Arc::clone(&motif_id),

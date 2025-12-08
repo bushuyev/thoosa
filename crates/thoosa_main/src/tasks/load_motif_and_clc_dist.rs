@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
-use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
+use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use cached_derive::Cached;
@@ -34,7 +34,7 @@ pub struct LoadMotifAndClcDistanceStage<ML, CLC, C>
 where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
-            In<'i> = DataId,
+            In<'i> = MotifLoaderInput,
             Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
@@ -55,7 +55,7 @@ impl<ML, CLC, C> Debug for LoadMotifAndClcDistanceStage<ML, CLC, C>
 where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
-            In<'i> = DataId,
+            In<'i> = MotifLoaderInput,
             Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
@@ -75,7 +75,7 @@ impl<ML, CLC, C> WithId for LoadMotifAndClcDistanceStage<ML, CLC, C>
 where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
-            In<'i> = DataId,
+            In<'i> = MotifLoaderInput,
             Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
@@ -97,7 +97,7 @@ impl<ML, CLC, C> LoadMotifAndClcDistanceStage<ML, CLC, C>
 where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
-            In<'i> = DataId,
+            In<'i> = MotifLoaderInput,
             Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
@@ -123,7 +123,7 @@ impl<ML, CLC, C> OutId for LoadMotifAndClcDistanceStage<ML, CLC, C>
 where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
-            In<'i> = DataId,
+            In<'i> = MotifLoaderInput,
             Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
@@ -143,7 +143,7 @@ impl<ML, CLC, C> Stage for LoadMotifAndClcDistanceStage<ML, CLC, C>
 where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
-            In<'i> = DataId,
+            In<'i> = MotifLoaderInput,
             Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
@@ -154,7 +154,7 @@ where
             Ctx = C,
         > + Adjustable + OutId + Sync + Send + 'static,
 {
-    type In<'a> = DataId;
+    type In<'a> = MotifLoaderInput;
 
     type Out = AverageDistanceValue;
     type Ctx = C;
@@ -165,7 +165,7 @@ impl<ML, CLC, C> AsyncStage for LoadMotifAndClcDistanceStage<ML, CLC, C>
 where
     C: RunCtx + Adjustable + 'static,
     for<'i> ML: AsyncStage<
-            In<'i> = DataId,
+            In<'i> = MotifLoaderInput,
             Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>,
             Ctx = C,
         > + Cached + OutId + 'static,
@@ -270,7 +270,7 @@ mod tests {
     use super::{LoadMotifAndClcDistanceStage, RunCtx2};
     use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use crate::tasks::average_euclidean_distance::{mock_average_stage, AverageDistanceValue};
-    use crate::tasks::motif_loader::{MotifMeta, mock_motif_loader};
+    use crate::tasks::motif_loader::{MotifMeta, mock_motif_loader, MotifLoaderInput};
     use caching_runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
     use parking_lot::{Mutex, RwLock};
@@ -289,7 +289,7 @@ mod tests {
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (42u32, (MotifMeta { channel: 0, find_motifs_run_id: 1, window: 3 }, Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3))))
+            (MotifLoaderInput::new(DataId(42u32)), (MotifMeta { channel: 0, find_motifs_run_id: 1, window: 3 }, Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3))))
         ]).finish());
 
         let call_log = Arc::new(Mutex::new(Vec::new()));
@@ -307,7 +307,7 @@ mod tests {
         let cache_area = ctx.read().cache_area();
         let num_devices = GlobalCtx::global().device_count();
         let input_id_value = DataId::from(&42u32);
-        let input_id = Arc::new(DevicesWrap::wrap_cpu(input_id_value.clone()));
+        let input_id = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new(input_id_value.clone())));
         let result = stage.run_cached(Arc::clone(&input_id), Arc::clone(&ctx)).await?;
 
         let result_value: AverageDistanceValue = result.with_data_ref(0, Arc::clone(&ctx), None, |val: &AverageDistanceValue| Ok(val.clone())).await?;

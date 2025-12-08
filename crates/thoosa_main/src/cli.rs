@@ -83,7 +83,7 @@ use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
-use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
+use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
 use crate::tasks::train_label_nets::{TrainLabelNets, TrainLabelNetsInput};
 use crate::tasks::train_motif_nets::{TrainMotifNets, TrainMotifNetInput};
@@ -1851,7 +1851,7 @@ async fn plot_motif(
 ) -> Result<(), ThoosaError> {
     let cache_area = ctx.read().cache_area();
     let num_devices = GlobalCtx::global().device_count();
-    let motif_id_cache = Arc::new(DevicesWrap::wrap_cpu(DataId(motif_id as u32)));
+    let motif_id_cache = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new(DataId(motif_id as u32))));
 
     let motif = Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_cache),
