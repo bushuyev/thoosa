@@ -2376,7 +2376,7 @@ pub async fn select_motifs_for_label_2(
 
                         info!("num good motifs: {} good_motif_ids_rates={good_motif_ids_rates:?}", good_motifs.sum(Kind::Int));
                         // a.push(store.write().save_selected_motifs(run_config.id.expect("no cfg id"), good_motif_ids_rates)?);
-                        Some(Box::new(SelectMotifsSavableResult::new(&[find_motif_run_cfg.id.expect("find_motif_run_cfg.id")], select_motif_run_config.clone(), good_motif_ids_rates)) as Box<dyn SavableResult>)
+                        Some(Box::new(SelectMotifsSavableResult::new(&[find_motif_run_cfg.id.expect("find_motif_run_cfg.id")], vec![select_motif_run_config.clone()], good_motif_ids_rates)) as Box<dyn SavableResult>)
                     }
                 }
             })
@@ -2544,7 +2544,7 @@ pub fn select_motifs_for_label(
 
                          info!("num good motifs: {} good_motif_ids_rates={good_motif_ids_rates:?}", good_motifs.sum(Kind::Int));
                          // a.push(store.write().save_selected_motifs(run_config.id.expect("no cfg id"), good_motif_ids_rates)?);
-                         Some(Box::new(SelectMotifsSavableResult::new(&[find_motif_run_cfg.id.expect("find_motif_run_cfg.id")], select_motif_run_config.clone(), good_motif_ids_rates)) as Box<dyn SavableResult>)
+                         Some(Box::new(SelectMotifsSavableResult::new(&[find_motif_run_cfg.id.expect("find_motif_run_cfg.id")], vec![select_motif_run_config.clone()], good_motif_ids_rates)) as Box<dyn SavableResult>)
                      }
                  }
              })
@@ -2557,7 +2557,7 @@ pub fn select_motifs_for_label(
 #[dummy_data(clone)]
 pub struct SelectMotifsSavableResult {
     find_motif_run_id: Vec<RunId>,
-    run_config: SelectMotifsRunConfig,
+    run_config: Vec<SelectMotifsRunConfig>,
     good_motif_ids_rates: Vec<(u32, f64)>,
 }
 
@@ -2566,14 +2566,14 @@ impl WithId for SelectMotifsSavableResult {
     type ID = RunId;
 
     fn id(&self) -> &Self::ID {
-        self.run_config.id.as_ref().unwrap()
+        self.run_config[0].id.as_ref().unwrap()//TODO 
     }
 }
 
 impl SelectMotifsSavableResult {
     pub fn new(
         find_motif_run_id: &[RunId],
-        run_config: SelectMotifsRunConfig,
+        run_config: Vec<SelectMotifsRunConfig>,
         good_motif_ids_rates: Vec<(u32, f64)>,
     ) -> Self {
         Self {
@@ -2594,21 +2594,13 @@ impl SavableResult for SelectMotifsSavableResult {
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoosaError> {
-        let run_config_id = store.write().save_run_config(
-            Some(&self.find_motif_run_id),
-            &SelectMotifsRunConfig::type_name(),
-            "Select motifs",
-            &"todo",
-            self.run_config.to_properties_iter(None).collect(),
-        )?;
+        for run_config in &self.run_config {
+            store
+                .write()
+                .save_selected_motifs(run_config.id.expect("should be pre set in run_grid"), self.good_motif_ids_rates.clone())?; //TODO mem::replace?
 
-        self.run_config.set_id(run_config_id);
-
-        store
-            .write()
-            .save_selected_motifs(run_config_id, self.good_motif_ids_rates.clone())?; //TODO mem::replace?
-
-        Ok(run_config_id)
+        }
+        Ok(0)//TODO not used
     }
 }
 

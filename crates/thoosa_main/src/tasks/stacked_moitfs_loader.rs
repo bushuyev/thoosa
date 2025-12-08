@@ -45,8 +45,10 @@ pub struct StackedMotifsInput {
 
 impl StackedMotifsInput {
     pub fn new( find_config: Arc<FindMotifsRunConfig>, select_config: Arc<SelectMotifsRunConfig>) -> Self {
+        debug!("StackedMotifsInput: find_config={find_config:?} select_config={select_config:?}");
         Self {
-            id: format!("{}_{}", find_config.id.unwrap(), select_config.id.unwrap()).into(),
+            // id: format!("{}_{}", find_config.id.unwrap(), select_config.id.unwrap()).into(),//TODO in select motifs SelectMotifsRunConfig is saved in run_grid right before running stage so no sense to cache by select_motifs_run_config. No other cases yet.
+            id: format!("{}", find_config.id.unwrap()/*, select_config.id.unwrap()*/).into(),
             find_motifs_run_config: find_config,
             select_motifs_run_config: select_config
         }

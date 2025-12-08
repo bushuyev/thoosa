@@ -70,7 +70,7 @@ where
     ws:Arc<RwLock<Box<dyn Workspace>>>,
     loader:Arc<L>,
     stacked_motifs_loader:Arc<StackedMotifsLoader<ML, C>>,
-    run_configs:Vec<SelectMotifsRunConfig>,
+    run_configs:Vec<SelectMotifsRunConfig>,//TODO map to Vec<Arc in new
     find_motifs_run_ids:Vec<RunId>,
     clc_resources_motifs_dist:Arc<ClcResourcesMotifsDist<C>>,
     max_batch:i64//TODO to SelectMotifsSFixedConfig
@@ -204,7 +204,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         .collect::<Vec<_>>();
 
         Ok(ClcResourcesMotifsDistOutput::new(
-            self.id.find_motifs_run_id,
+            self.id.select_motifs_run_id,
             channel_masks_dists_ids,
             SlicesIter::new(self.step, resource_ids_sizes)
         ))
@@ -289,14 +289,11 @@ where
                     .collect::<Vec<_>>())
             }).await?;
 
-
-
         debug!("SelectMotifsStage::run: resources={resources:?}");
         if resources.is_empty() {
             warn!("SelectMotifsStage::run: no labels resources");
             return Err(format!("No resources found in  {input:?}").into())
         }
-
 
         let num_channels = self.ws.read().channels() as usize;
 
@@ -314,6 +311,7 @@ where
             })
             .collect::<Result<Vec<_>, ThoosaError>>()?;
 
+        //for each FindMotifsRunConfigs X SelectMotifsRunConfig
         let stacked_motifs = futures::stream::iter(
             find_motifs_run_configs
                 .into_iter()
@@ -418,7 +416,7 @@ where
                         let required_ids = HashMap::new();
 
                         let ClcResourcesMotifsDistOutput {
-                            select_motifs_run_id: find_motifs_run_config_id,
+                            select_motifs_run_id,//can be taken from motif_data, no need to trip through ClcResourcesMotifsDist?
                             channel_masks_dists_ids,
                             resources_iter,
                             ..
@@ -433,9 +431,14 @@ where
                                 Arc::clone(&clc_resources_input),
                                 ctx_clone,
                                 Contexts::new(
-                                    SplitsAdjusterContextImpl::new(t_1_batch_len as i64, SelectMotifsSavableResultBuilder::new(StackedMotifsOutputId::new(
-                                        find_motifs_run_config.id.expect("find_motifs_run_config"), select_motifs_run_config.id.expect("select_motifs_run_config")
-                                    ), num_channels as u32, find_motifs_run_config.step as usize, cache_area).await),
+                                    SplitsAdjusterContextImpl::new(t_1_batch_len as i64, SelectMotifsSavableResultBuilder::new(
+                                        StackedMotifsOutputId::new(
+                                            find_motifs_run_config.id.expect("find_motifs_run_config"), select_motifs_run_config.id.expect("select_motifs_run_config")
+                                        ),
+                                        num_channels as u32,
+                                        find_motifs_run_config.step as usize,
+                                        cache_area
+                                    ).await),
                                     NoopRunnableContext {},
                                     PermitsAndDumpToCpuAdjustableContex::new(
                                         PermitsAdjustContextImpl::new(ctx_name),
@@ -447,7 +450,7 @@ where
 
                         /* run without OOM handling
                         let ClcRresourcesMotifsDistOutput {
-                            select_motifs_run_id: find_motifs_run_config_id,
+                            select_motifs_run_id,
                             channel_masks_dists_ids,
                             resources_iter,
                             ..
@@ -459,7 +462,7 @@ where
                         ).await?;*/
 
 
-                        debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?}");
+                        debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?} select_motifs_run_id={select_motifs_run_id}");
                         let mut motif_ids = vec![];
                         for channel_mask_dists_ids in channel_masks_dists_ids.into_iter().enumerate() {
                             if let (channel, Some(mask_dists_ids)) = channel_mask_dists_ids {
@@ -489,7 +492,7 @@ where
 
                                     if !slices.is_empty() && slices.len() < num_resources * 3{//TODO move to a Stage and use both from find_motifs and here
                                         motif_ids.push(motif_id.clone());
-                                        store.write().add_slices_to_motif(find_motifs_run_config_id, *motif_id, channel as i64, slices)?;
+                                        store.write().add_slices_to_motif(select_motifs_run_id, *motif_id, channel as i64, slices)?;
                                     }
                                 }
                             }
@@ -523,7 +526,7 @@ where
 
         debug!("SelectMotifsStage::run: good_motif_ids={good_motif_ids:?}");
 
-        Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(&self.find_motifs_run_ids, self.run_configs[0].clone(), good_motif_ids))))
+        Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new(&self.find_motifs_run_ids, self.run_configs.clone(), good_motif_ids))))
     }
 }
 
