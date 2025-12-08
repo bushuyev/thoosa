@@ -175,7 +175,7 @@ pub trait ResourcesConfig {
         store: &Arc<RwLock<Box<S>>>,
     ) -> Result<Self::R, ThoosaError>;
 
-    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> where Self:Debug{
-        Err(ThoosaError::new(format!("resource config {self:?} is not ok")))
+    fn check<S: ResourceStore + ?Sized>(&self, _store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> {
+        Err(ThoosaError::new("resource config check is not implemented"))
     }
 }
