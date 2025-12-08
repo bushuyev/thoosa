@@ -157,7 +157,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     fn list_motifs_slices(
         &self,
         run_id: RunId,
-        slice_run_ids: Vec<RunId>,
+        select_motifs_run_id: Option<Vec<RunId>>,
     ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
 
     fn list_motif_slices(&self, motif_id: u32, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>) ->
@@ -291,7 +291,7 @@ mock! {
         fn list_motifs_slices(
             &self,
             run_id: RunId,
-            slice_run_ids: Vec<RunId>,
+            select_motifs_run_id: Option<Vec<RunId>>,
         ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
 
         fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoosaError>;
@@ -1570,14 +1570,14 @@ impl Store for SqlStore {
     fn list_motifs_slices(
         &self,
         run_id: RunId,
-        slice_run_ids: Vec<RunId>,
+        select_motifs_run_id: Option<Vec<RunId>>,
     ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
-        let mut slice_run_ids = slice_run_ids;
-        if slice_run_ids.is_empty() {
-            slice_run_ids.push(run_id);
+        let mut slice_run_ids = vec![run_id];
+        if let Some(select_ids) = select_motifs_run_id {
+            slice_run_ids.extend(select_ids);
         }
 
         let slice_run_placeholders = slice_run_ids
@@ -3283,7 +3283,7 @@ mod store_tests {
         let motif_slices_map =
             store
                 .read()
-                .list_motifs_slices(find_motifs_run_id, vec![find_motifs_run_id])?;
+                .list_motifs_slices(find_motifs_run_id, None)?;
         debug!("motif_slices_map={:?}", motif_slices_map);
 
         // assert_eq!(4, map.len());
@@ -3470,9 +3470,9 @@ mod store_tests {
 
         let resource = store.list_resources_by_ids(&resource_ids)?.remove(0);
 
-        let only_find = store.list_motifs_slices(find_run_id, vec![find_run_id])?;
+        let only_find = store.list_motifs_slices(find_run_id, None)?;
         let both_runs =
-            store.list_motifs_slices(find_run_id, vec![find_run_id, select_run_id])?;
+            store.list_motifs_slices(find_run_id, Some(vec![select_run_id]))?;
 
         let find_only_slices = only_find.get(&resource).expect("resource slices");
         assert_eq!(1, find_only_slices.len());
