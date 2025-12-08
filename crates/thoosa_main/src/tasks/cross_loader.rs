@@ -140,10 +140,18 @@ pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync> {
 }
 
 impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
-    pub fn new(id: SimpleId, resources: RC) -> Self {
+    pub(crate) fn check(self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<Self, ThoosaError> {
+        self.resources_config.check(store)?;
+
+        Ok(self)
+    }
+}
+
+impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
+    pub fn new(id: SimpleId, resources_config: RC) -> Self {
         Self {
             id,
-            resources_config: resources, //: resources.to_resources().into_iter().map(|r| Arc::new(r)).collect(),
+            resources_config,
         }
     }
 

@@ -100,6 +100,8 @@ where
         input: &Self::In<'f>,
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
+        debug!("ClcResourcesMotifsDist::do_run: input={input:?}");
+
         let device_idx = ctx.read().device_idx();
 
         let unfold_params = UnfoldParams::new(
@@ -224,7 +226,7 @@ pub struct ClcResourcesMotifsDistInputDeviceWrapper {
     id: SimpleId,
     batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>,
     resource_ids: Vec<ResourceId>,
-    stacked_motifs_output: Arc<DevicesWrap<StackedMotifsOutput>>,
+    stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>,
 }
 
 impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapper {
@@ -248,8 +250,8 @@ impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 impl ClcResourcesMotifsDistInputDeviceWrapper {
-    pub fn new(id: SimpleId, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>, resource_ids: Vec<ResourceId>, batched_motifs_output: Arc<DevicesWrap<StackedMotifsOutput>>) -> Self {
-        Self { id, batch, resource_ids, stacked_motifs_output: batched_motifs_output }
+    pub fn new(id: SimpleId, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>, resource_ids: Vec<ResourceId>, stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>) -> Self {
+        Self { id, batch, resource_ids, stacked_motifs }
     }
 }
 
@@ -270,17 +272,17 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
         P:PermitsCtx
     {
         let t_1_batch= self.batch.clone();
-        let batched_motifs_output = Arc::clone(&self.stacked_motifs_output);
-        with_data!(to_device_idx, [t_1_batch], batched_motifs_output;
+        let stacked_motifs = Arc::clone(&self.stacked_motifs);
+        with_data!(to_device_idx, [t_1_batch], stacked_motifs;
             |
              batch_v:&[&ThoTensor<ChannelsData2, SimpleId>],
-             batched_motifs_output:&StackedMotifsOutput
+             stacked_motifs:&StackedMotifsOutput
             |{
 
                 do_run(&ClcResourcesMotifsDistInput::new(
                     batch_v,
                     self.resource_ids.clone(),
-                    batched_motifs_output,
+                    stacked_motifs,
                 ))
 
         })
@@ -320,7 +322,7 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
 
         let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
         let t_1_batch= self.batch[range.clone()].to_vec();
-        let stacked_motifs_output = Arc::clone(&self.stacked_motifs_output);
+        let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
 
         with_data!(to_device_idx, [t_1_batch], stacked_motifs_output;
             |
@@ -409,13 +411,15 @@ pub struct ClcResourcesMotifsDistOutput {
 
 impl ClcResourcesMotifsDistOutput {
     pub fn new(
-        select_motifs_run_config_id: RunId,
+        select_motifs_run_id: RunId,
         channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<DataId>)>>,
         resources_iter: SlicesIter,
     ) -> Self {
+        debug!("ClcResourcesMotifsDistOutput::new: select_motifs_run_id={select_motifs_run_id} channel_masks_dists_ids={channel_masks_dists_ids:?} resources_iter={resources_iter:?}");
+
         Self {
             id: SimpleId("ClcResourcesMotifsDistOutput"),
-            select_motifs_run_id: select_motifs_run_config_id,
+            select_motifs_run_id,
             channel_masks_dists_ids,
             resources_iter,
         }
