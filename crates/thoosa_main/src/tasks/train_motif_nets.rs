@@ -472,7 +472,7 @@ mod tests {
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new(Some(find_motifs_run_id), 50, 100, None, None).to_properties_iter(None).collect()),
                 )
-                .with_list_motif_slices(motif_id, None, None, Ok((0i64, find_motifs_run_id, /*vec![
+                .with_list_motif_slices(motif_id, None, None, None, Ok((0i64, find_motifs_run_id, /*vec![
                     TensorIdSliceIdx(1, 100),
                     TensorIdSliceIdx(1, 200),
                     TensorIdSliceIdx(2, 100)

@@ -1926,7 +1926,7 @@ async fn run_train_motif_nets_2(
         );
 
         let (channel, run_id, slices, resources_map) =
-            store.read().list_motif_slices(motif_id, None, None)?;
+            store.read().list_motif_slices(motif_id, None, None, None)?;
 
         assert_eq!(run_id, find_motifs_run_id);
 
@@ -1951,6 +1951,7 @@ async fn run_train_motif_nets_2(
 
         let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(
             motif_id,
+            None,
             Some(all_slices_1.len() as u32),
             Some((find_motifs_run_id, channel as u32)),
         )?;
@@ -2035,7 +2036,7 @@ fn run_train_motif_nets(
     motifs.into_iter().map(|motif_id| {
         let (all_slices_0, all_slices_1, channel) = {
 
-            let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(*motif_id, None, None)?;
+            let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(*motif_id, None, None, None)?;
 
             assert_eq!(run_id, find_motifs_run_id);
 
@@ -2047,7 +2048,7 @@ fn run_train_motif_nets(
             );
 
             //list motifs which are NOT motif_id and NOT from run_id
-            let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(*motif_id, Some(all_slices_1.len() as u32), Some((find_motifs_run_id, channel as u32)))?;
+            let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(*motif_id, None, Some(all_slices_1.len() as u32), Some((find_motifs_run_id, channel as u32)))?;
 
             debug!("train_on_motif: 0. channel={channel}, run_id={run_id}, slices.len={}", slices.len());
             trace!("train_on_motif: 0. slices={slices:?}, resources_map={resources_map:?}");
