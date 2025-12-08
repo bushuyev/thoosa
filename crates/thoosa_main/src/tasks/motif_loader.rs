@@ -39,6 +39,33 @@ use crate::tasks::find_motifs::{config_to_stage, FilteredLoaderStage, LoaderStag
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 
+#[derive(Debug, Clone, DummyData, PartialEq, Eq, Hash)]
+pub struct MotifLoaderInput {
+    motif_id:DataId
+}
+
+impl From<u32> for MotifLoaderInput{
+    fn from(value: u32) -> Self {
+        MotifLoaderInput::new(DataId(value))
+    }
+}
+
+impl MotifLoaderInput {
+    pub fn new(motif_id: DataId) -> Self {
+        Self { motif_id }
+    }
+}
+impl Input for MotifLoaderInput {
+}
+
+impl WithId for MotifLoaderInput {
+    type ID = DataId;
+
+    fn id(&self) -> &Self::ID {
+        &self.motif_id
+    }
+}
+
 #[derive(Debug, Cached)]
 pub struct MotifLoader<L, C>
 where
@@ -89,7 +116,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
-    type In<'a> = DataId;
+    type In<'a> = MotifLoaderInput;
     type Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>;
 
     type Ctx = C;
@@ -115,9 +142,9 @@ where
             (guard.device_idx(), guard.cache_area())
         };
 
-        let motif_id = input
-            .with_data_ref(0, Arc::clone(&ctx), None, |id: &DataId| Ok(id.clone()))
-            .await?;
+        let intput = input.clone_from_cpu().await?;
+
+        let motif_id = intput.motif_id;
 
         let motif_id_value = motif_id.clone().0;
         let (channel, find_motifs_run_id, slices, resources_map) =
@@ -413,7 +440,7 @@ pub mod mock_motif_loader {
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
-    use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
+    use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::tensor_loader::mock_tensor_loader::MockTensorLoaderBuilder;
 
     mock! {
@@ -424,7 +451,7 @@ pub mod mock_motif_loader {
         impl Stage for MotifLoader {
             type Ctx = MockRunCtx;
 
-            type In<'a> = DataId;
+            type In<'a> = MotifLoaderInput;
             type Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>;
         }
 
@@ -454,17 +481,17 @@ pub mod mock_motif_loader {
     impl MockMotifLoaderBuilder {
         pub fn with_run_cached<H>(mut self, h: H) -> Self
         where
-            H: IntoIterator<Item=(u32, (MotifMeta, Tensor))>,
+            H: IntoIterator<Item=(MotifLoaderInput, (MotifMeta, Tensor))>,
         {
-            let data_map: Arc<HashMap<DataId, Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
-                (k.into(), Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(k.into(), v.1), v.0), 0)))
+            let data_map: Arc<HashMap<MotifLoaderInput, Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
+                (k.clone(), Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(k.motif_id.into(), v.1), v.0), 0)))
             }).collect());
 
             self.mock.expect_run_cached().returning(move |input, ctx| {
                 block_in_place(|| {
                     Handle::current().block_on(async {
                         input.with_data_ref(0,
-                                            Arc::clone(&ctx), None, |v: &DataId| {
+                                            Arc::clone(&ctx), None, |v: &MotifLoaderInput| {
                                                                         Ok(Arc::clone(data_map
                                                                             .get(v)
                                                                             .expect(&format!("no mock data for {input:? } in MockMotifLoader"))))
@@ -558,7 +585,7 @@ mod tests {
 
         let num_devices = GlobalCtx::global().device_count();
         let cache_area = ctx.read().cache_area();
-        let input_id = Arc::new(DevicesWrap::wrap_cpu(DataId::from(&10u32)));
+        let input_id = Arc::new(DevicesWrap::wrap_cpu(10u32.into()));
 
         let motif = motif_loader
             .run_cached(Arc::clone(&input_id), Arc::clone(&ctx))

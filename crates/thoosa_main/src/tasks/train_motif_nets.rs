@@ -38,7 +38,7 @@ use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::motif_loader::{MotifLoader, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
+use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
 use crate::tasks::motifs_batch_builder::{make_batch_with, MixupJitterCfg};
 use crate::tasks::run_ctx_2::MotifsCtx;
 use crate::tasks::tensor_loader::RawTensorLoader;
@@ -190,7 +190,7 @@ where
             let out_key = Arc::clone(&out_key);
 
             tokio::spawn(async move {
-                let motif = motif_loader.run(Arc::new(DevicesWrap::wrap_cpu(motif_id_rate.0.into())), Arc::clone(&ctx)).await?;
+                let motif = motif_loader.run(Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new(motif_id_rate.0.into()))), Arc::clone(&ctx)).await?;
                 let random_slices = random_slices_loader.run(Arc::new(DevicesWrap::wrap_cpu(SlicesLoaderInput::new(motif_id_rate.0.into(), motif.size().dim_0() as u32))), Arc::clone(&ctx)).await?;
 
 

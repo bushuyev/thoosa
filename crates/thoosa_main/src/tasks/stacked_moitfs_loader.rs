@@ -32,7 +32,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::cross_dims::{ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
-use crate::tasks::motif_loader::MotifMeta;
+use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use crate::tasks::run_ctx_2::MotifsCtx;
 
 #[derive(Debug, Clone, DummyData)]
@@ -131,7 +131,7 @@ impl Output for StackedMotifsOutput {}
 #[derive(Debug, Cached)]
 pub struct StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     motif_loader:Arc<ML>,
@@ -144,7 +144,7 @@ where
 
 impl <ML, C> OutId for StackedMotifsLoader<ML, C>
 where
-ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
 C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -155,7 +155,7 @@ C: RunCtx + MotifsCtx + Adjustable + 'static
 
 impl <ML, C> StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     pub fn new(
@@ -177,7 +177,7 @@ where
 
 impl <ML, C> Stage for StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 
 {
@@ -189,7 +189,7 @@ where
 // #[async_trait]
 impl <ML, C> AsyncStage for StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=DataId, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 
 {
@@ -223,7 +223,7 @@ where
                 // let select_motifs_run_config_id = input.select_motifs_run_config.id;
 
                 async move {
-                    let motif_id_wrap = Arc::new(DevicesWrap::wrap_cpu((motif_id as u32).into()));
+                    let motif_id_wrap = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new((motif_id as u32).into())));
                     let motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx).await?;
 
 
