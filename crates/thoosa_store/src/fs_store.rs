@@ -302,7 +302,7 @@ mod tests {
         file_store.load_slices_into_groups(&store, None)?;
 
         let resources = store.read().list_resources_by_ids(&resource_ids)?;
-        let map = store.read().list_motifs_slices(run_id)?;
+        let map = store.read().list_motifs_slices(run_id, vec![run_id])?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let mut slise_idxs = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
@@ -337,7 +337,7 @@ mod tests {
         file_store.load_slices_into_groups(&store, None)?;
 
         let resources = store.read().list_resources_by_ids(&resource_ids)?;
-        let map = store.read().list_motifs_slices(run_id)?;
+        let map = store.read().list_motifs_slices(run_id, vec![run_id])?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let resoruce_0_motifs = motifs_slices.iter().map(|ms| ms.motif_id).collect::<HashSet<_>>();
@@ -382,7 +382,7 @@ mod tests {
         file_store.load_slices_into_groups(&store, None)?;
 
         let resources = store.read().list_resources_by_ids(&resource_ids)?;
-        let map = store.read().list_motifs_slices(run_id)?;
+        let map = store.read().list_motifs_slices(run_id, vec![run_id])?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let mut slise_idxs_0 = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
@@ -427,7 +427,7 @@ mod tests {
         file_store.load_slices_into_groups(&store, None)?;
 
         let resources = store.read().list_resources_by_ids(&resource_ids)?;
-        let map = store.read().list_motifs_slices(run_id)?;
+        let map = store.read().list_motifs_slices(run_id, vec![run_id])?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let mut slise_idxs = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
@@ -455,7 +455,7 @@ mod tests {
 
         file_store.load_slices_into_groups(&store, None)?;
 
-        let map = store.read().list_motifs_slices(run_id)?;
+        let map = store.read().list_motifs_slices(run_id, vec![run_id])?;
 
         assert_eq!(0, map.len());
 
