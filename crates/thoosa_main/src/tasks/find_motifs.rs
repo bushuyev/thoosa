@@ -134,11 +134,12 @@ where
         device: ThoDevice, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
     ) -> Self {
         // let band_filter = Arc::new(FreqFilter::new());
-
+        debug!("FindMotifsStage::new: fixed_config={fixed_config:?}");
 
         let cross_loaders = run_configs
             .into_iter()
             .map(|run_config| {
+                debug!("FindMotifsStage::new: run_config={run_config:?}");
                 let channels = ws.read().channels();
 
                 let filter = run_config.slices_filter.clone();
@@ -220,6 +221,7 @@ where
                             let run_config = run_config_clone.clone();
                             let fixed_config = fixed_config.clone();
                             move |resources: &[Arc<Resource>]| {
+                                debug!("FindMotifsStages::new: new DistsTracker, resources.len={}", resources.len());
                                 // let total_seq_len = resources.iter().map(|r|r.length() as u64).sum::<u64>();
                                 Arc::new(DistsTracker::<C>::new(
                                     &ws,
@@ -285,6 +287,7 @@ where
         let best = 0;
         let mut js: JoinSet<Result<Arc<DevicesWrap<CrossResult>>, ThoosaError>> = JoinSet::new();
 
+        debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
         for stage in self.run_config_stages.iter() {
             let ctx_arc = Arc::clone(&ctx);
             let input_arc = Arc::clone(&input);

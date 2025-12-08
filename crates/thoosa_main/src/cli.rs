@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::{File, OpenOptions, read_dir};
 use std::io::Write;
-use std::ops::Deref;
+use std::ops::{Deref, Range};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
@@ -43,7 +43,7 @@ use thoosa_common::batches::{
     AsyncBatchTransform, AsyncClassTensorsLoaderData, AsyncLoadingTensorsDataBatch,
 };
 use thoosa_common::dims::{Batch, ChannelsData, TCD, ThoBatch};
-use thoosa_common::find_motifs_run_config::{DistanceRunningMeanK, DistanceRunningMeanKRangeOrValue, FindMotifsApplicable, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_common::find_motifs_run_config::{ByLabelVarianceConfig, ByLabelVarianceConfigRangeOrValue, DistanceRunningMeanK, DistanceRunningMeanKRangeOrValue, FindMotifsApplicable, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -67,7 +67,7 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId, Runnable};
 use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
-use thoosa_shared::{CopyToDevice, RangeOrValue};
+use thoosa_shared::{parse_resources, CopyToDevice, RangeOrValue};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{ResourceType, ThoosaError, cdt, cdt_for_dir};
@@ -113,13 +113,39 @@ pub struct Cli {
 #[derive(Args, Debug, Clone)]
 pub struct RunAllArgs {
     #[arg(long)]
-    train_resource_group: String,
+    find_resources: String,
 
     #[arg(long)]
+    select_resources: String,
+
+    #[arg(long, default_value = "XXX")]
+    train_resource_group: String,
+
+    #[arg(long, default_value = "XXX")]
     valid_resource_group: String,
 
     #[arg(long)]
     pub run_config_cnt: String, //TrainLabelNetsRunConfig
+}
+
+impl RunAllArgs {
+
+    pub fn find_resource_config(&self) -> Result<Simple, ThoosaError> {
+        Ok(Simple::new(parse_resources(&self.find_resources)?))
+    }
+
+    pub fn select_resource_config(&self) -> Result<Simple, ThoosaError> {
+        Ok(Simple::new(parse_resources(&self.select_resources)?))
+    }
+
+    pub fn train_resource_config(&self) -> NetResources<Labeled> {
+        NetResources::new(
+            Labeled::new(self.train_resource_group.clone()),
+            Labeled::new(self.valid_resource_group.clone()),
+        )
+
+    }
+
 }
 
 /**
@@ -510,21 +536,20 @@ where
             let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
                 ResourcesConfigInput::new(
                     SimpleId::from("resources"),
-                    Simple::new(ResourceType::Set("asdf".to_string())),
+                    run_all_params.find_resource_config()?
                 )
             ));
 
             let find_motifs_run_config_range_or_value:FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue{
                 id: None,
-                step: RangeOrValue::Value(100),
+                step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
                 window: RangeOrValue::Value(1000),
                 min_tracker_step: None,
                 filter: None,
-                slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ mean: RangeOrValue::Value(0.0)}),
+                slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ mean: RangeOrValue::Value(0.02)}),
             };
 
-
-            let run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
+            let find_motif_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
                 None,
                 find_motifs_run_config_range_or_value,
                 input_wrapper,
@@ -535,7 +560,7 @@ where
                     Arc::new(crate::tasks::find_motifs::FindMotifsStage::new(
                         &ws,
                         &store,
-                        loader_2,
+                        Arc::clone(&loader_2),
                         run_configs,
                         FixedFindMotifsConfig::new(None, 10_000, false, None),
                         ThoDevice::from(1),
@@ -544,6 +569,45 @@ where
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
             ).await?;
 
+            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
+                ResourcesConfigInput::new(
+                    SimpleId::from("resources"),
+                    run_all_params.select_resource_config()?,
+                )
+            ));
+
+
+            let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
+                None,
+                SelectMotifsRunConfigRangeOrValue{
+                    id: None,
+                    motif_selector: MotifSelectorRangeOrValue::ByLabelVariance(ByLabelVarianceConfigRangeOrValue{ _dummy: 0 })
+                },
+                input_wrapper,
+                &ws,
+                &store,
+                true,
+                |run_configs| {
+
+                    Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtx2>, MotifLoader<RawTensorLoader<RunCtx2>, RunCtx2>, RunCtx2>::new(
+                        &ws,
+                        &store,
+                        Arc::clone(&loader_2),
+                        Arc::new(MotifLoader::new(
+                            Arc::clone(&store),
+                            Arc::clone(&loader_2)
+                        )),
+                        run_configs,
+                        find_motif_run_ids.clone(),
+                        100_000, //TODO config
+                        #[cfg(test)]
+                        None
+                    ))
+                },
+                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "select motifs"))),
+            ).await?;
+
+            info!("all done: find_motif_run_ids={find_motif_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
 
             /*if let Some(source_path) = run_all_params.import_source_path.as_ref() {
                 debug!("RunAll: init_resources");
