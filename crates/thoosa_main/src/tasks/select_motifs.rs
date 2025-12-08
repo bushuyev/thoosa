@@ -364,7 +364,6 @@ where
         let mut total_processed_size = 0;
 
 
-        let mut good_motif_ids = vec![];
         let mut run_config_good_motif_ids: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)> = vec![];
         for run_config in self.run_configs.iter() {
             let mut motif_added_slices:Arc<Vec<tokio::sync::RwLock<HashMap<DataId, HashSet<IdSlice>>>>> = Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
@@ -524,7 +523,6 @@ where
 
 
 
-                good_motif_ids.extend(expanded_motif_ids.into_iter().flat_map(|v|v.into_iter()).map(|motif_id|(*motif_id, 1.0)));//TODO rate
 
 
                 t_1_batch_dim_0_size = 0;;
@@ -547,7 +545,10 @@ where
 
                         (*motif_id, 1.0)
                     })
-                }).collect();
+
+                })
+
+                .collect();
 
             run_config_good_motif_ids.push((run_config.clone(), good_motif_ids));
         }
@@ -557,7 +558,7 @@ where
         //     self.store.write().add_slices_to_motif(select_motifs_run_id, motif_id.0, 0 as i64, new_slices)?;
         // }
 
-        debug!("SelectMotifsStage::run: good_motif_ids={good_motif_ids:?}");
+        debug!("SelectMotifsStage::run: good_motif_ids={run_config_good_motif_ids:?}");
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new2(run_config_good_motif_ids))))
     }
