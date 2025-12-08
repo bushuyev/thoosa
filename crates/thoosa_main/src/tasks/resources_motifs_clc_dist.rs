@@ -211,7 +211,7 @@ where
                 .stacked_motifs_output
                 .motifs
                 .extra()
-                .2
+                .1
                 .id
                 .expect("no select_motifs_run_config_id"),
             channel_masks_dists_ids,

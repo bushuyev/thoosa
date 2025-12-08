@@ -228,7 +228,7 @@ where
                                     &store,
                                     &run_config,
                                     &fixed_config,
-                                    Some(resources.len() as u32 * 2),//TODO
+                                    Some(resources.len() as u32 * 10),//TODO. max_slices_count - if motif has more than ten slices in each resource it's probably noise
                                 ))
                             }
                         },
