@@ -40,17 +40,17 @@ pub struct StackedMotifsInput {
 
     id:SimpleId,
     find_motifs_run_config: Arc<FindMotifsRunConfig>,
-    select_motifs_run_config: Arc<SelectMotifsRunConfig>,
+    // select_motifs_run_config: Arc<SelectMotifsRunConfig>,
 }
 
 impl StackedMotifsInput {
-    pub fn new( find_config: Arc<FindMotifsRunConfig>, select_config: Arc<SelectMotifsRunConfig>) -> Self {
-        debug!("StackedMotifsInput: find_config={find_config:?} select_config={select_config:?}");
+    pub fn new( find_config: Arc<FindMotifsRunConfig>) -> Self {
+        debug!("StackedMotifsInput: find_config={find_config:?}");
         Self {
             // id: format!("{}_{}", find_config.id.unwrap(), select_config.id.unwrap()).into(),//TODO in select motifs SelectMotifsRunConfig is saved in run_grid right before running stage so no sense to cache by select_motifs_run_config. No other cases yet.
             id: format!("{}", find_config.id.unwrap()/*, select_config.id.unwrap()*/).into(),
             find_motifs_run_config: find_config,
-            select_motifs_run_config: select_config
+            // select_motifs_run_config: select_config
         }
     }
 }
@@ -67,11 +67,11 @@ impl WithId for StackedMotifsInput {
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct StackedMotifsOutputId {
     pub(crate)  find_motifs_run_id:RunId,
-    pub(crate)  select_motifs_run_id:RunId
+    pub(crate)  select_motifs_run_id:Vec<RunId>//not used, can be used to return previously ran select_motifs ids
 }
 
 impl StackedMotifsOutputId {
-    pub fn new(find_motifs_run_id: RunId, select_motifs_run_id: RunId) -> Self {
+    pub fn new(find_motifs_run_id: RunId, select_motifs_run_id: Vec<RunId>) -> Self {
         Self { find_motifs_run_id, select_motifs_run_id }
     }
 }
@@ -82,12 +82,12 @@ impl Named for StackedMotifsOutputId {}
 #[derive(Debug)]
 pub struct StackedMotifsOutput {
     id:StackedMotifsOutputId,
-    pub motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Arc<SelectMotifsRunConfig>)>,
+    pub motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>,
     pub motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SimpleId>
 }
 
 impl StackedMotifsOutput {
-    pub fn new(id: StackedMotifsOutputId, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Arc<SelectMotifsRunConfig>)>, motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SimpleId>) -> Self {
+    pub fn new(id: StackedMotifsOutputId, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>, motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SimpleId>) -> Self {
         Self { id, motifs, motifs_avg_dists }
     }
 
@@ -149,7 +149,7 @@ C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         // format!("BatchedMotifsLoader_{}",  input_id).into()
-        StackedMotifsOutputId::new(0, 0)
+        StackedMotifsOutputId::new(0, vec![])
     }
 }
 
@@ -220,7 +220,7 @@ where
                 let motif_avg_dists = Arc::clone(&motif_avg_dists);
 
                 let find_motifs_run_config_id = input.find_motifs_run_config.id;
-                let select_motifs_run_config_id = input.select_motifs_run_config.id;
+                // let select_motifs_run_config_id = input.select_motifs_run_config.id;
 
                 async move {
                     let motif_id_wrap = Arc::new(DevicesWrap::wrap_cpu((motif_id as u32).into()));
@@ -233,7 +233,7 @@ where
                         .with_data_ref(0, Arc::clone(&ctx_for_clc), None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
                         .await?;
 
-                    debug!("SelectMotifsStage::run: find_motifs_run_id={:?} run_config.id={:?} motif={motif:?} avg_motif_dist={avg_motif_dist}", find_motifs_run_config_id, select_motifs_run_config_id);
+                    debug!("SelectMotifsStage::run: find_motifs_run_id={:?}  motif={motif:?} avg_motif_dist={avg_motif_dist}", find_motifs_run_config_id);
 
                     motif_avg_dists.write().insert(DataId(motif_id as u32), avg_motif_dist);
 
@@ -361,8 +361,10 @@ where
             trace!("SelectMotifsStage::run: channels_motifs_t=\n{channels_motifs_t}");
 
             let find_motifs_run_id = input.find_motifs_run_config.id.expect("no id in find_motifs_run_config");
-            let select_motifs_run_id = input.select_motifs_run_config.id.expect("no id in select_motifs_run_config");
-            let find_and_select_motifs_id = SimpleId(format!("{find_motifs_run_id}_{select_motifs_run_id}").leak());
+            // let select_motifs_run_id = input.select_motifs_run_config.id.expect("no id in select_motifs_run_config");
+            //select_motifs_run_id  -
+            let select_motifs_run_id = vec![];//can be used to return select_motifs_run_i ran earlier on find_motifs_run_id
+            let find_and_select_motifs_id = SimpleId(format!("{find_motifs_run_id}_{select_motifs_run_id:?}").leak());
 
             Ok(Arc::new(DevicesWrap::wrap(StackedMotifsOutput::new(
                 StackedMotifsOutputId::new(find_motifs_run_id, select_motifs_run_id),
@@ -371,7 +373,7 @@ where
                         find_and_select_motifs_id.clone(),
                         channels_motifs_t
                     ),
-                    (channels_motif_ids, Arc::clone(&input.find_motifs_run_config), Arc::clone(&input.select_motifs_run_config))
+                    (channels_motif_ids, Arc::clone(&input.find_motifs_run_config), vec![])
                 ),
                  ThoTensor::new(
                     find_and_select_motifs_id,
