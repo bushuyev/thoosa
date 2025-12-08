@@ -71,6 +71,23 @@ impl ResourcesConfig for Simple {
 
             })
     }
+
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> {
+        if let ResourceType::List(list) = self.resources() {
+            if list.is_empty() {
+                return Err(ThoosaError::new("resource list should not be empty"));
+            }
+        }
+
+        let resources = self.to_resources(store)?;
+        if resources.is_empty() {
+            Err(ThoosaError::new(format!(
+                "resource config {self:?} resolved to no resources"
+            )))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -83,6 +100,10 @@ impl ResourcesConfig for Empty {
         &self,
         store: &Arc<RwLock<Box<S>>>,
     ) -> Result<Self::R, ThoosaError> {
+        Ok(())
+    }
+
+    fn check<S: ResourceStore + ?Sized>(&self, _store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> {
         Ok(())
     }
 }
@@ -123,6 +144,25 @@ impl ResourcesConfig for Labeled {
                     .map(|data| (label, data))
             })
             .collect()
+    }
+
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> {
+        let labeled_resources = self.to_resources(store)?;
+        if labeled_resources.is_empty() {
+            return Err(ThoosaError::new(format!(
+                "resource config {self:?} resolved to no labeled resource sets"
+            )));
+        }
+
+        for (label, resources) in &labeled_resources {
+            if resources.is_empty() {
+                return Err(ThoosaError::new(format!(
+                    "label {label} in resource config {self:?} has no resources"
+                )));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -167,6 +207,19 @@ impl ResourcesConfig for Logits {
             })
             .collect()
     }
+
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> {
+        
+        if store
+            .read()
+            .list_resource_random_in_group(&self.group)?.is_empty() {
+            Err(ThoosaError::new(format!(
+                "resource config {self:?} resolved to no logits resources"
+            )))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl Display for Logits {
@@ -203,6 +256,12 @@ impl<RC: ResourcesConfig> ResourcesConfig for NetResources<RC> {
                 .to_resources(store)
                 .map(|valid| (train, valid))
         })
+    }
+
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> {
+        self.train_resources.check(store)?;
+        self.valid_resources.check(store)?;
+        Ok(())
     }
 }
 
