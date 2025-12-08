@@ -64,7 +64,7 @@ use thoosa_properties_map::ToHashmap;
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 use thoosa_shared::applicables_runner::{Input, Runner, ToOrdinal};
 use thoosa_shared::hyperparameter::Hyperparameter;
-use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
+use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId, Runnable};
 use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
 use thoosa_shared::{parse_resources, CopyToDevice, RangeOrValue};
@@ -533,12 +533,22 @@ where
 
         Some(RunAll(run_all_params)) => {
             debug!("RunAll: run_all_params={:?}", run_all_params);
-            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
+
+            let find_motifs_input = Arc::new(DevicesWrap::wrap_cpu(
                 ResourcesConfigInput::new(
                     SimpleId::from("resources"),
                     run_all_params.find_resource_config()?
-                )
+                ).check(&store)?
             ));
+
+            let select_motifs_input = Arc::new(DevicesWrap::wrap_cpu(
+                ResourcesConfigInput::new(
+                    SimpleId::from("resources"),
+                    run_all_params.select_resource_config()?,
+                ).check(&store)?
+            ));
+
+
 
             let find_motifs_run_config_range_or_value:FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue{
                 id: None,
@@ -552,7 +562,7 @@ where
             let find_motif_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
                 None,
                 find_motifs_run_config_range_or_value,
-                input_wrapper,
+                find_motifs_input,
                 &ws,
                 &store,
                 true,
@@ -569,12 +579,6 @@ where
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
             ).await?;
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
-                ResourcesConfigInput::new(
-                    SimpleId::from("resources"),
-                    run_all_params.select_resource_config()?,
-                )
-            ));
 
 
             let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
@@ -583,7 +587,7 @@ where
                     id: None,
                     motif_selector: MotifSelectorRangeOrValue::ByLabelVariance(ByLabelVarianceConfigRangeOrValue{ _dummy: 0 })
                 },
-                input_wrapper,
+                select_motifs_input,
                 &ws,
                 &store,
                 true,

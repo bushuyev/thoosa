@@ -5,7 +5,7 @@ use log::trace;
 use mockall::automock;
 use parking_lot::RwLock;
 use std::cmp::Ordering;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
@@ -175,7 +175,7 @@ pub trait ResourcesConfig {
         store: &Arc<RwLock<Box<S>>>,
     ) -> Result<Self::R, ThoosaError>;
 
-    fn serialize(&self) -> String {
-        "TODO".to_string()
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> where Self:Debug{
+        Err(ThoosaError::new(format!("resource config {self:?} is not ok")))
     }
 }
