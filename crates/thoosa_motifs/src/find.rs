@@ -5136,7 +5136,7 @@ pub fn plot_motif_slices(
     device: &Device,
 ) -> Result<(), ThoosaError> {
     let (channel, run_id, slices, resources_map) =
-        store.read().list_motif_slices(motif_id, limit, None)?;
+        store.read().list_motif_slices(motif_id, None, limit, None)?;
     let slices_len = slices.len();
     // if slices_len < 3 {
     //     return Ok(())

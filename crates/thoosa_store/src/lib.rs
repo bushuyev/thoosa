@@ -160,13 +160,21 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         select_motifs_run_id: Option<Vec<RunId>>,
     ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
 
-    fn list_motif_slices(&self, motif_id: u32, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>) ->
-    Result<(
-        i64,
-        RunId,
-        Vec<TensorIdSliceIdx>,
-        HashMap<ResourceId, Resource>,
-    ), ThoosaError>;
+    fn list_motif_slices(
+        &self,
+        motif_id: u32,
+        select_motifs_run_id: Option<Vec<RunId>>,
+        limit: Option<u32>,
+        all_but_in_run_id: Option<(RunId, u32)>,
+    ) -> Result<
+        (
+            i64,
+            RunId,
+            Vec<TensorIdSliceIdx>,
+            HashMap<ResourceId, Resource>,
+        ),
+        ThoosaError,
+    >;
 
     fn list_random_slices(
         &self,
@@ -299,6 +307,7 @@ mock! {
         fn list_motif_slices(
             &self,
             motif_id: u32,
+            select_motifs_run_id: Option<Vec<RunId>>,
             limit: Option<u32>,
             all_but_in_run_id: Option<(RunId, u32)>,
         ) -> Result<
@@ -1575,16 +1584,25 @@ impl Store for SqlStore {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
-        let mut slice_run_ids = vec![run_id];
-        if let Some(select_ids) = select_motifs_run_id {
-            slice_run_ids.extend(select_ids);
-        }
+        let slice_run_ids = select_motifs_run_id.map(|mut ids| {
+            ids.push(run_id);
+            ids.sort();
+            ids.dedup();
+            ids
+        });
 
-        let slice_run_placeholders = slice_run_ids
-            .iter()
-            .map(|_| "?")
-            .collect::<Vec<_>>()
-            .join(", ");
+        let slice_filter_clause = slice_run_ids
+            .as_ref()
+            .map(|ids| {
+                format!(
+                    " AND s.run_id IN ({})",
+                    ids.iter()
+                        .map(|_| "?")
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+            .unwrap_or_default();
 
         let resources_motifs = {
             let mut stmt = t.prepare(
@@ -1595,19 +1613,16 @@ impl Store for SqlStore {
                     FROM motifs m \
                     JOIN slices s ON s.motif_id=m.id \
                     JOIN resources r on r.id=s.resource_id \
-                    WHERE m.run_id=? AND s.run_id IN ({})\
+                    WHERE m.run_id=?{}\
             ",
-                    slice_run_placeholders
+                    slice_filter_clause
                 ),
             )?;
 
-            let mut params: Vec<Value> = Vec::with_capacity(slice_run_ids.len() + 1);
-            params.push(Value::Integer(run_id as i64));
-            params.extend(
-                slice_run_ids
-                    .iter()
-                    .map(|slice_run_id| Value::Integer(*slice_run_id as i64)),
-            );
+            let mut params: Vec<Value> = vec![Value::Integer(run_id as i64)];
+            if let Some(ids) = &slice_run_ids {
+                params.extend(ids.iter().map(|slice_run_id| Value::Integer(*slice_run_id as i64)));
+            }
 
             let tensor_motifs: (
                 HashMap<ResourceId, Vec<MotifSlice>>,
@@ -1691,6 +1706,7 @@ impl Store for SqlStore {
     fn list_motif_slices(
         &self,
         motif_id: u32,
+        select_motifs_run_id: Option<Vec<RunId>>,
         limit: Option<u32>,
         all_but_in_run_id: Option<(RunId, u32/*channel*/)>,//TODO remove - load random slices from same channel/resources
     ) -> Result<
@@ -1702,48 +1718,76 @@ impl Store for SqlStore {
         ),
         ThoosaError,
     > {
-        debug!("list_motif_slices: motif_id={motif_id} limit={limit:?} all_but_in_run_id={all_but_in_run_id:?}");
+        debug!("list_motif_slices: motif_id={motif_id} select_motifs_run_id={select_motifs_run_id:?} limit={limit:?} all_but_in_run_id={all_but_in_run_id:?}");
 
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
+        let (slice_filter_clause, slice_filter_params) = if all_but_in_run_id.is_none() {
+            match select_motifs_run_id.as_ref() {
+                None => (String::new(), Vec::new()),
+                Some(ids_raw) => {
+                    let mut ids = ids_raw.clone();
+                    ids.sort();
+                    ids.dedup();
+                    if ids.is_empty() {
+                        (" AND s.run_id IN (m.run_id)".to_string(), Vec::new())
+                    } else {
+                        let placeholders = ids
+                            .iter()
+                            .map(|_| "?")
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        (format!(" AND s.run_id IN (m.run_id, {placeholders})"), ids)
+                    }
+                }
+            }
+        } else {
+            (String::new(), Vec::new())
+        };
+
         let channel_slices = {
-            let mut stmt = t.prepare(
-                &[
-                    "SELECT m.channel_id, m.run_id, r.id,  r.import_id, r.key, s.slice_idx \
+            let mut query = String::from(
+                "SELECT m.channel_id, m.run_id, s.run_id, r.id,  r.import_id, r.key, s.slice_idx \
                     FROM motifs m \
                     LEFT JOIN slices s on s.motif_id=m.id \
                     LEFT JOIN resources r on s.resource_id=r.id \
-                    WHERE s.motif_id
-                ",
-                    // if all_but_in_run_id.is_none() {"=? AND ? IS NOT NULL AND ? IS NOT NULL "} else {"!=? AND run_id=? AND channel_id=?"}, run_id? //TODO
-                    if all_but_in_run_id.is_none() {
-                        "=? AND ? IS NOT NULL "
-                    } else {
-                        "!=? AND m.channel_id=(SELECT channel_id FROM motifs WHERE id=?) ORDER BY RANDOM()"
-                    },
-                    &limit
-                        .map(|limit| format!("LIMIT {}", limit))
-                        .unwrap_or("".to_owned()),
-                ]
-                .join(""),
-            )?;
+                    WHERE ",
+            );
 
-            let params = match all_but_in_run_id {
-                Some((_run_id, channel_id)) => [motif_id, motif_id],
-                None => [motif_id, 1],
+            let mut params: Vec<u32> = match all_but_in_run_id {
+                Some((_run_id, _channel_id)) => {
+                    query.push_str(
+                        "s.motif_id!=? AND m.channel_id=(SELECT channel_id FROM motifs WHERE id=?) ORDER BY RANDOM()",
+                    );
+                    vec![motif_id, motif_id]
+                }
+                None => {
+                    query.push_str("s.motif_id=?");
+                    query.push_str(&slice_filter_clause);
+                    let mut values = vec![motif_id];
+                    values.extend(slice_filter_params.iter().copied());
+                    values
+                }
             };
+            if let Some(limit) = limit {
+                query.push_str(&format!(" LIMIT {}", limit));
+            }
+
+            let mut stmt = t.prepare(&query)?;
+
             debug!("list_motif_slices: params={params:?}");
 
             let (slices, channel_set, run_id, resources_map) = stmt
-                .query_map(params, |row| {
+                .query_map(rusqlite::params_from_iter(params.iter()), |row| {
                     Ok((
                         row.get::<usize, i64>(0)?,   //channel_id
-                        row.get::<usize, RunId>(1)?, //run_id
-                        row.get(2)?,                 // resource_id,
-                        row.get(3)?,                 // import_id,
-                        row.get(4)?,                 // key,
-                        row.get(5)?,                 // slice_idx,
+                        row.get::<usize, RunId>(1)?, //motif run_id
+                        row.get::<usize, RunId>(2)?, //slice run_id
+                        row.get(3)?,                 // resource_id,
+                        row.get(4)?,                 // import_id,
+                        row.get(5)?,                 // key,
+                        row.get(6)?,                 // slice_idx,
                     ))
                 })?
                 .fold(
@@ -1759,32 +1803,39 @@ impl Store for SqlStore {
                     >,
                      v: Result<
                         (
-                            i64,//channel_id
-                            RunId, //, run_id
-                            u32,//resource_id
-                            u32,//import_id
-                            String,//key
-                            u32, // slice_idx
+                            i64,    //channel_id
+                            RunId,  //motif run_id
+                            RunId,  //slice run_id
+                            u32,    //resource_id
+                            u32,    //import_id
+                            String, //key
+                            u32,    // slice_idx
                         ),
                         Error,
                     >| {
-                        
-                        let v = v?;
+                        let (
+                            channel_id,
+                            motif_run_id,
+                            _slice_run_id,
+                            resource_id,
+                            import_id,
+                            key,
+                            slice_idx,
+                        ) = v?;
                         let (mut a, mut channel_set, mut run_id, mut resources_map) = a?;
 
-                        // a.insert(TensorSliceIdx(Resource::new(v.2, v.3, v.4, 0), v.5));
-                        a.insert(TensorIdSliceIdx(v.2, v.5));
-                        resources_map.insert(v.2, Resource::new(v.2, v.3, v.4, 0));
-
-                        channel_set.insert(v.0); //TODO replace with Option
-
-                        if all_but_in_run_id.is_none() {
-                            if let Some(run_id) = run_id {
-                                assert!(run_id == v.1);
-                            } else {
-                                run_id.replace(v.1);
-                            }
+                        if run_id.is_none() {
+                            run_id.replace(motif_run_id);
+                        } else {
+                            assert_eq!(run_id, Some(motif_run_id));
                         }
+
+                        a.insert(TensorIdSliceIdx(resource_id, slice_idx));
+                        resources_map.insert(
+                            resource_id,
+                            Resource::new(resource_id, import_id, key, 0),
+                        );
+                        channel_set.insert(channel_id); //TODO replace with Option
 
                         Ok((a, channel_set, run_id, resources_map))
                     },
@@ -2944,7 +2995,7 @@ mod store_tests {
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::val::Val;
-    use thoosa_shared::{TensorIdSliceIdx, cdt, cdt_for_dir};
+    use thoosa_shared::{TensorIdSliceIdx, cdt, cdt_for_dir, MotifSlice};
 
     use crate::{
         MotifTrackerStore, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoosaError,
@@ -3353,7 +3404,7 @@ mod store_tests {
         let (channel, run_id_, mut slices, resources_map) =
             store
                 .read()
-                .list_motif_slices(motif_slices_1111[0].motif_id, None, None)?;
+                .list_motif_slices(motif_slices_1111[0].motif_id, None, None, None)?;
         slices.sort();
 
         debug!("slices={slices:?}");
@@ -3373,7 +3424,7 @@ mod store_tests {
         let (channel, run_id_, mut slices, resources_map) =
             store
                 .read()
-                .list_motif_slices(motif_slices_1111[0].motif_id, Some(1), None)?;
+                .list_motif_slices(motif_slices_1111[0].motif_id, None, Some(1), None)?;
         slices.sort();
 
 
@@ -3383,7 +3434,7 @@ mod store_tests {
         let (channel, run_id_, mut slices, resources_map) =
             store
                 .read()
-                .list_motif_slices(motif_slices_1111[0].motif_id, Some(3), Some((0, 0)))?;
+                .list_motif_slices(motif_slices_1111[0].motif_id, None, Some(3), Some((0, 0)))?;
 
         debug!("random slices={slices:?}");
         //
@@ -3470,18 +3521,97 @@ mod store_tests {
 
         let resource = store.list_resources_by_ids(&resource_ids)?.remove(0);
 
-        let only_find = store.list_motifs_slices(find_run_id, None)?;
+        let find_only = store.list_motifs_slices(find_run_id, Some(vec![]))?;
+        let all_runs = store.list_motifs_slices(find_run_id, None)?;
         let both_runs =
-            store.list_motifs_slices(find_run_id, Some(vec![select_run_id]))?;
+            store.list_motifs_slices(find_run_id, Some(vec![select_run_id, select_run_id]))?;
 
-        let find_only_slices = only_find.get(&resource).expect("resource slices");
+        let find_only_slices = find_only.get(&resource).expect("resource slices");
         assert_eq!(1, find_only_slices.len());
         assert_eq!(10, find_only_slices[0].slice_idx);
 
-        let both_run_slices = both_runs.get(&resource).expect("resource slices");
-        let mut slice_idxs = both_run_slices.iter().map(|s| s.slice_idx).collect::<Vec<_>>();
-        slice_idxs.sort();
-        assert_eq!(vec![10, 30], slice_idxs);
+        let expect_two = |map: &HashMap<Resource, Vec<MotifSlice>>| {
+            let slices = map.get(&resource).expect("resource slices");
+            let mut slice_idxs = slices.iter().map(|s| s.slice_idx).collect::<Vec<_>>();
+            slice_idxs.sort();
+            assert_eq!(vec![10, 30], slice_idxs);
+        };
+
+        expect_two(&all_runs);
+        expect_two(&both_runs);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_motif_slices_filters_slice_run_ids() -> Result<(), ThoosaError> {
+        let mut store = SqlStore::in_mem()?;
+
+        let resource_ids = {
+            let mut guard = store.conn().lock();
+            let t = guard.transaction()?;
+
+            let import_id = store.save_import("test".to_string(), &t)?;
+            store.save_label("aaa", &t)?;
+
+            let ids = store.save_resources_labels(
+                &HashMap::from([(
+                    "res_a".to_string(),
+                    (ResourceStats::new(vec![1, 10]), vec![("aaa".into(), 1.0)]),
+                )]),
+                import_id,
+                &t,
+            )?;
+
+            t.commit()?;
+            ids
+        };
+
+        let find_run_id =
+            store.save_run_config(None, &"find", "find_motifs", "", HashMap::new())?;
+        let select_run_id = store.save_run_config(
+            Some(&[find_run_id]),
+            &"select",
+            "select_motifs",
+            "",
+            HashMap::new(),
+        )?;
+
+        {
+            let mut guard = store.conn().lock();
+            let t = guard.transaction()?;
+
+            t.execute(
+                "INSERT INTO motifs (id, group_ord, run_id, channel_id) VALUES (2, 0, ?, ?)",
+                params![find_run_id, 0i64],
+            )?;
+
+            t.execute(
+                "INSERT INTO slices (motif_id, run_id, channel_id, resource_id, slice_idx) VALUES (2, ?, ?, ?, ?)",
+                params![find_run_id, 0i64, resource_ids[0], 12i64],
+            )?;
+            t.execute(
+                "INSERT INTO slices (motif_id, run_id, channel_id, resource_id, slice_idx) VALUES (2, ?, ?, ?, ?)",
+                params![select_run_id, 0i64, resource_ids[0], 32i64],
+            )?;
+
+            t.commit()?;
+        }
+
+        let (_, run_id, all_slices, _) = store.list_motif_slices(2, None, None, None)?;
+        assert_eq!(find_run_id, run_id);
+        let mut idxs = all_slices.iter().map(|s| s.1).collect::<Vec<_>>();
+        idxs.sort();
+        assert_eq!(vec![12, 32], idxs);
+
+        let (_, _, find_only, _) = store.list_motif_slices(2, Some(vec![]), None, None)?;
+        assert_eq!(vec![12], find_only.iter().map(|s| s.1).collect::<Vec<_>>());
+
+        let (_, _, filtered, _) =
+            store.list_motif_slices(2, Some(vec![select_run_id, select_run_id]), None, None)?;
+        let mut idxs = filtered.iter().map(|s| s.1).collect::<Vec<_>>();
+        idxs.sort();
+        assert_eq!(vec![12, 32], idxs);
 
         Ok(())
     }
@@ -3940,14 +4070,17 @@ impl MockStoreBuilder {
     pub fn with_list_motif_slices(
         mut self,
         motif_id: u32,
+        select_motifs_run_id: Option<Vec<RunId>>,
         limit: Option<u32>,
         all_but_in_run_id: Option<(RunId, u32)>, r:Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError>
     ) -> Self {
 
+        let expected_select = select_motifs_run_id.clone();
+
         self.store.expect_list_motif_slices().returning(
-            move |p_motif_id, limit, all_but_in_run_id| {
-                debug!("with_list_motif_slices: p_motif_id={p_motif_id} motif_id={motif_id} ");
-                if p_motif_id == motif_id {
+            move |p_motif_id, p_select_motifs_run_id, limit, all_but_in_run_id| {
+                debug!("with_list_motif_slices: p_motif_id={p_motif_id} motif_id={motif_id} p_select_motifs_run_id={p_select_motifs_run_id:?} expected_select={expected_select:?}");
+                if p_motif_id == motif_id && p_select_motifs_run_id == expected_select {
                     r.clone()
                 } else {
                     Err(ThoosaError::new("Not found"))
