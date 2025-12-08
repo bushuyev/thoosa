@@ -157,6 +157,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     fn list_motifs_slices(
         &self,
         run_id: RunId,
+        slice_run_ids: Vec<RunId>,
     ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
 
     fn list_motif_slices(&self, motif_id: u32, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>) ->
@@ -290,6 +291,7 @@ mock! {
         fn list_motifs_slices(
             &self,
             run_id: RunId,
+            slice_run_ids: Vec<RunId>,
         ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
 
         fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoosaError>;
@@ -1568,27 +1570,52 @@ impl Store for SqlStore {
     fn list_motifs_slices(
         &self,
         run_id: RunId,
+        slice_run_ids: Vec<RunId>,
     ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
+        let mut slice_run_ids = slice_run_ids;
+        if slice_run_ids.is_empty() {
+            slice_run_ids.push(run_id);
+        }
+
+        let slice_run_placeholders = slice_run_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+
         let resources_motifs = {
             let mut stmt = t.prepare(
-                "\
+                &format!(
+                    "\
                     SELECT m.id, m.channel_id, \
                     r.id, r.import_id, r.key, s.slice_idx, r.length \
                     FROM motifs m \
                     JOIN slices s ON s.motif_id=m.id \
                     JOIN resources r on r.id=s.resource_id \
-                    WHERE m.run_id=?\
+                    WHERE m.run_id=? AND s.run_id IN ({})\
             ",
+                    slice_run_placeholders
+                ),
             )?;
+
+            let mut params: Vec<Value> = Vec::with_capacity(slice_run_ids.len() + 1);
+            params.push(Value::Integer(run_id as i64));
+            params.extend(
+                slice_run_ids
+                    .iter()
+                    .map(|slice_run_id| Value::Integer(*slice_run_id as i64)),
+            );
 
             let tensor_motifs: (
                 HashMap<ResourceId, Vec<MotifSlice>>,
                 HashMap<ResourceId, Resource>,
             ) = stmt
-                .query_map([run_id], |row| {
+                .query_map(
+                    rusqlite::params_from_iter(params.iter()),
+                    |row| {
                     Ok((
                         row.get(0)?, // motif_id,
                         row.get(1)?, // channel_id,
@@ -1598,7 +1625,8 @@ impl Store for SqlStore {
                         row.get(5)?, // slice_idx_0,
                         row.get(6)?, // length,
                     ))
-                })?
+                },
+                )?
                 .fold(
                     Ok((HashMap::new(), HashMap::new())),
                     |a: Result<
@@ -3252,7 +3280,10 @@ mod store_tests {
             }
         };
 
-        let motif_slices_map = store.read().list_motifs_slices(find_motifs_run_id)?;
+        let motif_slices_map =
+            store
+                .read()
+                .list_motifs_slices(find_motifs_run_id, vec![find_motifs_run_id])?;
         debug!("motif_slices_map={:?}", motif_slices_map);
 
         // assert_eq!(4, map.len());
@@ -3378,6 +3409,79 @@ mod store_tests {
         // );
         //
         // store.lock().delete_slices_without_matches(run_id)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_motifs_slices_filters_slice_run_ids() -> Result<(), ThoosaError> {
+        let mut store = SqlStore::in_mem()?;
+
+        let resource_ids = {
+            let mut guard = store.conn().lock();
+            let t = guard.transaction()?;
+
+            let import_id = store.save_import("test".to_string(), &t)?;
+            store.save_label("aaa", &t)?;
+
+            let ids = store.save_resources_labels(
+                &HashMap::from([(
+                    "res_a".to_string(),
+                    (ResourceStats::new(vec![1, 10]), vec![("aaa".into(), 1.0)]),
+                )]),
+                import_id,
+                &t,
+            )?;
+
+            t.commit()?;
+            ids
+        };
+
+        let find_run_id =
+            store.save_run_config(None, &"find", "find_motifs", "", HashMap::new())?;
+        let select_run_id = store.save_run_config(
+            Some(&[find_run_id]),
+            &"select",
+            "select_motifs",
+            "",
+            HashMap::new(),
+        )?;
+
+        {
+            let mut guard = store.conn().lock();
+            let t = guard.transaction()?;
+
+            t.execute(
+                "INSERT INTO motifs (id, group_ord, run_id, channel_id) VALUES (1, 0, ?, ?)",
+                params![find_run_id, 0i64],
+            )?;
+
+            t.execute(
+                "INSERT INTO slices (motif_id, run_id, channel_id, resource_id, slice_idx) VALUES (1, ?, ?, ?, ?)",
+                params![find_run_id, 0i64, resource_ids[0], 10i64],
+            )?;
+            t.execute(
+                "INSERT INTO slices (motif_id, run_id, channel_id, resource_id, slice_idx) VALUES (1, ?, ?, ?, ?)",
+                params![select_run_id, 0i64, resource_ids[0], 30i64],
+            )?;
+
+            t.commit()?;
+        }
+
+        let resource = store.list_resources_by_ids(&resource_ids)?.remove(0);
+
+        let only_find = store.list_motifs_slices(find_run_id, vec![find_run_id])?;
+        let both_runs =
+            store.list_motifs_slices(find_run_id, vec![find_run_id, select_run_id])?;
+
+        let find_only_slices = only_find.get(&resource).expect("resource slices");
+        assert_eq!(1, find_only_slices.len());
+        assert_eq!(10, find_only_slices[0].slice_idx);
+
+        let both_run_slices = both_runs.get(&resource).expect("resource slices");
+        let mut slice_idxs = both_run_slices.iter().map(|s| s.slice_idx).collect::<Vec<_>>();
+        slice_idxs.sort();
+        assert_eq!(vec![10, 30], slice_idxs);
 
         Ok(())
     }
