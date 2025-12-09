@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::f64;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Range;
@@ -6,9 +7,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use async_trait::async_trait;
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::{stream, StreamExt, TryStreamExt};
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
+use polars_arrow::io::iterator::StreamingIterator;
 use tch::Device::Cpu;
 use tch::Kind::{Float, Uint8};
 use tch::{IndexOp, Kind, Tensor};
@@ -29,7 +31,7 @@ use caching_runner::tmp_cache::TmpCached;
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRunConfig};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig};
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
@@ -74,7 +76,8 @@ where
     run_configs:Vec<SelectMotifsRunConfig>,//TODO map to Vec<Arc in new
     find_motifs_run_ids:Vec<RunId>,
     clc_resources_motifs_dist:Arc<ClcResourcesMotifsDist<C>>,
-    max_batch:i64//TODO to SelectMotifsSFixedConfig
+    max_batch:i64,//TODO to SelectMotifsSFixedConfig,
+    clc_dist:Arc<LoadMotifAndClcDistanceStage<ML, AverageEuclideanDistanceStage<C>, C>>
 }
 
 impl <L, ML, C> Debug for SelectMotifsStage<L, ML, C>
@@ -233,6 +236,13 @@ where
     ) -> Self {
 
 
+
+        let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
+            Arc::clone(&motif_loader),
+            Arc::new(AverageEuclideanDistanceStage::<C>::new())
+        ));
+
+
         Self {
             id: "SelectMotifsStage".into(),
             store: Arc::clone(store),
@@ -249,8 +259,57 @@ where
                  #[cfg(test)]
                  fail_if_size_bigger_than
             )),
-            max_batch
+            max_batch,
+            clc_dist
         }
+    }
+
+    async fn load_stacked_motifs(store:&Arc<RwLock<Box<dyn Store>>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, ctx_for_loader: &Arc<RwLock<C>>, find_motifs_run_ids: &Vec<RunId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoosaError> {
+        let find_motifs_run_configs = find_motifs_run_ids
+            .iter()
+            .map(|find_motifs_run_id| -> Result<_, ThoosaError> {
+                Ok(Arc::new(FindMotifsRunConfig::from_properties_map__(
+                    *find_motifs_run_id,
+                    &store.read().list_run_config_values(*find_motifs_run_id)?,
+                )?))
+            })
+            .collect::<Result<Vec<_>, ThoosaError>>()?;
+
+        //for each FindMotifsRunConfigs X SelectMotifsRunConfig
+        let stacked_motifs = futures::stream::iter(
+            find_motifs_run_configs
+                .into_iter()
+        )
+            .then(|find_motifs_run_config| {
+                let stacked_motifs_loader = Arc::clone(&stacked_motifs_loader);
+                let ctx = Arc::clone(&ctx_for_loader);
+
+                async move {
+                    let stacked_motifs_input = Arc::new(DevicesWrap::wrap_cpu(
+                        StackedMotifsInput::new(
+                            Arc::clone(&find_motifs_run_config),
+                        )
+                    ));
+
+                    match stacked_motifs_loader.run_cached(stacked_motifs_input, Arc::clone(&ctx)).await {
+                        Ok(motif_data) => Ok((find_motifs_run_config, motif_data)),
+                        Err(e) => Err((e, find_motifs_run_config))
+                    }
+                }
+            })
+            .filter_map(|result| async move {
+                match result {
+                    Ok(tuple) => Some(tuple),
+                    Err((e, select_motifs_run_config)) => {
+                        //TODO switch to CPU if OOM ctx.to_cpu...
+                        error!("Can't load select_motifs_run_config: e={e:?} select_motifs_run_config={select_motifs_run_config:?}");
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+        Ok(stacked_motifs)
     }
 
 }
@@ -302,57 +361,7 @@ where
         let stacked_motifs_loader = Arc::clone(&self.stacked_motifs_loader);
         let ctx_for_loader = Arc::clone(&ctx);
 
-        let find_motifs_run_configs = self.find_motifs_run_ids
-            .iter()
-            .map(|find_motifs_run_id| -> Result<_, ThoosaError> {
-                Ok(Arc::new(FindMotifsRunConfig::from_properties_map__(
-                    *find_motifs_run_id,
-                    &self.store.read().list_run_config_values(*find_motifs_run_id)?,
-                )?))
-            })
-            .collect::<Result<Vec<_>, ThoosaError>>()?;
-
-        //for each FindMotifsRunConfigs X SelectMotifsRunConfig
-        let stacked_motifs = futures::stream::iter(
-            find_motifs_run_configs
-                .into_iter()
-                // .flat_map(|find_motifs_run_config| {
-                //     self.run_configs
-                //         .iter()
-                //         .map(move |select_motifs_run_config| {
-                //             (Arc::clone(&find_motifs_run_config), select_motifs_run_config)
-                //         })
-                // })
-        )
-        .then(|find_motifs_run_config| {
-            let stacked_motifs_loader = Arc::clone(&stacked_motifs_loader);
-            let ctx = Arc::clone(&ctx_for_loader);
-
-            async move {
-                let stacked_motifs_input = Arc::new(DevicesWrap::wrap_cpu(
-                    StackedMotifsInput::new(
-                        Arc::clone(&find_motifs_run_config),
-                    )
-                ));
-
-                match stacked_motifs_loader.run_cached(stacked_motifs_input, Arc::clone(&ctx)).await {
-                    Ok(motif_data) => Ok((find_motifs_run_config, motif_data)),
-                    Err(e) => Err((e, find_motifs_run_config))
-                }
-            }
-        })
-        .filter_map(|result| async move {
-            match result {
-                Ok(tuple) => Some(tuple),
-                Err((e, select_motifs_run_config)) => {
-                    //TODO switch to CPU if OOM ctx.to_cpu...
-                    error!("Can't load select_motifs_run_config: e={e:?} select_motifs_run_config={select_motifs_run_config:?}");
-                    None
-                }
-            }
-        })
-        .collect::<Vec<_>>()
-        .await;
+        let stacked_motifs = Self::load_stacked_motifs( &self.store, &stacked_motifs_loader,&ctx_for_loader, &self.find_motifs_run_ids).await?;
 
         let mut t_1_batch: Vec<_> = vec![];
         let mut t_1_batch_resources: Vec<_> = vec![];
@@ -366,7 +375,7 @@ where
 
         let mut run_config_good_motif_ids: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)> = vec![];
         for run_config in self.run_configs.iter() {
-            let mut motif_added_slices:Arc<Vec<tokio::sync::RwLock<HashMap<DataId, HashSet<IdSlice>>>>> = Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
+            let mut channels_motifs_added_slices:Arc<Vec<tokio::sync::RwLock<HashMap<DataId, HashSet<IdSlice>>>>> = Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
 
             for (i_0, resource_0) in resources.iter()/*.flat_map(|label_resources|label_resources.1.iter())*/.enumerate() {
                 debug!("SelectMotifsStage::run: on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
@@ -388,141 +397,131 @@ where
 
                 let t_1_batch_len = t_1_batch.len();
 
-                let expanded_motif_ids = futures::stream::iter(stacked_motifs.clone())
-                    .map(|(find_motifs_run_config, motif_data)| {
-                        let t_1_batch = t_1_batch.clone(); //clones Arcs
+                futures::stream::iter(stacked_motifs.clone())
+                .map(|(find_motifs_run_config, motif_data)| {
+                    let t_1_batch = t_1_batch.clone(); //clones Arcs
 
-                        let store = Arc::clone(&self.store);
-                        let clc_stage = Arc::clone(&self.clc_resources_motifs_dist);
-                        let ctx_clone = Arc::clone(&ctx);
-                        debug!("SelectMotifsStage::run: t_0_batch={t_1_batch:?} \nbatched_motifs_output_wrap={motif_data:?}");
+                    let store = Arc::clone(&self.store);
+                    let clc_stage = Arc::clone(&self.clc_resources_motifs_dist);
+                    let ctx_clone = Arc::clone(&ctx);
+                    debug!("SelectMotifsStage::run: t_0_batch={t_1_batch:?} \nbatched_motifs_output_wrap={motif_data:?}");
 
-                        let t_1_batch_resources = t_1_batch_resources.clone();
-                        let resource_ids = t_1_batch_resources
-                            .iter()
-                            .map(|resource| resource.id())
-                            .collect::<Vec<_>>();
+                    let t_1_batch_resources = t_1_batch_resources.clone();
+                    let resource_ids = t_1_batch_resources
+                        .iter()
+                        .map(|resource| resource.id())
+                        .collect::<Vec<_>>();
 
 
-                        let clc_resources_input = Arc::new(ClcResourcesMotifsDistInputDeviceWrapper::new(
-                            format!("ClcResourcesMotifsDistInputDeviceWrapper: resource_ids={resource_ids:?}").into(),
-                            t_1_batch,
-                            resource_ids,
-                            motif_data
-                        ));
+                    let clc_resources_input = Arc::new(ClcResourcesMotifsDistInputDeviceWrapper::new(
+                        format!("ClcResourcesMotifsDistInputDeviceWrapper: resource_ids={resource_ids:?}").into(),
+                        t_1_batch,
+                        resource_ids,
+                        motif_data
+                    ));
 
-                        debug!("SelectMotifsStage::run: clc_resources_input={clc_resources_input:?}");
-                        // let output_builder = (self.output_builder)(SimpleId("zzz"));
-                        let motif_added_slices = Arc::clone(&motif_added_slices);
-                        async move {
-                            let out_id = Arc::new(SimpleId("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
+                    debug!("SelectMotifsStage::run: clc_resources_input={clc_resources_input:?}");
+                    // let output_builder = (self.output_builder)(SimpleId("zzz"));
+                    let motif_added_slices = Arc::clone(&channels_motifs_added_slices);
+                    tokio::spawn(async move {
+                        let out_id = Arc::new(SimpleId("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
 
-                            let required_ids = HashMap::new();
+                        let required_ids = HashMap::new();
 
-                            let ClcResourcesMotifsDistOutput {
-                                select_motifs_run_id, //can be taken from motif_data, no need to trip through ClcResourcesMotifsDist?
-                                channel_masks_dists_ids,
-                                resources_iter,
-                                ..
-                            } = OOMHandler::new(
-                                vec![
-                                    Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, out_id.clone())))),
-                                    Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                                    Adjusters::Input(Box::new(SplitsAdjuster::<ClcResourcesMotifsDistInputDeviceWrapperSelector, i64>::new(1))), //TODO
-                                ], None)
-                                .run(
-                                    &clc_stage,
-                                    Arc::clone(&clc_resources_input),
-                                    ctx_clone,
-                                    Contexts::new(
-                                        SplitsAdjusterContextImpl::new(t_1_batch_len as i64, SelectMotifsSavableResultBuilder::new(
-                                            StackedMotifsOutputId::new(
-                                                find_motifs_run_config.id.expect("find_motifs_run_config"), vec![]
-                                            ),
-                                            num_channels as u32,
-                                            find_motifs_run_config.step as usize,
-                                            cache_area
-                                        ).await),
-                                        NoopRunnableContext {},
-                                        PermitsAndDumpToCpuAdjustableContex::new(
-                                            PermitsAdjustContextImpl::new(ctx_name),
-                                            DumpToCpuContextImpl::new(&required_ids),
+                        let ClcResourcesMotifsDistOutput {
+                            select_motifs_run_id, //can be taken from motif_data, no need to trip through ClcResourcesMotifsDist?
+                            channel_masks_dists_ids,
+                            resources_iter,
+                            ..
+                        } = OOMHandler::new(
+                            vec![
+                                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, out_id.clone())))),
+                                Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                                Adjusters::Input(Box::new(SplitsAdjuster::<ClcResourcesMotifsDistInputDeviceWrapperSelector, i64>::new(1))), //TODO
+                            ], None)
+                            .run(
+                                &clc_stage,
+                                Arc::clone(&clc_resources_input),
+                                ctx_clone,
+                                Contexts::new(
+                                    SplitsAdjusterContextImpl::new(t_1_batch_len as i64, SelectMotifsSavableResultBuilder::new(
+                                        StackedMotifsOutputId::new(
+                                            find_motifs_run_config.id.expect("find_motifs_run_config"), vec![]
                                         ),
+                                        num_channels as u32,
+                                        find_motifs_run_config.step as usize,
+                                        cache_area
+                                    ).await),
+                                    NoopRunnableContext {},
+                                    PermitsAndDumpToCpuAdjustableContex::new(
+                                        PermitsAdjustContextImpl::new(ctx_name),
+                                        DumpToCpuContextImpl::new(&required_ids),
                                     ),
-                                )
-                                .await?;
+                                ),
+                            )
+                            .await?;
 
-                            /* run without OOM handling
-                            let ClcRresourcesMotifsDistOutput {
-                                select_motifs_run_id,
-                                channel_masks_dists_ids,
-                                resources_iter,
-                                ..
-                            } = clc_resources_input.with_data_ref(
-                                1,
-                                  Arc::clone(&ctx_clone), None, |v|{
-                                      clc_stage.do_run(v, ctx_clone)
-                                  }
-                            ).await?;*/
-
-
-                            debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?} select_motifs_run_id={select_motifs_run_id}");
-                            let mut motif_ids = vec![];
-                            for channel_mask_dists_ids in channel_masks_dists_ids.into_iter().enumerate() {
-                                if let (channel, Some(mask_dists_ids)) = channel_mask_dists_ids {
-                                    debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
-                                    let mut motif_added_slices_guard = motif_added_slices[channel].write().await;
-                                    let (cpu_mask, _) = mask_dists_ids.0.to_cpu().await?.unpack();
-
-                                    trace!("SelectMotifsStage::run: channel={channel} cpu_mask=\n{cpu_mask}");
-
-                                    let mut mask_in_channel = BoolTensorIterator::from(&cpu_mask);
-                                    for motif_id in mask_dists_ids.1 {
-                                        let resources_iter = resources_iter.clone();
+                        /* run without OOM handling
+                        let ClcRresourcesMotifsDistOutput {
+                            select_motifs_run_id,
+                            channel_masks_dists_ids,
+                            resources_iter,
+                            ..
+                        } = clc_resources_input.with_data_ref(
+                            1,
+                              Arc::clone(&ctx_clone), None, |v|{
+                                  clc_stage.do_run(v, ctx_clone)
+                              }
+                        ).await?;*/
 
 
-                                        let mut slices = motif_added_slices_guard.entry(motif_id.clone()).or_insert(HashSet::new());
-                                        if slices.len() < 1000 {
-                                            for slice_1 in resources_iter {
-                                                if let Some(mask) = mask_in_channel.next() {
-                                                    trace!("SelectMotifsStage::run: motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} mask={mask}");
-                                                    if mask {
-                                                        slices.insert(IdSlice(0, slice_1.0, slice_1.1));
-                                                    }
-                                                } else {
-                                                    warn!("SelectMotifsStage::run: no mask for motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} ");
+                        debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?} select_motifs_run_id={select_motifs_run_id}");
+                        for channel_mask_dists_ids in channel_masks_dists_ids.into_iter().enumerate() {
+                            if let (channel, Some(mask_dists_ids)) = channel_mask_dists_ids {
+                                debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
+                                let mut motif_added_slices_guard = motif_added_slices[channel].write().await;
+                                let (cpu_mask, _) = mask_dists_ids.0.to_cpu().await?.unpack();
+
+                                trace!("SelectMotifsStage::run: channel={channel} cpu_mask=\n{cpu_mask}");
+
+                                let mut mask_in_channel = BoolTensorIterator::from(&cpu_mask);
+                                for motif_id in mask_dists_ids.1 {
+                                    let resources_iter = resources_iter.clone();
+
+
+                                    let mut slices = motif_added_slices_guard.entry(motif_id.clone()).or_insert(HashSet::new());
+                                    if slices.len() < 1000 {//TODO config
+                                        for slice_1 in resources_iter {
+                                            if let Some(mask) = mask_in_channel.next() {
+                                                trace!("SelectMotifsStage::run: motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} mask={mask}");
+                                                if mask {
+                                                    slices.insert(IdSlice(0, slice_1.0, slice_1.1));
                                                 }
+                                            } else {
+                                                warn!("SelectMotifsStage::run: no mask for motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} ");
                                             }
-
-                                            // if !slices.is_empty() /*&& slices.len() < num_resources * 3*/{ //TODO move to a Stage and use both from find_motifs and here
-                                            //     motif_ids.push(motif_id.clone());
-                                            //     // store.write().add_slices_to_motif(select_motifs_run_id, *motif_id, channel as i64, slices)?;
-                                            // }
                                         }
                                     }
                                 }
                             }
-                            //TODO select motif_ids?
-
-                            Ok::<Vec<DataId>, ThoosaError>(motif_ids)
                         }
+
+                        Ok::<(), ThoosaError>(())
                     })
-                    .buffer_unordered(10)
-                    .filter_map(|v| async {
-                        match v {
-                            Ok(v) => {
-                                Some(v)
-                            }
-                            Err(e) => {
-                                error!("SelectMotifsStage: failed to select slices for {stacked_motifs:?} and {t_1_batch:?}");
-                            None
+                })
+                .buffer_unordered(10)
+                .filter_map(|v| async {
+                    match v {
+                        Ok(v) => {
+                            Some(v)
                         }
-                    }})
-                    .collect::<Vec<_>>()
-                    .await;
-
-
-
+                        Err(e) => {
+                            error!("SelectMotifsStage: failed to select slices for {stacked_motifs:?} and {t_1_batch:?}");
+                        None
+                    }
+                }})
+                .collect::<Vec<_>>()//TODO use for_each?
+                .await;
 
 
                 t_1_batch_dim_0_size = 0;;
@@ -530,33 +529,81 @@ where
                 t_1_batch_resources.clear();
             }
 
-            if Arc::strong_count(&motif_added_slices) != 1 {
+            if Arc::strong_count(&channels_motifs_added_slices) != 1 {
                 return Err(ThoosaError::new(format!("can't unwrap motif_added_slices for {:?}", run_config)))
             }
-            let good_motif_ids = Arc::into_inner(motif_added_slices)
-                .expect("still can't unwrap motif_added_slices")
-                .into_iter()
-                .enumerate()
-                .flat_map(|(channel, lock)| {
-                    let mut store = self.store.write();
 
-                    lock.into_inner().into_iter().map(move |(motif_id, slices)| {
-                        store.add_slices_to_motif(run_config.id.unwrap(), *motif_id, channel as i64, slices).unwrap(); //TODO unwrap
+            let good_motif_ids = futures::stream::iter(
+                Arc::into_inner(channels_motifs_added_slices)
+                    .expect("still can't unwrap motif_added_slices")
+                    .into_iter()
+                    .enumerate()
 
-                        (*motif_id, 1.0)
+            )
+            .flat_map(|(channel, lock)| {
+
+                let clc_dist = Arc::clone(&self.clc_dist);
+                let ctx = Arc::clone(&ctx);
+                let store = Arc::clone(&self.store);
+                let motif_selector = run_config.motif_selector.clone();
+                let run_config_id =  run_config.id.unwrap().clone();
+
+                stream::iter(lock.into_inner()).map(move |(motif_id, slices)| {
+
+                    store.write().add_slices_to_motif(run_config_id, *motif_id, channel as i64, slices).unwrap(); //TODO unwrap
+
+                    let clc_dist = Arc::clone(&clc_dist);
+                    let ctx = Arc::clone(&ctx);
+                    let motif_selector = motif_selector.clone();
+                    tokio::spawn(async move {
+
+                        match &motif_selector {
+                            //TODO add relevant MotifSelector variants
+                            MotifSelector::ByLabelVariance(_) => {
+                                let dist = clc_dist.run(Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new(DataId(*motif_id)))), ctx).await
+                                    .map_err(|e|ThoosaError::new(format!("Got error while running clc_dist for {motif_id}")))?;
+
+                                with_data!(0, dist; |dist:&AverageDistanceValue|{
+                                    Ok::<_, ThoosaError>((*motif_id, dist.value() as f64))
+                                })
+                            }
+                            _=> {
+                                Ok((*motif_id, f64::MAX)) //TODO
+                            }
+                        }
                     })
-
                 })
 
-                .collect();
+            })
+            .buffer_unordered(10)
+            .filter_map(|result| async move {
+                //TODO clean up
+                match result {
+                    Ok(v) => match v {
+                        Ok(vv) =>  Some(vv),
+                        Err(e) => {
+                            error!("Got error calculating good motifs: e={e:?}");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        error!("Got error joining good motifs: e={e:?}");
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+            let good_motif_ids = good_motif_ids.into_iter().filter(|v|v.1 < f64::MAX).collect::<Vec<_>>();
+
+            let avg_dist = good_motif_ids.iter().map(|v|v.1).sum::<f64>()/good_motif_ids.len() as f64;
+
+            let good_motif_ids = good_motif_ids.into_iter().filter(|v|v.1 <= avg_dist).collect::<Vec<_>>();
 
             run_config_good_motif_ids.push((run_config.clone(), good_motif_ids));
         }
 
-        // let motif_added_slices_guard:OwnedRwLockWriteGuard<HashMap<DataId, HashSet<IdSlice>>> = motif_added_slices.write_owned().await;
-        // for (motif_id, new_slices) in motif_added_slices_guard.into_iter() {
-        //     self.store.write().add_slices_to_motif(select_motifs_run_id, motif_id.0, 0 as i64, new_slices)?;
-        // }
 
         debug!("SelectMotifsStage::run: good_motif_ids={run_config_good_motif_ids:?}");
 

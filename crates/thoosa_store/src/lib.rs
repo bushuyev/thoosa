@@ -1738,7 +1738,7 @@ impl Store for SqlStore {
                             .map(|_| "?")
                             .collect::<Vec<_>>()
                             .join(", ");
-                        (format!(" AND s.run_id IN (m.run_id, {placeholders})"), ids)
+                        (format!(" AND s.run_id IN (m.run_id, {placeholders})"), ids)//if slices.run_id == motifs.run_id = slice was found during find_motifs, if not -during select_motifs
                     }
                 }
             }
