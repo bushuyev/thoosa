@@ -6,6 +6,7 @@ use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::str::FromStr;
 
 use crate::distance::{average_euclidean_distance, clc_dist_d2};
 use clap::{Args, ValueEnum};
@@ -541,29 +542,73 @@ where
     Ok(())
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum MotifsBy {
     MotifId(usize), //TODO u32
-    RunId(RunId),
+    RunId {
+        find_motifs_run_id: RunId,
+        select_motifs_run_ids: Option<Vec<RunId>>,
+    },
+}
+
+impl MotifsBy {
+    fn parse_run_id_payload(payload: &str) -> Result<Self, String> {
+        let (find_part, select_part) = if let Some((find, rest)) = payload.split_once('_') {
+            (find, Some(rest))
+        } else {
+            (payload, None)
+        };
+
+        let find_motifs_run_id = find_part
+            .parse::<RunId>()
+            .map_err(|e| format!("can't parse {payload:?} to find_motifs_run_id: {e}"))?;
+
+        let select_motifs_run_ids = match select_part {
+            None => None,
+            Some("") => Some(vec![]),
+            Some(values) => {
+                let ids = values
+                    .split(',')
+                    .filter(|segment| !segment.is_empty())
+                    .map(|segment| {
+                        segment
+                            .parse::<RunId>()
+                            .map_err(|e| format!("can't parse {segment:?} to select_motifs_run_id: {e}"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Some(ids)
+            }
+        };
+
+        Ok(MotifsBy::RunId {
+            find_motifs_run_id,
+            select_motifs_run_ids,
+        })
+    }
+}
+
+impl FromStr for MotifsBy {
+    type Err = String;
+
+    fn from_str(v: &str) -> Result<Self, Self::Err> {
+        if let Some(rest) = v.strip_prefix("motif_id:") {
+            Ok(MotifsBy::MotifId(
+                rest.parse()
+                    .map_err(|e| format!("can't parse {rest:?} to motif_id: {e}"))?,
+            ))
+        } else if let Some(rest) = v.strip_prefix("run_id:") {
+            MotifsBy::parse_run_id_payload(rest)
+        } else {
+            Err(format!(
+                "unexpected parameter {v}, should be motif_id:nnn or run_id:nnn"
+            ))
+        }
+    }
 }
 
 impl From<&str> for MotifsBy {
     fn from(v: &str) -> MotifsBy {
-        if v.starts_with("motif_id:") {
-            MotifsBy::MotifId(
-                v[v.find(":").expect(": not found") + 1..]
-                    .parse()
-                    .expect("can't parse {v} to motif_id"),
-            )
-        } else if v.starts_with("run_id:") {
-            MotifsBy::RunId(
-                v[v.find(":").expect(": not found") + 1..]
-                    .parse()
-                    .expect("can't parse {v} to run_id"),
-            )
-        } else {
-            panic!("unexpected parameter {v}, should be motif:id:nnn or run_id:nnn")
-        }
+        MotifsBy::from_str(v).unwrap_or_else(|err| panic!("{err}"))
     }
 }
 
@@ -578,7 +623,7 @@ pub struct PlotMotifSlicesArgs {
 
 impl PlotMotifSlicesArgs {
     pub fn motifs_by(&self) -> MotifsBy {
-        self.motifs_by
+        self.motifs_by.clone()
     }
 
     pub fn new(motifs_by: MotifsBy) -> Self {
@@ -773,6 +818,7 @@ impl MotifsToTensorArgs {
 
 #[cfg(test)]
 mod motifs_tests {
+    use super::MotifsBy;
     use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::ops::Index;
@@ -802,6 +848,38 @@ mod motifs_tests {
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
+    }
+
+    #[test]
+    fn parses_motifs_by_run_id_filters() {
+        use std::str::FromStr;
+
+        let simple = MotifsBy::from_str("run_id:11").unwrap();
+        assert_eq!(
+            simple,
+            MotifsBy::RunId {
+                find_motifs_run_id: 11,
+                select_motifs_run_ids: None
+            }
+        );
+
+        let empty = MotifsBy::from_str("run_id:42_").unwrap();
+        assert_eq!(
+            empty,
+            MotifsBy::RunId {
+                find_motifs_run_id: 42,
+                select_motifs_run_ids: Some(vec![])
+            }
+        );
+
+        let filtered = MotifsBy::from_str("run_id:7_10,20,30").unwrap();
+        assert_eq!(
+            filtered,
+            MotifsBy::RunId {
+                find_motifs_run_id: 7,
+                select_motifs_run_ids: Some(vec![10, 20, 30])
+            }
+        );
     }
 
     #[test]
