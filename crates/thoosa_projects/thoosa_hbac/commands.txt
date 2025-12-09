@@ -17,12 +17,6 @@ cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logg
 
 
 
-cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'10',window:'1000',descr:'lalala'}"
-
-
-cargo run --release  --bin thoosa_hbac   -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/  find-motifs --resources="group:pure group 100" --chunk-size=2 --window=100..1000:100 --step=100 --dist-quantile=0.01
-
-
 
 cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="group:pure group 1000" --run-config-cnt="{motif_selector: {ByLabelVariance:{"_dummy":"0"}}}"
 
@@ -40,7 +34,7 @@ cargo run --release   -- --term-logger-level=INFO --write-logger-level=DEBUG --w
   --train-resource-group="pure group 100" --valid-resource-group="group 1 labels/100/0-100" --opt-max-evals=10 --opt-n-init=3  --batch-size=10 --cycles=20 \
   --lr=0.00001..0.001 --num-layers=9..10
 
-cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  run-all --train-resource-group="pure group 100" --valid-resource-group="group 1 labels/100/0-100" --step=100 --window=1000 --find-motifs-chunk-size=2 --lr=0.00001..0.001 --num-layers=1..10 --opt-max-evals=100 --opt-n-init=10
+cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=DEBUG  --ws-path=/home/bu/tmp/ws_test_hbac/  run-all --find-resources="group:pure group 100" --select-resources="group:pure group 200" --run-config-cnt=""
 
 
 

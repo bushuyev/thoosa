@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
-use log::{debug, error, trace};
+use log::{debug, error, info, trace};
 use parking_lot::RwLock;
 use plotters::prelude::BLACK;
 use tch::Device::{Cpu, Cuda};
@@ -214,7 +214,7 @@ where
                     ThoDevice::from(device_idx).into(),
                     "motifs",
                 ).await.map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)| {
-                    debug!("TrainMotifNet::run: motif_node_params={motif_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
+                    info!("TrainMotifNet::run: motif_node_params={motif_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
                     store.read().get_motif_meta(motif_id_rate.0).and_then(|(channel, find_motifs_run_id)|{
                         Ok(TrainMotifsNetResult::new(
                             min_loss,
@@ -316,7 +316,7 @@ impl MotifsBatch {
             let num_motif_slices = motif.data().t_ref().size()[0];
             assert!(num_motif_slices > 1);
             let num_validation_slices = (num_motif_slices as f32 * 0.2) as i64;
-            let num_validation_slices = if num_validation_slices < 0 {1} else {num_validation_slices};
+            let num_validation_slices = if num_validation_slices <= 0 {1} else {num_validation_slices};
             let split = num_motif_slices - num_validation_slices;
 
             debug!("MotifsBatch::new: motif={:?} num_motif_slices={num_motif_slices} num_validation_slices={num_validation_slices} split={split}", motif.extra());
@@ -501,7 +501,6 @@ mod tests {
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(20)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(11)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.001)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MaxLoss), Val::Real(0.01)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptMaxEvals), Val::Int(10)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptNInit), Val::Int(10)),
                 ]),

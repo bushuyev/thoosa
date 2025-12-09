@@ -1462,7 +1462,7 @@ impl TrainMotifsNetsRunConfig {
     pub fn new(id: Option<RunId>) -> Self {
         Self {
             id,
-            common_training_args: CommonTrainingRunConfig::new(1, 1, 0.1, 0.1, 1, 1),
+            common_training_args: CommonTrainingRunConfig::new(1, 1, 0.1, 1, 1),
             num_layers: 1,
         }
     }
@@ -1484,10 +1484,6 @@ pub struct CommonTrainingRunConfig {
 
     #[in_map]
     #[run_config]
-    pub max_loss: f32,
-
-    #[in_map]
-    #[run_config]
     pub opt_max_evals: u32,
 
     #[in_map]
@@ -1500,7 +1496,6 @@ impl CommonTrainingRunConfig {
         cycles: u32,
         batch_size: u32,
         lr: f64,
-        max_loss: f32,
         opt_max_evals: u32,
         opt_n_init: u32,
     ) -> Self {
@@ -1508,7 +1503,6 @@ impl CommonTrainingRunConfig {
             cycles,
             batch_size,
             lr,
-            max_loss,
             opt_max_evals,
             opt_n_init,
         }
@@ -4538,7 +4532,7 @@ mod train_tests {
 
         let run_config = TrainLabelNetsRunConfig::new(
             Some(1),
-            CommonTrainingRunConfig::new(10, 10, 0.1, 0.1, 10, 3),
+            CommonTrainingRunConfig::new(10, 10, 0.1, 10, 3),
             LabelNetTypeArgs::MaxPadding(MaxPaddingNetArgs::new(3)),
         );
 
@@ -4564,7 +4558,7 @@ mod train_tests {
 
         let run_config = TrainLabelNetsRunConfig::new(
             Some(1),
-            CommonTrainingRunConfig::new(10, 10, 0.1, 0.1, 10, 3),
+            CommonTrainingRunConfig::new(10, 10, 0.1, 10, 3),
             LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs {
                 num_layers: 3,
                 slices_len: MAX_SLICES_LEN as u32,
@@ -5076,7 +5070,7 @@ mod train_tests {
 
         let run_config = TrainLabelNetsRunConfig::new(
             Some(1),
-            CommonTrainingRunConfig::new(10, BATCH_SIZE as u32, 0.1, 0.1, 10, 3),
+            CommonTrainingRunConfig::new(10, BATCH_SIZE as u32, 0.1, 10, 3),
             LabelNetTypeArgs::MaxPadding(MaxPaddingNetArgs::new(3)),
         );
 
@@ -5119,7 +5113,6 @@ mod train_tests {
                     cycles: 10.into(),
                     batch_size: 10.into(),
                     lr: (0.01..0.1).into(),
-                    max_loss: 0.1f32.into(),
                     opt_max_evals: 10.into(),
                     opt_n_init: 3.into(),
                 },
@@ -5273,7 +5266,7 @@ mod train_tests {
         let (loss, final_params) = super::train_final_net(
             &TrainFinalNetRunConfig::new(
                 Some(1),
-                CommonTrainingRunConfig::new(10, 10, 0.1, 0.1, 10, 3),
+                CommonTrainingRunConfig::new(10, 10, 0.1, 10, 3),
                 FinalNetArgs::new(3),
             ),
             LABEL_NETS_SIZE as u32,
