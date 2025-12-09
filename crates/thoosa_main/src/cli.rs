@@ -1874,6 +1874,52 @@ async fn run_plot_motif_slices(
                 .await;
 
         }
+
+        MotifsBy::GoodMotifs(selection_run_id) => {
+            let channels = ws.read().channels();
+            debug!(
+                "run_plot_motif_slices: MotifsBy::GoodMotifs selection_run_id={selection_run_id} channels={channels}"
+            );
+
+            let motifs = store
+                .read()
+                .list_selected_motifs(selection_run_id, channels)?;
+
+            let motif_ids: Vec<usize> = motifs
+                .into_iter()
+                .flat_map(|channel| channel.into_iter().map(|(motif_id, _)| motif_id as usize))
+                .collect();
+
+            if motif_ids.is_empty() {
+                warn!("run_plot_motif_slices: no motifs found for selection_run_id={selection_run_id}");
+                return Ok(());
+            }
+
+            let motifs_len = motif_ids.len();
+            let done_cnt = Arc::new(AtomicU32::new(0));
+
+            futures::stream::iter(motif_ids)
+                .map(|motif_id| {
+                    let done_cnt = Arc::clone(&done_cnt);
+                    let clc_dist = Arc::clone(&clc_dist);
+                    let motif_loader_impl = Arc::clone(&motif_loader_impl);
+                    let ctx = Arc::clone(&ctx);
+                    async move {
+                        debug!("run_plot_motif_slices: motif_id={motif_id}");
+                        if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist).await {
+                            error!("motif {motif_id} failed: e={e:?}");
+                        };
+                        MotifLoader::<RawTensorLoader<RunCtx2>, RunCtx2>::cache().await.clear();
+
+                        let done = done_cnt.fetch_add(1, Relaxed);
+                        if done % 32 == 0 {
+                            info!("done {done} from  {motifs_len}");
+                        }
+                    }})
+                .buffer_unordered(10)
+                .collect::<Vec<()>>()
+                .await;
+        }
     }
 
     Ok(())
