@@ -41,6 +41,7 @@ use crate::tasks::transforms::freq_filter::FreqFilter;
 
 #[derive(Debug, Clone, DummyData, PartialEq, Eq, Hash)]
 pub struct MotifLoaderInput {
+    select_motifs_run_id: Option<Vec<RunId>>,
     motif_id:DataId
 }
 
@@ -52,7 +53,17 @@ impl From<u32> for MotifLoaderInput{
 
 impl MotifLoaderInput {
     pub fn new(motif_id: DataId) -> Self {
-        Self { motif_id }
+        Self {
+            motif_id,
+            select_motifs_run_id: None //all slices loaded
+        }
+    }
+
+    pub fn find_motif_slices_only(motif_id: DataId) -> Self {
+        Self {
+            motif_id,
+            select_motifs_run_id: Some(vec![]) //all slices loaded
+        }
     }
 }
 impl Input for MotifLoaderInput {

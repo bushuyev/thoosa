@@ -48,7 +48,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetParams, LabelNetsApplicable, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsResult, load_channels_motifs, load_final_model, opt_train, opt_train_2, run_opt_train_label_nets, run_train_motif_net, train_final_net, /*train_final_net_2, *//*train_label_net_2, */TrainMotifsNetResult};
+use thoosa_common::train_nets::{CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetParams, LabelNetsApplicable, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsResult, load_channels_motifs, load_final_model, opt_train, opt_train_2, run_opt_train_label_nets, run_train_motif_net, train_final_net, TrainMotifsNetResult, CommonTrainingRunConfigRangeOrValue};
 use thoosa_common::utils::{DummyListener, TrainListener, cuda_mem, from, list_devices, lin_t, plot_series, reset_print_options};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
@@ -440,10 +440,6 @@ where
             let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = serde_json5::from_str(&train_motif_nets_args.run_config_cnt).expect("TrainMotifsNets2");
 
             let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
-                // ResourcesConfigInput::new(
-                //     SimpleId::from("resources"),
-                //     train_motif_nets_args.resource_config(),
-                // )
                 TrainMotifNetInput::new(train_motif_nets_args.select_motifs_run_ids.clone(), Arc::new(train_motif_nets_args.fixed_config.clone()))
             ));
 
@@ -553,7 +549,7 @@ where
             let find_motifs_run_config_range_or_value:FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue{
                 id: None,
                 step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-                window: RangeOrValue::Value(1000),
+                window: RangeOrValue::Value(2000),
                 min_tracker_step: None,
                 filter: None,
                 slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ mean: RangeOrValue::Value(0.02)}),
@@ -612,6 +608,43 @@ where
             ).await?;
 
             info!("all done: find_motif_run_ids={find_motif_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
+
+
+            let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
+                id: None,
+                common_training_args: CommonTrainingRunConfigRangeOrValue {
+                    cycles: RangeOrValue::Value(10),
+                    batch_size: RangeOrValue::Value(11),
+                    lr: RangeOrValue::Value(0.0001),
+                    opt_max_evals: RangeOrValue::Value(10),
+                    opt_n_init: RangeOrValue::Value(3),
+                },
+                num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+            };
+
+            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
+                TrainMotifNetInput::new(select_motifs_run_ids, Arc::new(OptConfig::new(100, 10)))
+            ));
+
+            let run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
+                None,
+                train_motif_nets_run_config_range_or_value,
+                input_wrapper,
+                &ws,
+                &store,
+                true,
+                async |run_configs| {
+
+                    Ok(Arc::new(TrainMotifNets::<_, RunCtx2>::new(
+                        loader_2,
+                        &ws,
+                        &store,
+                        run_configs,
+                    )))
+                },
+                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train motif nets"))),
+            ).await?;
+
 
             /*if let Some(source_path) = run_all_params.import_source_path.as_ref() {
                 debug!("RunAll: init_resources");
