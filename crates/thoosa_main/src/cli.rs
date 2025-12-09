@@ -1842,10 +1842,12 @@ async fn run_plot_motif_slices(
 
         }
 
-        MotifsBy::RunId(run_id) => {
-            debug!("run_plot_motif_slices: MotifsBy::RunId run_id={run_id}");
+        MotifsBy::RunId { find_motifs_run_id, select_motifs_run_ids } => {
+            debug!(
+                "run_plot_motif_slices: MotifsBy::RunId find_run_id={find_motifs_run_id} select_run_ids={select_motifs_run_ids:?}"
+            );
 
-            let motifs = store.read().list_motifs(run_id)?;
+            let motifs = store.read().list_motifs(find_motifs_run_id)?;
             let motifs_len = motifs.len();
             let done_cnt = Arc::new(AtomicU32::new(0));
 
@@ -3706,7 +3708,7 @@ mod cli_tests {
         //     &ws,
         //     &store,
         //     &loader,
-        //     &PlotMotifSlicesArgs::new(MotifsBy::RunId(find_motifs_run_ids[0])),
+        //     &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: find_motifs_run_ids[0], select_motifs_run_ids: None }),
         //     &devices[0],
         // )?;
         // debug!("test_run_step: find_motifs_run_ids={find_motifs_run_ids:?}");
