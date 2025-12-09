@@ -309,6 +309,12 @@ struct  LoadedRange {
 }
 impl Adjustable for LoadedRange {}
 
+impl From<std::ops::Range<MonoMetrics<1, 2>>> for LoadedRange {
+    fn from(value: std::ops::Range<MonoMetrics<1, 2>>) -> Self {
+        Self { range: value }
+    }
+}
+
 impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
     type Output = ThoTensor<LoadedTensor, SimpleId>;
 

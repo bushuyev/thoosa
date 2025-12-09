@@ -436,6 +436,12 @@ impl<'a, const Idx:usize, const Size:usize> AddAssign<&'a MonoMetrics<Idx, Size>
     }
 }
 
+impl<const Idx:usize, const Size:usize> AddAssign<MonoMetrics<Idx, Size>> for MonoMetrics<Idx, Size> {
+    fn add_assign(&mut self, rhs: MonoMetrics<Idx, Size>) {
+        self.dims[Idx] += rhs.dims[Idx];
+    }
+}
+
 impl <const Idx:usize, const Size:usize> TryFrom<Vec<i64>> for MonoMetrics<Idx, Size> {
     type Error = ThoosaError;
 

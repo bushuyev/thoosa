@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use log::debug;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::{Add, AddAssign, DivAssign, Range};
+use std::ops::{AddAssign, DivAssign, Range};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics};
 
@@ -17,7 +17,7 @@ where
     M: Metrics + Debug + Clone + Default + Send + Sync,
     M: DivAssign<i64>,//TODO replace i64 with num_traits type
     M: PartialOrd<M>,
-    for<'a, 'b> &'a M: Add<&'b M, Output =M>
+    M: AddAssign<M>,
 {
     pd: PhantomData<A>,
     min_split_len: M,
@@ -29,7 +29,7 @@ where
     M: Metrics + Debug + Clone + Default + Send + Sync,
     M: DivAssign<i64>,//TODO replace i64 with num_traits type
     M: PartialOrd<M>,
-    for<'a, 'b> &'a M: Add<&'b M, Output =M>
+    M: AddAssign<M>,
 {
     pub fn new(min_split_len: M) -> Self {
         debug!("SplitsAdjuster::new: min_split_len={min_split_len:?}");
@@ -49,7 +49,7 @@ where
     M: Metrics + Debug + Clone + Default + Send + Sync,
     M: DivAssign<i64>,//TODO replace i64 with num_traits type
     M: PartialOrd<M>,
-    for<'a, 'b> &'a M: Add<&'b M, Output =M>
+    M: AddAssign<M>,
 {
     type A = A;
 
@@ -61,7 +61,8 @@ where
 
         let split_start = adjust_context.done_to();
 
-        let mut split_end = split_start + adjust_context.split_len();
+        let mut split_end = split_start.clone();
+        split_end += adjust_context.split_len().clone();
         adjust_context.input_len().cap(&mut split_end);
 
         debug!("SplitsAdjuster::adjust: split_start={split_start:?} split_end={split_end:?} adjustable.size={:?}", adjust_context.input_len());
@@ -114,13 +115,13 @@ where
     R:Stage + Adjustable + 'a,
     B:OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::In<'b>: Data,
-    <<R as Stage>::In<'b> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'b> as Data>::Metrics>,
+    <<R as Stage>::In<'b> as Data>::Metrics: AddAssign<(<<R as Stage>::In<'b> as Data>::Metrics)>,
     <<R as Stage>::In<'b> as Data>::Metrics: PartialOrd,
 {
     fn add_partial_output(&mut self, o: R::Out){
         self.output_builder.add_partial_output(o);
 
-        self.done_to += &self.split_len.clone();
+        self.done_to += self.split_len.clone();
 
         debug!("SplitsAdjusterContextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}",self.done_to, self.split_len);
     }
@@ -143,7 +144,7 @@ where
     R:Stage + Adjustable + 'a,
     B:OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::In<'a>: Data,
-    <<R as Stage>::In<'a> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'a> as Data>::Metrics>,
+    <<R as Stage>::In<'a> as Data>::Metrics: AddAssign<(<<R as Stage>::In<'a> as Data>::Metrics)>,
     <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
 {
     pub fn new(
@@ -164,7 +165,7 @@ where
     R:Stage + Adjustable + 'a,
     B:OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::In<'a>: Data,
-    <<R as Stage>::In<'a> as Data>::Metrics: for<'x> AddAssign<&'x <<R as Stage>::In<'a> as Data>::Metrics>,
+    <<R as Stage>::In<'a> as Data>::Metrics: AddAssign<(<<R as Stage>::In<'a> as Data>::Metrics)>,
     <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
 {
     type Metrics = <<R as Stage>::In<'a> as Data>::Metrics;
