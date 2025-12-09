@@ -47,12 +47,12 @@ pub struct MotifLoaderInput {
 
 impl From<u32> for MotifLoaderInput{
     fn from(value: u32) -> Self {
-        MotifLoaderInput::new(DataId(value))
+        MotifLoaderInput::all_slices(DataId(value))
     }
 }
 
 impl MotifLoaderInput {
-    pub fn new(motif_id: DataId) -> Self {
+    pub fn all_slices(motif_id: DataId) -> Self {
         Self {
             motif_id,
             select_motifs_run_id: None //all slices loaded
@@ -64,6 +64,10 @@ impl MotifLoaderInput {
             motif_id,
             select_motifs_run_id: Some(vec![]) //all slices loaded
         }
+    }
+
+    pub fn new(motif_id: DataId, select_motifs_run_id: Option<Vec<RunId>>) -> Self {
+        Self { select_motifs_run_id, motif_id }
     }
 }
 impl Input for MotifLoaderInput {
