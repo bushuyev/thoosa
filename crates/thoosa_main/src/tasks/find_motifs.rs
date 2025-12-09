@@ -596,7 +596,7 @@ mod tests {
             let cache_area_loop = ctx.read().cache_area();
             let num_devices_loop = GlobalCtx::global().device_count();
             let motif_id_value = DataId::from(&(motif_id_raw as u32));
-            let motif_id = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new(motif_id_value.clone())));
+            let motif_id = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::all_slices(motif_id_value.clone())));
 
             let motif = Arc::clone(&motif_loader_impl).run(
                 Arc::clone(&motif_id),

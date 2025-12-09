@@ -223,7 +223,7 @@ where
                 // let select_motifs_run_config_id = input.select_motifs_run_config.id;
 
                 async move {
-                    let motif_id_wrap = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new((motif_id as u32).into())));
+                    let motif_id_wrap = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::all_slices((motif_id as u32).into())));
                     let motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx).await?;
 
 

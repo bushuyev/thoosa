@@ -552,6 +552,8 @@ where
 
                     store.write().add_slices_to_motif(run_config_id, *motif_id, channel as i64, slices).unwrap(); //TODO unwrap
 
+
+
                     let clc_dist = Arc::clone(&clc_dist);
                     let ctx = Arc::clone(&ctx);
                     let motif_selector = motif_selector.clone();
@@ -560,7 +562,9 @@ where
                         match &motif_selector {
                             //TODO add relevant MotifSelector variants
                             MotifSelector::ByLabelVariance(_) => {
-                                let dist = clc_dist.run(Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new(DataId(*motif_id)))), ctx).await
+                                ML::cache().await.remove(&ML::out_id(&clc_dist.motif_loader, &motif_id));
+
+                                let dist = clc_dist.run(Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::all_slices(DataId(*motif_id)))), ctx).await
                                     .map_err(|e|ThoosaError::new(format!("Got error while running clc_dist for {motif_id}")))?;
 
                                 with_data!(0, dist; |dist:&AverageDistanceValue|{
@@ -599,9 +603,15 @@ where
 
             let avg_dist = good_motif_ids.iter().map(|v|v.1).sum::<f64>()/good_motif_ids.len() as f64;
 
+            debug!("SelectMotifsStage::run: avg_dist={avg_dist:?} good_motif_ids.len={}", good_motif_ids.len());
+
             let good_motif_ids = good_motif_ids.into_iter().filter(|v|v.1 <= avg_dist).collect::<Vec<_>>();
 
+            debug!("SelectMotifsStage::run: run_config={run_config:?} filtered good_motif_ids.len={}", good_motif_ids.len());
+
             run_config_good_motif_ids.push((run_config.clone(), good_motif_ids));
+
+
         }
 
 

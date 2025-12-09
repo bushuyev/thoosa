@@ -13,7 +13,7 @@ use caching_runner::common::runnable::Stage;
 use clap::{Args, Parser, Subcommand};
 use futures::executor::block_on;
 use futures_util::future::{join_all, try_join_all};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use log::{Level, LevelFilter, debug, error, info, trace, warn};
 use parking_lot::{RawRwLock, RwLock};
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
@@ -1838,7 +1838,7 @@ async fn run_plot_motif_slices(
         MotifsBy::MotifId(motif_id) => {
             debug!("run_plot_motif_slices: MotifsBy::MotifId run_id={motif_id}");
 
-            plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist).await?;
+            plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None).await?;
 
         }
 
@@ -1859,7 +1859,7 @@ async fn run_plot_motif_slices(
                     let ctx = Arc::clone(&ctx);
                     async move {
                         debug!("run_plot_motif_slices: motif_id={motif_id}");
-                        if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist).await {
+                        if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None).await {
                             error!("motif {motif_id} failed: e={e:?}");
                         };
                         MotifLoader::<RawTensorLoader<RunCtx2>, RunCtx2>::cache().await.clear();
@@ -1877,9 +1877,7 @@ async fn run_plot_motif_slices(
 
         MotifsBy::GoodMotifs(selection_run_id) => {
             let channels = ws.read().channels();
-            debug!(
-                "run_plot_motif_slices: MotifsBy::GoodMotifs selection_run_id={selection_run_id} channels={channels}"
-            );
+            debug!("run_plot_motif_slices: MotifsBy::GoodMotifs selection_run_id={selection_run_id} channels={channels}");
 
             let motifs = store
                 .read()
@@ -1897,16 +1895,18 @@ async fn run_plot_motif_slices(
 
             let motifs_len = motif_ids.len();
             let done_cnt = Arc::new(AtomicU32::new(0));
-
+            let suffix = Some(vec![selection_run_id]);
             futures::stream::iter(motif_ids)
                 .map(|motif_id| {
                     let done_cnt = Arc::clone(&done_cnt);
                     let clc_dist = Arc::clone(&clc_dist);
                     let motif_loader_impl = Arc::clone(&motif_loader_impl);
                     let ctx = Arc::clone(&ctx);
-                    async move {
+                    let ws = Arc::clone(&ws);
+                    let suffix = suffix.clone();
+                    tokio::spawn(async move {
                         debug!("run_plot_motif_slices: motif_id={motif_id}");
-                        if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist).await {
+                        if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix).await {
                             error!("motif {motif_id} failed: e={e:?}");
                         };
                         MotifLoader::<RawTensorLoader<RunCtx2>, RunCtx2>::cache().await.clear();
@@ -1915,10 +1915,10 @@ async fn run_plot_motif_slices(
                         if done % 32 == 0 {
                             info!("done {done} from  {motifs_len}");
                         }
-                    }})
+                    })})
                 .buffer_unordered(10)
-                .collect::<Vec<()>>()
-                .await;
+                .try_collect::<Vec<()>>()
+                .await?;
         }
     }
 
@@ -1931,44 +1931,47 @@ async fn plot_motif(
     motif_id: usize,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<RunCtx2>, RunCtx2>>,
     clc_dist: Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<RunCtx2>, RunCtx2>, AverageEuclideanDistanceStage<RunCtx2>, RunCtx2>>,
+    select_motif_run_ids: Option<Vec<RunId>>,
 ) -> Result<(), ThoosaError> {
     let cache_area = ctx.read().cache_area();
     let num_devices = GlobalCtx::global().device_count();
-    let motif_id_cache = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new(DataId(motif_id as u32))));
+    let select_motif_run_ids_sfx = select_motif_run_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
+    let motif_id_arc = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new(DataId(motif_id as u32), select_motif_run_ids)));
 
     let motif = Arc::clone(&motif_loader_impl).run_cached(
-        Arc::clone(&motif_id_cache),
+        Arc::clone(&motif_id_arc),
         Arc::clone(&ctx),
     )
     .await?;
 
     let dist = clc_dist
-        .run_cached(Arc::clone(&motif_id_cache), Arc::clone(&ctx))
+        .run_cached(Arc::clone(&motif_id_arc), Arc::clone(&ctx))
         .await?
         .with_data_ref(0, Arc::clone(&ctx), None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
         .await?;
 
-    let r = motif.with_data_ref(0,
-                                Arc::clone(&ctx), None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>| {
-                                        let run_id = motif.extra().find_motifs_run_id;
-                                        let channel = motif.extra().channel;
-
-                                        trace!("motif.t={} dist={dist}", motif.data().t_ref());
-                                        let all_slices = motif.data().t_ref().unbind(0);
-                                        let slices_len = all_slices.len();
-                                        let mut color_iter = DistinctColorIter::new();
-                                        plot_series(
-                                            all_slices.into_iter().enumerate().map(|(i, t)| {
-                                                (format!("{i}"), color_iter.next().unwrap_or(BLACK), t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
-                                            }).collect(),
-                                            format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={dist}").as_str(),
-                                            (2000, 1000),
-                                            &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
-                                        )?;
 
 
-                                        Ok(true)
-                                    }).await?;
+    let r = motif.with_data_ref(0, Arc::clone(&ctx), None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>| {
+            let run_id = motif.extra().find_motifs_run_id;
+            let channel = motif.extra().channel;
+
+            trace!("motif.t={} dist={dist}", motif.data().t_ref());
+            let all_slices = motif.data().t_ref().unbind(0);
+            let slices_len = all_slices.len();
+            let mut color_iter = DistinctColorIter::new();
+            plot_series(
+                all_slices.into_iter().enumerate().map(|(i, t)| {
+                    (format!("{i}"), color_iter.next().unwrap_or(BLACK), t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
+                }).collect(),
+                format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={dist}").as_str(),
+                (2000, 1000),
+                &ws.read().plots_path().join(format!("{run_id}{select_motif_run_ids_sfx}")).join(format!("motif_{}.png", motif_id))
+            )?;
+
+
+            Ok(true)
+        }).await?;
     Ok(())
 }
 

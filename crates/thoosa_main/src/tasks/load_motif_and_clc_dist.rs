@@ -46,7 +46,7 @@ where
         > + Adjustable + OutId + Sync + Send + 'static,
 {
     id: SimpleId,
-    motif_loader: Arc<ML>,
+    pub motif_loader: Arc<ML>,
     clc_dist: Arc<CLC>,
     // output_builder: Box<dyn Fn(<Self as WithId>::ID) -> Box<dyn OutputBuilder<O = AverageDistanceValue>> + Send + Sync>,
     _ctx: PhantomData<C>,
@@ -289,7 +289,7 @@ mod tests {
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::new(DataId(42u32)), (MotifMeta { channel: 0, find_motifs_run_id: 1, window: 3 }, Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3))))
+            (MotifLoaderInput::all_slices(DataId(42u32)), (MotifMeta { channel: 0, find_motifs_run_id: 1, window: 3 }, Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]).view((6, 3))))
         ]).finish());
 
         let call_log = Arc::new(Mutex::new(Vec::new()));
@@ -307,7 +307,7 @@ mod tests {
         let cache_area = ctx.read().cache_area();
         let num_devices = GlobalCtx::global().device_count();
         let input_id_value = DataId::from(&42u32);
-        let input_id = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new(input_id_value.clone())));
+        let input_id = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::all_slices(input_id_value.clone())));
         let result = stage.run_cached(Arc::clone(&input_id), Arc::clone(&ctx)).await?;
 
         let result_value: AverageDistanceValue = result.with_data_ref(0, Arc::clone(&ctx), None, |val: &AverageDistanceValue| Ok(val.clone())).await?;
