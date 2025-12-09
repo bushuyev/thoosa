@@ -549,6 +549,7 @@ pub enum MotifsBy {
         find_motifs_run_id: RunId,
         select_motifs_run_ids: Option<Vec<RunId>>,
     },
+    GoodMotifs(RunId),
 }
 
 impl MotifsBy {
@@ -598,6 +599,11 @@ impl FromStr for MotifsBy {
             ))
         } else if let Some(rest) = v.strip_prefix("run_id:") {
             MotifsBy::parse_run_id_payload(rest)
+        } else if let Some(rest) = v.strip_prefix("good_motifs_run_id:") {
+            Ok(MotifsBy::GoodMotifs(
+                rest.parse()
+                    .map_err(|e| format!("can't parse {rest:?} to good motifs run_id: {e}"))?,
+            ))
         } else {
             Err(format!(
                 "unexpected parameter {v}, should be motif_id:nnn or run_id:nnn"
@@ -880,6 +886,9 @@ mod motifs_tests {
                 select_motifs_run_ids: Some(vec![10, 20, 30])
             }
         );
+
+        let good = MotifsBy::from_str("good_motifs_run_id:99").unwrap();
+        assert_eq!(good, MotifsBy::GoodMotifs(99));
     }
 
     #[test]
