@@ -3,10 +3,7 @@ use crate::dims::{
     MotifsNetsSelectionDims, Slice,
 };
 use crate::find_motifs_run_config::FindMotifsRunConfig;
-use crate::train_nets::{
-    FinalNetParams, LabelNetParams, LoadMotifNetOutput, MotifNetParams, ThoModuleWithStore,
-    motif_node,
-};
+use crate::train_nets::{FinalNetParams, LabelNetParams, LoadMotifNetOutput, MotifNetParams, ThoModuleWithStore, motif_node, motif_node_2};
 use async_trait::async_trait;
 use futures_util::FutureExt;
 use lazy_static::lazy_static;
@@ -243,10 +240,11 @@ impl Workspace for FsWorkspace {
 
             let params_for_builder = motif_node_params.clone();
 
-            let module = ThoModuleWithStore::load(format!("MotifNet_{}", motif_id).into(),
-                                                  move |path: &nn::Path| motif_node(&params_for_builder).build_tch_module(path),
-                                                  model,
-                                                  device.clone(),
+            let module = ThoModuleWithStore::load(
+                format!("MotifNet_{}", motif_id).into(),
+                move |path: &nn::Path| motif_node_2(&params_for_builder).build_tch_module(path),
+                model,
+                device.clone(),
             )?;
 
             Ok((motif_node_params, module))
