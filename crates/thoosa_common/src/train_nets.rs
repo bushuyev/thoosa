@@ -32,7 +32,7 @@ use std::rc::Rc;
 
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
-use tch::nn::{AdamW, OptimizerConfig, VarStore};
+use tch::nn::{AdamW, ConvConfig, OptimizerConfig, VarStore};
 use tch::{nn, Device, IndexOp, Reduction, Tensor};
 
 use thoosa_shared::{clc_step, slices_len};
@@ -1530,7 +1530,7 @@ impl OptConfig {
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct MotifNetParams {
     pub num_features: u32,
-    num_layers: u32,
+    pub num_layers: u32,
 }
 
 impl MotifNetParams {
@@ -1573,6 +1573,68 @@ impl MotifNetParams {
         }
     }
 }
+
+
+pub fn motif_node_2(params: &MotifNetParams) -> Node {
+    debug!("motif_node: params={params:?}");
+    let mut builder = SeqBuilder::new(params.num_features, None);
+    let mut net = builder
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor| {
+
+                let r = t.unsqueeze(1);
+
+                debug!("motif_node_2: 0. input.size={:?}", r.size());
+
+                r
+            })),
+            None,
+        )
+        // .batch_norm()
+        .conv_1d("conv_1", 10, 1, 4, ConvConfig::default(), None)
+        .func(Tensor::relu)
+        .adaptive_max_pool(1, 4)
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor| {
+
+                let r = t.squeeze();
+
+                debug!("motif_node_2: 1. input.size={:?}", r);
+
+                r
+            })),
+            None,
+        )
+
+        .linear_s(
+            4,
+            #[cfg(debug_assertions)]
+            "motif_node first layer".to_string(),
+        )
+        .func(Tensor::relu);
+
+    for i in 0..params.num_layers as usize {
+        net = net
+            .linear_s(
+                4,
+                #[cfg(debug_assertions)]
+                format!("motif_node  {i}th layer"),
+            )
+            .func(Tensor::relu);
+    }
+
+    net
+        // .linear_s(180)
+        .func(Tensor::relu)
+        .linear_s(
+            1,
+            #[cfg(debug_assertions)]
+            "motif_node last layer".to_string(),
+        )
+        .func(Tensor::sigmoid)
+        .end_seq()
+}
+
 
 pub fn motif_node(params: &MotifNetParams) -> Node {
     debug!("motif_node: params={params:?}");
@@ -2715,7 +2777,7 @@ pub async fn run_train_motif_net_2(
     let loss = train_2(
         &device,
         batch,
-        motif_node(&node_params).build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&vs.root())?,
+        motif_node_2(&node_params).build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&vs.root())?,
         |pred: &Tensor, target: &Tensor| {
             let pred_y = pred; //.i((.., 0));
 
@@ -3635,7 +3697,7 @@ impl FixedNumSlicesNetArgs {
 #[cfg(test)]
 mod train_tests {
     use crate::applicables::ThoRunner;
-    use crate::builder::SeqBuilder;
+    use crate::builder::{Node, SeqBuilder};
     use crate::dims::{
         AnyDims, Batch, Dims, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice,
         ThoBatch,
@@ -3646,18 +3708,7 @@ mod train_tests {
     use crate::simp::DummyDs;
     use crate::tho_tensor::ThoTensor;
     use crate::{train_nets, utils};
-    use crate::train_nets::{
-        load_channels_motifs, opt_train, BatchTransform,
-        ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue,
-        FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue,
-        FixedNumSlicesNetArgs, FixedNumSlicesNetParams, InputFilterRangeOrValue,
-        LabelNetApplicable, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetTypeArgs,
-        LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LabelNetsApplicable, LoadMotifNetOutput,
-        LoadingTensorsDataBatch, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue,
-        MaxPaddingNetParams, MotifsNetsSelectionApplicable, NetsPadding, OptConfig, PlotVecf32,
-        RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig,
-        TrainLabelNetsRunConfigRangeOrValue,
-    };
+    use crate::train_nets::{load_channels_motifs, motif_node, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, InputFilterRangeOrValue, LabelNetApplicable, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LabelNetsApplicable, LoadMotifNetOutput, LoadingTensorsDataBatch, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MaxPaddingNetParams, MotifsNetsSelectionApplicable, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore,
     };
@@ -5740,4 +5791,5 @@ mod train_tests {
         //
         //     })
     }
+
 }

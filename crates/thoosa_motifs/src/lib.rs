@@ -19,3 +19,4 @@ pub mod fragments;
 mod tasks;
 mod tensor_iter;
 pub mod generators;
+mod motif_nodes;
