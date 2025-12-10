@@ -238,6 +238,11 @@ mod tests {
             self.dim_0 += rhs.dim_0;
         }
     }
+    impl std::ops::AddAssign<ABMetrics> for ABMetrics {
+        fn add_assign(&mut self, rhs: ABMetrics) {
+            self.dim_0 += rhs.dim_0;
+        }
+    }
     impl std::ops::DivAssign<i64> for ABMetrics {
         fn div_assign(&mut self, rhs: i64) {
             if rhs != 0 {
