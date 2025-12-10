@@ -468,11 +468,15 @@ impl Data for ApplyMotifNetInput<'_> {
     type Metrics = MonoMetrics<0, 3>;
 
     fn size(&self) -> Self::Metrics {
-        todo!()
+        MonoMetrics::<0, 3>::try_from(self.batch.size()).unwrap_or_default()
     }
 
     fn device(&self) -> usize {
-        todo!()
+        self.batch.device()
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.batch.mem_size()
     }
 }
 
