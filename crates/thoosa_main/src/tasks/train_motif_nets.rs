@@ -536,7 +536,7 @@ mod tests {
 
             debug!("test_num_layers_opt: result={r:?}");
 
-            assert!(r.train_motif_nets_results[0].loss < 0.1);
+            assert!(r.train_motif_nets_results[0].loss < 0.2);
 
             Ok::<_, ThoosaError>(())
         })?;

@@ -5,10 +5,7 @@ use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, Module};
 use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
-use crate::my_tch::{
-    Fp, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyFuncModule, MyMaxPool1d, MyParallel,
-    MySequential, ThoModule, my_linear,
-};
+use crate::my_tch::{Fp, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule, my_linear, AdaptiveMaxPool1d};
 use crate::train_nets::ThoModuleWithStore;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::SimpleId;
@@ -71,6 +68,9 @@ pub enum Node {
         kernel_size: u32,
         stride: u32,
         padding: u32,
+    },
+    AdaptiveMaxPool {
+        output_size: u32,
     },
     AvgPool {
         kernel_size: u32,
@@ -229,6 +229,10 @@ impl Node {
                 padding as i64,
             )),
 
+            Node::AdaptiveMaxPool { output_size } => Box::new(AdaptiveMaxPool1d::new(
+                output_size
+            )),
+
             Node::AvgPool {
                 kernel_size,
                 stride,
@@ -244,6 +248,7 @@ impl Node {
             Node::Closure { cl: closure } => {
                 Box::new(MyClosureModule::new(closure))
             },
+
         })
     }
 }
@@ -355,6 +360,17 @@ impl SeqBuilder {
 
         self
     }
+
+    pub fn adaptive_max_pool(&mut self, output_size:u32, num_features:u32) -> &mut Self {
+        self.num_features = num_features;
+
+        self.elts.push(Node::AdaptiveMaxPool {
+            output_size
+        });
+
+        self
+    }
+
 
     pub fn avg_pool(&mut self, kernel: u32, stride: u32, padding: u32) -> &mut Self {
         self.elts.push(Node::AvgPool {

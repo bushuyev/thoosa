@@ -1991,7 +1991,7 @@ where
         debug!("train: device={:?}  x_t.size={:?}",device,x_t.size());
 
         let predicted_y = net.tho_forward(&x_t, true);
-        debug!("train: 1. cuda_mem={:?}", cuda_mem());
+        debug!("train: 1.predicted_y.size={:?} expected_y.size={:?} cuda_mem={:?}", predicted_y.size(), expected_y.size(), cuda_mem());
         trace!("train: x_t=\n{x_t}");
         x_t.drop();
         // unsafe { at_autocast_clear_cache(); }
