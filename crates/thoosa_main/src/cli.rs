@@ -48,7 +48,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetParams, LabelNetsApplicable, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsResult, load_channels_motifs, load_final_model, opt_train, opt_train_2, run_opt_train_label_nets, run_train_motif_net, train_final_net, TrainMotifsNetResult, CommonTrainingRunConfigRangeOrValue};
+use thoosa_common::train_nets::{CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetParams, LabelNetsApplicable, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsResult, load_channels_motifs, load_final_model, opt_train, opt_train_2, run_opt_train_label_nets, run_train_motif_net, train_final_net, TrainMotifsNetResult, CommonTrainingRunConfigRangeOrValue, LabelNetTypeArgsRangeOrValue, FixedNumSlicesNetArgsRangeOrValue};
 use thoosa_common::utils::{DummyListener, TrainListener, cuda_mem, from, list_devices, lin_t, plot_series, reset_print_options};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
@@ -544,6 +544,12 @@ where
                 ).check(&store)?
             ));
 
+            let train_labels_input = Arc::new(DevicesWrap::wrap_cpu(
+                ResourcesConfigInput::new(
+                    SimpleId::from(run_all_params.train_resource_group.to_string()),//TODO the group is needed to load resouces not belonging to label being trained
+                    run_all_params.train_resource_config()
+                ).check(&store)?
+            ));
 
 
             let find_motifs_run_config_range_or_value:FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue{
@@ -623,7 +629,7 @@ where
             };
 
             let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
-                TrainMotifNetInput::new(select_motifs_run_ids, Arc::new(OptConfig::new(100, 10)))
+                TrainMotifNetInput::new(select_motifs_run_ids.clone(), Arc::new(OptConfig::new(100, 10)))
             ));
 
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
@@ -636,13 +642,52 @@ where
                 async |run_configs| {
 
                     Ok(Arc::new(TrainMotifNets::<_, RunCtx2>::new(
-                        loader_2,
+                        Arc::clone(&loader_2),
                         &ws,
                         &store,
                         run_configs,
                     )))
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train motif nets"))),
+            ).await?;
+
+            ///////////////////
+            let train_motif_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue{
+                id: None,
+                common_training_args: CommonTrainingRunConfigRangeOrValue {
+                    cycles: RangeOrValue::Value(10),
+                    batch_size: RangeOrValue::Value(11),
+                    lr: RangeOrValue::Value(0.0001),
+                    opt_max_evals: RangeOrValue::Value(10),
+                    opt_n_init: RangeOrValue::Value(3),
+                },
+                net: LabelNetTypeArgsRangeOrValue::FixedNumSlices(FixedNumSlicesNetArgsRangeOrValue{ num_layers: RangeOrValue::Value(3), slices_len: RangeOrValue::Value(0) }),
+            };
+
+            let opt_config = Arc::new(OptConfig::new(100, 10));//TODO use one from  motifs?
+            let select_motifs_run_ids = select_motifs_run_ids.clone();
+
+            let run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
+                None,
+                train_motif_nets_run_config_range_or_value,
+                train_labels_input,
+                &ws,
+                &store,
+                true,
+                async |run_configs| {
+
+                    TrainLabelNets::<_, RunCtx2>::new(
+                        select_motifs_run_ids,
+                        loader_2,
+                        run_configs,
+                        &ws,
+                        &store,
+                        Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "init label nets"))),
+                        opt_config,
+                        100
+                    ).await.map(|v|Arc::new(v))
+                },
+                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train label nets"))),
             ).await?;
 
 
