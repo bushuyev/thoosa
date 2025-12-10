@@ -755,6 +755,10 @@ pub trait WithDataRef: WithId + Debug {
     fn mem_size(&self) ->u64{
         0
     }
+
+    fn cache_area(&self) -> u64 {
+        0
+    }
 }
 
 pub trait WithSelectDataRef<S>: WithDataRef
@@ -802,6 +806,10 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
 
     fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics {
         self.size().clone()
+    }
+
+    fn cache_area(&self) -> u64 {
+        self.cache_areas()
     }
 }
 

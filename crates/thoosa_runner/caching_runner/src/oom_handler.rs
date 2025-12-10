@@ -1,6 +1,7 @@
+use std::borrow::Borrow;
 use crate::common::{PermitsCtx, RunCtx};
-use crate::common::cachable::{DevicesWrap, WithSelectDataRef};
-use crate::common::runnable::{Stage, SyncStage};
+use crate::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
+use crate::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::common::{DropIf, OutId};
 #[double]
 use crate::global_ctx::GlobalCtx;
@@ -13,6 +14,7 @@ use mockall_double::double;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::process::Output;
@@ -229,7 +231,7 @@ where
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
-    S: Adjustable + Debug + Clone + Default,
+    S: Adjustable + Debug + Clone + Default + 'static,
     // <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId
@@ -250,7 +252,8 @@ where
     S: Adjustable + Debug + Clone + Default+ 'static,//S - for Select<Selector>, 'static is for Any in WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
     // <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
-    for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId,
+    for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Data + Send + Sync,
+    R::Out: WithId + Send + Sync,
 {
     pub fn new(
         adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
@@ -269,13 +272,158 @@ where
         task: &Arc<R>,
         input: Arc<W>,
         run_context: Arc<RwLock<R::Ctx>>,
-        mut contexts: Contexts<'a, R, IC, RC, RCC>,
+        contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
     where
-       for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>>,
-        W:WithId<ID=<R::In<'z> as WithId>::ID>
+        W: WithSelectDataRef<S>,
+        W: WithId<ID = <R::In<'z> as WithId>::ID>,
+        for<'f> <W as WithDataRef>::O<'f>: Borrow<<R as Stage>::In<'f>>,
     {
+        run_with_runner(
+            &self.adjusters,
+            Arc::clone(task),
+            input,
+            run_context,
+            contexts,
+            |task, input, selector, device_idx, run_ctx| async move {
+                if let Some(selector) = selector {
+                    input
+                        .with_selected_data_ref(
+                                device_idx,
+                                Arc::clone(&run_ctx),
+                                selector,
+                                None,
+                                |data| {
+                                    Arc::clone(&task)
+                                        .do_run(data.borrow(), Arc::clone(&run_ctx))
+                                },
+                            )
+                            .await
+                } else {
+                    input
+                        .with_data_ref(
+                                device_idx,
+                                Arc::clone(&run_ctx),
+                                None,
+                                |data| {
+                                    Arc::clone(&task)
+                                        .do_run(data.borrow(), Arc::clone(&run_ctx))
+                                },
+                            )
+                            .await
+                }
+            },
+        )
+        .await
+    }
+}
 
+#[derive(Debug)]
+pub struct AsyncOOMHandler<'a, 'z, R, IC, RC, RCC, S>
+where
+    R: AsyncStage + Adjustable + OutId,
+    R::Ctx: Adjustable,
+    IC: InputContext<'a, R>,
+    RC: RunnableContext,
+    RCC: RunCtxContext,
+    S: Adjustable + Debug + Clone + Default + 'static,
+    for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Data + CopyToDevice + Send + Sync + 'static,
+    <R as Stage>::In<'static>: Select<S, Output = <R as Stage>::In<'static>>,
+    R::Out: Data + CopyToDevice + WithId + Send + Sync + 'static,
+{
+    adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
+    #[allow(dead_code)]
+    statistics: Option<&'a Arc<Statistics>>,
+    pd_rc: PhantomData<(RC, &'z RCC)>,
+}
+
+impl<'a, 'z, R, IC, RC, RCC, S> AsyncOOMHandler<'a, 'z, R, IC, RC, RCC, S>
+where
+    R: AsyncStage + Adjustable + OutId + 'a,
+    R::Ctx: Adjustable,
+    IC: InputContext<'a, R>,
+    RC: RunnableContext,
+    RCC: RunCtxContext,
+    S: Adjustable + Debug + Clone + Default + 'static,
+    for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Data + CopyToDevice + Send + Sync + 'static,
+    <R as Stage>::In<'static>: Select<S, Output = <R as Stage>::In<'static>>,
+    R::Out: Data + CopyToDevice + WithId + Send + Sync + 'static,
+{
+    pub fn new(
+        adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
+        statistics: Option<&'a Arc<Statistics>>,
+    ) -> Self {
+        Self {
+            adjusters,
+            statistics,
+            pd_rc: Default::default(),
+        }
+    }
+
+    pub async fn run(
+        &self,
+        task: &Arc<R>,
+        input: Arc<DevicesWrap<<R as Stage>::In<'static>>>,
+        run_context: Arc<RwLock<R::Ctx>>,
+        contexts: Contexts<'a, R, IC, RC, RCC>,
+    ) -> Result<R::Out, ThoosaError> {
+        run_with_runner(
+            &self.adjusters,
+            Arc::clone(task),
+            input,
+            run_context,
+            contexts,
+            |task, input, selector, device_idx, run_ctx| async move {
+                let cache_area = input.cache_area();
+                let prepared_input = if let Some(selector) = selector {
+                    let selected = input
+                        .with_selected_data(device_idx, selector.clone(), |data| Ok(data))
+                        .await?;
+                    Arc::new(DevicesWrap::wrap(selected, cache_area))
+                } else {
+                    
+                    Arc::clone(&input)
+                };
+
+                let wrapped = task
+                    .run(Arc::clone(&prepared_input), Arc::clone(&run_ctx))
+                    .await?;
+
+                match Arc::try_unwrap(wrapped) {
+                    Ok(inner) => inner.take_data(device_idx).await,
+                    Err(_) => Err(MyError::SomethingElse(
+                        "AsyncOOMHandler: output is still shared".into(),
+                    )
+                    .into()),
+                }
+            },
+        )
+        .await
+    }
+}
+
+async fn run_with_runner<'a, 'z, R, IC, RC, RCC, S, W, Run, Fut>(
+    adjusters: &[Adjusters<'a, R, IC, RC, RCC, S>],
+    task: Arc<R>,
+    input: Arc<W>,
+    run_context: Arc<RwLock<R::Ctx>>,
+    mut contexts: Contexts<'a, R, IC, RC, RCC>,
+    runner: Run,
+) -> Result<R::Out, ThoosaError>
+where
+    R: Adjustable + OutId + Stage + 'a,
+    R::Ctx: Adjustable,
+    IC: InputContext<'a, R>,
+    RC: RunnableContext,
+    RCC: RunCtxContext,
+    S: Adjustable + Debug + Clone + Default + 'static,
+    for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Send + Sync,
+    R::Out: WithId + Send + Sync,
+    W: WithSelectDataRef<S>,
+    W: WithId<ID = <R::In<'z> as WithId>::ID>,
+    Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, Arc<RwLock<R::Ctx>>) -> Fut + Copy,
+    Fut: Future<Output = Result<R::Out, ThoosaError>>,
+{
         let (device_idx, ctx_name) = {
             let guard = run_context.read();
             (guard.device_idx(), guard.name())
@@ -304,14 +452,10 @@ where
         let mut last_task_adjuster = None::<&Box<dyn Adjuster<RC, A = R>>>;
         let mut last_context_adjuster = None::<&Box<dyn Adjuster<RCC, A = Arc<RwLock<R::Ctx>>>>>;
 
-        let mut input_select_adjusted = None;
+        let mut input_select_adjusted: Option<S> = None;
 
         match panic_to_err_async!(
-            input
-                .with_data_ref(device_idx, Arc::clone(&run_context), None, |data| {
-                    Arc::clone(task).do_run(data, Arc::clone(&run_context))
-                })
-                .await
+            runner(Arc::clone(&task), Arc::clone(&input), None, device_idx, Arc::clone(&run_context)).await
         ) {
             Err(te) => {
                 match te.what() {
@@ -320,7 +464,7 @@ where
 
                         let mut task_adjusted = None::<Arc<R>>;
 
-                        for adjuster in &self.adjusters {
+                        for adjuster in adjusters {
                             debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  starting adjuster={adjuster:?}", os_thread_id());
 
                             loop {
@@ -337,14 +481,12 @@ where
                                             last_input_adjuster = None;
                                         }
 
+                                        let base_selector =
+                                            input_select_adjusted.clone().unwrap_or_default();
+
                                         input_select_adjusted = Some(
                                             input_ad
-                                                .adjust(
-                                                    input_select_adjusted
-                                                        .as_ref()
-                                                        .unwrap_or(&S::default())/*.unwrap_or(input_guard_op.as_ref().unwrap())*/,
-                                                    &mut contexts.input,
-                                                )
+                                                .adjust(&base_selector, &mut contexts.input)
                                                 .await?,
                                         );
                                     }
@@ -354,7 +496,9 @@ where
                                             last_task_adjuster = None;
                                         }
                                         task_adjusted.replace(Arc::new(
-                                            task_ad.adjust(task, &mut contexts.runnable).await?,
+                                            task_ad
+                                                .adjust(task.as_ref(), &mut contexts.runnable)
+                                                .await?,
                                         ));
                                     }
 
@@ -369,7 +513,8 @@ where
                                     }
                                 };
 
-                                let task_to_run = task_adjusted.as_ref().unwrap_or(task);
+                                let task_to_run =
+                                    task_adjusted.clone().unwrap_or_else(|| Arc::clone(&task));
 
                                 if run_context.read().acquired_permits() == 0 {
                                     let result = GlobalCtx::global()
@@ -380,18 +525,14 @@ where
 
                                 debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",os_thread_id(), run_context.read().acquired_permits());
 
-                                let run_result = if let Some(selector) = input_select_adjusted.as_ref() {
-
-                                    panic_to_err_async!(input.with_selected_data_ref(device_idx, Arc::clone(&run_context), selector.clone(), None, |data| {
-                                        Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
-                                    }).await)
-
-                                } else {
-                                    panic_to_err_async!(input.with_data_ref(device_idx, Arc::clone(&run_context), None, |data| {
-                                        Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
-                                    }).await)
-
-                                };
+                                let run_result = runner(
+                                    task_to_run,
+                                    Arc::clone(&input),
+                                    input_select_adjusted.clone(),
+                                    device_idx,
+                                    Arc::clone(&run_context),
+                                )
+                                .await;
 
                                 match run_result {
                                     Ok(v) => {
@@ -463,7 +604,6 @@ where
             }
             Ok(o) => Ok(o),
         }
-    }
 }
 
 
@@ -803,17 +943,93 @@ mod tests {
     use super::mock_runnable::build as mock_runnable;
     use super::mock_task_adjuster::build as mock_task_adjuster;
     use super::test_types::{TestInput, TestOutput};
-    use super::{Adjusters, Contexts, OOMHandler};
+    use super::{Adjusters, AsyncOOMHandler, Contexts, OOMHandler};
     use crate::common::cachable::DevicesWrap;
     // use crate::common::runnable::Runnable;
-    use crate::common::{DropIf, MockRunCtx};
+    use crate::common::{DropIf, MockRunCtx, OutId};
+    use crate::common::runnable::{AsyncStage, Stage};
     use crate::global_ctx;
     use crate::global_ctx::{mock_global_ctx, MockGlobalCtx};
     use parking_lot::RwLock;
-    use std::sync::Arc;
+    use std::collections::VecDeque;
+    use std::ops::Range;
+    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use async_trait::async_trait;
     use thoosa_shared::{MyError, ThoosaError};
-    use thoosa_shared::traits::Adjustable;
+    use thoosa_shared::traits::{Adjustable, WithId};
+    use super::{Adjuster, InputContext};
+
+    #[derive(Debug)]
+    struct AsyncTestTask {
+        results: Arc<Mutex<VecDeque<Result<TestOutput, ThoosaError>>>>,
+    }
+
+    impl AsyncTestTask {
+        fn new(results: VecDeque<Result<TestOutput, ThoosaError>>) -> Self {
+            Self {
+                results: Arc::new(Mutex::new(results)),
+            }
+        }
+    }
+
+    impl Adjustable for AsyncTestTask {}
+
+    impl Stage for AsyncTestTask {
+        type In<'a> = TestInput;
+        type Out = TestOutput;
+        type Ctx = MockRunCtx;
+    }
+
+    impl AsyncStage for AsyncTestTask {
+        async fn run(
+            self: Arc<Self>,
+            input: Arc<DevicesWrap<Self::In<'static>>>,
+            _ctx: Arc<RwLock<Self::Ctx>>,
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+            let next = self
+                .results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Err(MyError::SomethingElse("no more results".into()).into()));
+
+            match next {
+                Ok(o) => Ok(Arc::new(DevicesWrap::wrap(o, input.cache_areas()))),
+                Err(e) => Err(e),
+            }
+        }
+    }
+
+    impl OutId for AsyncTestTask {
+        fn out_id(
+            &self,
+            input_id: &<Self::In<'static> as WithId>::ID,
+        ) -> <Self::Out as WithId>::ID {
+            input_id.clone()
+        }
+    }
+
+    #[derive(Debug)]
+    struct AsyncInputCtx {
+        outputs: Vec<TestOutput>,
+    }
+
+    impl InputContext<'static, AsyncTestTask> for AsyncInputCtx {
+        fn add_partial_output(&mut self, o: TestOutput) {
+            self.outputs.push(o);
+        }
+
+        fn all_done(&self) -> bool {
+            true
+        }
+
+        async fn build_final_output(self) -> Result<TestOutput, ThoosaError> {
+            self.outputs.into_iter().next().ok_or_else(|| {
+                ThoosaError::new("no output in AsyncInputCtx")
+            })
+        }
+    }
 
 
     #[tokio::test]
@@ -1023,6 +1239,76 @@ mod tests {
         assert_eq!(10., out.v.0);
         assert_eq!(1, ctx_adj_calls.load(Ordering::SeqCst));
         assert_eq!(2, task_calls.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_async_handler_with_input_adjuster() {
+        let ctx = MockGlobalCtx::global_context();
+        ctx.expect().returning(|| {
+            Box::leak(Box::new(
+                mock_global_ctx::build_default(),
+            )) as &'static global_ctx::MockGlobalCtx
+        });
+
+        let results = VecDeque::from([
+            Err(ThoosaError::from(MyError::OutOfMemory)),
+            Ok(TestOutput::new(7.)),
+        ]);
+        let async_task = Arc::new(AsyncTestTask::new(results));
+
+        #[derive(Debug)]
+        struct SimpleInputAdjuster {
+            calls: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl Adjuster<AsyncInputCtx> for SimpleInputAdjuster {
+            type A = Range<[usize; 1]>;
+
+            async fn adjust(
+                &self,
+                adjustable: &<Self as Adjuster<AsyncInputCtx>>::A,
+                _adjust_context: &mut AsyncInputCtx,
+            ) -> Result<<Self as Adjuster<AsyncInputCtx>>::A, ThoosaError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(adjustable.clone())
+            }
+
+            fn degrade(&self, _adjust_context: &mut AsyncInputCtx) -> bool {
+                false
+            }
+        }
+
+        let input_calls = Arc::new(AtomicUsize::new(0));
+        let input_adj = SimpleInputAdjuster {
+            calls: input_calls.clone(),
+        };
+
+        let oom_handler =
+            AsyncOOMHandler::new(vec![Adjusters::Input(Box::new(input_adj))], None);
+
+        let ctx_mock = crate::common::mock_run_ctx::build()
+            .with_device_idx(1)
+            .with_acquired_permits(1)
+            .with_drop_permits(vec![DropIf::IfNotMax])
+            .finish();
+
+        let out = oom_handler
+            .run(
+                &async_task,
+                Arc::new(DevicesWrap::wrap(TestInput::new(2), 0)),
+                Arc::new(RwLock::new(ctx_mock)),
+                Contexts::new(
+                    AsyncInputCtx { outputs: vec![] },
+                    super::MockRunnableContext::new(),
+                    super::MockRunCtxContext::new(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(7., out.v.0);
+        assert_eq!(1, input_calls.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
