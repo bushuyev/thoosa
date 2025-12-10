@@ -1,6 +1,7 @@
 #![feature(backtrace_frames)]
 #![feature(async_fn_traits, fn_traits, unboxed_closures)]
 #![feature(tuple_trait)]
+#![feature(generic_const_exprs)]
 
 extern crate self as thoosa_shared;
 

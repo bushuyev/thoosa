@@ -495,8 +495,7 @@ where
                         &ws,
                         &store,
                         Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "init label nets"))),
-                        opt_config,
-                        100
+                        opt_config
                     ).await.map(|v|Arc::new(v))
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train label nets"))),
@@ -626,6 +625,7 @@ where
                     opt_n_init: RangeOrValue::Value(3),
                 },
                 num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+                step: RangeOrValue::Value(10),
             };
 
             let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
@@ -652,7 +652,7 @@ where
             ).await?;
 
             ///////////////////
-            let train_motif_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue{
+            let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue{
                 id: None,
                 common_training_args: CommonTrainingRunConfigRangeOrValue {
                     cycles: RangeOrValue::Value(10),
@@ -661,7 +661,10 @@ where
                     opt_max_evals: RangeOrValue::Value(10),
                     opt_n_init: RangeOrValue::Value(3),
                 },
-                net: LabelNetTypeArgsRangeOrValue::FixedNumSlices(FixedNumSlicesNetArgsRangeOrValue{ num_layers: RangeOrValue::Value(3), slices_len: RangeOrValue::Value(0) }),
+                net: LabelNetTypeArgsRangeOrValue::FixedNumSlices(FixedNumSlicesNetArgsRangeOrValue{
+                    num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
+                    slices_len: RangeOrValue::Value(0)
+                }),
             };
 
             let opt_config = Arc::new(OptConfig::new(100, 10));//TODO use one from  motifs?
@@ -669,7 +672,7 @@ where
 
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
                 None,
-                train_motif_nets_run_config_range_or_value,
+                train_label_nets_run_config_range_or_value,
                 train_labels_input,
                 &ws,
                 &store,
@@ -683,8 +686,7 @@ where
                         &ws,
                         &store,
                         Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "init label nets"))),
-                        opt_config,
-                        100
+                        opt_config
                     ).await.map(|v|Arc::new(v))
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train label nets"))),

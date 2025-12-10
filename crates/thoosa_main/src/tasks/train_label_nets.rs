@@ -27,7 +27,7 @@ use thoosa_common::batches::{AsyncDataBatch, ThoBatchIter};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{flat_label_node, opt_train_2, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{flat_label_node, opt_train_2, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, train_2, train_3};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -52,6 +52,7 @@ where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
+    select_motifs_run_ids: Vec<RunId>,
     run_configs: Arc<OptRunConfigs<
         Vec<NamedVal<TrainLabelNetsRunConfigFields>>,
         Vec<NamedRange<TrainLabelNetsRunConfigFields>>,
@@ -63,7 +64,6 @@ where
     apply_motif_nets:Arc<ApplyMotifNets<C>>,
     store: Arc<RwLock<Box<dyn Store>>>,
     opt_config:Arc<OptConfig>,
-    slice_step: u32//TODO move to config
 }
 
 impl <L, C> TrainLabelNets<L, C>
@@ -72,14 +72,13 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     pub async fn new<R>(
-        select_motifs_run_id: Vec<RunId>,
+        select_motifs_run_ids: Vec<RunId>,
         loader: Arc<L>,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
         stage_ctx:Arc<parking_lot::RwLock<R>>,
-        opt_config:Arc<OptConfig>,
-        slice_step: u32
+        opt_config:Arc<OptConfig>
     ) -> Result<Self, ThoosaError>
 where
     R:RunCtx + MotifsCtx + Adjustable + 'static
@@ -89,10 +88,10 @@ where
             run_configs: Arc::new(run_configs),
             loader,
             ws:Arc::clone(&ws),
-            apply_motif_nets: Arc::new(ApplyMotifNets::new("".into(), ws, store, select_motifs_run_id, stage_ctx, slice_step).await?),
+            apply_motif_nets: Arc::new(ApplyMotifNets::new("".into(), ws, store, select_motifs_run_ids.clone(), stage_ctx).await?),
             store: Arc::clone(store),
             opt_config,
-            slice_step
+            select_motifs_run_ids
         })
     }
 
@@ -206,17 +205,16 @@ where
         let store = Arc::clone(&self.store);
         let cache_area = cache_area.clone();
         let channels = self.ws.read().channels() as i64;
-        let max_input = self.ws.read().max_input() as i64;
-        let slices_len = (max_input as u32 - self.apply_motif_nets.motif_width)/self.slice_step + 1;
+        let max_input = 10_000; //self.ws.read().max_input() as i64;
+        let slices_len = (max_input as u32 - self.apply_motif_nets.motif_width)/self.apply_motif_nets.slice_step + 1;
         let num_nets = self.apply_motif_nets.num_nets() as u32;
 
-        debug!("TrainLabelNets::run: channels={channels} max_input={max_input} self.slice_step={} slices_len={slices_len}", self.slice_step);
+        debug!("TrainLabelNets::run: channels={channels} max_input={max_input} self.apply_motif_nets.slice_step={} slices_len={slices_len}", self.apply_motif_nets.slice_step);
 
         async move {
             let (train_labels_resource_keys, valid_label_resource_keys) = with_data!(0, input; |input:&ResourcesConfigInput<NetResources<Labeled>>|{
                 Ok::<_, ThoosaError>(input.resources_config().to_resources(&self.store)?)
             })?;
-
 
             let (labels_tain_and_valid_sets, labels_others_train_valid_resources) = Self::build_resource_maps(train_labels_resource_keys, valid_label_resource_keys);
             debug!("TrainLabelNets::run: labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
@@ -236,7 +234,7 @@ where
                 let train_motifs_nodes_run_configs = Arc::clone(&train_motifs_nodes_run_configs);
                 let loader = Arc::clone(&self.loader);
                 let apply_motif_nets = Arc::clone(&self.apply_motif_nets);
-
+                let select_motifs_run_ids = self.select_motifs_run_ids.clone();
                 let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
 
                 tokio::spawn(async move {
@@ -309,7 +307,17 @@ where
                                 Arc::clone(&ctx)
                             );
 
-                            let params = LabelNetParams::new(channels as u32, num_nets, 3, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
+                            //TODO build proper LabelNetParams
+                            let num_layers = match run_config.net {
+                                LabelNetTypeArgs::MaxPadding(MaxPaddingNetArgs{num_layers}) => {
+                                    num_layers
+                                }
+                                LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs{num_layers, ..}) => {
+                                    num_layers
+                                }
+                            };
+
+                            let params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
                             let loss = train_label_net_2(&run_config, &resources_batch, &ThoDevice::from(device_idx), vs, params.clone()).await?;
 
                             Ok((loss, params))
@@ -321,7 +329,7 @@ where
 
                         debug!("TrainLabelNet::run: label_node_params={label_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
                         TrainLabelNetsRunConfigResult::new(
-                            0,//TODO
+                            select_motifs_run_ids,//TODO
                             label,
                             min_loss,
                             label_node_params,
@@ -686,14 +694,14 @@ mod tests {
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::select_motifs::tests::{motifs_tensor, resource_tensor};
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::train_label_nets::{ResourcesBatch, TrainLabelNets, TrainLabelNetsInput};
+    use crate::tasks::train_label_nets::{ResourcesBatch, TrainLabelNets, TrainLabelNetsInput, TrainLabelNetsOutput};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_train_label_net_3x3() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
-        log::set_max_level(Trace);
+        log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
 
@@ -717,13 +725,13 @@ mod tests {
                 .with_load_motif_nets(vec![
                     vec![
                         //channel 0
-                        motif_test_net_(Cpu, Arc::clone(&pulse_motif)),
-                        motif_test_net_(Cpu, Arc::clone(&triangle_motif)),
-                        motif_test_net_(Cpu, Arc::clone(&sin_motif)),
+                        motif_test_net_(Cpu, Arc::clone(&pulse_motif), 10),
+                        motif_test_net_(Cpu, Arc::clone(&triangle_motif), 10),
+                        motif_test_net_(Cpu, Arc::clone(&sin_motif), 10),
                     ],
                     vec![
                         //channel 1
-                        motif_test_net_(Cpu, Arc::clone(&sin_motif)),
+                        motif_test_net_(Cpu, Arc::clone(&sin_motif), 10),
                     ],
                     vec![],
                 ])
@@ -858,8 +866,7 @@ mod tests {
             &ws,
             &store,
             Arc::new(RwLock::new(mock_run_ctx::default(1))),
-            Arc::new(OptConfig::new(10, 3)),
-            1
+            Arc::new(OptConfig::new(10, 3))
         ).await?);
 
 
@@ -869,6 +876,16 @@ mod tests {
         ));
 
         let out = train_label_nets.run(input, Arc::new(RwLock::new(mock_run_ctx::default(1)))).await?;
+
+        with_data!(0, out; |out:&TrainLabelNetsOutput|{
+
+            debug!("test_train_label_net_3x3: 0. out={out:?}");
+
+            assert!(out.results[0].loss < 0.5);
+            assert!(out.results[1].loss < 0.5);
+            assert!(out.results[2].loss < 0.5);
+            Ok::<_, ThoosaError>(())
+        })?;
 
         debug!("test_train_label_net_3x3: out={out:?}");
 
