@@ -307,6 +307,10 @@ impl Metrics for usize {
 
 }
 
+pub struct Assert<const COND: bool>;
+pub trait IsTrue {}
+impl IsTrue for Assert<true> {}
+
 //for resources batch vec in ClcResourcesMotifsDistInputDeviceWrapper
 impl Metrics for Range<i64> {}
 
@@ -364,6 +368,12 @@ impl <const Idx:usize, const Size:usize> MonoMetrics<Idx, Size> {
         self.dims[1]
     }
 
+    pub fn dim<const DIM: usize>(&self) -> i64
+    where
+        Assert<{ DIM < Size }>: IsTrue,
+    {
+        self.dims[DIM]
+    }
     pub fn map_to_ranges(start:&Self, end:&Self) ->Result<[Range<i64>; Size], ThoosaError> {
 
         start.dims

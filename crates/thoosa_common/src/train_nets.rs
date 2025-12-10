@@ -823,9 +823,9 @@ impl<DI: Dims, DO: Dims> ClassTensorsLoaderData<DI, DO> {
 
 #[derive(Debug)]
 pub struct TrainLabelNetsRunConfigResult {
-    select_motifs_for_label_run_id: u32,
+    select_motifs_for_label_run_ids: Vec<RunId>,
     label: String,
-    loss: f32,
+    pub loss: f32,
     label_node_params: LabelNetParams,
     train_label_nets_run_config: TrainLabelNetsRunConfig,
     var_store: VarStore,
@@ -842,7 +842,7 @@ impl WithId for Box<TrainLabelNetsRunConfigResult> {
 
 impl TrainLabelNetsRunConfigResult {
     pub fn new(
-        find_motifs_run_id: RunId,
+        select_motifs_for_label_run_ids: Vec<RunId>,
         label: String,
         loss: f32,
         label_node_params: LabelNetParams,
@@ -850,7 +850,7 @@ impl TrainLabelNetsRunConfigResult {
         var_store: VarStore,
     ) -> Self {
         Self {
-            select_motifs_for_label_run_id: find_motifs_run_id,
+            select_motifs_for_label_run_ids,
             label,
             loss,
             label_node_params,
@@ -871,7 +871,7 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoosaError> {
         let run_config_id = store.write().save_run_config(
-            Some(&[self.select_motifs_for_label_run_id]),
+            Some(&self.select_motifs_for_label_run_ids),
             &TrainLabelNetsRunConfig::type_name(),
             "Label",
             "todo",
@@ -974,7 +974,7 @@ pub fn run_opt_train_label_nets(
         *device,
         "label",
     ).map(|(var_store, label_node_params, run_config, min_loss)| {
-        Box::new(TrainLabelNetsRunConfigResult::new(motifs_nets_selection_applicable_arc.select_motifs_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
+        Box::new(TrainLabelNetsRunConfigResult::new(vec![motifs_nets_selection_applicable_arc.select_motifs_run_id], label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
     })
 }
 
@@ -1456,6 +1456,10 @@ pub struct TrainMotifsNetsRunConfig {
     #[in_map]
     #[run_config]
     num_layers: u32,
+
+    #[in_map]
+    #[run_config]
+    step: u32,
 }
 
 impl TrainMotifsNetsRunConfig {
@@ -1464,6 +1468,7 @@ impl TrainMotifsNetsRunConfig {
             id,
             common_training_args: CommonTrainingRunConfig::new(1, 1, 0.1, 1, 1),
             num_layers: 1,
+            step: 1,
         }
     }
 }
@@ -1531,13 +1536,15 @@ impl OptConfig {
 pub struct MotifNetParams {
     pub num_features: u32,
     pub num_layers: u32,
+    pub stride:u32
 }
 
 impl MotifNetParams {
-    pub fn new(num_features: u32, num_layers: u32) -> Self {
+    pub fn new(num_features: u32, num_layers: u32, stride: u32) -> Self {
         Self {
             num_features,
             num_layers,
+            stride
         }
     }
 
@@ -1553,6 +1560,7 @@ impl MotifNetParams {
                 .try_into()
                 .expect("num_features as_i64"),
             1,
+            100,
         )
     }
 
@@ -1566,18 +1574,17 @@ impl MotifNetParams {
         self.num_features
     }
 
-    pub fn with_num_layer(&self, num_layers: u32) -> Self {
-        Self {
-            num_features: self.num_features,
-            num_layers,
-        }
-    }
 }
 
 
 pub fn motif_node_2(params: &MotifNetParams) -> Node {
     debug!("motif_node: params={params:?}");
     let mut builder = SeqBuilder::new(params.num_features, None);
+    let nd = ConvConfig {
+        stride: params.stride as i64,
+        ..ConvConfig::default()
+    };
+
     let mut net = builder
         .closure(
             Arc::new(Box::new(move |t: &Tensor| {
@@ -1591,7 +1598,7 @@ pub fn motif_node_2(params: &MotifNetParams) -> Node {
             None,
         )
         // .batch_norm()
-        .conv_1d("conv_1", 10, 1, 4, ConvConfig::default(), None)
+        .conv_1d("conv_1", 10, 1, 4, nd, None)
         .func(Tensor::relu)
         .adaptive_max_pool(1, 4)
         .closure(
@@ -2309,7 +2316,7 @@ pub fn flat_label_node(params: &LabelNetParams) -> Node {
     builder
         .closure(
             Arc::new(Box::new(move |t: &Tensor| {
-                debug!("flat_label_node flatten t.size={:?}", t.size());
+                debug!("flat_label_node before flatten t.size={:?}", t.size());
                 //batch x motifs x dists
                 let t_0 = t.flatten(1, 2);// - channels removed
                 debug!("flat_label_node flatten t.size={:?} t_0.size={:?}",t.size(),t_0.size());
@@ -2733,7 +2740,7 @@ pub fn run_train_motif_net(
     vs: &VarStore,
     listener: &mut dyn TrainListener,
 ) -> Result<(f32, MotifNetParams), ThoosaError> {
-    let node_params = MotifNetParams::new(motif_width, run_config.num_layers);
+    let node_params = MotifNetParams::new(motif_width, run_config.num_layers, 100);
     debug!("run_train_motif_net: node_params={node_params:?}");
 
     let loss = train(
@@ -2771,7 +2778,7 @@ pub async fn run_train_motif_net_2(
     vs: &VarStore,
     listener: &mut dyn TrainListener,
 ) -> Result<(f32, MotifNetParams), ThoosaError> {
-    let node_params = MotifNetParams::new(motif_width, run_config.num_layers);
+    let node_params = MotifNetParams::new(motif_width, run_config.num_layers, run_config.step);
     debug!("run_train_motif_net: node_params={node_params:?}");
 
     let loss = train_2(
@@ -3665,7 +3672,7 @@ impl Default for LabelNetTypeArgs {
 pub struct MaxPaddingNetArgs {
     #[in_map]
     #[run_config]
-    pub(crate) num_layers: u32,
+    pub num_layers: u32,
 }
 
 impl MaxPaddingNetArgs {
@@ -5589,7 +5596,7 @@ mod train_tests {
     ) -> Result<(), ThoosaError> {
         let mut vs_0 = VarStore::new(Cpu);
         let _test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            train_nets::motif_node(&MotifNetParams::new(window, 1))
+            train_nets::motif_node(&MotifNetParams::new(window, 1, 100))
                 .build_tch_module(&vs_0.root())?;
 
         let test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> = SeqBuilder::new(100, None)
@@ -5616,7 +5623,7 @@ mod train_tests {
             &motif_node_params_run_id,
             &motif_id,
             &vs_0,
-            &MotifNetParams::new(100, 1),
+            &MotifNetParams::new(100, 1, 100),
         )?;
         Ok(())
     }

@@ -495,7 +495,7 @@ mod tests {
 
                 .build()));
 
-        let run_configs =         thoosa_shared::run_configs::OptRunConfigs::new(
+        let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(20)),
@@ -503,6 +503,7 @@ mod tests {
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.001)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptMaxEvals), Val::Int(10)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptNInit), Val::Int(10)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Step, Val::Int(1))
                 ]),
                 vec![
                     // NamedRange::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
