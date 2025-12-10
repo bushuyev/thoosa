@@ -213,6 +213,25 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyMaxPool1d {
 }
 
 #[derive(Debug)]
+pub struct AdaptiveMaxPool1d {
+    output_size: u32
+}
+
+impl AdaptiveMaxPool1d {
+    pub fn new(output_size: u32) -> Self {
+        Self { output_size }
+    }
+}
+
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveMaxPool1d {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
+        t.as_ref()
+            .adaptive_avg_pool1d(self.output_size as i64)
+            .into()
+    }
+}
+
+#[derive(Debug)]
 pub struct MyBatchNorm1d {
     batch_norm: BatchNorm,
 }
