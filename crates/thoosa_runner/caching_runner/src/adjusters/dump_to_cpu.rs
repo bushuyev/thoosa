@@ -68,9 +68,9 @@ where
 
     async fn adjust(
         &self,
-        adjustable: &Self::A,
+        adjustable: &<Self as Adjuster<C>>::A,
         adjust_context: &mut C,
-    ) -> Result<Self::A, ThoosaError> {
+    ) -> Result<<Self as Adjuster<C>>::A, ThoosaError> {
         debug!("DumpToCpu::adjust: adjustable={adjustable:?}");
 
         assert_eq!(adjustable.read().acquired_permits(), MAX_PERMITS);

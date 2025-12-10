@@ -23,7 +23,9 @@ use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+use thoosa_shared::traits::MonoMetrics;
 use thoosa_shared::CopyToDevice;
+use thoosa_shared::traits::Data;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::find::{FixedFindMotifsConfig, SimpleMotifTracker};
 use thoosa_shared::ThoosaError;
@@ -34,6 +36,7 @@ use thoosa_store::fs_store::FileMotifTrackerStore;
 use thoosa_store::{SqlMotifTrackerStore, Store};
 use thoosa_common::tho_tensor::ThoTensor;
 
+//Don't implement Data & CopyToDevice for DistsMask - it's to be copied only once from cuda to cpu. Never cached.
 #[derive(Debug)]
 pub struct DistsMask {
     mask: Tensor,

@@ -112,9 +112,9 @@ where
 
     async fn adjust(
         &self,
-        adjustable: &Self::A,
+        adjustable: &<Self as Adjuster<C>>::A,
         adjust_context: &mut C,
-    ) -> Result<Self::A, ThoosaError> {
+    ) -> Result<<Self as Adjuster<C>>::A, ThoosaError> {
         let acquired_permits = adjustable.read().acquired_permits();
         if adjust_context.to_acquire() <= acquired_permits {
             //TODO warn
