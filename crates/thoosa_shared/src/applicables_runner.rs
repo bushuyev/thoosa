@@ -223,7 +223,11 @@ where
         .boxed()
         .shared();
 
-        let mut device_futures = vec![const { None }; num_devices].into_boxed_slice();
+        const fn nonnne<O>() -> Option<Shared<BoxFuture<'static, Arc<O>>>>{
+            None
+        }
+
+        let mut device_futures = vec![nonnne(); num_devices].into_boxed_slice();
         let mut device_cache_areas = vec![0; num_devices].into_boxed_slice();
 
         device_futures[device_ordinal] = Some(fut.clone());

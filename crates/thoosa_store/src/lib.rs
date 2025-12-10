@@ -512,7 +512,7 @@ impl ResourceStore for SqlStore {
         let t = guard.transaction()?;
 
         let labeled_resources_sets = {
-            let mut stmt = t.prepare("SELECT l.label, rs.descr FROM resource_set_group rsg JOIN resource_set rs ON rs.group_id=rsg.id JOIN labels l ON l.id=rs.label_id WHERE rsg.descr=?")?;
+            let mut stmt = t.prepare("SELECT l.label, rs.descr FROM resource_set_group rsg JOIN resource_set rs ON rs.group_id=rsg.id JOIN labels l ON l.id=rs.label_id WHERE rsg.descr=? ORDER BY label")?;
 
             let vec = stmt
                 .query_map([group_descr], |row| {
@@ -532,9 +532,7 @@ impl ResourceStore for SqlStore {
 
         t.commit()?;
 
-        debug!(
-            "list_group_labeled_resources_sets: labeled_resources_sets={labeled_resources_sets:?}"
-        );
+        debug!("list_group_labeled_resources_sets: labeled_resources_sets={labeled_resources_sets:?}");
 
         Ok(labeled_resources_sets)
     }

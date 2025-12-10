@@ -20,10 +20,10 @@ fn test_motif_node() -> Result<(), ThoosaError>{
 
     let motif_width = 100;
     let vs = VarStore::new(Cpu);
-    let node = motif_node_2(&MotifNetParams::new(motif_width, 3)).build_tch_module::<AnyDims, AnyDims>(&vs.root())?;
+    let node = motif_node_2(&MotifNetParams::new(motif_width, 3, 100)).build_tch_module::<AnyDims, AnyDims>(&vs.root())?;
 
     let motifs_vec = generate_motifs_with_avg_distance(
-        gen_motif(motif_width as usize, &MotifKind::Pulse).as_slice(),
+        gen_motif(10 * motif_width as usize, &MotifKind::Pulse).as_slice(),
         8,
         0.1,
         0.2, //should be lower than in motif where it's 0.2-0.3, TODO move to params
@@ -52,6 +52,7 @@ fn test_motif_node() -> Result<(), ThoosaError>{
     //     &format!("/tmp/plots/test_motif_node_{:?}.png", Utc::now().to_rfc3339()).as_str(),
     // )?;
 
+
     let motifs_batch = Tensor::stack(
         motifs_vec
             .into_iter()
@@ -64,6 +65,8 @@ fn test_motif_node() -> Result<(), ThoosaError>{
 
 
     let res = node.tho_forward(&ThoTensor::new("".into(), motifs_batch), true);
+
+
 
     debug!("res=\n{}", res.t);
 

@@ -8,6 +8,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::lock_api::RwLock;
 use tch::IndexOp;
+use tch::Kind::Float;
 use tokio::task::JoinError;
 use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
@@ -18,6 +19,7 @@ use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use caching_runner::permits::{PermitStep, MAX_PERMITS};
+use thoosa_common::applicables::ThoDevice;
 use thoosa_common::dims::{Batch, MotifProbability, Slice};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -32,6 +34,7 @@ use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
+use torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 use crate::tasks::cross_dims::{BatchChannelsData2Selector, ChannelsData2};
 use crate::tasks::load_motif_and_clc_dist::MotifSlicesSelector;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
@@ -65,7 +68,7 @@ where
     load_motif_net:Arc<LoadMotifNet<C>>,//TODO not needed?
     loaded_motif_nets:Vec<Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>>,
     apply_motif_net: Arc<ApplyMotifNet<C>>,
-    slice_step: u32,//should be in the input
+    pub slice_step: u32,//should be in the input
     pub motif_width:u32,
 }
 
@@ -78,8 +81,7 @@ where
         ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
         store: &Arc<parking_lot::RwLock<Box<dyn Store>>>,
         select_motifs_run_id: Vec<RunId>,
-        stage_ctx:Arc<parking_lot::RwLock<R>>,
-        slice_step: u32
+        stage_ctx:Arc<parking_lot::RwLock<R>>
     ) -> Result<Self, ThoosaError>
     where
         R:RunCtx + MotifsCtx + Adjustable + 'static
@@ -118,17 +120,23 @@ where
             .buffered(10)//TODO config order is important to keep output tensor same
             .try_collect::<Vec<_>>().await?;
 
+
+        //TODO all motif nets should have same width/step, handle different ones?
         let mut motif_width = HashSet::new();
+        let mut slice_step = HashSet::new();
         for v in &loaded_motif_nets {
             with_data!(0, v; |v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
                 motif_width.insert(v.extra().motif_net_params.num_features);
+                slice_step.insert(v.extra().motif_net_params.stride);
 
                 Ok::<_, ThoosaError>(())
             })?;
         };
         assert_eq!(motif_width.len(), 1);//TODO  group motif nets by width. all motifs should be of same width so that tensors can be batched for label training
+        assert_eq!(slice_step.len(), 1);
 
         let motif_width = motif_width.into_iter().next().expect("no motif_width");
+        let slice_step = slice_step.into_iter().next().expect("no motif_width");
         debug!("ApplyMotifNets::run: motif_width={motif_width:?}");
 
         Ok(Self {
@@ -227,28 +235,6 @@ where
     type Out = ApplyMotifNetsOutput;
 }
 
-#[derive(Debug)]
-struct MotifsProbabilitiesOutputBuilder {
-
-}
-
-impl MotifsProbabilitiesOutputBuilder {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl OutputBuilder for MotifsProbabilitiesOutputBuilder {
-    type O = ThoTensor<MotifProbability, SimpleId>;
-
-    fn add_partial_output(&mut self, o: Self::O) {
-        todo!()
-    }
-
-    async fn build(self) -> Result<Self::O, ThoosaError> {
-        todo!()
-    }
-}
 
 // #[async_trait]
 impl <C>AsyncStage for ApplyMotifNets<C>
@@ -275,9 +261,15 @@ where
                 let apply_motif_net = Arc::clone(&self.apply_motif_net);
                 let slice_step = self.slice_step;
 
+
+
+                let slices = (input.size().dim::<2>() as u32 - self.motif_width)/slice_step;
+
+                debug!("ApplyMotifNets::run: applying motif_net={motif_net:?} slice_step={slice_step} slices={slices}");
+
                 tokio::spawn(async move {
                     let wrapper = Arc::new(ApplyMotifNetInputDeviceWrapper::new(input, motif_net, slice_step));
-                    let output_builder = MotifsProbabilitiesOutputBuilder::new();
+                    let output_builder = SingleDimTensorOutputBuilder::new("".into(), 1, &[0,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append);
 
                     let map = HashMap::new();
 
@@ -548,7 +540,9 @@ impl <C> SyncStage for ApplyMotifNet<C> where
         let slices = input_t.i((.., c..c+1, ..));
 
         debug!("ApplyMotifNet::do_run: input_t.size={:?} slices.size={:?}", input_t.size(), slices.size());
-        Ok(input.motif_net.data().tho_forward(&ThoTensor::new("".into(), slices), false))
+        let out = input.motif_net.data().tho_forward(&ThoTensor::new("".into(), slices), false);
+        debug!("ApplyMotifNet::do_run: out.size={:?}", out.size());
+        Ok(out)
     }
 }
 
@@ -613,12 +607,12 @@ pub(crate) mod tests {
                 .with_load_motif_nets(vec![
                     vec![
                         //channel 0
-                        motif_test_net_(Cpu, Arc::clone(&motif_0_0)),
-                        motif_test_net_(Cpu, Arc::clone(&motif_0_1)),
+                        motif_test_net_(Cpu, Arc::clone(&motif_0_0), 1),
+                        motif_test_net_(Cpu, Arc::clone(&motif_0_1), 1),
                     ],
                     vec![
                         //channel 1
-                        motif_test_net_(Cpu, Arc::clone(&motif_1_0)),
+                        motif_test_net_(Cpu, Arc::clone(&motif_1_0), 1),
                     ],
                     vec![],
                 ])
@@ -655,8 +649,7 @@ pub(crate) mod tests {
             &ws,
             &store,
             vec![select_motifs_run_id],
-            Arc::new(RwLock::new(mock_run_ctx::default(1))),
-            100
+            Arc::new(RwLock::new(mock_run_ctx::default(1)))
         ).await?);
 
         let (resource_a_t, resource_a_intervals) = resource_tensor(input_n_0, &[
@@ -731,6 +724,7 @@ pub(crate) mod tests {
         device: Device,
         descr: &str,
         pattern:&Tensor,
+        stride: i64,
     ) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoosaError> {
         assert_eq!(pattern.size().len(), 1, "template must be 1-D");
         let l = pattern.size()[0];
@@ -743,7 +737,7 @@ pub(crate) mod tests {
         let t = &t / (t.pow_tensor_scalar(2).sum(Kind::Float).sqrt() + 1e-12);
 
         let vs = VarStore::new(device);
-        let mut cfg = nn::ConvConfig { bias: false, ..Default::default() };
+        let mut cfg = nn::ConvConfig { bias: false, stride, ..Default::default() };
 
 
         let tho_tensor:Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::new("".into(), t));
@@ -806,7 +800,7 @@ pub(crate) mod tests {
         let test_dir = Path::new("/tmp/test_test_net"); //.join(cdt_for_dir());
 
 
-        let test_net = dummy_motif_net::<AnyDims, AnyDims>(100, 1., Cpu, "test", &motif_t.i((0, ..)))?;
+        let test_net = dummy_motif_net::<AnyDims, AnyDims>(100, 1., Cpu, "test", &motif_t.i((0, ..)), 1)?;
 
         let out = test_net.tho_forward(&ThoTensor::new("".into(), resource_a_t.shallow_clone()), false).t;//.i((0, .., 0));//channel[1], slices, vals[1]
 
@@ -853,22 +847,23 @@ pub(crate) mod tests {
     pub fn motif_test_net_(
         device: Device,
         motif_t: Arc<ThoTensor<Batch<Slice>, SimpleId>>,
+        step: u32,
     ) -> (
         Box<dyn Fn() -> MotifNetParams + Sync + Send>,
         Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
     ) {
         let motif_width = motif_t.as_ref().as_ref().size()[1] as u32;
         (
-            Box::new(move || MotifNetParams::new(motif_width, 1)),
+            Box::new(move || MotifNetParams::new(motif_width, 1, step)),
             Box::new(move || {
-                *dummy_motif_net::<Batch<Slice>, MotifProbability>(motif_width, 1., device, "test", &motif_t.as_ref().as_ref().i((0, ..))).unwrap()//first slice
+                *dummy_motif_net::<Batch<Slice>, MotifProbability>(motif_width, 1., device, "test", &motif_t.as_ref().as_ref().i((0, ..)), step as i64).unwrap()//first slice
             }),
         )
     }
 
     #[tokio::test]
     async fn test_copy_to_device(){
-        let cpu_net = *dummy_motif_net::<Batch<Slice>, MotifProbability>(123, 1., Cpu, "test", &Tensor::rand([123], FLOAT_CPU)).unwrap();//first slice
+        let cpu_net = *dummy_motif_net::<Batch<Slice>, MotifProbability>(123, 1., Cpu, "test", &Tensor::rand([123], FLOAT_CPU), 10).unwrap();//first slice
 
         let cuda_net = cpu_net.copy_to_device(1).await;
     }

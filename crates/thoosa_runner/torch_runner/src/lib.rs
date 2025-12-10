@@ -6,7 +6,7 @@ pub mod data;
 pub mod metrics;
 #[cfg(test)]
 mod model_test;
-mod output_builders;
+pub mod output_builders;
 
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
