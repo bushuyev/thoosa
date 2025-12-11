@@ -5,7 +5,7 @@ use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, Module};
 use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
-use crate::my_tch::{Fp, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule, my_linear, AdaptiveMaxPool1d};
+use crate::my_tch::{Fp, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule, my_linear, AdaptiveMaxPool1d, Split1};
 use crate::train_nets::ThoModuleWithStore;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::SimpleId;
@@ -13,15 +13,26 @@ use crate::runs::Simple;
 use crate::tho_tensor::ThoTensor;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
-pub fn clc_conv1d_out(l_in: u32, k: u32, c: ConvConfig) -> u32 {
-    (l_in + 2 * c.padding as u32 - c.dilation as u32 * (k - 1) - 1) / c.stride as u32 + 1
+pub fn clc_conv1d_out(l_in: u32, kernel: u32, c: ConvConfig) -> u32 {
+    debug!("clc_conv1d_out: l_in={l_in} kernel={kernel} padding={} dilation={} stride={}", c.padding, c.dilation, c.stride);
+
+    let r = (l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) - 1) / c.stride as u32 + 1;
+
+    debug!("clc_conv1d_out: r={r}");
+
+    r
 }
 
-pub fn clc_maxpool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, stride: u32) -> u32 {
-    (l_in + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1
+pub fn clc_max_pool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, stride: u32) -> u32 {
+    debug!("clc_max_pool1d_out: l_in={l_in} kernel={kernel} padding={padding} dilation={dilation} stride={stride}");
+    let r= (l_in + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1;
+
+    debug!("clc_max_pool1d_out: r={r}");
+
+    r
 }
 
-pub fn clc_avgpool1d_out(l_in: u32, kernel: u32, padding: u32, stride: u32) -> u32 {
+pub fn clc_avg_pool1d_out(l_in: u32, kernel: u32, padding: u32, stride: u32) -> u32 {
     (l_in + 2 * padding - kernel) / stride + 1
 }
 
@@ -33,6 +44,11 @@ pub enum Node {
     },
     Par {
         elts: Vec<Node>,
+        split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+    },
+    Split1 {
+        node: Box<Node>,
         split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
         join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
     },
@@ -151,6 +167,14 @@ impl Node {
                 Box::new(MyParallel::new(layers, split, join))
             }
 
+            Node::Split1 { node, split, join } => {
+                Box::new(Split1::new(
+                    node.build_tch_module(&(vs / format!("Split1")))?,//TODO name
+                    split,
+                    join
+                ))
+            }
+
             Node::Conv1d {
                 path,
                 kernel,
@@ -249,6 +273,7 @@ impl Node {
                 Box::new(MyClosureModule::new(closure))
             },
 
+
         })
     }
 }
@@ -285,6 +310,22 @@ impl SeqBuilder {
 
         self
     }
+
+    pub fn split1(
+        &mut self,
+        node: Node,
+        split: Box<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
+        join: Box<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+    ) -> &mut Self {
+        self.elts.push(Node::Split1 {
+            node: Box::new(node),
+            split: Arc::from(split),
+            join: Arc::from(join),
+        });
+
+        self
+    }
+
 
     pub fn end_seq(&mut self) -> Node {
         let mut elts = Vec::new();
@@ -356,7 +397,7 @@ impl SeqBuilder {
             padding,
         });
 
-        self.num_features = clc_maxpool1d_out(self.num_features, kernel, padding, 1, stride); //TODO config?
+        self.num_features = clc_max_pool1d_out(self.num_features, kernel, padding, 1, stride); //TODO config?
 
         self
     }
@@ -379,7 +420,7 @@ impl SeqBuilder {
             padding,
         });
 
-        self.num_features = clc_avgpool1d_out(self.num_features, kernel, padding, stride);
+        self.num_features = clc_avg_pool1d_out(self.num_features, kernel, padding, stride);
 
         self
     }

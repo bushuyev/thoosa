@@ -422,7 +422,7 @@ mod tests {
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
-    use crate::tasks::select_motifs::tests::resource_tensor;
+    use thoosa_motifs::generators::noise::resource_tensor;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::train_motif_nets::{TrainMotifNets, TrainMotifNetInput};
 

@@ -537,10 +537,14 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 
         let input_t = input.batch.as_ref();
         let c = params.channel() as i64;
-        let slices = input_t.i((.., c..c+1, ..));
+        let motif_width = input.motif_net.extra().motif_net_params.num_features() as i64;
+
+        let slices = input_t.i((.., c, ..)).unfold(1, motif_width, 1).reshape([-1, motif_width]);;
 
         debug!("ApplyMotifNet::do_run: input_t.size={:?} slices.size={:?}", input_t.size(), slices.size());
         let out = input.motif_net.data().tho_forward(&ThoTensor::new("".into(), slices), false);
+        let out = ThoTensor::new("".into(), out.t.view((input_t.size()[0], -1)));
+
         debug!("ApplyMotifNet::do_run: out.size={:?}", out.size());
         Ok(out)
     }
@@ -571,6 +575,7 @@ pub(crate) mod tests {
     use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
     use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, reset_print_options, test_net, vec_f32_from};
     use thoosa_common::ws::WsMockBuilder;
+    use thoosa_motifs::generators::noise::resource_tensor;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
@@ -579,7 +584,7 @@ pub(crate) mod tests {
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
     use crate::tasks::apply_motif_nets::{ApplyMotifNets, ApplyMotifNetsInput, ApplyMotifNetsOutput};
-    use crate::tasks::select_motifs::tests::{motifs_tensor, resource_tensor};
+    use crate::tasks::select_motifs::tests::motifs_tensor;
     use crate::tasks::tensor_loader::mock_tensor_loader;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -743,6 +748,17 @@ pub(crate) mod tests {
         let tho_tensor:Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::new("".into(), t));
 
         let node = SeqBuilder::new(num_features, None)
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor| {
+
+                    let r = t.unsqueeze(1);//dummy channel
+
+                    debug!("motif_node_2: 0. input.size={:?}", r.size());
+
+                    r
+                })),
+                None,
+            )
             .split(
                 vec![
                     SeqBuilder::new(num_features, None).conv_1d("conv", l as u32, 1, 1, cfg, Some(Arc::clone(&tho_tensor))).end_seq(),
