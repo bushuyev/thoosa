@@ -164,6 +164,53 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyParallel<DI, DO> {
         t.into()
     }
 }
+/////
+pub struct Split1<DI: Dims, DO: Dims> {
+    layer: Box<dyn ThoModule<DI, DO>>,
+    split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
+    join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+}
+
+impl<DI: Dims, DO: Dims> Debug for Split1<DI, DO> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MySeq").finish()//TODO
+    }
+}
+
+impl<DI: Dims, DO: Dims> Split1<DI, DO> {
+    pub fn new(
+        layer: Box<dyn ThoModule<DI, DO>>,
+        split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+    ) -> Self {
+
+        Self {
+            layer,
+            split,
+            join,
+        }
+    }
+}
+
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for Split1<DI, DO> {
+    fn debug(&self) {
+       self.layer.debug()
+    }
+
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
+        debug!("MyParallel::forward: xs={:?}", t.size());
+        let t = (self.join)(
+            (self.split)(t.as_ref())
+                .into_iter()
+                .map(|t| self.layer.tho_forward(&t.into(), train).as_ref().shallow_clone())
+                .collect::<Vec<Tensor>>(),
+        );
+
+        debug!("MyParallel::forward: t={:?}", t.size());
+
+        t.into()
+    }
+}
 /*
 impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for Conv1D {
     fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
