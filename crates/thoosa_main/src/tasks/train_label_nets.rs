@@ -27,7 +27,7 @@ use thoosa_common::batches::{AsyncDataBatch, ThoBatchIter};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{flat_label_node, opt_train_2, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train_2, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, train_2, train_3};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -40,7 +40,7 @@ use thoosa_with_data::with_data;
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::run_ctx_2::MotifsCtx;
-use rand::{seq::SliceRandom, rng};
+use rand::{rng, seq::SliceRandom};
 use tch::kind::FLOAT_CPU;
 use tokio::{join, try_join};
 use thoosa_dummy_data_derive::DummyData;
@@ -269,6 +269,7 @@ where
                                 Arc::clone(&resources_1_valid),
                                 Arc::clone(&resources_0_train),
                                 Arc::clone(&resources_0_valid),
+
                                 Box::new(move |x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>,  x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>, ctx: Arc<RwLock<C>>|{
                                     let apply_motif_nets = Arc::clone(&apply_motif_nets);
 
@@ -324,7 +325,7 @@ where
                         },
                         train_motifs_nodes_run_configs,
                         ThoDevice::from(device_idx).into(),
-                        "motifs",
+                        "labels",
                     ).await.map(|(var_store, label_node_params, train_motifs_nets_run_config, min_loss)| {
 
                         debug!("TrainLabelNet::run: label_node_params={label_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
@@ -634,7 +635,7 @@ pub async fn train_label_net_2(
     let loss = train_3(
         &device,
         batch,
-        flat_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?,
+        any_len_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?,
         |pred: &Tensor, target: &Tensor| {
             debug!("train_label_net: pred.size={:?}", pred.size());
             let pred_y = pred;//.squeeze();
@@ -661,7 +662,7 @@ mod tests {
     use std::collections::HashMap;
     use tokio::fs;
     use std::path::Path;
-    use std::sync::{Arc};
+    use std::sync::Arc;
     use futures_util::StreamExt;
     use futures::FutureExt;
     use log::debug;
@@ -681,6 +682,7 @@ mod tests {
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, FixedNumSlicesNetArgsFields, LabelNetTypeArgsFields, OptConfig, TrainLabelNetsRunConfigFields};
     use thoosa_common::utils::{mix_x_binary_with_labels, reset_print_options};
     use thoosa_common::ws::{mock_ws_simp, WsMockBuilder};
+    use thoosa_motifs::generators::noise::resource_tensor;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
@@ -692,7 +694,7 @@ mod tests {
     use crate::tasks::apply_motif_nets::tests::motif_test_net_;
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
-    use crate::tasks::select_motifs::tests::{motifs_tensor, resource_tensor};
+    use crate::tasks::select_motifs::tests::motifs_tensor;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::train_label_nets::{ResourcesBatch, TrainLabelNets, TrainLabelNetsInput, TrainLabelNetsOutput};
 

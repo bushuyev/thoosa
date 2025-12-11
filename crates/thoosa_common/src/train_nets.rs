@@ -2308,6 +2308,101 @@ impl LabelNetParams {
     }
 }
 
+pub fn any_len_label_node(params: &LabelNetParams) -> Node {
+    let num_features = 1000;//params.motif_nets;
+    debug!("any_len_label_node: num_features={num_features}");
+
+    SeqBuilder::new(num_features/*30000*/, None)
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor| {
+                debug!("any_len_label_node: input={t:?}");
+                t.shallow_clone()
+            })),
+            None,
+        )
+        .split1(
+            SeqBuilder::new(num_features, None)
+                .linear_s(num_features,
+                      #[cfg(debug_assertions)]
+                      "split1".into()
+                )
+                .linear_s(
+                    num_features,
+                    #[cfg(debug_assertions)]
+                    "any_len_label_node 0".to_string(),
+                )
+                .func(Tensor::relu)
+                .linear_s(
+                    num_features,
+                    #[cfg(debug_assertions)]
+                    "any_len_label_node 1".to_string(),
+                )
+                .func(Tensor::relu)
+                .end_seq(),
+
+            Box::new(move |t: &Tensor| {
+                debug!("any_len_label_node: t.size={:?}", t.size());
+                let batch_size = t.size()[0];
+                let motif_nets = t.size()[1];
+                let dim_size = t.size()[2] as u32;
+                let ranges = (0..dim_size).step_by(num_features as usize).map(|v|v as i64).collect::<Vec<_>>();
+                debug!("any_len_label_node: ranges={ranges:?}");
+
+
+                ranges.into_iter().map(|start| {
+
+                    let t = if start as u32 + num_features > dim_size  {
+                        pad_to(&t.narrow(2, start, (dim_size as i64 - start)), &[batch_size, motif_nets, num_features as i64]).unwrap()
+                    } else {
+                        t.narrow(2, start, num_features as i64)
+                    };
+                    debug!("any_len_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?}", start as u32 + num_features, t.size());
+                    t
+                }).collect()
+            }),
+            Box::new(move |res: Vec<Tensor>| {
+                debug!("any_len_label_node: res={res:?}");
+
+                let conct = Tensor::concat(res.as_slice(), 1);
+                debug!("any_len_label_node: conct={:?}", conct.size());
+
+                let r = conct.flatten(1, 2).to(Cpu).adaptive_avg_pool1d(num_features as i64).to(Cuda(0));//.i((0, ..num_features as i64)); //
+                debug!("any_len_label_node: r.size={:?}", r.size());
+
+                r
+
+            })
+        )
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor| {
+                debug!("any_len_label_node: final input={t:?}");
+                t.shallow_clone()
+            })),
+            None,
+        )
+        // .conv_1d("any_len_label_node conv", 1000)
+        .linear_s(
+            num_features,
+            #[cfg(debug_assertions)]
+            "any_len_label_node 0".to_string(),
+        )
+        .func(Tensor::relu)
+        .linear_s(
+            num_features,
+            #[cfg(debug_assertions)]
+            "any_len_label_node 1".to_string(),
+        )
+        .func(Tensor::relu)
+        .linear_s(
+            1,
+            #[cfg(debug_assertions)]
+            "any_len_label_node 2".to_string(),
+        )
+        .func(Tensor::sigmoid)
+        .end_seq()
+}
+
+
 pub fn flat_label_node(params: &LabelNetParams) -> Node {
     debug!("flat_label_node: params={params:?}");
     let num_features = params.motif_nets * params.slices_len; //params.motif_nets * slices_len;

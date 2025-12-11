@@ -7,4 +7,5 @@ is_available = torch.cuda.is_available()
 print(f"is_available={is_available}")
 
 
+
 print("Ok")
