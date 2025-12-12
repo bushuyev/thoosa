@@ -79,7 +79,7 @@ pub trait ToOrdinal: Debug + Sync + Send {
 }
 
 pub trait Runner {
-    type Ctx: RunCtx;
+    type Ctx: ApplicableRunCtx;
 }
 
 
@@ -243,7 +243,7 @@ where
         )
     }
 
-    fn get_from_any_device<R: RunCtx>(
+    fn get_from_any_device<R: ApplicableRunCtx>(
         &mut self,
         device_ordinal: usize,
         _pool: &ThreadPool,
@@ -535,7 +535,7 @@ impl CacheAreasKeeper {
     }
 }
 
-pub trait RunCtx: Debug + Send + Sync {
+pub trait ApplicableRunCtx: Debug + Send + Sync {
     fn cache_area(&self) -> u64;
     fn into_cached_iter_mut(self) -> impl Iterator<Item = Vec<CachableId>>;
 }
@@ -713,7 +713,7 @@ impl FuturesRunner {
         })
     }
 
-    pub async fn purge_all_gpu_caches<C: RunCtx>(
+    pub async fn purge_all_gpu_caches<C: ApplicableRunCtx>(
         self: Arc<Self>,
         ctx: C,
         device: &dyn ToOrdinal,
@@ -830,7 +830,7 @@ mod tests {
     #![allow(unused_imports, dead_code, unused_variables)]
     use super::{
         Cachable, CachableId, DataInDevices, DeviceThreadPools, FuturesRunner, FuturesRunnerMap,
-        Input, MapWithThread, Output, RunCtx, Runner, ToOrdinal, dummy_load, yield_n,
+        Input, MapWithThread, Output, ApplicableRunCtx, Runner, ToOrdinal, dummy_load, yield_n,
     };
     use crate::applicables_runner::tests::Devices::Cpu;
     use crate::rayon_future::ScopeFutureExt;
@@ -936,7 +936,7 @@ mod tests {
         }
     }
 
-    impl RunCtx for MyRunCtx {
+    impl ApplicableRunCtx for MyRunCtx {
         fn into_cached_iter_mut(self) -> impl Iterator<Item = Vec<CachableId>> {
             [
                 self.loaded_cached,
