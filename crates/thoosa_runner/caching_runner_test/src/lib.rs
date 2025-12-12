@@ -12,7 +12,7 @@ use caching_runner::oom_handler::{
 use caching_runner::permits::{NumPermits, PermitStep, MAX_PERMITS};
 
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
-use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use caching_runner::common::runnable::{Stage, SyncStage};
 use log::debug;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};

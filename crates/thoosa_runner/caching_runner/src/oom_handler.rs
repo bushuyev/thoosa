@@ -16,14 +16,11 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::ops::Range;
-use std::process::Output;
 use std::sync::Arc;
 use thoosa_shared::panic_to_err_async;
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
 use thoosa_shared::{MyError, ThoosaError};
-use tracing::instrument;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::utils::os_thread_id;
 
@@ -581,7 +578,7 @@ where
                                                     break;
                                                 }
                                             }
-                                            e => {
+                                            _ => {
                                                 debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} other error 1", os_thread_id());
                                                 return Err(te);
                                             }
@@ -637,10 +634,10 @@ pub(crate) mod test_types {
         pub data: DummyTensor,
     }
 
-    impl Select<Range<[usize;1]>> for TestInput {
+    impl Select<std::ops::Range<[usize;1]>> for TestInput {
         type Output = TestInput;
 
-        fn subview(&self, selector: Range<[usize; 1]>) -> Result<Self::Output, ThoosaError> {
+        fn subview(&self, selector: std::ops::Range<[usize; 1]>) -> Result<Self::Output, ThoosaError> {
             Ok(TestInput {
                 id: self.id.clone(),
                 data: DummyTensor(self.data.0[selector.start[0]..selector.end[0]].to_vec())//.0[selector.start..selector.end])
@@ -959,6 +956,7 @@ mod tests {
     use thoosa_shared::{MyError, ThoosaError};
     use thoosa_shared::traits::{Adjustable, WithId};
     use super::{Adjuster, InputContext};
+    type Selector = Range<[usize; 1]>;
 
     #[derive(Debug)]
     struct AsyncTestTask {
@@ -1082,7 +1080,7 @@ mod tests {
             None,
         );
 
-        let out = oom_handler
+        let out: TestOutput = oom_handler
             .run(
                 &Arc::new(init_task),
                 Arc::new(DevicesWrap::wrap(TestInput::new(100), 0)),
@@ -1122,7 +1120,7 @@ mod tests {
         let (init_task, init_calls) = mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
         let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
         let (task_adj, task_adj_calls) = mock_task_adjuster([final_task]);
-        let oom_handler = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj))], None);
+        let oom_handler: OOMHandler<'_, 'static, _, _, _, _, Selector> = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj))], None);
 
         let ctx_mock = crate::common::mock_run_ctx::build()
             .with_device_idx(1)
@@ -1130,7 +1128,7 @@ mod tests {
             .with_drop_permits(vec![DropIf::IfNotMax])
             .finish();
 
-        let out = oom_handler
+        let out: TestOutput = oom_handler
             .run(
                 &Arc::new(init_task),
                 Arc::new(DevicesWrap::wrap(TestInput::new(1), 0)),
@@ -1211,7 +1209,7 @@ mod tests {
         ]);
         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
 
-        let oom_handler = OOMHandler::new(vec![Adjusters::RunContext(Box::new(ctx_adj))], None);
+        let oom_handler: OOMHandler<'_, 'static, _, _, _, _, Selector> = OOMHandler::new(vec![Adjusters::RunContext(Box::new(ctx_adj))], None);
 
         let ctx_mock = crate::common::mock_run_ctx::build()
             .with_device_idx(1)
@@ -1344,7 +1342,6 @@ mod tests {
         ));
 
         let oom1 = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj1))], None);
-
         let h1 = oom1.run(
             &init_task1_arc,
             Arc::clone(&input_arc),
@@ -1376,7 +1373,8 @@ mod tests {
                 super::MockRunCtxContext::new(),
             ),
         );
-        let (r1, r2) = tokio::join!(h1, h2);
+        let r1: Result<TestOutput, ThoosaError> = h1.await;
+        let r2: Result<TestOutput, ThoosaError> = h2.await;
         assert_eq!(5., r1.unwrap().v.0);
         assert_eq!(7., r2.unwrap().v.0);
 

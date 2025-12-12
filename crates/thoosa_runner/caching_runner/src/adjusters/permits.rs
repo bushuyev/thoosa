@@ -156,7 +156,7 @@ where
 
                             tokio::task::yield_now().await;
                         }
-                        e => {
+                        _ => {
                             // Propagate unexpected errors to let caller decide.
                             return Err(te);
                         }
