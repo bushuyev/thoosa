@@ -232,8 +232,6 @@ where
             .map(|label_tain_and_valid_sets|{
 
 
-
-
                 let opt_config = Arc::clone(&self.opt_config);
                 let ctx = Arc::clone(&ctx);
 
@@ -726,6 +724,7 @@ mod tests {
     use futures::FutureExt;
     use log::debug;
     use log::LevelFilter::{Debug, Trace};
+    use mockall::predicate::always;
     use parking_lot::RwLock;
     use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
@@ -758,7 +757,13 @@ mod tests {
     use crate::tasks::train_label_nets::{ResourcesBatch, TrainLabelNets, TrainLabelNetsInput, TrainLabelNetsOutput};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_train_label_net_3x3() -> Result<(), ThoosaError> {
+    async fn test_train_label_net_3x3() -> Result<(), ThoosaError>
+    {
+
+        let ctx = MockRunCtx::purge_gpu_caches_context();
+        ctx.expect().with(always()).returning( |_| Box::pin(async { Ok(()) }));
+
+
         let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
@@ -919,6 +924,7 @@ mod tests {
                 Hyperparameter::UniformFloat{name: TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.0001, upper: 0.001}
             ],
         );
+
 
         let train_label_nets = Arc::new(TrainLabelNets::new(
             vec![select_motifs_run_id],

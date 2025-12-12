@@ -45,9 +45,10 @@ pub struct MotifLoaderInput {
     motif_id:DataId
 }
 
+#[cfg(test)]
 impl From<u32> for MotifLoaderInput{
     fn from(value: u32) -> Self {
-        MotifLoaderInput::all_slices(DataId(value))
+        MotifLoaderInput::find_motif_slices_only(DataId(value))
     }
 }
 
@@ -506,11 +507,11 @@ pub mod mock_motif_loader {
                 block_in_place(|| {
                     Handle::current().block_on(async {
                         input.with_data_ref(0,
-                                            Arc::clone(&ctx), None, |v: &MotifLoaderInput| {
-                                                                        Ok(Arc::clone(data_map
-                                                                            .get(v)
-                                                                            .expect(&format!("no mock data for {input:? } in MockMotifLoader"))))
-                                                                    }).await
+                        Arc::clone(&ctx), None, |v: &MotifLoaderInput| {
+                            Ok(Arc::clone(data_map
+                                .get(v)
+                                .expect(&format!("no mock data for {input:? } in MockMotifLoader"))))
+                        }).await
                     })
                 })
             });

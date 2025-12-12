@@ -124,7 +124,7 @@ pub mod mock_run_ctx {
         }
 
         pub fn with_purge_gpu_caches(mut self) -> Self {
-            MockRunCtx::purge_gpu_caches_context().expect().returning( |_| Box::pin(async { Ok(()) }));
+            MockRunCtx::purge_gpu_caches_context().expect().with(always()).returning( |_| Box::pin(async { Ok(()) }));
 
             self
         }
@@ -147,6 +147,7 @@ pub mod mock_run_ctx {
             .with_add_permits()
             .with_drop_permits(vec![IfNotMax])
             .with_cache_area(0)
+            .with_purge_gpu_caches()
             .finish()
     }
 }
