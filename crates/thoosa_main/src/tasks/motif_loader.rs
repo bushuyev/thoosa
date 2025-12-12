@@ -62,12 +62,12 @@ impl MotifLoaderInput {
     pub fn find_motif_slices_only(motif_id: DataId) -> Self {
         Self {
             motif_id,
-            select_motifs_run_id: Some(vec![]) //all slices loaded
+            select_motifs_run_id: Some(vec![]) //only slices found during find_motifs loaded
         }
     }
 
     pub fn new(motif_id: DataId, select_motifs_run_id: Option<Vec<RunId>>) -> Self {
-        Self { select_motifs_run_id, motif_id }
+        Self { select_motifs_run_id, motif_id }// slices found during find_motifs + select_motifs_run_id
     }
 }
 impl Input for MotifLoaderInput {

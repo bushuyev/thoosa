@@ -28,7 +28,7 @@ use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
 use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train_2, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
-use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, train_2, train_3};
+use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, train_2, train_3, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::{shuffle_and_chunk_with_rng, CopyToDevice, ThoosaError};
@@ -323,7 +323,7 @@ where
                             };
 
                             let params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
-                            let loss = train_label_net_2(&run_config, &resources_batch, &ThoDevice::from(device_idx), vs, params.clone()).await?;
+                            let loss = train_label_net_2(&run_config, &resources_batch, &ThoDevice::from(device_idx), vs, params.clone(), Arc::clone(&ctx)).await?;
 
                             Ok((loss, params))
                         },
@@ -616,12 +616,16 @@ where
 
 }
 
-pub async fn train_label_net_2(
+pub async fn train_label_net_2<C>(
     run_config: &TrainLabelNetsRunConfig,
     batch: &dyn AsyncDataBatch<MotifProbability, LabelProbability>,
     device: &Device,
     vs: &VarStore, net_params: LabelNetParams,
-) -> Result<f32, ThoosaError> {
+    ctx: Arc<RwLock<C>>
+) -> Result<f32, ThoosaError>
+where
+    C:RunCtx
+{
     debug!("train_label_net:  ");
 
     let device = device.clone();
@@ -635,6 +639,39 @@ pub async fn train_label_net_2(
     // }
 
     debug!("train_label_net: cuda_mem={:?}", cuda_mem());
+    // C::purge_gpu_caches(Arc::clone(&ctx)).await?;
+    // ctx.purge_gpu_caches().await?;
+    pub struct PurgeCacheListener<C>
+    where
+        C:RunCtx{
+        ctx:Arc<RwLock<C>>
+    };
+
+    impl <C>  PurgeCacheListener<C>
+    where
+        C:RunCtx{
+        pub fn new(ctx: Arc<RwLock<C>>) -> Self {
+            Self { ctx }
+        }
+    }
+
+    impl <C> TrainListener for PurgeCacheListener<C>
+    where
+        C:RunCtx{
+        fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<ListenerResponse> {
+            Box::pin(async {
+
+                C::purge_gpu_caches(Arc::clone(&self.ctx)).await.unwrap();
+
+                ListenerResponse::Nope
+            })
+        }
+
+
+        fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse {
+            ListenerResponse::Nope
+        }
+    }
 
     let loss = train_3(
         &device,
@@ -653,7 +690,7 @@ pub async fn train_label_net_2(
             debug!("train_label_net: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
             t
         },
-        None,
+        Some(&mut PurgeCacheListener::new(ctx)),
     )
         .await?;
 
