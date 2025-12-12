@@ -77,7 +77,7 @@ impl RunCtx for RunCtx2 {
                 )
             };
             debug!("purge_gpu_caches: 1 ctx_name={ctx_name} device_idx={device_idx} batched_motifs_ids={batched_motifs_ids:?} loaded_raw_tensors={loaded_raw_tensors:?}");
-            info!("dumping {} batched motifs", batched_motifs_ids.len());
+            debug!("dumping {} batched motifs", batched_motifs_ids.len());
 
             tokio::try_join!(
                     RawTensorLoader::<RunCtx2>::purge_gpu_cache_area(

@@ -123,6 +123,11 @@ pub mod mock_run_ctx {
             self
         }
 
+        pub fn with_purge_gpu_caches(mut self) -> Self {
+            MockRunCtx::purge_gpu_caches_context().expect().returning( |_| Box::pin(async { Ok(()) }));
+
+            self
+        }
 
         pub fn finish(self) -> MockRunCtx {
             self.mock
