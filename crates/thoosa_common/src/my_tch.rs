@@ -103,7 +103,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
                         1,
                     );
 
-                    let mean_r = split_r.mean_dim(1, false, None).unsqueeze(1);
+                    let mean_r = split_r.mean_dim(1, false, None).unsqueeze(1);//TODO why mean?
 
                     debug!("MySequential::tho_forward split_r.size()={:?} mean_r.size()={:?}",split_r.size(),mean_r.size());
 
@@ -202,7 +202,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for Split1<DI, DO> {
         let t = (self.join)(
             (self.split)(t.as_ref())
                 .into_iter()
-                .map(|t| self.layer.tho_forward(&t.into(), train).as_ref().shallow_clone())
+                .map(|split_t| self.layer.tho_forward(&split_t.into(), train).as_ref().shallow_clone())
                 .collect::<Vec<Tensor>>(),
         );
 
