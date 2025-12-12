@@ -567,7 +567,7 @@ where
                                 let dist = clc_dist.run(Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::all_slices(DataId(*motif_id)))), Arc::clone(&ctx)).await
                                     .map_err(|e|ThoosaError::new(format!("Got error while running clc_dist for {motif_id}")))?;
 
-                                with_data!(ctx, 0, dist; |dist:&AverageDistanceValue|{
+                                with_data!(ctx, device_idx, dist; |dist:&AverageDistanceValue|{
                                     Ok::<_, ThoosaError>((*motif_id, dist.value() as f64))
                                 })
                             }

@@ -136,10 +136,10 @@ impl GlobalCtx {
     pub async fn acquire_many(
         &self,
         ordinal: usize,
-        n: NumPermits,
+        num_permits: NumPermits,
         out_id: std::sync::Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoosaError> {
-        self.semaphores[ordinal].acquire(n, out_id).await
+        self.semaphores[ordinal].acquire(num_permits, out_id).await
     }
 
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation

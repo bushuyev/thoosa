@@ -142,12 +142,12 @@ where
                         MyError::OutOfPermits => {
                             debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name} acquired_permits={acquired_permits} Error: {te:?} device_idx={}", adjustable.read().device_idx());
 
-                            if adjustable.read().device_idx() != 0 {
+                           /* if adjustable.read().device_idx() != 0 {
                                 //not on CPU, TODO
                                 if let Err(e) = A::purge_gpu_caches(Arc::clone(adjustable)).await {
                                     debug!("PermitsAdjuster::adjust: purge_gpu_caches failed: {e:?}");
                                 };
-                            }
+                            }*/
                             adjustable.write().drop_permits(DropIf::Always);
 
                             *adjust_context.to_acquire_mut() = 0;

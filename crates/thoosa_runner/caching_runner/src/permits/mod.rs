@@ -35,7 +35,7 @@ pub const MAX_PERMITS: NumPermits = 100;
 pub trait PermitSource: Debug + Send + Sync {
     async fn acquire(
         &self,
-        n: NumPermits,
+        num_permits: NumPermits,
         out_id: std::sync::Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoosaError>;
 }
