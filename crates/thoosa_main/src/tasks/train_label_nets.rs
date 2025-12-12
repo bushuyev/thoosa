@@ -200,6 +200,11 @@ where
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
+
+
+
+
+
         let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
         let ctx = Arc::clone(&ctx);
         let store = Arc::clone(&self.store);
@@ -212,6 +217,8 @@ where
         debug!("TrainLabelNets::run: channels={channels} max_input={max_input} self.apply_motif_nets.slice_step={} slices_len={slices_len}", self.apply_motif_nets.slice_step);
 
         async move {
+
+
             let (train_labels_resource_keys, valid_label_resource_keys) = with_data!(0, input; |input:&ResourcesConfigInput<NetResources<Labeled>>|{
                 Ok::<_, ThoosaError>(input.resources_config().to_resources(&self.store)?)
             })?;
@@ -219,18 +226,17 @@ where
             let (labels_tain_and_valid_sets, labels_others_train_valid_resources) = Self::build_resource_maps(train_labels_resource_keys, valid_label_resource_keys);
             debug!("TrainLabelNets::run: labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
 
-            let out_key = {
-                let out_id = SimpleId("todo");  //self.out_id(input.id());
-                Arc::new(out_id) as Arc<dyn CachableIdTr>
-            };
+
 
             let results = futures::stream::iter(labels_tain_and_valid_sets.clone())
             .map(|label_tain_and_valid_sets|{
 
 
+
+
                 let opt_config = Arc::clone(&self.opt_config);
                 let ctx = Arc::clone(&ctx);
-                let out_key = Arc::clone(&out_key);
+
                 let train_motifs_nodes_run_configs = Arc::clone(&train_motifs_nodes_run_configs);
                 let loader = Arc::clone(&self.loader);
                 let apply_motif_nets = Arc::clone(&self.apply_motif_nets);
@@ -239,6 +245,18 @@ where
 
                 tokio::spawn(async move {
                     let (label, resources_1) = label_tain_and_valid_sets;
+                    let out_key = {
+                        let out_id = SimpleId::from(format!("Train_{label}"));  //self.out_id(input.id());
+                        Arc::new(out_id) as Arc<dyn CachableIdTr>
+                    };
+
+                    if ctx.read().acquired_permits() == 0 {
+                        let result = GlobalCtx::global()
+                            .acquire_many(device_idx, 1, out_key.clone())
+                            .await?;
+                        ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
+                    }
+
                     debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
                     let resources_0 = labels_others_train_valid_resources.get(&label).expect(&format!("no resources not belonging to {label}"));

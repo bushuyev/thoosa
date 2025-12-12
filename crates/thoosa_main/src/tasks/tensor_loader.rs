@@ -88,7 +88,7 @@ where
     where
         Self: 'a
     {
-        
+        ctx.write().add_loaded_raw_tensor_id(self.out_id(input.id()))
     }
 }
 

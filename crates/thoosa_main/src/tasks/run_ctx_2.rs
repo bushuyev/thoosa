@@ -9,6 +9,7 @@ use caching_runner::common::{ambassador_impl_PermitsCtx, DropIf, MockRunCtx, Per
 use caching_runner::common::cachable::Cached;
 use thoosa_shared::traits::Adjustable;
 use caching_runner::permits::{NumPermits, RunnerPerm};
+use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Named, SimpleId};
 use torch_runner::TorchPermsCtx;
@@ -130,6 +131,6 @@ impl MotifsCtx for MockRunCtx {
     }
 
     fn add_loaded_raw_tensor_id(&mut self, id: SimpleId) {
-        todo!()
+
     }
 }
