@@ -760,8 +760,7 @@ mod tests {
     async fn test_train_label_net_3x3() -> Result<(), ThoosaError>
     {
 
-        let ctx = MockRunCtx::purge_gpu_caches_context();
-        ctx.expect().with(always()).returning( |_| Box::pin(async { Ok(()) }));
+
 
 
         let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
@@ -925,6 +924,8 @@ mod tests {
             ],
         );
 
+        // let ctx = MockRunCtx::purge_gpu_caches_context();
+        // ctx.expect().with(always()).times(1..).returning( |_| Box::pin(async { Ok(()) }));
 
         let train_label_nets = Arc::new(TrainLabelNets::new(
             vec![select_motifs_run_id],
@@ -941,6 +942,9 @@ mod tests {
             ResourcesConfigInput::new("test".into(), NetResources::new(Labeled::new(train_group.to_string()), Labeled::new("valid_group".to_string()))),
             0
         ));
+
+        let ctx = MockRunCtx::purge_gpu_caches_context();
+        ctx.expect().with(always()).times(0..).returning( |_| Box::pin(async { Ok(()) }));
 
         let out = train_label_nets.run(input, Arc::new(RwLock::new(mock_run_ctx::default(1)))).await?;
 

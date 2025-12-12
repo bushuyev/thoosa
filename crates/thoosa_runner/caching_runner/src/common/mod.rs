@@ -147,7 +147,7 @@ pub mod mock_run_ctx {
             .with_add_permits()
             .with_drop_permits(vec![IfNotMax])
             .with_cache_area(0)
-            .with_purge_gpu_caches()
+            // .with_purge_gpu_caches()
             .finish()
     }
 }
