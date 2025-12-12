@@ -256,7 +256,7 @@ where
             .collect::<Vec<_>>()
             .await;
 
-        with_data!(device_idx, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
+        with_data!(Arc::clone(&ctx), device_idx, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
 
             let channels_motifs = data.into_iter().fold(
 
