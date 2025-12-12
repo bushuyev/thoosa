@@ -293,7 +293,7 @@ where
                     ).await
                 })
             })
-            .buffered(10)//TODO config, TODO - use buffer_unordered and then sort by motif_id?
+            .buffered(2)//TODO config, TODO - use buffer_unordered and then sort by motif_id?
             // .map(|r|r.and_then(|r|r))
             .try_collect::<Vec<_>>().await?
             .into_iter().
@@ -304,6 +304,13 @@ where
 
         Ok(Arc::new(DevicesWrap::wrap_cpu(ApplyMotifNetsOutput::new("".into(), matches))))
 
+    }
+
+    fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<parking_lot::RwLock<Self::Ctx>>)
+    where
+        Self: 'a
+    {
+        //TODO
     }
 }
 
@@ -376,6 +383,13 @@ impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNe
         P:PermitsCtx,
         for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
     {
+        if permits_ctx.read().acquired_permits() == 0 {
+            let result = GlobalCtx::global()
+                .acquire_many(to_device_idx, 1, Arc::new(SimpleId("ApplyMotifNetInput")))
+                .await?;
+            permits_ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
+        }
+
         let t_1_batch = Arc::clone(&self.batch);
         let motif_net = Arc::clone(&self.motif_net);
 

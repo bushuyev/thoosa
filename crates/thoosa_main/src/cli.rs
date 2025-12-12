@@ -494,7 +494,7 @@ where
                         run_configs,
                         &ws,
                         &store,
-                        Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "init label nets"))),
+                        Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, GlobalCtx::global().next_cache_area()?, "init label nets"))),
                         opt_config
                     ).await.map(|v|Arc::new(v))
                 },
