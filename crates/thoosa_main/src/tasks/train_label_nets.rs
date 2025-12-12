@@ -219,7 +219,7 @@ where
         async move {
 
 
-            let (train_labels_resource_keys, valid_label_resource_keys) = with_data!(0, input; |input:&ResourcesConfigInput<NetResources<Labeled>>|{
+            let (train_labels_resource_keys, valid_label_resource_keys) = with_data!(ctx, 0, input; |input:&ResourcesConfigInput<NetResources<Labeled>>|{
                 Ok::<_, ThoosaError>(input.resources_config().to_resources(&self.store)?)
             })?;
 
@@ -290,7 +290,7 @@ where
                                     let apply_motif_nets = Arc::clone(&apply_motif_nets);
 
                                     async move {
-                                        let (x,y) = with_data!(ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<ChannelsData2, SimpleId>], x_0:&[&ThoTensor<ChannelsData2, SimpleId>]|{
+                                        let (x,y) = with_data!(ctx, ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<ChannelsData2, SimpleId>], x_0:&[&ThoTensor<ChannelsData2, SimpleId>]|{
                                             debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
 
                                             let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.size()[1]).max().expect("no max_input");
@@ -731,6 +731,7 @@ mod tests {
     use tch::Tensor;
     use caching_runner::common::cachable::DevicesWrap;
     use caching_runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
+    use caching_runner::common::PermitsCtx;
     use caching_runner::common::runnable::AsyncStage;
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::batches::AsyncDataBatch;
@@ -745,7 +746,7 @@ mod tests {
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::hyperparameter::Hyperparameter;
-    use thoosa_shared::traits::SimpleId;
+    use thoosa_shared::traits::{Named, SimpleId};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
@@ -946,9 +947,11 @@ mod tests {
         let ctx = MockRunCtx::purge_gpu_caches_context();
         ctx.expect().with(always()).times(0..).returning( |_| Box::pin(async { Ok(()) }));
 
-        let out = train_label_nets.run(input, Arc::new(RwLock::new(mock_run_ctx::default(1)))).await?;
+        let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
-        with_data!(0, out; |out:&TrainLabelNetsOutput|{
+        let out = train_label_nets.run(input, Arc::clone(&run_ctx)).await?;
+
+        with_data!(run_ctx, 0, out; |out:&TrainLabelNetsOutput|{
 
             debug!("test_train_label_net_3x3: 0. out={out:?}");
 
@@ -1016,7 +1019,7 @@ mod tests {
             resources_0_valid,
             Box::new(|x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>,  x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>, ctx: Arc<RwLock<MockRunCtx>>|{
                 async move {
-                    with_data!(ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<ChannelsData2, SimpleId>], x_0:&[&ThoTensor<ChannelsData2, SimpleId>]|{
+                    with_data!(ctx, ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<ChannelsData2, SimpleId>], x_0:&[&ThoTensor<ChannelsData2, SimpleId>]|{
                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.as_ref().copy()).collect::<Vec<_>>(), 0);
                         let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.as_ref().copy()).collect::<Vec<_>>(), 0);

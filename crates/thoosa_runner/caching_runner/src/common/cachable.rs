@@ -880,7 +880,11 @@ mod tests {
     use crate::oom_handler::{mock_input_context, Adjusters, Contexts, MockRunCtxContext, MockRunnableContext, OOMHandler};
     use crate::oom_handler::test_types::{TestInput, TestOutput};
     use crate::test_utils::MockDataWithId;
-
+    extern crate self as caching_runner;
+    pub use caching_runner::*;
+    use crate::common::PermitsCtx;
+    use thoosa_shared::traits::Named;
+    
     #[tokio::test]
     async fn test_cache_area() -> Result<(), ThoosaError> {
         let ctx = MockGlobalCtx::global_context();
@@ -1009,8 +1013,11 @@ mod tests {
             Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "f"), 0)),
         ];
 
+
+
         //TODO ensure that asserts were actually invoked
-        with_data!(1, wrap_a, [wrap_vec], wrap_b, [wrap_vec_second];
+        let permits_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
+        with_data!(Arc::clone(&permits_ctx), 1, wrap_a, [wrap_vec], wrap_b, [wrap_vec_second];
             |a: &MockDataWithId, first: &[&MockDataWithId], b: &MockDataWithId, second: &[&MockDataWithId]|{
                 assert_eq!(a.device(), &1);
                 assert_eq!(b.device(), &1);
@@ -1114,7 +1121,8 @@ mod tests {
 
         let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), 0));
 
-        with_data!(1, wrap_a;
+        let permits_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
+        with_data!(Arc::clone(&permits_ctx), 1, wrap_a;
             |a: &MockDataWithId|{
                 assert_eq!(a.device(), &1);
                 Ok::<(), ThoosaError>(())
