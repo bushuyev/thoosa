@@ -125,7 +125,7 @@ where
         let mut motif_width = HashSet::new();
         let mut slice_step = HashSet::new();
         for v in &loaded_motif_nets {
-            with_data!(0, v; |v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+            with_data!(stage_ctx, 0, v; |v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
                 motif_width.insert(v.extra().motif_net_params.num_features);
                 slice_step.insert(v.extra().motif_net_params.stride);
 
@@ -346,7 +346,7 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
         let t_1_batch= Arc::clone(&self.batch);
         let motif_net = Arc::clone(&self.motif_net);
 
-        with_data!(to_device_idx, t_1_batch, motif_net;
+        with_data!(permits_ctx, to_device_idx, t_1_batch, motif_net;
             |
              batch_v:&ThoTensor<Batch<ChannelsData2>, SimpleId>,
              batched_motifs_output:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>
@@ -580,6 +580,7 @@ pub(crate) mod tests {
     use tch::nn::{LinearConfig, VarStore};
     use caching_runner::common::cachable::DevicesWrap;
     use caching_runner::common::mock_run_ctx;
+    use caching_runner::common::PermitsCtx;
     use caching_runner::common::runnable::AsyncStage;
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::builder::SeqBuilder;
@@ -595,6 +596,7 @@ pub(crate) mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{CopyToDevice, MotifKind, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::traits::Named;
     use thoosa_shared::traits::SimpleId;
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
@@ -693,9 +695,11 @@ pub(crate) mod tests {
 
         debug!("test_apply_motif_nets_3_channels_1_motif: batch={batch:?}");
 
+        let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
+
         let out = apply_motif_nets.run(
             Arc::new(DevicesWrap::wrap(ThoTensor::new("test_batch".into(), batch), 0)),
-            Arc::new(RwLock::new(mock_run_ctx::default(1)))
+            Arc::clone(&run_ctx)
         ).await?;
 
 
@@ -711,7 +715,7 @@ pub(crate) mod tests {
         let sin_interval_starts_in_resources_a = resource_a_intervals[1][0][0].start;
         let sin_interval_starts_in_resources_b = resource_b_intervals[1][0][0].start;
 
-        with_data!(0, out; |r:&ApplyMotifNetsOutput|{
+        with_data!(run_ctx, 0, out; |r:&ApplyMotifNetsOutput|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r.matches);
 
             let (pulse_matches_vals, pulse_matches_idx) = &r.matches[0].t_ref().topk(1i64, 1, true, true);

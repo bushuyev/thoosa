@@ -4,6 +4,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::{bracketed, parse_macro_input, Expr, ExprClosure, Ident, Result, Token};
 
 struct WithDataInput {
+    permits_ctx: Expr,
     device: Expr,
     args: Vec<Arg>,
     closure: ExprClosure,
@@ -16,6 +17,8 @@ enum Arg {
 
 impl Parse for WithDataInput {
     fn parse(input: ParseStream) -> Result<Self> {
+        let permits_ctx = input.parse::<Expr>()?;
+        input.parse::<Token![,]>()?;
         let device = input.parse::<Expr>()?;
         input.parse::<Token![,]>()?;
 
@@ -40,7 +43,7 @@ impl Parse for WithDataInput {
         input.parse::<Token![;]>()?;
         let closure = input.parse::<ExprClosure>()?;
 
-        Ok(Self { device, args, closure })
+        Ok(Self { permits_ctx, device, args, closure })
     }
 }
 
@@ -51,6 +54,7 @@ pub fn with_data(input: TokenStream) -> TokenStream {
 }
 
 fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
+    let permits_ctx_expr = input.permits_ctx;
     let device_expr = input.device;
     let closure = input.closure;
 
@@ -156,10 +160,18 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
 
     quote! {
         {
-            //TODO add permits check
+            let __with_data_permits_ctx = ::std::sync::Arc::clone(&(#permits_ctx_expr));
             let __with_data_device = #device_expr;
             async {
-                let __device_idx = __with_data_device;
+                let to_device_idx = __with_data_device;
+                let __device_idx = to_device_idx;
+                if __with_data_permits_ctx.read().acquired_permits() == 0 {
+                    let name = __with_data_permits_ctx.read().name();
+                    let result = caching_runner::global_ctx::GlobalCtx::global()
+                        .acquire_many(to_device_idx, 1, ::std::sync::Arc::new(::thoosa_shared::traits::SimpleId(name)))
+                        .await?;
+                    __with_data_permits_ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
+                }
                 #(#prelude)*
                 #(#load_handles)*
                 #(#await_blocks)*
