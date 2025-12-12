@@ -165,17 +165,26 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
             async {
                 let to_device_idx = __with_data_device;
                 let __device_idx = to_device_idx;
-                if __with_data_permits_ctx.read().acquired_permits() == 0 {
+                let mut extra_permits = if __with_data_permits_ctx.read().acquired_permits() == 0 {
                     let name = __with_data_permits_ctx.read().name();
-                    let result = caching_runner::global_ctx::GlobalCtx::global()
+                    // let result = caching_runner::global_ctx::GlobalCtx::global()
+                    //     .acquire_many(to_device_idx, 1, ::std::sync::Arc::new(::thoosa_shared::traits::SimpleId(name)))
+                    //     .await?;
+                    Some(caching_runner::global_ctx::GlobalCtx::global()
                         .acquire_many(to_device_idx, 1, ::std::sync::Arc::new(::thoosa_shared::traits::SimpleId(name)))
-                        .await?;
-                    __with_data_permits_ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
-                }
+                        .await?)
+                } else {
+                    None
+                };
+
+
                 #(#prelude)*
                 #(#load_handles)*
                 #(#await_blocks)*
                 #(#post_load)*
+                if let Some(permits) = extra_permits {
+                   drop(permits);
+                }
                 (#closure)(#(#arg_refs),*)
             }.await
         }

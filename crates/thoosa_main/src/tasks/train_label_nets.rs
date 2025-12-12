@@ -8,7 +8,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use futures_util::future::BoxFuture;
 use futures::FutureExt;
 use futures_util::stream::BoxStream;
-use log::{debug, trace};
+use log::{debug, info, trace};
 use parking_lot::RwLock;
 use polars_arrow::io::iterator::StreamingIterator;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
@@ -43,6 +43,7 @@ use crate::tasks::run_ctx_2::MotifsCtx;
 use rand::{rng, seq::SliceRandom};
 use tch::kind::FLOAT_CPU;
 use tokio::{join, try_join};
+use caching_runner::permits::{RunnerPerm, MAX_PERMITS};
 use thoosa_dummy_data_derive::DummyData;
 use crate::tasks::stages_seq::ABStage;
 
@@ -270,12 +271,7 @@ where
                         opt_config,
 
                     async move  |vs: &VarStore, run_config: TrainLabelNetsRunConfig, _listener| {
-                            if ctx.read().acquired_permits() == 0 { //TODO move to with_data!
-                                let result = GlobalCtx::global()
-                                    .acquire_many(device_idx, 1, out_key.clone())
-                                    .await?;
-                                ctx.write().add_permit(result); //permits can be dropped only from OOM handler or when context is dropped
-                            }
+
                             let apply_motif_nets = Arc::clone(&apply_motif_nets);
 
                             let resources_batch = ResourcesBatch::new(
@@ -677,7 +673,26 @@ where
         fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<ListenerResponse> {
             Box::pin(async {
 
-                C::purge_gpu_caches(Arc::clone(&self.ctx)).await.unwrap();
+                loop {
+                    match GlobalCtx::global().acquire_many(1, MAX_PERMITS, Arc::new(SimpleId::from("PURGE"))).await {
+                        Ok(permits) => {
+                            info!("got {permits:?} purging all");
+                            match C::purge_gpu_caches(Arc::clone(&self.ctx)).await{
+                                Ok(_) => {
+                                    info!("purging done");
+                                    break
+                                }
+                                Err(e) => {
+                                    info!("purging failed {e:?}");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            info!("can't get permits e={e:?}");
+                        }
+                    }
+                }
+
 
                 ListenerResponse::Nope
             })

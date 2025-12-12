@@ -5,7 +5,7 @@ use std::ops::{AddAssign, DivAssign, Range};
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
-use log::debug;
+use log::{debug, info};
 use parking_lot::lock_api::RwLock;
 use tch::IndexOp;
 use tch::Kind::Float;
@@ -86,6 +86,7 @@ where
     where
         R:RunCtx + MotifsCtx + Adjustable + 'static
     {
+        let device_idx = stage_ctx.read().device_idx();
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));
 
         let loaded_motif_nets = futures::stream::iter(
@@ -125,7 +126,7 @@ where
         let mut motif_width = HashSet::new();
         let mut slice_step = HashSet::new();
         for v in &loaded_motif_nets {
-            with_data!(stage_ctx, 0, v; |v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+            with_data!(stage_ctx, device_idx, v; |v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
                 motif_width.insert(v.extra().motif_net_params.num_features);
                 slice_step.insert(v.extra().motif_net_params.stride);
 
@@ -355,7 +356,6 @@ impl WithDataRef for ApplyMotifNetInputDeviceWrapper {
                 do_run(&ApplyMotifNetInput::new(
                     batch_v,
                     batched_motifs_output,
-                    self.slice_step
                 ))
 
         })
@@ -383,6 +383,8 @@ impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNe
         P:PermitsCtx,
         for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
     {
+
+
         let name = permits_ctx.read().name();
         if permits_ctx.read().acquired_permits() == 0 {
             let result = GlobalCtx::global()
@@ -403,7 +405,7 @@ impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNe
 
         let __device_idx = __with_data_device;
         // let __with_data_var_0 = ::std::sync::Arc::clone(&(t_1_batch));
-        let __with_data_var_1 = ::std::sync::Arc::clone(&(motif_net));
+        // let __with_data_var_1 = ::std::sync::Arc::clone(&(motif_net));
 
         // let __with_data_handle_0 = ::tokio::spawn({
         //     let __wrap = ::std::sync::Arc::clone(&__with_data_var_0);
@@ -414,23 +416,25 @@ impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNe
         //     }
         // });
 
-        let __with_data_handle_1 = ::tokio::spawn({
-            let __wrap = ::std::sync::Arc::clone(&__with_data_var_1);
-            let __device_idx = __device_idx;
-            async move {
-                __wrap.load_from_any_device(__device_idx).await?;
-                Ok::<(), ::thoosa_shared::ThoosaError>(())
-            }
-        });
+        // let __with_data_handle_1 = ::tokio::spawn({
+        //     let __wrap = ::std::sync::Arc::clone(&__with_data_var_1);
+        //     let __device_idx = __device_idx;
+        //     async move {
+        //         __wrap.load_from_any_device(__device_idx).await?;
+        //         Ok::<(), ::thoosa_shared::ThoosaError>(())
+        //     }
+        // });
 
         // let __with_data_handle_res_0 = __with_data_handle_0.await?;
         // __with_data_handle_res_0?;
-        let __with_data_handle_res_1 = __with_data_handle_1.await?;
-        __with_data_handle_res_1?;
+        // let __with_data_handle_res_1 = __with_data_handle_1.await?;
+        // let __with_data_handle_res_1 = __with_data_handle_res_1?;
 
         // let __with_data_guard_0 = __with_data_var_0.get_copied(__device_idx).await?;
         // let __with_data_ref_0 = &*__with_data_guard_0;
-        let __with_data_guard_1 = __with_data_var_1.get_copied(__device_idx).await?;
+        let __with_data_guard_1 = motif_net.load_from_any_device_(__device_idx).await?;
+
+        // let __with_data_guard_1 = motif_net.get_copied(__device_idx).await?;
         let __with_data_ref_1 = &*__with_data_guard_1;
 
         // (|batch_v: &ThoTensor<Batch<ChannelsData2>, SimpleId>,
@@ -440,7 +444,6 @@ impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNe
         do_run(&ApplyMotifNetInput::new(
             &selected_batch,
             __with_data_ref_1,
-            100, //TODO slice step - take from train label run config
         ))
 
 
@@ -465,7 +468,6 @@ impl Adjustable for ApplyMotifNetInputDeviceWrapper {}
 
 #[derive(Debug)]
 struct ApplyMotifNetInput<'a> {
-    slice_step:u32,
     batch: &'a ThoTensor<Batch<ChannelsData2>, SimpleId>,
     motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>
 }
@@ -488,8 +490,8 @@ impl Data for ApplyMotifNetInput<'_> {
 }
 
 impl <'a> ApplyMotifNetInput<'a> {
-    pub fn new(batch: &'a ThoTensor<Batch<ChannelsData2>, SimpleId>, motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, slice_step: u32) -> Self {
-        Self {  batch, motif_net, slice_step }
+    pub fn new(batch: &'a ThoTensor<Batch<ChannelsData2>, SimpleId>, motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>) -> Self {
+        Self {  batch, motif_net }
     }
 }
 

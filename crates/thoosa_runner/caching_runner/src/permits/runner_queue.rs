@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use log::trace;
+use log::{info, trace};
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{MyError, ThoosaError};
 use tokio::sync::{Notify, Semaphore, TryAcquireError, mpsc, oneshot};
@@ -140,6 +140,7 @@ impl Arbiter {
                                 super_id = None;
                             }
                             Err(_) => {
+                                info!("Not enough permits yet → wait for notify");
                                 // Not enough permits yet → wait for notify
                             }
                         }
