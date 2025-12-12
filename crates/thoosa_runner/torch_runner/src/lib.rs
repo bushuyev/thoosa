@@ -11,7 +11,6 @@ mod output_builders;
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
 use caching_runner::common::{DropIf, PermitsCtx};
-use caching_runner::common::cachable::WithDataRef;
 use caching_runner::permits::{MAX_PERMITS, NumPermits, RunnerPerm};
 // test-only imports live under cfg(test)
 use thoosa_common::tho_tensor::ThoTensor;

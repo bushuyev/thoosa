@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics};
+use thoosa_shared::traits::{Adjustable, Data, Metrics};
 
 ///A - Selector (range, etc), M - its metrics
 #[derive(Debug)]
@@ -55,7 +55,7 @@ where
 
     async fn adjust(
         &self,
-        adjustable: &A,
+        _adjustable: &A,
         adjust_context: &mut AC,
     ) -> Result<A, ThoosaError> {
 
@@ -115,7 +115,7 @@ where
     R:Stage + Adjustable + 'a,
     B:OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::In<'b>: Data,
-    <<R as Stage>::In<'b> as Data>::Metrics: AddAssign<(<<R as Stage>::In<'b> as Data>::Metrics)>,
+    <<R as Stage>::In<'b> as Data>::Metrics: AddAssign<<<R as Stage>::In<'b> as Data>::Metrics>,
     <<R as Stage>::In<'b> as Data>::Metrics: PartialOrd,
 {
     fn add_partial_output(&mut self, o: R::Out){
@@ -144,7 +144,7 @@ where
     R:Stage + Adjustable + 'a,
     B:OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::In<'a>: Data,
-    <<R as Stage>::In<'a> as Data>::Metrics: AddAssign<(<<R as Stage>::In<'a> as Data>::Metrics)>,
+    <<R as Stage>::In<'a> as Data>::Metrics: AddAssign<<<R as Stage>::In<'a> as Data>::Metrics>,
     <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
 {
     pub fn new(
@@ -165,7 +165,7 @@ where
     R:Stage + Adjustable + 'a,
     B:OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::In<'a>: Data,
-    <<R as Stage>::In<'a> as Data>::Metrics: AddAssign<(<<R as Stage>::In<'a> as Data>::Metrics)>,
+    <<R as Stage>::In<'a> as Data>::Metrics: AddAssign<<<R as Stage>::In<'a> as Data>::Metrics>,
     <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
 {
     type Metrics = <<R as Stage>::In<'a> as Data>::Metrics;
