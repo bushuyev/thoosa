@@ -9,7 +9,7 @@ use std::ops::Range;
 use std::time::Instant;
 use std::{fs, ptr};
 
-use log::{debug, error, trace, warn};
+use log::{debug, error, info, trace, warn};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
 use plotters::drawing::IntoDrawingArea;
@@ -1914,11 +1914,13 @@ where
 
             debug!("train: 3. cuda_mem={:?}  optimizer_size={}",cuda_mem(),optimizer_mem_size(&opt));
             debug!("train: device={:?}  backward_step done in {}",device,t1.elapsed().as_millis());
+
+            if let  Some(listener) = listener.as_mut() {
+                listener.on_cycle(0, 0.0).await;
+            }
         }
 
-        if let  Some(listener) = listener.as_mut() {
-            listener.on_cycle(0, 0.0).await;
-        }
+
 
 
         if idx % 10 == 0 || idx == cycles - 1 {
@@ -1955,7 +1957,7 @@ where
             }
 
         }
-
+        info!(".");
         std::io::stdout().flush()?;
     }
     debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
