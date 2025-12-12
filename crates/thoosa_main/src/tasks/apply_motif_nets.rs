@@ -383,9 +383,10 @@ impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNe
         P:PermitsCtx,
         for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
     {
+        let name = permits_ctx.read().name();
         if permits_ctx.read().acquired_permits() == 0 {
             let result = GlobalCtx::global()
-                .acquire_many(to_device_idx, 1, Arc::new(SimpleId("ApplyMotifNetInput")))
+                .acquire_many(to_device_idx, 1, Arc::new(SimpleId(name)))
                 .await?;
             permits_ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
         }
