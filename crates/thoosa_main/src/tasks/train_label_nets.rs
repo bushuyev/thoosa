@@ -8,7 +8,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use futures_util::future::BoxFuture;
 use futures::FutureExt;
 use futures_util::stream::BoxStream;
-use log::{debug, trace};
+use log::{debug, info, trace};
 use parking_lot::RwLock;
 use polars_arrow::io::iterator::StreamingIterator;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
@@ -43,6 +43,7 @@ use crate::tasks::run_ctx_2::MotifsCtx;
 use rand::{rng, seq::SliceRandom};
 use tch::kind::FLOAT_CPU;
 use tokio::{join, try_join};
+use caching_runner::permits::{RunnerPerm, MAX_PERMITS};
 use thoosa_dummy_data_derive::DummyData;
 use crate::tasks::stages_seq::ABStage;
 
@@ -214,6 +215,7 @@ where
         let slices_len = (max_input as u32 - self.apply_motif_nets.motif_width)/self.apply_motif_nets.slice_step + 1;
         let num_nets = self.apply_motif_nets.num_nets() as u32;
 
+
         debug!("TrainLabelNets::run: channels={channels} max_input={max_input} self.apply_motif_nets.slice_step={} slices_len={slices_len}", self.apply_motif_nets.slice_step);
 
         async move {
@@ -264,20 +266,16 @@ where
                     let resources_1_valid = Arc::new(resources_1.1);
                     let resources_0_train = Arc::new(resources_0.0.clone());
                     let resources_0_valid = Arc::new(resources_0.1.clone());
-
+                    let label = label.clone();
+                    let label_ = label.clone();
                     //TODO async OOM
                     opt_train_2(
                         opt_config,
 
                     async move  |vs: &VarStore, run_config: TrainLabelNetsRunConfig, _listener| {
-                            if ctx.read().acquired_permits() == 0 { //TODO move to with_data!
-                                let result = GlobalCtx::global()
-                                    .acquire_many(device_idx, 1, out_key.clone())
-                                    .await?;
-                                ctx.write().add_permit(result); //permits can be dropped only from OOM handler or when context is dropped
-                            }
-                            let apply_motif_nets = Arc::clone(&apply_motif_nets);
 
+                            let apply_motif_nets = Arc::clone(&apply_motif_nets);
+                            let label = label.clone();
                             let resources_batch = ResourcesBatch::new(
                                 Arc::clone(&loader),
                                 run_config.common_training_args.batch_size,
@@ -339,7 +337,7 @@ where
                             };
 
                             let params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
-                            let loss = train_label_net_2(&run_config, &resources_batch, &ThoDevice::from(device_idx), vs, params.clone(), Arc::clone(&ctx)).await?;
+                            let loss = train_label_net_2(&run_config, &resources_batch, &ThoDevice::from(device_idx), vs, params.clone(), Arc::clone(&ctx), &label).await?;
 
                             Ok((loss, params))
                         },
@@ -351,7 +349,7 @@ where
                         debug!("TrainLabelNet::run: label_node_params={label_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
                         TrainLabelNetsRunConfigResult::new(
                             select_motifs_run_ids,//TODO
-                            label,
+                            label_,
                             min_loss,
                             label_node_params,
                             train_motifs_nets_run_config,
@@ -637,7 +635,8 @@ pub async fn train_label_net_2<C>(
     batch: &dyn AsyncDataBatch<MotifProbability, LabelProbability>,
     device: &Device,
     vs: &VarStore, net_params: LabelNetParams,
-    ctx: Arc<RwLock<C>>
+    ctx: Arc<RwLock<C>>,
+    label: &str
 ) -> Result<f32, ThoosaError>
 where
     C:RunCtx
@@ -660,14 +659,15 @@ where
     pub struct PurgeCacheListener<C>
     where
         C:RunCtx{
+        permits_key:String,
         ctx:Arc<RwLock<C>>
     };
 
     impl <C>  PurgeCacheListener<C>
     where
         C:RunCtx{
-        pub fn new(ctx: Arc<RwLock<C>>) -> Self {
-            Self { ctx }
+        pub fn new(ctx: Arc<RwLock<C>>, permits_key:String) -> Self {
+            Self { ctx, permits_key }
         }
     }
 
@@ -675,9 +675,30 @@ where
     where
         C:RunCtx{
         fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<ListenerResponse> {
-            Box::pin(async {
+            let acquired_permits = self.ctx.read().acquired_permits();
+            Box::pin(async move {
 
-                C::purge_gpu_caches(Arc::clone(&self.ctx)).await.unwrap();
+                loop {
+
+                    match GlobalCtx::global().acquire_many(1, MAX_PERMITS-acquired_permits, Arc::new(SimpleId::from(self.permits_key.clone()))).await {
+                        Ok(permits) => {
+                            info!("got {permits:?} purging all");
+                            match C::purge_gpu_caches(Arc::clone(&self.ctx)).await{
+                                Ok(_) => {
+                                    info!("purging done");
+                                    break
+                                }
+                                Err(e) => {
+                                    info!("purging failed {e:?}");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            info!("can't get permits e={e:?}");
+                        }
+                    }
+                }
+
 
                 ListenerResponse::Nope
             })
@@ -706,7 +727,7 @@ where
             debug!("train_label_net: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
             t
         },
-        Some(&mut PurgeCacheListener::new(ctx)),
+        Some(&mut PurgeCacheListener::new(ctx,  format!("PURGE_{}", label))),
     )
         .await?;
 

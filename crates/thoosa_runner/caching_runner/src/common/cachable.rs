@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
 use futures_util::{FutureExt, StreamExt, TryStreamExt};
 use futures_util::future::{BoxFuture, Shared, join_all, try_join_all};
-use log::{debug, trace};
+use log::{debug, info, trace};
 use mockall_double::double;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -471,7 +471,7 @@ impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O
         }
     }
 
-    async fn load_from_any_device_(
+    pub /*remove pub*/async fn load_from_any_device_(
         &self,
         to_device_idx: usize,
     ) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError> {
@@ -548,6 +548,7 @@ impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O
                 |val: &Option<O>| val.as_ref().expect("no value behind guard"),
             ))
         } else {
+            info!("MyError::NotReady: {:?} from_device_idx={from_device_idx}", self.id);
             Err(MyError::NotReady.into())
         }
     }
