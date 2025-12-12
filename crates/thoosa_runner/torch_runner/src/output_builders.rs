@@ -1,8 +1,7 @@
 use thoosa_common::tho_tensor::ThoTensor;
 use caching_runner::adjusters::splits::OutputBuilder;
 use std::fmt::Debug;
-use std::marker::PhantomData;
-use log::{debug, warn};
+use log::debug;
 use tch::Device;
 use tch::Kind;
 use thoosa_common::dims::Dims;

@@ -1,13 +1,12 @@
+#[cfg(test)]
 use std::ops::Range;
 #[cfg(test)]
 use crate::common::*;
-#[cfg(test)]
-use ambassador::Delegate;
 use async_trait::async_trait;
 use log::debug;
 use thoosa_shared::{CopyToDevice, ThoosaError};
-use thoosa_shared::traits::*;
-use thoosa_shared::traits::{DummyCachableId, MockWithId};
+#[cfg(test)]
+use thoosa_shared::traits::{Data, DummyCachableId, MockData, MockWithId, Select, WithId};
 
 #[derive(Debug, Clone)]
 pub struct DummyTensor(pub Vec<f32>);
@@ -42,14 +41,21 @@ pub fn parse_numeric_part(name: &str) -> Option<f64> {
     }
 }
 
-#[derive(Debug, Delegate)]
-// #[delegate(Data, target = "data")]
-#[delegate(WithId, target = "with_id")]
 #[cfg(test)]
+#[derive(Debug)]
 pub struct MockDataWithId {
     data: MockData,
     with_id: MockWithId,
     device: usize,
+}
+
+#[cfg(test)]
+impl WithId for MockDataWithId {
+    type ID = DummyCachableId;
+
+    fn id(&self) -> &Self::ID {
+        self.with_id.id()
+    }
 }
 
 #[cfg(test)]

@@ -1,29 +1,24 @@
-use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
 use std::future::Future;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use dashmap::mapref::multiple::RefMulti;
 use rand::distr::{Alphanumeric, SampleString};
 use log::{debug, error};
-use tokio::io::AsyncWriteExt;
 use tokio::runtime::Handle;
-use futures::executor::block_on;
-use futures_util::future::{join_all, try_join_all};
 use futures_util::{stream, StreamExt, TryStreamExt};
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{CachableIdTr, Data, SimpleId, WithId};
+use thoosa_shared::traits::{CachableIdTr, Data, WithId};
 use thoosa_shared::CopyToDevice;
-use crate::common::cachable::{Cached, DevicesWrap};
-use crate::common::{OutId};
-use crate::common::runnable::Stage;
+use crate::common::cachable::DevicesWrap;
 use crate::global_ctx::GlobalCtx;
 use crate::purge::FuturesRunnerMapPurger;
+
+#[cfg(test)]
+use thoosa_shared::traits::SimpleId;
 
 
 ///To keep tensors in async functions in between async calls so that data can be dumped to CPU when competing task wins 100 Permits and requests others to be dumped.

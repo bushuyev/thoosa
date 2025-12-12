@@ -6,23 +6,21 @@ use crate::common::*;
 use crate::global_ctx::GlobalCtx;
 use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
-use futures_util::{FutureExt, StreamExt, TryStreamExt};
-use futures_util::future::{BoxFuture, Shared, join_all, try_join_all};
+use futures_util::FutureExt;
+use futures_util::future::{BoxFuture, Shared, try_join_all};
 use log::{debug, trace};
 use mockall_double::double;
 use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::mem;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use thoosa_shared::CopyToDevice;
 use thoosa_shared::MyError;
 use tokio::sync::{Notify, RwLockReadGuard};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Data, Select};
-use thoosa_with_data::with_data;
 
 #[async_trait]
 pub trait Cached: AsyncStage
@@ -768,7 +766,7 @@ where
     async fn with_selected_data_ref<'o, R, F, P>(
         &self,
         to_device_idx: usize,
-        permits_ctx: Arc<parking_lot::RwLock<P>>,
+        _permits_ctx: Arc<parking_lot::RwLock<P>>,
         selector: S,
         trace_ctx: Option<&'static str>,
         do_run: F,
@@ -820,7 +818,7 @@ where
     S:Debug + Clone + 'static,
     O: Select<S, Output=O> + Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
 {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, _permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>

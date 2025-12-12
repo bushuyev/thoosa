@@ -3,16 +3,12 @@
 use crate::permits::{NumPermits, RunnerPerm};
 use ambassador::delegatable_trait;
 use futures_util::future::BoxFuture;
-use async_trait::async_trait;
 use parking_lot::RwLock;
 use runnable::Stage;
-use std::fmt::{Debug, Display, Formatter};
-use std::hash::Hash;
-use std::ops::Deref;
+use std::fmt::Debug;
 use std::sync::Arc;
-use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{CachableIdTr, Metrics, Named, WithId};
+use thoosa_shared::traits::{Named, WithId};
 
 pub mod cachable;
 pub mod runnable;
@@ -49,7 +45,7 @@ pub trait RunCtx: PermitsCtx {
 
 #[cfg_attr(test, allow(dead_code))]
 pub mod mock_run_ctx {
-    use super::{mock_run_ctx, DropIf, PermitsCtx, RunCtx};
+    use super::{DropIf, PermitsCtx, RunCtx};
     use crate::permits::{NumPermits, RunnerPerm};
     use futures_util::future::BoxFuture;
     use mockall::mock;
