@@ -36,7 +36,8 @@ use crate::my_tch::{LossFp, ThoModule};
 use crate::batches::AsyncDataBatch;
 use crate::builder::SeqBuilder;
 use crate::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
+use futures_util::future::BoxFuture;
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -1850,8 +1851,8 @@ pub trait DataBatch<D: Dims> {
 pub trait SplittableDataBatch<D: Dims>: DataBatch<D> + Splittable<1> + Debug {}
 
 pub trait TrainListener: Send + Sync {
-    fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> ListenerResponse {
-        ListenerResponse::Nope
+    fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<ListenerResponse> {
+        async {ListenerResponse::Nope}.boxed()
     }
     fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse;
 }
@@ -1915,6 +1916,9 @@ where
             debug!("train: device={:?}  backward_step done in {}",device,t1.elapsed().as_millis());
         }
 
+        if let  Some(listener) = listener.as_mut() {
+            listener.on_cycle(0, 0.0).await;
+        }
 
 
         if idx % 10 == 0 || idx == cycles - 1 {
