@@ -14,7 +14,7 @@ use tch::Kind::Float;
 use tch::{Device, Tensor};
 use thoosa_shared::applicables_runner::{
     CachableId, DataInDevices, DeviceThreadPools, FuturesRunner, FuturesRunnerMap, Input,
-    MapWithThread, Output, RunCtx, Runner, Statistics, ToOrdinal,
+    MapWithThread, Output, ApplicableRunCtx, Runner, Statistics, ToOrdinal,
 };
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{Cachable, Runnable};
@@ -100,7 +100,7 @@ impl ThoRunCtx {
     }
 }
 
-impl RunCtx for ThoRunCtx {
+impl ApplicableRunCtx for ThoRunCtx {
     fn into_cached_iter_mut(self) -> impl Iterator<Item = Vec<CachableId>> {
         [self.loaded, self.find_motifs, self.motif_nets].into_iter()
     }

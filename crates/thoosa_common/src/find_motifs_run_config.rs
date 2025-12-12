@@ -19,7 +19,7 @@ use thoosa_properties_map::FromHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::applicables_runner::{CachableId, Input, Output, RunCtx, Runner, ToOrdinal};
+use thoosa_shared::applicables_runner::{CachableId, Input, Output, ApplicableRunCtx, Runner, ToOrdinal};
 use thoosa_shared::run_configs::{Cachable, RunConfig, RunId, Runnable};
 use thoosa_shared::traits::WithId;
 use thoosa_shared::val::Val;
@@ -385,7 +385,7 @@ impl Output for FindMotifsApplicableOutput {
 pub struct DummyRunner;
 #[derive(Debug)]
 pub struct DummyRunnerCtx;
-impl RunCtx for DummyRunnerCtx {
+impl ApplicableRunCtx for DummyRunnerCtx {
     fn cache_area(&self) -> u64 {
         todo!()
     }
