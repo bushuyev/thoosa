@@ -232,8 +232,6 @@ where
             .map(|label_tain_and_valid_sets|{
 
 
-
-
                 let opt_config = Arc::clone(&self.opt_config);
                 let ctx = Arc::clone(&ctx);
 
@@ -759,6 +757,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_train_label_net_3x3() -> Result<(), ThoosaError> {
+
         let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
