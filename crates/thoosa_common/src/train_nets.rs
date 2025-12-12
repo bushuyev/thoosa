@@ -2309,7 +2309,7 @@ impl LabelNetParams {
 }
 
 pub fn any_len_label_node(params: &LabelNetParams) -> Node {
-    let num_features = 1000;//params.motif_nets;
+    let num_features = params.slices_len;//params.motif_nets;
     debug!("any_len_label_node: num_features={num_features}");
 
     SeqBuilder::new(num_features/*30000*/, None)
@@ -2366,7 +2366,8 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
                 let conct = Tensor::concat(res.as_slice(), 1);
                 debug!("any_len_label_node: conct={:?}", conct.size());
 
-                let r = conct.flatten(1, 2).to(Cpu).adaptive_avg_pool1d(num_features as i64).to(Cuda(0));//.i((0, ..num_features as i64)); //
+                // let r = conct.flatten(1, 2).adaptive_avg_pool1d(num_features as i64);//.i((0, ..num_features as i64)); //
+                let r = conct.mean_dim(1, false, None);//.i((0, ..num_features as i64)); //
                 debug!("any_len_label_node: r.size={:?}", r.size());
 
                 r

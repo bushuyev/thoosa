@@ -277,6 +277,10 @@ where
                                         let (x,y) = with_data!(ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<ChannelsData2, SimpleId>], x_0:&[&ThoTensor<ChannelsData2, SimpleId>]|{
                                             debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
 
+                                            let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.size()[1]).max().expect("no max_input");
+
+                                            debug!("ResourcesBatch::train_batch_iter: max_input={max_input}");
+
                                             let x_1 = Tensor::stack(&x_1.into_iter().map(|v|{
                                                 Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())//TODO
                                             }).collect::<Result<Vec<_>, ThoosaError>>()?, 0);
@@ -850,7 +854,7 @@ mod tests {
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptMaxEvals), Val::Int(10)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptNInit), Val::Int(10)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), Val::Int(3)),
-                    NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::SlicesLen)), Val::Int(10)),
+                    NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::SlicesLen)), Val::Int(1000)),//TODO used as num features in any_len_label_node
                 ]),
                 vec![
                     // NamedRange::new(TrainLabelNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
