@@ -67,3 +67,7 @@ then change From<&str> for MotifsBy::from so that
 
 
 motif_id handling should not be affected. Update usage sites as needed.  Add simple test.
+
+
+refactor Arbiter (crates/thoosa_runner/caching_runner/src/permits/runner_queue.rs:16) to keep track of granted permits. Add another HashMap similar to fail_counts and put requester_id with granted permits count whenever try_acquire_many_owned succeeds.
+The values should be removed when RunnerPerm is dropped. This can be done by adding requester_id to RunnerPerm and  replacing RunnerPerm::notify:Option<Arc<Notify>> with something what can be used to send requester_id back to Arbiter from RunnerPerm::drop (one shot channel or wrapper struct keeping both Notify and requester_id)
