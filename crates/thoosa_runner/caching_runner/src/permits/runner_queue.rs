@@ -22,10 +22,11 @@ pub struct Arbiter {
     shutdown: Arc<AtomicBool>,
 }
 
+#[derive(Debug)]
 struct Req {
     needed: NumPermits,
     reply: oneshot::Sender<Result<RunnerPerm, ThoosaError>>,
-    out_id: Arc<dyn CachableIdTr>,
+    requester_id: Arc<dyn CachableIdTr>,
 }
 
 impl Arbiter {
@@ -53,7 +54,7 @@ impl Arbiter {
     async fn send_acquire_rq(
         &self,
         mut needed: NumPermits,
-        out_id: Arc<dyn CachableIdTr>,
+        requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoosaError> {
         // Clamp to capacity to avoid unfulfillable requests.
         if needed as usize > self.capacity as usize {
@@ -69,7 +70,7 @@ impl Arbiter {
         tx.send(Req {
             needed,
             reply,
-            out_id,
+            requester_id,
         })
         .await
         .map_err(|_| MyError::SomethingElse("arbiter closed".to_string()))?;
@@ -122,7 +123,7 @@ impl Arbiter {
                     let mut i = 0;
 
                     while i < q.len() {
-                        if !q[i].out_id.as_ref().eq(sc.as_ref()) {
+                        if !q[i].requester_id.as_ref().eq(sc.as_ref()) {
                             let Req { reply, .. } = q.remove(i).unwrap();
                             let _ = reply.send(Err(MyError::OutOfPermits.into()));
                         } else {
@@ -130,17 +131,17 @@ impl Arbiter {
                         }
                     }
                     // Try to grant full capacity to the supertask request (if present).
-                    if let Some(pos) = q.iter().position(|r| r.out_id.as_ref().eq(sc.as_ref())) {
+                    if let Some(pos) = q.iter().position(|r| r.requester_id.as_ref().eq(sc.as_ref())) {
                         match Arc::clone(&sem).try_acquire_many_owned(capacity) {
                             Ok(inner) => {
-                                let Req { reply, out_id, .. } = q.remove(pos).unwrap();
+                                let Req { reply, requester_id: out_id, .. } = q.remove(pos).unwrap();
                                 let _ = reply
                                     .send(Ok(RunnerPerm::with_notify(inner, Arc::clone(&notify))));
                                 fail_counts.remove(&out_id);
                                 super_id = None;
                             }
                             Err(_) => {
-                                info!("Not enough permits yet → wait for notify");
+                                info!("Not enough permits yet → wait for notify. super_id={super_id:?} q={q:?}");
                                 // Not enough permits yet → wait for notify
                             }
                         }
@@ -157,7 +158,7 @@ impl Arbiter {
                             let Req {
                                 needed: _,
                                 reply,
-                                out_id,
+                                requester_id: out_id,
                             } = q.pop_front().unwrap();
                             let _ =
                                 reply.send(Ok(RunnerPerm::with_notify(inner, Arc::clone(&notify))));
@@ -168,7 +169,7 @@ impl Arbiter {
                         Err(TryAcquireError::NoPermits) => {
                             if q.len() >= 2 && front.needed > 1 {
                                 // Pop and fail the head to trigger drop/degradation.
-                                let Req { reply, out_id, .. } = q.pop_front().unwrap();
+                                let Req { reply, requester_id: out_id, .. } = q.pop_front().unwrap();
                                 let _ = reply.send(Err(MyError::OutOfPermits.into()));
                                 let c = fail_counts.entry(out_id.clone()).or_insert(0);
                                 *c += 1;
@@ -203,11 +204,11 @@ impl Arbiter {
 
                 // If there is a supertask pending, try to serve it with full capacity now.
                 if let Some(sc) = super_id.clone() {
-                    if let Some(pos) = q.iter().position(|r| r.out_id.as_ref().eq(sc.as_ref())) {
+                    if let Some(pos) = q.iter().position(|r| r.requester_id.as_ref().eq(sc.as_ref())) {
 
                         match Arc::clone(&sem).try_acquire_many_owned(capacity) {
                             Ok(inner) => {
-                                let Req { reply, out_id, .. } = q.remove(pos).unwrap();
+                                let Req { reply, requester_id: out_id, .. } = q.remove(pos).unwrap();
                                 let _ = reply
                                     .send(Ok(RunnerPerm::with_notify(inner, Arc::clone(&notify))));
                                 fail_counts.remove(&out_id);
@@ -376,7 +377,7 @@ mod tests {
             .send(Req {
                 needed: 1,
                 reply,
-                out_id: Arc::new(SimpleId::from("b")) as Arc<dyn CachableIdTr>,
+                requester_id: Arc::new(SimpleId::from("b")) as Arc<dyn CachableIdTr>,
             })
             .await
             .unwrap();
