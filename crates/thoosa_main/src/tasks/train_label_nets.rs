@@ -727,7 +727,7 @@ where
             debug!("train_label_net: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
             t
         },
-        Some(&mut PurgeCacheListener::new(ctx,  format!("PURGE_{}", label))),
+        Some(&mut PurgeCacheListener::new(ctx,  format!("Train_{}", label))),
     )
         .await?;
 

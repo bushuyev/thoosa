@@ -1,8 +1,8 @@
-use crate::permits::{NumPermits, PermitSource, RunnerPerm};
+use crate::permits::{DropSignal, NumPermits, PermitSource, RunnerPerm};
 use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use log::{info, trace};
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{MyError, ThoosaError};
@@ -21,6 +21,7 @@ pub struct Arbiter {
     capacity: NumPermits,
     worker: Option<JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
+    granted_counts_len: Arc<AtomicUsize>,
 }
 
 #[derive(Debug)]
@@ -36,10 +37,12 @@ impl Arbiter {
         let sem = Arc::new(Semaphore::new(capacity as usize));
         let notify = Arc::new(Notify::new());
         let shutdown = Arc::new(AtomicBool::new(false));
+        let granted_counts_len = Arc::new(AtomicUsize::new(0));
         let worker = Self::spawn(
             Arc::clone(&sem),
             Arc::clone(&notify),
             Arc::clone(&shutdown),
+            Arc::clone(&granted_counts_len),
             rx,
         );
         Self {
@@ -49,6 +52,7 @@ impl Arbiter {
             capacity,
             worker: Some(worker),
             shutdown,
+            granted_counts_len,
         }
     }
 
@@ -94,6 +98,7 @@ impl Arbiter {
         sem: Arc<Semaphore>,
         notify: Arc<Notify>,
         shutdown: Arc<AtomicBool>,
+        granted_counts_len: Arc<AtomicUsize>,
         mut rx: mpsc::Receiver<Req>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
@@ -101,10 +106,13 @@ impl Arbiter {
 
             // Track repeated OutOfPermits per out_id to trigger escalation.
             let mut fail_counts: HashMap<Arc<dyn CachableIdTr>, u32> = HashMap::new();
+            // Track permits granted per requester until dropped.
+            let mut granted_counts: HashMap<Arc<dyn CachableIdTr>, usize> = HashMap::new();
             // When set, only this out_id may receive permits; others get OutOfPermits immediately.
             let mut super_id: Option<Arc<dyn CachableIdTr>> = None;
             const SUPERTASK_FAIL_THRESHOLD: u32 = 3;
             let capacity: u32 = sem.available_permits() as u32;
+            let (drop_tx, mut drop_rx) = mpsc::unbounded_channel::<Arc<dyn CachableIdTr>>();
             loop {
                 if shutdown.load(Ordering::Acquire) {
                     while let Some(Req { reply, .. }) = q.pop_front() {
@@ -137,14 +145,24 @@ impl Arbiter {
                         match Arc::clone(&sem).try_acquire_many_owned(capacity) {
                             Ok(inner) => {
                                 let Req { reply, requester_id, .. } = q.remove(pos).unwrap();
+                                granted_counts.insert(requester_id.clone(), inner.num_permits());
+                                granted_counts_len.store(granted_counts.len(), Ordering::Release);
+                                let perm = RunnerPerm::with_drop_signal(
+                                    inner,
+                                    DropSignal::new(
+                                        Arc::clone(&notify),
+                                        drop_tx.clone(),
+                                        Arc::clone(&requester_id),
+                                    ),
+                                );
                                 let _ = reply
-                                    .send(Ok(RunnerPerm::with_notify(inner, Arc::clone(&notify))));
+                                    .send(Ok(perm));
                                 fail_counts.remove(&requester_id);
                                 super_id = None;
                             }
                             Err(e) => {
                                 debug!("Arbiter::spawn: e={e:?}");
-                                info!("Not enough permits yet → wait for notify. super_id={super_id:?} q={q:?}");
+                                info!("Not enough permits yet → wait for notify. super_id={super_id:?} q={q:?} granted_counts={granted_counts:?}");
                                 // Not enough permits yet → wait for notify
                             }
                         }
@@ -163,8 +181,16 @@ impl Arbiter {
                                 reply,
                                 requester_id,
                             } = q.pop_front().unwrap();
-                            let _ =
-                                reply.send(Ok(RunnerPerm::with_notify(inner, Arc::clone(&notify))));
+                            granted_counts.insert(requester_id.clone(), inner.num_permits());
+                            granted_counts_len.store(granted_counts.len(), Ordering::Release);
+                            let _ = reply.send(Ok(RunnerPerm::with_drop_signal(
+                                inner,
+                                DropSignal::new(
+                                    Arc::clone(&notify),
+                                    drop_tx.clone(),
+                                    Arc::clone(&requester_id),
+                                ),
+                            )));
                             // Success → reset failure count for this context
                             fail_counts.remove(&requester_id);
                             // loop to try the new head
@@ -205,6 +231,10 @@ impl Arbiter {
                             q.push_back(req);
                         }
                     }
+                    Some(dropped) = drop_rx.recv() => {
+                        granted_counts.remove(&dropped);
+                        granted_counts_len.store(granted_counts.len(), Ordering::Release);
+                    }
                     _ = notify.notified() => {
                         // someone dropped a permit → try to serve head again
                     }
@@ -220,8 +250,16 @@ impl Arbiter {
                         match Arc::clone(&sem).try_acquire_many_owned(capacity) {
                             Ok(inner) => {
                                 let Req { reply, requester_id: out_id, .. } = q.remove(pos).unwrap();
-                                let _ = reply
-                                    .send(Ok(RunnerPerm::with_notify(inner, Arc::clone(&notify))));
+                                granted_counts.insert(out_id.clone(), inner.num_permits());
+                                granted_counts_len.store(granted_counts.len(), Ordering::Release);
+                                let _ = reply.send(Ok(RunnerPerm::with_drop_signal(
+                                    inner,
+                                    DropSignal::new(
+                                        Arc::clone(&notify),
+                                        drop_tx.clone(),
+                                        Arc::clone(&out_id),
+                                    ),
+                                )));
                                 fail_counts.remove(&out_id);
                                 super_id = None;
                             }
@@ -408,6 +446,25 @@ mod tests {
         // The waiting receiver should see an error
         let res = recv.await;
         assert!(matches!(res, Ok(Err(_)) | Err(_)));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn granted_counts_are_cleared_on_drop() {
+        use tokio::time::{Duration, sleep};
+
+        let arb = Arbiter::new(2);
+        let requester_id = Arc::new(SimpleId::from("granted-tracking")) as Arc<dyn CachableIdTr>;
+
+        let permit = arb
+            .send_acquire_rq(1, Arc::clone(&requester_id))
+            .await
+            .unwrap();
+        assert_eq!(arb.granted_counts_len.load(Ordering::SeqCst), 1);
+
+        drop(permit);
+        sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(arb.granted_counts_len.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test(flavor = "multi_thread")]
