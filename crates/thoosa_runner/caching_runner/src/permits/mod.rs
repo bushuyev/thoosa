@@ -5,7 +5,7 @@ use std::sync::Arc;
 use log::trace;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::CachableIdTr;
-use tokio::sync::{Notify, OwnedSemaphorePermit};
+use tokio::sync::{Notify, OwnedSemaphorePermit, mpsc};
 
 pub mod runner_queue;
 pub mod runner_semaphore;
@@ -44,7 +44,27 @@ pub type NumPermits = u8;
 
 pub struct RunnerPerm {
     inner: OwnedSemaphorePermit,
-    notify: Option<Arc<Notify>>,
+    drop_signal: Option<DropSignal>,
+}
+
+pub struct DropSignal {
+    notify: Arc<Notify>,
+    drop_tx: mpsc::UnboundedSender<Arc<dyn CachableIdTr>>,
+    requester_id: Arc<dyn CachableIdTr>,
+}
+
+impl DropSignal {
+    pub fn new(
+        notify: Arc<Notify>,
+        drop_tx: mpsc::UnboundedSender<Arc<dyn CachableIdTr>>,
+        requester_id: Arc<dyn CachableIdTr>,
+    ) -> Self {
+        Self {
+            notify,
+            drop_tx,
+            requester_id,
+        }
+    }
 }
 
 impl Debug for RunnerPerm {
@@ -64,14 +84,14 @@ impl RunnerPerm {
     pub fn new(inner: OwnedSemaphorePermit) -> Self {
         Self {
             inner,
-            notify: None,
+            drop_signal: None,
         }
     }
 
-    pub fn with_notify(inner: OwnedSemaphorePermit, notify: Arc<Notify>) -> Self {
+    pub fn with_drop_signal(inner: OwnedSemaphorePermit, drop_signal: DropSignal) -> Self {
         Self {
             inner,
-            notify: Some(notify),
+            drop_signal: Some(drop_signal),
         }
     }
 }
@@ -81,8 +101,9 @@ impl Drop for RunnerPerm {
         trace!("Drop for RunnerPerm::drop");
         // Releasing permits is done by tokio::OwnedSemaphorePermit’s Drop.
         // We only need to wake the arbiter to re-check the head of queue.
-        if let Some(notify) = self.notify.as_ref() {
-            notify.notify_one();
+        if let Some(drop_signal) = self.drop_signal.take() {
+            let _ = drop_signal.drop_tx.send(drop_signal.requester_id);
+            drop_signal.notify.notify_one();
         }
     }
 }
