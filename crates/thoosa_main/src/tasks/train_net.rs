@@ -58,17 +58,10 @@ pub struct TrainNetOutput {
 }
 
 impl TrainNetOutput {
-    pub fn new(id: SimpleId) -> Self {
+    pub fn new(id: SimpleId, result: TrainLabelNetsRunConfigResult) -> Self {
         Self {
             id,
-            r:TrainLabelNetsRunConfigResult::new(
-                vec![],
-                "xxx".to_string(),
-                0.0,
-                LabelNetParams::new(0, 0, 0, 0,  LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams{})),
-                TrainLabelNetsRunConfig::new(None, CommonTrainingRunConfig::new(0,0, 0.0, 0, 0), LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs{ num_layers: 0, slices_len: 0 })),
-                VarStore::new(Cpu)
-            )
+            r: result
         }
     }
 }
@@ -183,7 +176,7 @@ where
         async move {
 
 
-            opt_train_2::<_, _, _, LabelNetParams>(
+            let (VarStore, N, R, f32) = opt_train_2::<_, _, _, LabelNetParams>(
                 Arc::clone(&self.opt_config),
                 async move |vs: &VarStore, run_config: RC, _listener| {
 
@@ -231,7 +224,14 @@ where
                 "labels",
             ).await?;
 
-            Ok(Arc::new(DevicesWrap::wrap_cpu(TrainNetOutput::new("".into()))))
+            Ok(Arc::new(DevicesWrap::wrap_cpu(TrainNetOutput::new("".into(), TrainLabelNetsRunConfigResult::new(
+                vec![],
+                "xxx".to_string(),
+                0.0,
+                LabelNetParams::new(0, 0, 0, 0,  LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams{})),
+                TrainLabelNetsRunConfig::new(None, CommonTrainingRunConfig::new(0,0, 0.0, 0, 0), LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs{ num_layers: 0, slices_len: 0 })),
+                VarStore::new(Cpu)
+            )))))
         }
     }
 }
