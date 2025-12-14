@@ -13,7 +13,7 @@ use thoosa_common::batches::AsyncDataBatch;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{opt_train_2, CommonTrainingRunConfig, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{opt_train_2, CommonTrainingRunConfig, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetTypeArgs, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::train_3;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -52,21 +52,33 @@ impl WithId for TrainNetInput {
 
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
-pub struct TrainNetOutput {
+pub struct TrainNetOutput<N, R>
+where
+    N:Debug + Send + Sync + 'static,
+    R:Debug + Send + Sync + 'static,
+{
     id:SimpleId,
-    pub r:TrainLabelNetsRunConfigResult
+    pub var_store: VarStore,
+    pub node_params:N,
+    pub run_config:R,
+    pub min_loss:f32
 }
 
-impl TrainNetOutput {
-    pub fn new(id: SimpleId, result: TrainLabelNetsRunConfigResult) -> Self {
-        Self {
-            id,
-            r: result
-        }
+impl<N, R> TrainNetOutput<N, R>
+where
+    N:Debug + Send + Sync + 'static,
+    R:Debug + Send + Sync + 'static,
+{
+    pub fn new(id: SimpleId, var_store: VarStore, node_params: N, run_config: R, min_loss:f32) -> Self {
+        Self { id, var_store, node_params, run_config, min_loss }
     }
 }
 
-impl WithId for TrainNetOutput {
+impl<N, R> WithId for TrainNetOutput<N, R>
+where
+    N:Debug + Send + Sync + 'static,
+    R:Debug + Send + Sync + 'static,
+{
     type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
@@ -74,11 +86,15 @@ impl WithId for TrainNetOutput {
     }
 }
 
-impl Output for TrainNetOutput{
+impl<N, R> Output for TrainNetOutput<N, R>
+where
+    N:Debug + Send + Sync + 'static,
+    R:Debug + Send + Sync + 'static,
+{
 
 }
 
-pub struct TrainNet<C, L, B, BF, DX, DY, P, RC, NF, FO, XF>
+pub struct TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -87,9 +103,10 @@ where
     BF:Fn(&RC)->B +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
-    NF:Fn(&RC,&VarStore)->Result<Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, ThoosaError> +  Send + Sync + 'static,
+    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
-     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
+    XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
+    NP: Default + Debug + Send + Sync + 'static,
 {
     batch:BF,
     net:NF,
@@ -101,7 +118,7 @@ where
     pd:PhantomData<(C, L, DX, DY, BF, P, RC)>
 }
 
-impl<C, L, B, BF, DX, DY, P, RC, NF, FO, XF> Debug for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, FO, XF>
+impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF> Debug for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -110,16 +127,17 @@ where
     BF:Fn(&RC)->B +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
-    NF:Fn(&RC,&VarStore)->Result<Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, ThoosaError> +  Send + Sync + 'static,
+    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
-     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
+    XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
+    NP: Default + Debug + Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TrainNet").finish()
     }
 }
 
-impl<C, L, B, BF, DX, DY, P, RC, NF, FO, XF> TrainNet<C, L, B, BF, DX, DY, P, RC, NF, FO, XF>
+impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF> TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -128,16 +146,17 @@ where
     BF:Fn(&RC)->B +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
-    NF:Fn(&RC,&VarStore)->Result<Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, ThoosaError> +  Send + Sync + 'static,
+    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
-     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
+    XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
+    NP: Default + Debug + Send + Sync + 'static,
 {
     pub fn new(batch:BF, net:NF,opt_config:Arc<OptConfig>,run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >, loss_fn:LossFp, optimizer:FO, x_f:XF) -> Self {
         Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f }
     }
 }
 
-impl<C, L, B, BF, DX, DY, P, RC, NF, FO, XF> Stage for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, FO, XF>
+impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF> Stage for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -146,17 +165,18 @@ where
     BF:Fn(&RC)->B +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
-    NF:Fn(&RC,&VarStore)->Result<Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, ThoosaError> +  Send + Sync + 'static,
+    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
-     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
+    XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
+    NP: Default + Debug + Send + Sync + 'static,
 {
     type Ctx = C;
     type In<'a> = TrainNetInput;
-    type Out = TrainNetOutput;
+    type Out = TrainNetOutput<NP, RC>;
 }
 
 
-impl<C, L, B, BF, DX, DY, P, RC, NF, FO, XF> AsyncStage for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, FO, XF>
+impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF> AsyncStage for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -165,9 +185,10 @@ where
     BF:Fn(&RC)->B +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
-    NF:Fn(&RC,&VarStore)->Result<Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, ThoosaError> +  Send + Sync + 'static,
+    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
+    NP: Default + Debug + Send + Sync + 'static,
 {
     fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> + Send {
         let run_config_source = Arc::clone(&self.run_config_source);
@@ -176,14 +197,14 @@ where
         async move {
 
 
-            let (VarStore, N, R, f32) = opt_train_2::<_, _, _, LabelNetParams>(
+            let (var_store, node_params, run_config, loss) = opt_train_2::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),
                 async move |vs: &VarStore, run_config: RC, _listener| {
 
 
 
                     let batch = (self.batch)(&run_config);
-                    let node = (self.net)(&run_config, vs)?;
+                    let (node, params) = (self.net)(&run_config, vs)?;
                     let optimizer = (self.optimizer)(&run_config, vs)?;
 
                     let r = train_3(
@@ -197,7 +218,7 @@ where
                         None
                     ).await?;
 
-                    Ok((r, LabelNetParams::new(0, 0, 0, 0, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()))))
+                    Ok((r, params))
 
                     // let apply_motif_nets = Arc::clone(&apply_motif_nets);
                     // let label = label.clone();
@@ -224,14 +245,7 @@ where
                 "labels",
             ).await?;
 
-            Ok(Arc::new(DevicesWrap::wrap_cpu(TrainNetOutput::new("".into(), TrainLabelNetsRunConfigResult::new(
-                vec![],
-                "xxx".to_string(),
-                0.0,
-                LabelNetParams::new(0, 0, 0, 0,  LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams{})),
-                TrainLabelNetsRunConfig::new(None, CommonTrainingRunConfig::new(0,0, 0.0, 0, 0), LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs{ num_layers: 0, slices_len: 0 })),
-                VarStore::new(Cpu)
-            )))))
+            Ok(Arc::new(DevicesWrap::wrap_cpu(TrainNetOutput::new("".into(), var_store, node_params, run_config, loss))))
         }
     }
 }
