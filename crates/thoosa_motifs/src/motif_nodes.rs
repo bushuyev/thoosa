@@ -62,7 +62,7 @@ fn test_label_node() -> Result<(), ThoosaError>{
 
     let vs = VarStore::new(Cpu);
 
-    let node = any_len_label_node(&LabelNetParams::new(0, 3, 0, 0, FixedNumSlices(FixedNumSlicesNetParams{}))).build_tch_module::<AnyDims, AnyDims>(&vs.root())?;
+    let node = any_len_label_node(&LabelNetParams::new(0, 3, 0, 100, FixedNumSlices(FixedNumSlicesNetParams{}))).build_tch_module::<AnyDims, AnyDims>(&vs.root())?;
 
     let motif_node_output = node.tho_forward(&ThoTensor::new("".into(), Tensor::rand(&[8, 3, 9901], FLOAT_CPU)), true);
     // let motif_node_output = node.tho_forward(&ThoTensor::new("".into(), Tensor::rand(&[10, 3, 123], FLOAT_CPU)), true);
