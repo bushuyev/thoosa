@@ -27,7 +27,7 @@ use thoosa_common::batches::{AsyncDataBatch, ThoBatchIter};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train_2, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train_2, CommonTrainingRunConfig, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, train_2, train_3, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -46,6 +46,7 @@ use tokio::{join, try_join};
 use caching_runner::permits::{RunnerPerm, MAX_PERMITS};
 use thoosa_dummy_data_derive::DummyData;
 use crate::tasks::stages_seq::ABStage;
+use crate::tasks::train_net::TrainNet;
 
 #[derive(Debug)]
 pub struct TrainLabelNets<L, C>
@@ -65,6 +66,7 @@ where
     apply_motif_nets:Arc<ApplyMotifNets<C>>,
     store: Arc<RwLock<Box<dyn Store>>>,
     opt_config:Arc<OptConfig>,
+
 }
 
 impl <L, C> TrainLabelNets<L, C>
@@ -92,7 +94,8 @@ where
             apply_motif_nets: Arc::new(ApplyMotifNets::new("".into(), ws, store, select_motifs_run_ids.clone(), stage_ctx).await?),
             store: Arc::clone(store),
             opt_config,
-            select_motifs_run_ids
+            select_motifs_run_ids,
+
         })
     }
 
@@ -255,6 +258,7 @@ where
                     //     ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
                     // }
 
+
                     debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
                     let resources_0 = labels_others_train_valid_resources.get(&label).expect(&format!("no resources not belonging to {label}"));
@@ -266,17 +270,14 @@ where
                     let resources_0_valid = Arc::new(resources_0.1.clone());
                     let label = label.clone();
                     let label_ = label.clone();
-                    //TODO async OOM
-                    opt_train_2(
-                        opt_config,
 
-                    async move  |vs: &VarStore, run_config: TrainLabelNetsRunConfig, _listener| {
-
+                    let train_net:Arc<TrainNet<C, L, _, _, _, _, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfig>> = Arc::new(TrainNet::new(
+                        move |rc:&TrainLabelNetsRunConfig| {
                             let apply_motif_nets = Arc::clone(&apply_motif_nets);
-                            let label = label.clone();
-                            let resources_batch = ResourcesBatch::new(
+
+                            ResourcesBatch::new(
                                 Arc::clone(&loader),
-                                run_config.common_training_args.batch_size,
+                                rc.common_training_args.batch_size,
                                 Arc::clone(&resources_1_train),
                                 Arc::clone(&resources_1_valid),
                                 Arc::clone(&resources_0_train),
@@ -322,39 +323,102 @@ where
                                     }.boxed()
                                 }),
                                 Arc::clone(&ctx)
-                            );
-
-                            //TODO build proper LabelNetParams
-                            let num_layers = match run_config.net {
-                                LabelNetTypeArgs::MaxPadding(MaxPaddingNetArgs{num_layers}) => {
-                                    num_layers
-                                }
-                                LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs{num_layers, ..}) => {
-                                    num_layers
-                                }
-                            };
-
-                            let params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
-                            let loss = train_label_net_2(&run_config, &resources_batch, &ThoDevice::from(device_idx), vs, params.clone(), Arc::clone(&ctx), &label).await?;
-
-                            Ok((loss, params))
+                            )
                         },
-                        train_motifs_nodes_run_configs,
-                        ThoDevice::from(device_idx).into(),
-                        "labels",
-                    ).await.map(|(var_store, label_node_params, train_motifs_nets_run_config, min_loss)| {
+                        opt_config,
+                        train_motifs_nodes_run_configs
+                    ));
+                    //TODO async OOM
+                    // opt_train_2(
+                    //     opt_config,
+                    //
+                    // async move  |vs: &VarStore, run_config: TrainLabelNetsRunConfig, _listener| {
+                    //
+                    //         let apply_motif_nets = Arc::clone(&apply_motif_nets);
+                    //         let label = label.clone();
+                    //         let resources_batch = ResourcesBatch::new(
+                    //             Arc::clone(&loader),
+                    //             run_config.common_training_args.batch_size,
+                    //             Arc::clone(&resources_1_train),
+                    //             Arc::clone(&resources_1_valid),
+                    //             Arc::clone(&resources_0_train),
+                    //             Arc::clone(&resources_0_valid),
+                    //
+                    //             Box::new(move |x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>,  x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>, ctx: Arc<RwLock<C>>|{
+                    //                 let apply_motif_nets = Arc::clone(&apply_motif_nets);
+                    //
+                    //                 async move {
+                    //                     let (x,y) = with_data!(ctx, ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<ChannelsData2, SimpleId>], x_0:&[&ThoTensor<ChannelsData2, SimpleId>]|{
+                    //                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
+                    //
+                    //                         let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.size()[1]).max().expect("no max_input");
+                    //
+                    //                         debug!("ResourcesBatch::train_batch_iter: max_input={max_input}");
+                    //
+                    //                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|{
+                    //                             Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())//TODO
+                    //                         }).collect::<Result<Vec<_>, ThoosaError>>()?, 0);
+                    //
+                    //                         let x_0 = Tensor::stack(&x_0.into_iter().map(|v|{
+                    //                             Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())
+                    //                         }).collect::<Result<Vec<_>, ThoosaError>>()?, 0);
+                    //
+                    //                         Ok::<_, ThoosaError>(mix_x_binary_with_labels(&x_1, &x_0))
+                    //                     })?;
+                    //
+                    //                     let x_batch:Arc<DevicesWrap<ThoTensor<Batch<ChannelsData2>, SimpleId>>> = Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), x.shallow_clone()), cache_area));
+                    //                     let motif_probs = Arc::clone(&apply_motif_nets).run(
+                    //                         x_batch,
+                    //                         ctx
+                    //                     ).await?;
+                    //
+                    //                     //apply_motif_nets is not caching so Arc can't have other refs
+                    //                     let motifs_probs_batch = Arc::into_inner(motif_probs).expect("can't take arc").take_data(0).await?;
+                    //                     debug!("ResourcesBatch::train_batch_iter: motifs_probs_batch={motifs_probs_batch:?} ");
+                    //
+                    //
+                    //                     Ok((
+                    //                         ThoTensor::<Batch<MotifProbability>, SimpleId>::new("".into(), Tensor::stack(motifs_probs_batch.matches.into_iter().map(|tt|tt.t).collect::<Vec<_>>().as_slice(), 1)),//motifs_probs_batch.matches contains [batch x probs] for each motif, stack(.., 1) - dim 1 makes [batch x motifs x dists]
+                    //                         ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y),
+                    //                     ))
+                    //                 }.boxed()
+                    //             }),
+                    //             Arc::clone(&ctx)
+                    //         );
+                    //
+                    //         //TODO build proper LabelNetParams
+                    //         let num_layers = match run_config.net {
+                    //             LabelNetTypeArgs::MaxPadding(MaxPaddingNetArgs{num_layers}) => {
+                    //                 num_layers
+                    //             }
+                    //             LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs{num_layers, ..}) => {
+                    //                 num_layers
+                    //             }
+                    //         };
+                    //
+                    //         let params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
+                    //         let loss = train_label_net_2(&run_config, &resources_batch, &ThoDevice::from(device_idx), vs, params.clone(), Arc::clone(&ctx), &label).await?;
+                    //
+                    //         Ok((loss, params))
+                    //     },
+                    //     train_motifs_nodes_run_configs,
+                    //     ThoDevice::from(device_idx).into(),
+                    //     "labels",
+                    // ).await.map(|(var_store, label_node_params, train_motifs_nets_run_config, min_loss)| {
+                    //
+                    //     debug!("TrainLabelNet::run: label_node_params={label_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
+                    //     TrainLabelNetsRunConfigResult::new(
+                    //         select_motifs_run_ids,//TODO
+                    //         label_,
+                    //         min_loss,
+                    //         label_node_params,
+                    //         train_motifs_nets_run_config,
+                    //         var_store,
+                    //
+                    //     )
+                    // })
 
-                        debug!("TrainLabelNet::run: label_node_params={label_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
-                        TrainLabelNetsRunConfigResult::new(
-                            select_motifs_run_ids,//TODO
-                            label_,
-                            min_loss,
-                            label_node_params,
-                            train_motifs_nets_run_config,
-                            var_store,
-
-                        )
-                    })
+                    Err::<TrainLabelNetsRunConfigResult, ThoosaError>(ThoosaError::new("zzz"))
                 })
 
             })

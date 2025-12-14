@@ -55,7 +55,7 @@ impl <'a, DX:Dims, DY:Dims> ThoBatchIter<'a, DX, DY> {
 // }
 
 #[async_trait]
-pub trait AsyncDataBatch<DX: Dims, DY: Dims>: Send + Sync {
+pub trait AsyncDataBatch<DX: Dims, DY: Dims>: Debug + Send + Sync {
     /// returns (inputs, labels)
     async fn train_batch(&self) -> Result<(ThoBatch<DX>, Tensor), ThoosaError>;
     async fn valid_batch(&self) -> Result<(ThoBatch<DX>, Tensor), ThoosaError>;
