@@ -14,7 +14,7 @@ use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
-use caching_runner::common::{OutId, PermitsCtx, RunCtx};
+use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -441,6 +441,8 @@ impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNe
         //   batched_motifs_output: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>| {
         //
         // })(__with_data_ref_0, __with_data_ref_1)
+
+        permits_ctx.write().drop_permits(DropIf::Always);
         do_run(&ApplyMotifNetInput::new(
             &selected_batch,
             __with_data_ref_1,
