@@ -271,7 +271,7 @@ where
                     let label = label.clone();
                     let label_ = label.clone();
 
-                    let train_net:Arc<TrainNet<C, L, _, _, _, _, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfig, _, _, _>> = Arc::new(TrainNet::new(
+                    let train_net:Arc<TrainNet<C, L, _, _, _, _, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfig, _, LabelNetParams, _, _>> = Arc::new(TrainNet::new(
                         move |rc:&TrainLabelNetsRunConfig| {
                             let apply_motif_nets = Arc::clone(&apply_motif_nets);
 
@@ -327,7 +327,7 @@ where
                         },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
                             let net_params = LabelNetParams::new(channels as u32, num_nets, 10, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
-                            any_len_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())
+                            Ok((any_len_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                         },
                         opt_config,
                         train_motifs_nodes_run_configs,
@@ -347,7 +347,17 @@ where
                         }
                     ));
 
-                    Ok(Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap_cpu(TrainNetInput::new("".into()))), Arc::clone(&ctx_0)).await.unwrap()).unwrap().take_data(0).await.unwrap().r)
+                    let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap_cpu(TrainNetInput::new("".into()))), Arc::clone(&ctx_0)).await?).unwrap().take_data(0).await?;
+                    Ok(
+                            TrainLabelNetsRunConfigResult::new(
+                                select_motifs_run_ids,//TODO
+                                label_,
+                                result.min_loss,
+                                result.node_params,
+                                result.run_config,
+                                result.var_store,
+                            )
+                    )
                     //TODO async OOM
                     // opt_train_2(
                     //     opt_config,
