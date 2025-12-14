@@ -20,7 +20,7 @@ use thoosa_common::tho_tensor::{Labels, ThoTensor};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, SimpleId, WithId};
 use crate::tasks::cross_dims::ChannelsData2;
-use caching_runner::common::{OutId, RunCtx};
+use caching_runner::common::{OutId, PermitsCtx, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch, ThoBatchIter};
@@ -39,7 +39,7 @@ use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::run_ctx_2::MotifsCtx;
+use crate::tasks::run_ctx_2::{MotifsCtx, RunCtx2};
 use rand::{rng, seq::SliceRandom};
 use tch::kind::FLOAT_CPU;
 use tokio::{join, try_join};
@@ -201,11 +201,6 @@ where
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
-
-
-
-
-
         let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
         let ctx = Arc::clone(&ctx);
         let store = Arc::clone(&self.store);
@@ -245,17 +240,20 @@ where
 
                 tokio::spawn(async move {
                     let (label, resources_1) = label_tain_and_valid_sets;
+                    let new_name = format!("Train_{label}");
                     let out_key = {
-                        let out_id = SimpleId::from(format!("Train_{label}"));  //self.out_id(input.id());
+
+                        let out_id = SimpleId::from(new_name.clone());  //self.out_id(input.id());
                         Arc::new(out_id) as Arc<dyn CachableIdTr>
                     };
+                    let ctx = Arc::clone(&ctx).read().branch(&new_name);
 
-                    if ctx.read().acquired_permits() == 0 {
-                        let result = GlobalCtx::global()
-                            .acquire_many(device_idx, 1, out_key.clone())
-                            .await?;
-                        ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
-                    }
+                    // if ctx.read().acquired_permits() == 0 {
+                    //     let result = GlobalCtx::global()
+                    //         .acquire_many(device_idx, 1, out_key.clone())
+                    //         .await?;
+                    //     ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
+                    // }
 
                     debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
@@ -659,15 +657,14 @@ where
     pub struct PurgeCacheListener<C>
     where
         C:RunCtx{
-        permits_key:String,
         ctx:Arc<RwLock<C>>
     };
 
     impl <C>  PurgeCacheListener<C>
     where
         C:RunCtx{
-        pub fn new(ctx: Arc<RwLock<C>>, permits_key:String) -> Self {
-            Self { ctx, permits_key }
+        pub fn new(ctx: Arc<RwLock<C>>) -> Self {
+            Self { ctx }
         }
     }
 
@@ -676,25 +673,41 @@ where
         C:RunCtx{
         fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<ListenerResponse> {
             let acquired_permits = self.ctx.read().acquired_permits();
+            let name = self.ctx.read().name();
             Box::pin(async move {
-
+                let mut cnt = 0;
                 loop {
 
-                    match GlobalCtx::global().acquire_many(1, MAX_PERMITS-acquired_permits, Arc::new(SimpleId::from(self.permits_key.clone()))).await {
+                    match GlobalCtx::global().acquire_many(1, MAX_PERMITS-acquired_permits, Arc::new(SimpleId::from(name))).await {
                         Ok(permits) => {
                             info!("got {permits:?} purging all");
-                            match C::purge_gpu_caches(Arc::clone(&self.ctx)).await{
-                                Ok(_) => {
-                                    info!("purging done");
-                                    break
-                                }
-                                Err(e) => {
-                                    info!("purging failed {e:?}");
-                                }
+                            match GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await {
+                                    Ok(_) => {
+                                        info!("dump_all_to_cpu done");
+                                        break
+                                    }
+                                    Err(e) => {
+                                        info!("dump_all_to_cpu failed {e:?}");
+                                    }
                             }
+                            // match C::purge_gpu_caches(Arc::clone(&self.ctx)).await{
+                            //     Ok(_) => {
+                            //         info!("purging done");
+                            //         break
+                            //     }
+                            //     Err(e) => {
+                            //         info!("purging failed {e:?}");
+                            //     }
+                            // }
                         }
                         Err(e) => {
-                            info!("can't get permits e={e:?}");
+                            info!("can't get permits cnt={cnt}");
+                            if cnt > 1000 {
+                                break
+                            } else {
+                                cnt+=1;
+                                tokio::task::yield_now().await;
+                            }
                         }
                     }
                 }
@@ -727,7 +740,7 @@ where
             debug!("train_label_net: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
             t
         },
-        Some(&mut PurgeCacheListener::new(ctx,  format!("Train_{}", label))),
+        Some(&mut PurgeCacheListener::new(ctx)),
     )
         .await?;
 
@@ -781,9 +794,6 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_train_label_net_3x3() -> Result<(), ThoosaError>
     {
-
-
-
 
         let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
