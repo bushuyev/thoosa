@@ -46,7 +46,7 @@ use tokio::{join, try_join};
 use caching_runner::permits::{RunnerPerm, MAX_PERMITS};
 use thoosa_dummy_data_derive::DummyData;
 use crate::tasks::stages_seq::ABStage;
-use crate::tasks::train_net::TrainNet;
+use crate::tasks::train_net::{TrainNet, TrainNetInput};
 
 #[derive(Debug)]
 pub struct TrainLabelNets<L, C>
@@ -250,7 +250,7 @@ where
                         Arc::new(out_id) as Arc<dyn CachableIdTr>
                     };
                     let ctx = Arc::clone(&ctx).read().branch(&new_name);
-
+                    let ctx_0 = Arc::clone(&ctx);
                     // if ctx.read().acquired_permits() == 0 {
                     //     let result = GlobalCtx::global()
                     //         .acquire_many(device_idx, 1, out_key.clone())
@@ -271,7 +271,7 @@ where
                     let label = label.clone();
                     let label_ = label.clone();
 
-                    let train_net:Arc<TrainNet<C, L, _, _, _, _, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfig>> = Arc::new(TrainNet::new(
+                    let train_net:Arc<TrainNet<C, L, _, _, _, _, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfig, _, _, _>> = Arc::new(TrainNet::new(
                         move |rc:&TrainLabelNetsRunConfig| {
                             let apply_motif_nets = Arc::clone(&apply_motif_nets);
 
@@ -325,9 +325,29 @@ where
                                 Arc::clone(&ctx)
                             )
                         },
+                        move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
+                            let net_params = LabelNetParams::new(channels as u32, num_nets, 10, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
+                            any_len_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())
+                        },
                         opt_config,
-                        train_motifs_nodes_run_configs
+                        train_motifs_nodes_run_configs,
+                        |pred: &Tensor, target: &Tensor| {
+                            debug!("train_label_net: pred.size={:?}", pred.size());
+                            let pred_y = pred;//.squeeze();
+                            debug!("train_label_net: pred_y={:?} target={:?} kind={:?}",pred_y.size(),target.size(),target.kind());
+                            trace!("train_label_net: pred_y=\n{pred_y} target=\n{target} kind={:?}",target.kind());
+                            pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
+                        },
+                        move |rc:&TrainLabelNetsRunConfig, vs: &VarStore|{
+                            AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e|e.into())
+                        },
+                        |t:ThoBatch<MotifProbability>| {
+                            debug!("train_label_net: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
+                            t
+                        }
                     ));
+
+                    Ok(Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap_cpu(TrainNetInput::new("".into()))), Arc::clone(&ctx_0)).await.unwrap()).unwrap().take_data(0).await.unwrap().r)
                     //TODO async OOM
                     // opt_train_2(
                     //     opt_config,
@@ -418,7 +438,7 @@ where
                     //     )
                     // })
 
-                    Err::<TrainLabelNetsRunConfigResult, ThoosaError>(ThoosaError::new("zzz"))
+                    // Err::<TrainLabelNetsRunConfigResult, ThoosaError>(ThoosaError::new("zzz"))
                 })
 
             })
@@ -800,7 +820,7 @@ where
         },
         run_config.common_training_args.cycles as usize,
         optimizer.build(&vs, run_config.common_training_args.lr)?,
-        |t| {
+        &|t| {
             debug!("train_label_net: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
             t
         },
