@@ -1870,7 +1870,7 @@ pub async fn train_3<F, DI: Dims, DO: Dims>(
     loss_fn: LossFp,
     cycles: usize,
     mut opt: Optimizer,
-    x_f: F,
+    x_f: &F,
     mut listener: Option<&mut dyn TrainListener>,
 ) -> Result<f32, ThoosaError>
 where
