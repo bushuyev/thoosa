@@ -48,6 +48,7 @@ pub mod run_configs;
 pub mod test_utils;
 pub mod traits;
 pub mod data_with_extra;
+pub mod perf_logging;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
