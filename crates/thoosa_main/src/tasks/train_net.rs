@@ -190,6 +190,8 @@ where
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
 {
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainNet::run"))]
     fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> + Send {
         let run_config_source = Arc::clone(&self.run_config_source);
         let device_idx = ctx.read().device_idx();

@@ -198,6 +198,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainLabelNets::run"))]
     fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> + Send {
         let (device_idx, cache_area, ctx_name) = {
             let guard = ctx.read();
@@ -848,15 +849,18 @@ mod tests {
     use tokio::fs;
     use std::path::Path;
     use std::sync::Arc;
+    use std::time::Duration;
     use futures_util::StreamExt;
     use futures::FutureExt;
-    use log::debug;
-    use log::LevelFilter::{Debug, Trace};
+    use log::{debug, info, set_max_level, LevelFilter};
+    use log::LevelFilter::{Debug, Info, Trace};
     use mockall::predicate::always;
     use parking_lot::RwLock;
     use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
+    use tokio::io::Join;
+    use tokio::task::JoinSet;
     use caching_runner::common::cachable::DevicesWrap;
     use caching_runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use caching_runner::common::PermitsCtx;
@@ -874,6 +878,7 @@ mod tests {
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_shared::traits::{Named, SimpleId};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::MockStoreBuilder;
@@ -885,14 +890,20 @@ mod tests {
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::train_label_nets::{ResourcesBatch, TrainLabelNets, TrainLabelNetsInput, TrainLabelNetsOutput};
 
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::test_utils::init_test_logging();
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_train_label_net_3x3() -> Result<(), ThoosaError>
     {
 
+        thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("info");
         let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
-        log::set_max_level(Debug);
+        log::set_max_level(Info);
         reset_print_options();
         GlobalCtx::init_devices(2);
 
@@ -1076,6 +1087,9 @@ mod tests {
 
         let out = train_label_nets.run(input, Arc::clone(&run_ctx)).await?;
 
+        info!("test_train_label_net_3x3: PERF={PERF:?}");
+        info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
+
         with_data!(run_ctx, 0, out; |out:&TrainLabelNetsOutput|{
 
             debug!("test_train_label_net_3x3: 0. out={out:?}");
@@ -1172,5 +1186,37 @@ mod tests {
 
 
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_0(){
+        thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("info");
+        set_max_level(LevelFilter::Debug);
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="aaa"))]
+        async fn some_fn_a(i:usize) {
+            debug!("some_fn: i={i}");
+
+            some_fn_b(i).await;
+
+            tokio::time::sleep( Duration::from_millis(1000)).await;
+        }
+
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="bbbbbb"))]
+        async fn some_fn_b(i:usize) {
+            debug!("some_fn: i={i}");
+            // do stuff
+            tokio::time::sleep( Duration::from_millis(1000)).await;
+        }
+
+
+        (0..3).map(|i|{
+            async move {
+                some_fn_a(i).await;
+            }
+        }).collect::<JoinSet<()>>().join_all().await;
+
+        info!("\n{}", format_perf_map(&PERF));
+
+
     }
 }
