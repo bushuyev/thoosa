@@ -64,7 +64,24 @@ impl Select<ChannelsData2Selector> for ThoTensor<ChannelsData2, SimpleId> {
     type Output = ThoTensor<ChannelsData2, SimpleId>;
 
     fn subview(&self, selector: ChannelsData2Selector) -> Result<Self::Output, ThoosaError> {
-        todo!()//self.subview(selector.0)
+        let size: MonoMetrics<1, 2> = self.size().try_into()?;
+
+        let mut ranges = MonoMetrics::<1, 2>::map_to_ranges(&selector.0.start, &selector.0.end)?;
+        debug!("ChannelsData2Selector::subview 1. ranges={ranges:?}, size={:?}", self.size());
+
+        // if ranges[1].start > 48 {
+        //     ranges[1].start -=48;
+        // }
+
+        // if ranges[1].end < self.size()[1]-100 {
+        //     ranges[1].end +=100;
+        // }
+
+        debug!("ChannelsData2Selector::subview 2. ranges={ranges:?}");
+
+        let sub_tensor = self.t_ref().f_i((ranges[0].clone(), ranges[1].clone()))?;
+
+        Ok(ThoTensor::new(self.id().clone(), sub_tensor))
     }
 }
 

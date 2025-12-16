@@ -175,7 +175,7 @@ where
 
     // #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNets::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
-        
+
         let (device_idx, cache_area, ctx_name) = {
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area(), guard.name())
@@ -185,7 +185,11 @@ where
 
         debug!("ApplyMotifNets::run: self.loaded_motif_nets.len={:?}", self.apply_motif_nets.len());
 
+
+
         let apply_motif_nets = self.apply_motif_nets.clone();
+        let min_split_len = self.motif_width as i64;
+        let overlap_len = (self.motif_width  - self.slice_step) as i64;
         let matches = futures::stream::iter(apply_motif_nets.into_iter())
             .map(|apply_motif_net|{
                 let input = Arc::clone(&input);
@@ -193,22 +197,27 @@ where
                 let ctx = Arc::clone(&ctx);
                 let slice_step = self.slice_step;
 
-                tokio::spawn(async move {
-                     let output_builder = SingleDimTensorOutputBuilder::new("".into(), 1, &[0,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append);
+                let slices = ((input.size().dim::<1>() as u32 - self.motif_width)/slice_step) as i64 + 1;
 
-                     let map = HashMap::new();
+                debug!("ApplyMotifNets::run: slice_step={slice_step} slices={slices}");
+
+                tokio::spawn(async move {
+                    let map = HashMap::new();
 
                      AsyncOOMHandler::new(
                          vec![
                              Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, Arc::clone(&out_id))))),
                              Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                             Adjusters::Input(Box::new(SplitsAdjuster::<ChannelsData2Selector, MonoMetrics<1,2>>::new([0, -1].into()))),//MonoMetrics<0, 3> - 0 dim of 3-dimensional  Batch<ChannelsData>
+                             Adjusters::Input(Box::new(SplitsAdjuster::<ChannelsData2Selector, MonoMetrics<1,2>>::new_with_overlap(
+                                 [-1, min_split_len].into(),
+                                 [-1, overlap_len].into()
+                             ))), //MonoMetrics<0, 3> - 0 dim of 3-dimensional  Batch<ChannelsData>
                          ], None).run(
                          &apply_motif_net,
                          Arc::clone(&input),
                          ctx,
                          Contexts::new(
-                             SplitsAdjusterContextImpl::new(input._size().into(), output_builder),
+                             SplitsAdjusterContextImpl::new(input._size().into(), SingleDimTensorOutputBuilder::new("".into(), 0, &[slices,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
                              NoopRunnableContext {},
                              PermitsAndDumpToCpuAdjustableContex::new(
                                  PermitsAdjustContextImpl::new(ctx_name),
@@ -497,6 +506,8 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> + Send {
+
+
         let net_wrapper = Arc::clone(&self.net_wrapper);
         let (device_idx, cache_area) = {
             let guard = ctx.read();
@@ -504,17 +515,25 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
         };
         async move {
             with_data!(ctx, device_idx, net_wrapper, input; |net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, input:&ThoTensor<ChannelsData2, SimpleId>|{
+                let motif_id = net.extra().motif_id();
+                 #[cfg(test)]
+                if self.fail_if_size_bigger_than.map(|v| v < input.size()[1] as usize).unwrap_or(false) {
+                    debug!("AsyncStage for ApplyMotifNet::run, triggering OOM: motif_id={motif_id} input.size={:?} self.fail_if_size_bigger_than={:?}", input.size(), self.fail_if_size_bigger_than);
+                    return Err(ThoosaError::oom());
+                }
+
                 let c = net.extra().channel() as i64;
+
                 let motif_width = net.extra().motif_net_params.num_features() as i64;
 
-                debug!("ApplyMotifNet::run: c={c} motif_width={motif_width} input.t.size={:?}", input.t.size());
+                debug!("ApplyMotifNet::run, ok: motif_id={motif_id} c={c} motif_width={motif_width} input.t.size={:?}", input.t.size());
                 let slices = input.t.i((c, ..)).unfold(0, motif_width, 1); //.reshape([-1, motif_width]);
 
-                debug!("ApplyMotifNet::run: slices.size={:?}",  slices.size());
+                debug!("ApplyMotifNet::run, ok: motif_id={motif_id} slices.size={:?}",  slices.size());
 
                 let out = net.data().tho_forward(&ThoTensor::new("".into(), slices), false);
 
-                debug!("ApplyMotifNet::do_run: out.size={:?}", out.size());
+                debug!("ApplyMotifNet::run, ok: motif_id={motif_id} out.size={:?}", out.size());
 
                 Ok(Arc::new(DevicesWrap::wrap(out, cache_area)))
             })
@@ -574,15 +593,24 @@ pub(crate) mod tests {
     use crate::tasks::select_motifs::tests::motifs_tensor;
     use crate::tasks::tensor_loader::mock_tensor_loader;
 
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_apply_motif_nets_3_channels_2_motifs() -> Result<(), ThoosaError>
-    {
+    async fn test_apply_motif_nets_3_channels_2_motifs_without_oom() -> Result<(), ThoosaError> {
+        test_apply_motif_nets_3_channels_2_motifs(None).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_apply_motif_nets_3_channels_2_motifs_with_oom() -> Result<(), ThoosaError> {
+        test_apply_motif_nets_3_channels_2_motifs(Some(1000)).await
+    }
+
+    async fn test_apply_motif_nets_3_channels_2_motifs(trigger_oom_len: Option<usize>) -> Result<(), ThoosaError> {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
 
-        let input_n_0 = 2000;
+        let input_n_0 = 4000;
 
         let find_motifs_run_id:RunId = 1;
         let select_motifs_run_id:RunId = 2;
@@ -644,12 +672,13 @@ pub(crate) mod tests {
             &store,
             vec![select_motifs_run_id],
             Arc::new(RwLock::new(mock_run_ctx::default(1))),
-            None
+            trigger_oom_len
         ).await?);
 
         let (resource_a_t, resource_a_intervals) = resource_tensor(input_n_0, &[
             vec![(1, 100, MotifKind::Pulse), (1, 100, MotifKind::Triangle)],
             vec![(1, 100, MotifKind::Sin)],
+            vec![]
         ], 200)?;
 
 
@@ -689,9 +718,6 @@ pub(crate) mod tests {
 
         Ok(())
     }
-
-
-
 
 
 }
