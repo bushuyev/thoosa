@@ -340,7 +340,8 @@ where
         Some(filter_config) => {
             debug!("MotifLoader::run: find_motifs_run_id={:?} filter_config={filter_config:?}", find_motifs_run_config.id);
 
-            Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
+            Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::
+            new(
                 SimpleId::from("ab"),
                 Arc::clone(loader),
                 Arc::new(FreqFilter::<C>::new(filter_config)),

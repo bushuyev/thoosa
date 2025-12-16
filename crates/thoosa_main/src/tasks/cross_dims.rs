@@ -4,7 +4,7 @@ use log::{debug, trace};
 use tch::{IndexOp, Tensor};
 use thoosa_common::dims::{AnyMetrics, Batch, Dims};
 use thoosa_shared::{MyError, ThoosaError};
-use thoosa_shared::traits::{DataId, Select, SimpleId};
+use thoosa_shared::traits::{Adjustable, DataId, Select, SimpleId};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 
@@ -54,6 +54,24 @@ impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SimpleId> {
         trace!("ChannelsData2::select: Vec sub.t=\n{}", sub.t_ref());
 
         Ok(sub)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ChannelsData2Selector(pub Range<MonoMetrics<1, 2>>);
+
+impl Select<ChannelsData2Selector> for ThoTensor<ChannelsData2, SimpleId> {
+    type Output = ThoTensor<ChannelsData2, SimpleId>;
+
+    fn subview(&self, selector: ChannelsData2Selector) -> Result<Self::Output, ThoosaError> {
+        todo!()//self.subview(selector.0)
+    }
+}
+
+impl Adjustable for ChannelsData2Selector {}
+impl From<Range<MonoMetrics<1, 2>>> for ChannelsData2Selector {
+    fn from(value: Range<MonoMetrics<1, 2>>) -> Self {
+        ChannelsData2Selector(value)
     }
 }
 

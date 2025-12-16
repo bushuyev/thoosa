@@ -38,6 +38,7 @@ cargo run --release   -- --term-logger-level=INFO --write-logger-level=DEBUG --w
 cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=DEBUG  --ws-path=/home/bu/tmp/ws_test_hbac/  run-all --find-resources="group:pure group 100" --select-resources="group:pure group 200" --train-resource-group="pure group 100" --valid-resource-group="pure group 10" --run-config-cnt=""
 
 
+cargo nextest run --release --no-fail-fast --retries=0 --no-capture tasks::train_label_nets::tests::test_train_label_net_3x3 > /tmp/test.log 2>&1
 
 with debug:
 07:29:30 [INFO] run_find_motifs_on_set done, run_id=[11, 12, 13, 14, 15]

@@ -37,7 +37,7 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
-use crate::tasks::apply_motif_nets::ApplyMotifNets;
+use crate::tasks::apply_motif_nets_to_batch::ApplyMotifNetsToBatch;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::run_ctx_2::{MotifsCtx, RunCtx2};
 use rand::{rng, seq::SliceRandom};
@@ -63,7 +63,7 @@ where
     >>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    apply_motif_nets:Arc<ApplyMotifNets<C>>,
+    apply_motif_nets:Arc<ApplyMotifNetsToBatch<C>>,
     store: Arc<RwLock<Box<dyn Store>>>,
     opt_config:Arc<OptConfig>,
 
@@ -91,7 +91,7 @@ where
             run_configs: Arc::new(run_configs),
             loader,
             ws:Arc::clone(&ws),
-            apply_motif_nets: Arc::new(ApplyMotifNets::new("".into(), ws, store, select_motifs_run_ids.clone(), stage_ctx).await?),
+            apply_motif_nets: Arc::new(ApplyMotifNetsToBatch::new("".into(), ws, store, select_motifs_run_ids.clone(), stage_ctx).await?),
             store: Arc::clone(store),
             opt_config,
             select_motifs_run_ids,
@@ -306,13 +306,13 @@ where
                                             Ok::<_, ThoosaError>(mix_x_binary_with_labels(&x_1, &x_0))
                                         })?;
 
-                                        let x_batch:Arc<DevicesWrap<ThoTensor<Batch<ChannelsData2>, SimpleId>>> = Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), x.shallow_clone()), cache_area));
+                                        let x_batch:Arc<DevicesWrap<ThoTensor<Batch<ChannelsData2>, SimpleId>>> = Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), x), cache_area));
                                         let motif_probs = Arc::clone(&apply_motif_nets).run(
                                             x_batch,
                                             ctx
                                         ).await?;
 
-                                        //apply_motif_nets is not caching so Arc can't have other refs
+                                        //apply_motif_nets is not caching [TODO it's caching] so Arc can't have other refs
                                         let motifs_probs_batch = Arc::into_inner(motif_probs).expect("can't take arc").take_data(0).await?;
                                         debug!("ResourcesBatch::train_batch_iter: motifs_probs_batch={motifs_probs_batch:?} ");
 
@@ -535,12 +535,7 @@ where
     }
 }
 
-type BuildBatchFn<
-    LD:Dims+ 'static,
-    X:Dims+ 'static,
-    Y:Dims+ 'static,
-    C
-> = Box<dyn Fn(Vec<Arc<DevicesWrap<ThoTensor<LD, SimpleId>>>>,  Vec<Arc<DevicesWrap<ThoTensor<LD, SimpleId>>>>, Arc<RwLock<C>>) -> BoxFuture<'static, Result<(ThoTensor<Batch<X>, SimpleId>, ThoTensor<Batch<Y>, SimpleId>), ThoosaError>> + Send + Sync>;
+type BuildBatchFn<LD:Dims+ 'static, X:Dims+ 'static, Y:Dims+ 'static, C> = Box<dyn Fn(Vec<Arc<DevicesWrap<ThoTensor<LD, SimpleId>>>>,  Vec<Arc<DevicesWrap<ThoTensor<LD, SimpleId>>>>, Arc<RwLock<C>>) -> BoxFuture<'static, Result<(ThoTensor<Batch<X>, SimpleId>, ThoTensor<Batch<Y>, SimpleId>), ThoosaError>> + Send + Sync>;
 
 // #[derive(Debug)]
 struct ResourcesBatch<L, C, LD, X, Y>
@@ -640,7 +635,7 @@ where
 
     async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, ThoBatch<Y>), ThoosaError>> {
         //TODO if self.batch_size > train_len?
-        let mut batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
+        let batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
 
@@ -656,7 +651,7 @@ where
     }
 
     async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, ThoBatch<Y>), ThoosaError>> {
-        let mut batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
+        let batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
 
@@ -680,8 +675,8 @@ where
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
-    fn build_batch_stream<'a>(build_batch_fn:&'a BuildBatchFn<LD, X, Y, C>, mut batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: Arc<RwLock<C>>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<X>, ThoBatch<Y>), ThoosaError>> {
-        futures_util::stream::iter(batches)
+    fn build_batch_stream<'a>(build_batch_fn:&'a BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: Arc<RwLock<C>>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<X>, ThoBatch<Y>), ThoosaError>> {
+        futures_util::stream::iter(resource_indexes_for_batches)
             .map(move |batch_keys| {
                 let loader = Arc::clone(&loader);
                 let ctx = Arc::clone(&ctx);
@@ -717,7 +712,7 @@ where
                     build_batch_fn(x_1_wrapped, x_0_wrapped, ctx).await
                 }
             })
-            .buffered(10)
+            .buffered(10)//TODO config
             .boxed()
     }
 
@@ -883,7 +878,7 @@ mod tests {
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
-    use crate::tasks::apply_motif_nets::tests::motif_test_net_;
+    use crate::tasks::apply_motif_nets_to_batch::tests::motif_test_net_;
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::select_motifs::tests::motifs_tensor;
@@ -903,7 +898,7 @@ mod tests {
         let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
-        log::set_max_level(Info);
+        log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
 
