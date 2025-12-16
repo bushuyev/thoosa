@@ -59,18 +59,13 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
     let closure = input.closure;
 
     let mut prelude = Vec::new();
-    let mut load_handles = Vec::new();
-    let mut load_handle_names = Vec::new();
-    let mut load_handle_results = Vec::new();
-    let mut post_load = Vec::new();
+    let mut load_steps = Vec::new();
     let mut arg_refs = Vec::new();
 
     for (idx, arg) in input.args.into_iter().enumerate() {
         match arg {
             Arg::Single(expr) => {
                 let var_ident = format_ident!("__with_data_var_{idx}");
-                let load_handle_ident = format_ident!("__with_data_handle_{idx}");
-                let load_result_ident = format_ident!("__with_data_handle_res_{idx}");
                 let guard_ident = format_ident!("__with_data_guard_{idx}");
                 let ref_ident = format_ident!("__with_data_ref_{idx}");
 
@@ -78,22 +73,8 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
                     let #var_ident = ::std::sync::Arc::clone(&(#expr));
                 });
 
-                load_handles.push(quote! {
-                    let #load_handle_ident = ::tokio::spawn({
-                        let __wrap = ::std::sync::Arc::clone(&#var_ident);
-                        let __device_idx = __device_idx;
-                        async move {
-                            __wrap.load_from_any_device(__device_idx).await?;
-                            Ok::<(), ::thoosa_shared::ThoosaError>(())
-                        }
-                    });
-                });
-
-                load_handle_names.push(load_handle_ident);
-                load_handle_results.push(load_result_ident.clone());
-
-                post_load.push(quote! {
-                    let #guard_ident = #var_ident.get_copied(__device_idx).await?;
+                load_steps.push(quote! {
+                    let #guard_ident = #var_ident.load_from_any_device_(__device_idx).await?;
                     let #ref_ident = &*#guard_ident;
                 });
 
@@ -101,41 +82,16 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
             }
             Arg::Vector(ident) => {
                 let vec_ident = format_ident!("__with_data_vec_{idx}");
-                let vec_for_load_ident = format_ident!("__with_data_vec_load_{idx}");
-                let load_handle_ident = format_ident!("__with_data_handle_{idx}");
-                let load_result_ident = format_ident!("__with_data_handle_res_{idx}");
                 let guards_ident = format_ident!("__with_data_vec_guards_{idx}");
                 let refs_ident = format_ident!("__with_data_vec_refs_{idx}");
 
                 prelude.push(quote! {
                     let #vec_ident = (#ident).clone();
-                    let #vec_for_load_ident: ::std::vec::Vec<_> = #vec_ident
-                        .iter()
-                        .map(|wrap| ::std::sync::Arc::clone(wrap))
-                        .collect();
                 });
 
-                load_handles.push(quote! {
-                    let #load_handle_ident = ::tokio::spawn({
-                        let __device_idx = __device_idx;
-                        let __items = #vec_for_load_ident;
-                        async move {
-                            ::futures_util::future::try_join_all(
-                                __items.into_iter().map(|wrap| async move {
-                                    wrap.load_from_any_device(__device_idx).await
-                                })
-                            ).await?;
-                            Ok::<(), ::thoosa_shared::ThoosaError>(())
-                        }
-                    });
-                });
-
-                load_handle_names.push(load_handle_ident);
-                load_handle_results.push(load_result_ident.clone());
-
-                post_load.push(quote! {
+                load_steps.push(quote! {
                     let #guards_ident = ::futures_util::future::try_join_all(
-                        #vec_ident.iter().map(|wrap| wrap.get_copied(__device_idx))
+                        #vec_ident.iter().map(|wrap| wrap.load_from_any_device_(__device_idx))
                     ).await?;
                     let #refs_ident: ::std::vec::Vec<_> = #guards_ident.iter().map(|item| &**item).collect();
                 });
@@ -144,19 +100,6 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
             }
         }
     }
-
-    let await_blocks: Vec<_> = load_handle_names
-        .iter()
-        .zip(load_handle_results.iter())
-        .map(|(handle, result)| {
-            let handle_ident = handle.clone();
-            let result_ident = result.clone();
-            quote! {
-                let #result_ident = #handle_ident.await?;
-                #result_ident?;
-            }
-        })
-        .collect();
 
     quote! {
         {
@@ -168,9 +111,7 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
 
 
                 #(#prelude)*
-                #(#load_handles)*
-                #(#await_blocks)*
-                #(#post_load)*
+                #(#load_steps)*
 
                 (#closure)(#(#arg_refs),*)
             }.await
