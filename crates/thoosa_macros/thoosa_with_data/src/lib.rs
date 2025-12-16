@@ -182,10 +182,15 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
                 #(#load_handles)*
                 #(#await_blocks)*
                 #(#post_load)*
+
+                debug!("with_data!: extra_permits={extra_permits:?}");
+
+                let r = (#closure)(#(#arg_refs),*);
+
                 if let Some(permits) = extra_permits {
                    drop(permits);
                 }
-                (#closure)(#(#arg_refs),*)
+                r
             }.await
         }
     }
