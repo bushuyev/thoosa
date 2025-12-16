@@ -72,7 +72,7 @@ impl GlobalCtx {
         Self {
             semaphores: (0..device_count)
                 // .map(|_| Box::new(RunnerSemaphore::new(100)) as Box<dyn PermitSource>) //TODO config
-                .map(|_| Box::new(Arbiter::new(100)) as Box<dyn PermitSource>)
+                .map(|device_idx| Box::new(Arbiter::new(100, device_idx)) as Box<dyn PermitSource>)
                 .collect(),
 
             device_count,

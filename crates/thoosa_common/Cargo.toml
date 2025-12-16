@@ -67,5 +67,6 @@ tokio.workspace = true
 tokio-utils.workspace = true
 libc = "0.2.175"
 anyhow = "1.0.99"
+tracing.workspace = true
 [build-dependencies]
 chrono.workspace = true

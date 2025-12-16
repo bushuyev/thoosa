@@ -3,18 +3,21 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering::Relaxed;
+use std::time::Instant;
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, info};
 use parking_lot::lock_api::RwLock;
-use tch::IndexOp;
+use tch::{IndexOp, Tensor};
 use tch::Kind::Float;
 use tokio::task::JoinError;
 use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
-use caching_runner::common::{OutId, PermitsCtx, RunCtx};
+use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -26,7 +29,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore, TrainMotifsNetsResult};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
@@ -242,6 +245,8 @@ impl <C>AsyncStage for ApplyMotifNets<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNets::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
         let (device_idx, cache_area, ctx_name) = {
             let guard = ctx.read();
@@ -441,6 +446,8 @@ impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNe
         //   batched_motifs_output: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>| {
         //
         // })(__with_data_ref_0, __with_data_ref_1)
+
+        permits_ctx.write().drop_permits(DropIf::Always);
         do_run(&ApplyMotifNetInput::new(
             &selected_batch,
             __with_data_ref_1,
@@ -548,22 +555,37 @@ where
 impl <C> SyncStage for ApplyMotifNet<C> where
     C: RunCtx + MotifsCtx + Adjustable
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::do_run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
-
         let params = input.motif_net.extra();
 
         let input_t = input.batch.as_ref();
         let c = params.channel() as i64;
         let motif_width = input.motif_net.extra().motif_net_params.num_features() as i64;
+        let batch_len = input_t.size()[0];
+        debug!("ApplyMotifNet::do_run: input_t.device={:?} requires_grad={} input_t.size={:?}", input_t.device(), input_t.requires_grad(), input_t.size());
+        let slices = input_t.i((.., c, ..)).unfold(1, motif_width, 1).reshape([-1, motif_width]);
 
-        let slices = input_t.i((.., c, ..)).unfold(1, motif_width, 1).reshape([-1, motif_width]);;
+        debug!("ApplyMotifNet::do_run: slices.size={:?}",  slices.size());
 
-        debug!("ApplyMotifNet::do_run: input_t.size={:?} slices.size={:?}", input_t.size(), slices.size());
-        let out = input.motif_net.data().tho_forward(&ThoTensor::new("".into(), slices), false);
-        let out = ThoTensor::new("".into(), out.t.view((input_t.size()[0], -1)));
+        let out = Self::run_forward(input, slices);
+
+        let out = ThoTensor::new("".into(), out.t.view((batch_len, -1)));
 
         debug!("ApplyMotifNet::do_run: out.size={:?}", out.size());
         Ok(out)
+    }
+
+}
+
+impl<C> ApplyMotifNet<C>
+where
+    C: Adjustable + MotifsCtx + RunCtx,
+{
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run_forward"))]
+    fn run_forward(input: &ApplyMotifNetInput, slices: Tensor) -> ThoTensor<MotifProbability, CachableId> {
+        input.motif_net.data().tho_forward(&ThoTensor::new("".into(), slices), false)
     }
 }
 
@@ -598,6 +620,7 @@ pub(crate) mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{CopyToDevice, MotifKind, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::perf_logging::PERF;
     use thoosa_shared::traits::Named;
     use thoosa_shared::traits::SimpleId;
     use thoosa_store::MockStoreBuilder;
@@ -607,7 +630,9 @@ pub(crate) mod tests {
     use crate::tasks::tensor_loader::mock_tensor_loader;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_apply_motif_nets_3_channels_2_motifs() -> Result<(), ThoosaError> {
+    async fn test_apply_motif_nets_3_channels_2_motifs() -> Result<(), ThoosaError>
+    {
+        thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
@@ -703,6 +728,8 @@ pub(crate) mod tests {
             Arc::new(DevicesWrap::wrap(ThoTensor::new("test_batch".into(), batch), 0)),
             Arc::clone(&run_ctx)
         ).await?;
+
+        debug!("test_apply_motif_nets_3_channels_1_motif: PERF={:?}", PERF);
 
 
         debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_intervals={resource_a_intervals:?}");

@@ -20,14 +20,14 @@ use thoosa_common::tho_tensor::{Labels, ThoTensor};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, SimpleId, WithId};
 use crate::tasks::cross_dims::ChannelsData2;
-use caching_runner::common::{OutId, RunCtx};
+use caching_runner::common::{OutId, PermitsCtx, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch, ThoBatchIter};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train_2, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train_2, CommonTrainingRunConfig, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, train_2, train_3, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -39,13 +39,14 @@ use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::run_ctx_2::MotifsCtx;
+use crate::tasks::run_ctx_2::{MotifsCtx, RunCtx2};
 use rand::{rng, seq::SliceRandom};
 use tch::kind::FLOAT_CPU;
 use tokio::{join, try_join};
 use caching_runner::permits::{RunnerPerm, MAX_PERMITS};
 use thoosa_dummy_data_derive::DummyData;
 use crate::tasks::stages_seq::ABStage;
+use crate::tasks::train_net::{TrainNet, TrainNetInput};
 
 #[derive(Debug)]
 pub struct TrainLabelNets<L, C>
@@ -65,6 +66,7 @@ where
     apply_motif_nets:Arc<ApplyMotifNets<C>>,
     store: Arc<RwLock<Box<dyn Store>>>,
     opt_config:Arc<OptConfig>,
+
 }
 
 impl <L, C> TrainLabelNets<L, C>
@@ -92,7 +94,8 @@ where
             apply_motif_nets: Arc::new(ApplyMotifNets::new("".into(), ws, store, select_motifs_run_ids.clone(), stage_ctx).await?),
             store: Arc::clone(store),
             opt_config,
-            select_motifs_run_ids
+            select_motifs_run_ids,
+
         })
     }
 
@@ -195,16 +198,12 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainLabelNets::run"))]
     fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> + Send {
         let (device_idx, cache_area, ctx_name) = {
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
-
-
-
-
-
 
         let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
         let ctx = Arc::clone(&ctx);
@@ -245,17 +244,21 @@ where
 
                 tokio::spawn(async move {
                     let (label, resources_1) = label_tain_and_valid_sets;
+                    let new_name = format!("Train_{label}");
                     let out_key = {
-                        let out_id = SimpleId::from(format!("Train_{label}"));  //self.out_id(input.id());
+
+                        let out_id = SimpleId::from(new_name.clone());  //self.out_id(input.id());
                         Arc::new(out_id) as Arc<dyn CachableIdTr>
                     };
+                    let ctx = Arc::clone(&ctx).read().branch(&new_name);
+                    let ctx_0 = Arc::clone(&ctx);
+                    // if ctx.read().acquired_permits() == 0 {
+                    //     let result = GlobalCtx::global()
+                    //         .acquire_many(device_idx, 1, out_key.clone())
+                    //         .await?;
+                    //     ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
+                    // }
 
-                    if ctx.read().acquired_permits() == 0 {
-                        let result = GlobalCtx::global()
-                            .acquire_many(device_idx, 1, out_key.clone())
-                            .await?;
-                        ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
-                    }
 
                     debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
@@ -268,17 +271,14 @@ where
                     let resources_0_valid = Arc::new(resources_0.1.clone());
                     let label = label.clone();
                     let label_ = label.clone();
-                    //TODO async OOM
-                    opt_train_2(
-                        opt_config,
 
-                    async move  |vs: &VarStore, run_config: TrainLabelNetsRunConfig, _listener| {
-
+                    let train_net:Arc<TrainNet<C, L, _, _, _, _, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfig, _, LabelNetParams, _, _>> = Arc::new(TrainNet::new(
+                        move |rc:&TrainLabelNetsRunConfig| {
                             let apply_motif_nets = Arc::clone(&apply_motif_nets);
-                            let label = label.clone();
-                            let resources_batch = ResourcesBatch::new(
+
+                            ResourcesBatch::new(
                                 Arc::clone(&loader),
-                                run_config.common_training_args.batch_size,
+                                rc.common_training_args.batch_size,
                                 Arc::clone(&resources_1_train),
                                 Arc::clone(&resources_1_valid),
                                 Arc::clone(&resources_0_train),
@@ -324,39 +324,132 @@ where
                                     }.boxed()
                                 }),
                                 Arc::clone(&ctx)
-                            );
-
-                            //TODO build proper LabelNetParams
-                            let num_layers = match run_config.net {
-                                LabelNetTypeArgs::MaxPadding(MaxPaddingNetArgs{num_layers}) => {
-                                    num_layers
-                                }
-                                LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs{num_layers, ..}) => {
-                                    num_layers
-                                }
-                            };
-
-                            let params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
-                            let loss = train_label_net_2(&run_config, &resources_batch, &ThoDevice::from(device_idx), vs, params.clone(), Arc::clone(&ctx), &label).await?;
-
-                            Ok((loss, params))
+                            )
                         },
+                        move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
+                            let net_params = LabelNetParams::new(channels as u32, num_nets, 10, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
+                            Ok((any_len_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
+                        },
+                        opt_config,
                         train_motifs_nodes_run_configs,
-                        ThoDevice::from(device_idx).into(),
-                        "labels",
-                    ).await.map(|(var_store, label_node_params, train_motifs_nets_run_config, min_loss)| {
+                        |pred: &Tensor, target: &Tensor| {
+                            debug!("train_label_net: pred.size={:?}", pred.size());
+                            let pred_y = pred;//.squeeze();
+                            debug!("train_label_net: pred_y={:?} target={:?} kind={:?}",pred_y.size(),target.size(),target.kind());
+                            trace!("train_label_net: pred_y=\n{pred_y} target=\n{target} kind={:?}",target.kind());
+                            pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
+                        },
+                        move |rc:&TrainLabelNetsRunConfig, vs: &VarStore|{
+                            AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e|e.into())
+                        },
+                        |t:ThoBatch<MotifProbability>| {
+                            debug!("train_label_net: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
+                            t
+                        }
+                    ));
 
-                        debug!("TrainLabelNet::run: label_node_params={label_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
-                        TrainLabelNetsRunConfigResult::new(
-                            select_motifs_run_ids,//TODO
-                            label_,
-                            min_loss,
-                            label_node_params,
-                            train_motifs_nets_run_config,
-                            var_store,
+                    let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap_cpu(TrainNetInput::new("".into()))), Arc::clone(&ctx_0)).await?).unwrap().take_data(0).await?;
+                    Ok(
+                            TrainLabelNetsRunConfigResult::new(
+                                select_motifs_run_ids,//TODO
+                                label_,
+                                result.min_loss,
+                                result.node_params,
+                                result.run_config,
+                                result.var_store,
+                            )
+                    )
+                    //TODO async OOM
+                    // opt_train_2(
+                    //     opt_config,
+                    //
+                    // async move  |vs: &VarStore, run_config: TrainLabelNetsRunConfig, _listener| {
+                    //
+                    //         let apply_motif_nets = Arc::clone(&apply_motif_nets);
+                    //         let label = label.clone();
+                    //         let resources_batch = ResourcesBatch::new(
+                    //             Arc::clone(&loader),
+                    //             run_config.common_training_args.batch_size,
+                    //             Arc::clone(&resources_1_train),
+                    //             Arc::clone(&resources_1_valid),
+                    //             Arc::clone(&resources_0_train),
+                    //             Arc::clone(&resources_0_valid),
+                    //
+                    //             Box::new(move |x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>,  x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>, ctx: Arc<RwLock<C>>|{
+                    //                 let apply_motif_nets = Arc::clone(&apply_motif_nets);
+                    //
+                    //                 async move {
+                    //                     let (x,y) = with_data!(ctx, ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<ChannelsData2, SimpleId>], x_0:&[&ThoTensor<ChannelsData2, SimpleId>]|{
+                    //                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
+                    //
+                    //                         let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.size()[1]).max().expect("no max_input");
+                    //
+                    //                         debug!("ResourcesBatch::train_batch_iter: max_input={max_input}");
+                    //
+                    //                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|{
+                    //                             Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())//TODO
+                    //                         }).collect::<Result<Vec<_>, ThoosaError>>()?, 0);
+                    //
+                    //                         let x_0 = Tensor::stack(&x_0.into_iter().map(|v|{
+                    //                             Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())
+                    //                         }).collect::<Result<Vec<_>, ThoosaError>>()?, 0);
+                    //
+                    //                         Ok::<_, ThoosaError>(mix_x_binary_with_labels(&x_1, &x_0))
+                    //                     })?;
+                    //
+                    //                     let x_batch:Arc<DevicesWrap<ThoTensor<Batch<ChannelsData2>, SimpleId>>> = Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), x.shallow_clone()), cache_area));
+                    //                     let motif_probs = Arc::clone(&apply_motif_nets).run(
+                    //                         x_batch,
+                    //                         ctx
+                    //                     ).await?;
+                    //
+                    //                     //apply_motif_nets is not caching so Arc can't have other refs
+                    //                     let motifs_probs_batch = Arc::into_inner(motif_probs).expect("can't take arc").take_data(0).await?;
+                    //                     debug!("ResourcesBatch::train_batch_iter: motifs_probs_batch={motifs_probs_batch:?} ");
+                    //
+                    //
+                    //                     Ok((
+                    //                         ThoTensor::<Batch<MotifProbability>, SimpleId>::new("".into(), Tensor::stack(motifs_probs_batch.matches.into_iter().map(|tt|tt.t).collect::<Vec<_>>().as_slice(), 1)),//motifs_probs_batch.matches contains [batch x probs] for each motif, stack(.., 1) - dim 1 makes [batch x motifs x dists]
+                    //                         ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y),
+                    //                     ))
+                    //                 }.boxed()
+                    //             }),
+                    //             Arc::clone(&ctx)
+                    //         );
+                    //
+                    //         //TODO build proper LabelNetParams
+                    //         let num_layers = match run_config.net {
+                    //             LabelNetTypeArgs::MaxPadding(MaxPaddingNetArgs{num_layers}) => {
+                    //                 num_layers
+                    //             }
+                    //             LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs{num_layers, ..}) => {
+                    //                 num_layers
+                    //             }
+                    //         };
+                    //
+                    //         let params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
+                    //         let loss = train_label_net_2(&run_config, &resources_batch, &ThoDevice::from(device_idx), vs, params.clone(), Arc::clone(&ctx), &label).await?;
+                    //
+                    //         Ok((loss, params))
+                    //     },
+                    //     train_motifs_nodes_run_configs,
+                    //     ThoDevice::from(device_idx).into(),
+                    //     "labels",
+                    // ).await.map(|(var_store, label_node_params, train_motifs_nets_run_config, min_loss)| {
+                    //
+                    //     debug!("TrainLabelNet::run: label_node_params={label_node_params:?} train_motifs_nets_run_config={train_motifs_nets_run_config:?} min_loss={min_loss}");
+                    //     TrainLabelNetsRunConfigResult::new(
+                    //         select_motifs_run_ids,//TODO
+                    //         label_,
+                    //         min_loss,
+                    //         label_node_params,
+                    //         train_motifs_nets_run_config,
+                    //         var_store,
+                    //
+                    //     )
+                    // })
 
-                        )
-                    })
+                    // Err::<TrainLabelNetsRunConfigResult, ThoosaError>(ThoosaError::new("zzz"))
                 })
 
             })
@@ -659,15 +752,14 @@ where
     pub struct PurgeCacheListener<C>
     where
         C:RunCtx{
-        permits_key:String,
         ctx:Arc<RwLock<C>>
     };
 
     impl <C>  PurgeCacheListener<C>
     where
         C:RunCtx{
-        pub fn new(ctx: Arc<RwLock<C>>, permits_key:String) -> Self {
-            Self { ctx, permits_key }
+        pub fn new(ctx: Arc<RwLock<C>>) -> Self {
+            Self { ctx }
         }
     }
 
@@ -676,25 +768,41 @@ where
         C:RunCtx{
         fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<ListenerResponse> {
             let acquired_permits = self.ctx.read().acquired_permits();
+            let name = self.ctx.read().name();
             Box::pin(async move {
-
+                let mut cnt = 0;
                 loop {
 
-                    match GlobalCtx::global().acquire_many(1, MAX_PERMITS-acquired_permits, Arc::new(SimpleId::from(self.permits_key.clone()))).await {
+                    match GlobalCtx::global().acquire_many(1, MAX_PERMITS-acquired_permits, Arc::new(SimpleId::from(name))).await {
                         Ok(permits) => {
                             info!("got {permits:?} purging all");
-                            match C::purge_gpu_caches(Arc::clone(&self.ctx)).await{
-                                Ok(_) => {
-                                    info!("purging done");
-                                    break
-                                }
-                                Err(e) => {
-                                    info!("purging failed {e:?}");
-                                }
+                            match GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await {
+                                    Ok(_) => {
+                                        info!("dump_all_to_cpu done");
+                                        break
+                                    }
+                                    Err(e) => {
+                                        info!("dump_all_to_cpu failed {e:?}");
+                                    }
                             }
+                            // match C::purge_gpu_caches(Arc::clone(&self.ctx)).await{
+                            //     Ok(_) => {
+                            //         info!("purging done");
+                            //         break
+                            //     }
+                            //     Err(e) => {
+                            //         info!("purging failed {e:?}");
+                            //     }
+                            // }
                         }
                         Err(e) => {
-                            info!("can't get permits e={e:?}");
+                            info!("can't get permits cnt={cnt}");
+                            if cnt > 1000 {
+                                break
+                            } else {
+                                cnt+=1;
+                                tokio::task::yield_now().await;
+                            }
                         }
                     }
                 }
@@ -723,11 +831,11 @@ where
         },
         run_config.common_training_args.cycles as usize,
         optimizer.build(&vs, run_config.common_training_args.lr)?,
-        |t| {
+        &|t| {
             debug!("train_label_net: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
             t
         },
-        Some(&mut PurgeCacheListener::new(ctx,  format!("Train_{}", label))),
+        Some(&mut PurgeCacheListener::new(ctx)),
     )
         .await?;
 
@@ -741,15 +849,18 @@ mod tests {
     use tokio::fs;
     use std::path::Path;
     use std::sync::Arc;
+    use std::time::Duration;
     use futures_util::StreamExt;
     use futures::FutureExt;
-    use log::debug;
-    use log::LevelFilter::{Debug, Trace};
+    use log::{debug, info, set_max_level, LevelFilter};
+    use log::LevelFilter::{Debug, Info, Trace};
     use mockall::predicate::always;
     use parking_lot::RwLock;
     use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
+    use tokio::io::Join;
+    use tokio::task::JoinSet;
     use caching_runner::common::cachable::DevicesWrap;
     use caching_runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use caching_runner::common::PermitsCtx;
@@ -767,6 +878,7 @@ mod tests {
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_shared::traits::{Named, SimpleId};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::MockStoreBuilder;
@@ -778,17 +890,20 @@ mod tests {
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::train_label_nets::{ResourcesBatch, TrainLabelNets, TrainLabelNetsInput, TrainLabelNetsOutput};
 
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::test_utils::init_test_logging();
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_train_label_net_3x3() -> Result<(), ThoosaError>
     {
 
-
-
-
+        thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("info");
         let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
-        log::set_max_level(Debug);
+        log::set_max_level(Info);
         reset_print_options();
         GlobalCtx::init_devices(2);
 
@@ -972,6 +1087,9 @@ mod tests {
 
         let out = train_label_nets.run(input, Arc::clone(&run_ctx)).await?;
 
+        info!("test_train_label_net_3x3: PERF={PERF:?}");
+        info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
+
         with_data!(run_ctx, 0, out; |out:&TrainLabelNetsOutput|{
 
             debug!("test_train_label_net_3x3: 0. out={out:?}");
@@ -1068,5 +1186,37 @@ mod tests {
 
 
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_0(){
+        thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("info");
+        set_max_level(LevelFilter::Debug);
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="aaa"))]
+        async fn some_fn_a(i:usize) {
+            debug!("some_fn: i={i}");
+
+            some_fn_b(i).await;
+
+            tokio::time::sleep( Duration::from_millis(1000)).await;
+        }
+
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="bbbbbb"))]
+        async fn some_fn_b(i:usize) {
+            debug!("some_fn: i={i}");
+            // do stuff
+            tokio::time::sleep( Duration::from_millis(1000)).await;
+        }
+
+
+        (0..3).map(|i|{
+            async move {
+                some_fn_a(i).await;
+            }
+        }).collect::<JoinSet<()>>().join_all().await;
+
+        info!("\n{}", format_perf_map(&PERF));
+
+
     }
 }

@@ -513,8 +513,7 @@ where
                                     }
                                 };
 
-                                let task_to_run =
-                                    task_adjusted.clone().unwrap_or_else(|| Arc::clone(&task));
+                                let task_to_run = task_adjusted.clone().unwrap_or_else(|| Arc::clone(&task));
 
                                 if run_context.read().acquired_permits() == 0 {
                                     let result = GlobalCtx::global()

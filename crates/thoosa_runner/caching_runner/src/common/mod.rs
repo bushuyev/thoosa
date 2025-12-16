@@ -45,6 +45,10 @@ pub trait RunCtx: PermitsCtx {
     }
 
     fn cache_area(&self) -> u64;
+
+    fn branch(&self, new_name:&str)-> Arc<RwLock<Self>> {
+        todo!()
+    }
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -82,6 +86,7 @@ pub mod mock_run_ctx {
             fn device_idx(&self) -> usize;
             fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>;
             fn cache_area(&self) -> u64;
+            fn branch(&self, new_name:&str)-> Arc<RwLock<Self>>;
         }
 
     }
@@ -129,6 +134,24 @@ pub mod mock_run_ctx {
             self
         }
 
+        pub fn with_branch(mut self)-> Self {
+            self.mock.expect_branch()
+                .with(always())
+                .returning(|_|{
+                    Arc::new(RwLock::new(build()
+                        .with_device_idx(1)
+                        .with_acquired_permits(100)
+                        .with_add_permits()
+                        .with_drop_permits(vec![IfNotMax])
+                        .with_cache_area(0)
+                        // .with_purge_gpu_caches()
+                        .finish()))
+
+                });
+
+            self
+        }
+
         pub fn finish(self) -> MockRunCtx {
             self.mock
         }
@@ -148,6 +171,7 @@ pub mod mock_run_ctx {
             .with_drop_permits(vec![IfNotMax])
             .with_cache_area(0)
             // .with_purge_gpu_caches()
+            .with_branch()
             .finish()
     }
 }
