@@ -21,6 +21,7 @@ where
 {
     pd: PhantomData<A>,
     min_split_len: M,
+    overlap_len: Option<M>, //for compensating lost slices when chunk needs to be sliced (unfolded)
 }
 
 impl<A, M> SplitsAdjuster<A, M>
@@ -37,6 +38,17 @@ where
         Self {
             pd: Default::default(),
             min_split_len,
+            overlap_len:None
+        }
+    }
+
+    pub fn new_with_overlap(min_split_len: M, overlap_len:M) -> Self {
+        debug!("SplitsAdjuster::new_with_overlap: min_split_len={min_split_len:?}");
+
+        Self {
+            pd: Default::default(),
+            min_split_len,
+            overlap_len:Some(overlap_len)
         }
     }
 }
@@ -63,13 +75,15 @@ where
 
         let mut split_end = split_start.clone();
         split_end += adjust_context.split_len().clone();
+        if let Some(overlap_len) = self.overlap_len.as_ref() {
+            split_end += overlap_len.clone();
+        }
         adjust_context.input_len().cap(&mut split_end);
 
         debug!("SplitsAdjuster::adjust: split_start={split_start:?} split_end={split_end:?} adjustable.size={:?}", adjust_context.input_len());
 
 
         Ok((split_start.clone()..split_end).into())
-        // todo!()
     }
 
     fn degrade(&self, adjust_context: &mut AC) -> bool {
@@ -130,9 +144,6 @@ where
         self.done_to >= self.input_len
     }
 
-    // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics {
-    //     &self.input_len
-    // }
 
     async fn build_final_output(self) -> Result<R::Out, ThoosaError> {
         self.output_builder.build().await

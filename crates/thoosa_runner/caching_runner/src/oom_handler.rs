@@ -379,6 +379,7 @@ where
                     let selected = input
                         .with_selected_data(device_idx, selector.clone(), |data| Ok(data))
                         .await?;
+
                     Arc::new(DevicesWrap::wrap(selected, cache_area))
                 } else {
                     
