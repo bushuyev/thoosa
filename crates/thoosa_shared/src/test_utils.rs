@@ -10,10 +10,20 @@ use std::env::VarError;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{
+    fmt,
+    fmt::{format::Writer, time::ChronoLocal},
+    layer::SubscriberExt,
+    registry,
+    EnvFilter, Layer,
+};
+use crate::perf_logging::{PerfLayer, SimplelogLikeEvent};
 
 pub fn init_test_logging() {
     if !LOG_INIT.load(Ordering::Relaxed) {
         LOG_INIT.store(true, Ordering::Relaxed);
+        //TODO CombinedLogger not needed?
         CombinedLogger::init(vec![TermLogger::new(
             LevelFilter::Trace, //to let set trace level from tests with set_max_level
             ConfigBuilder::new()
@@ -51,6 +61,34 @@ pub fn init_test_logging() {
         }
     }
 }
+
+
+/// Initialize a perf-only tracing subscriber that writes to **stdout**.
+/// Intended for tests (so you can `cargo test -- --nocapture`).
+///
+/// Returns `true` if it successfully installed the subscriber, `false` if a
+/// subscriber was already installed (common in test harnesses).
+pub fn maybe_init_perf_tracing_stdout(perf_filter: &str) -> bool {
+    if perf_filter.trim() == "off" {
+        return false;
+    }
+
+    let timer = tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S".to_string());
+
+    let layer = fmt::layer()
+        .with_ansi(true)
+        .with_writer(std::io::stdout)
+        .with_span_events(fmt::format::FmtSpan::CLOSE)
+        .event_format(SimplelogLikeEvent::new(timer))
+        .with_filter(EnvFilter::new(perf_filter));
+
+    tracing_subscriber::registry()
+        .with(layer)
+        .with(PerfLayer::new())
+        .try_init()
+        .is_ok()
+}
+
 
 pub fn set_panic_hook() {
     // std::panic::set_hook(Box::new(|panic_info| {

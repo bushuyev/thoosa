@@ -109,12 +109,12 @@ where
             Arc::new(out_id) as Arc<dyn CachableIdTr>
         };
 
-        if ctx.read().acquired_permits() == 0 {
-            let result = GlobalCtx::global()
-                .acquire_many(device_idx, 1, out_key.clone())
-                .await?;
-            ctx.write().add_permit(result);
-        }
+        // if ctx.read().acquired_permits() == 0 {
+        //     let result = GlobalCtx::global()
+        //         .acquire_many(device_idx, 1, out_key.clone())
+        //         .await?;
+        //     ctx.write().add_permit(result);
+        // }
 
 
         let num_devices = GlobalCtx::global().device_count();

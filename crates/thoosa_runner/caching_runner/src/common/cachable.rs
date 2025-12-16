@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use thoosa_shared::MyError;
 use tokio::sync::{Notify, RwLockReadGuard};
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::{Data, Select};
+use thoosa_shared::traits::{Data, Select, SimpleId};
 use thoosa_with_data::with_data;
 
 #[async_trait]
@@ -788,9 +788,11 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
         P:PermitsCtx
     {
-        if to_device_idx > 0 {
-            assert!(permits_ctx.read().acquired_permits() > 0);
-        }
+        let _permit = GlobalCtx::global().acquire_many(1, 1, Arc::new(SimpleId("with_data_ref")));//TODO .await?;
+        //TODO
+        // if to_device_idx > 0 {
+        //     assert!(permits_ctx.read().acquired_permits() > 0);
+        // }
 
         match self.load_from_any_device_(to_device_idx).await {
             Ok(v) => {
