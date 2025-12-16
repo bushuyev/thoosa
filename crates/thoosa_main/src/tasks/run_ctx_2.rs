@@ -104,7 +104,9 @@ impl RunCtx for RunCtx2 {
         self.cache_area
     }
 
-
+    fn branch(&self, new_name: &str) -> Arc<RwLock<Self>> {
+        Arc::new(parking_lot::RwLock::new(RunCtx2::new(self.device_idx, self.cache_area, new_name.to_string().leak())))//TODO
+    }
 }
 
 

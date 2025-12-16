@@ -1863,6 +1863,7 @@ pub enum ListenerResponse {
     Nope,
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="train_3"))]
 pub async fn train_3<F, DI: Dims, DO: Dims>(
     device: &Device,
     data: &dyn AsyncDataBatch<DI, DO>,
@@ -1870,7 +1871,7 @@ pub async fn train_3<F, DI: Dims, DO: Dims>(
     loss_fn: LossFp,
     cycles: usize,
     mut opt: Optimizer,
-    x_f: F,
+    x_f: &F,
     mut listener: Option<&mut dyn TrainListener>,
 ) -> Result<f32, ThoosaError>
 where

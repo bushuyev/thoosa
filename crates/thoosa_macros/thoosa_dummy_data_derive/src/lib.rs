@@ -35,7 +35,7 @@ pub fn derive_dummy_data(input: TokenStream) -> TokenStream {
         #[automatically_derived]
         #[async_trait::async_trait]
         impl #impl_generics ::thoosa_shared::CopyToDevice for #ident #ty_generics #where_clause {
-            async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+            async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, thoosa_shared::ThoosaError> {
                 #copy_body
             }
         }
