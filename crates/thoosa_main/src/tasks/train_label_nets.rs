@@ -385,7 +385,7 @@ where
                             let pred_y = pred;//.squeeze();
                             debug!("train_label_net: pred_y={:?} target={:?} kind={:?}",pred_y.size(),target.size(),target.kind());
                             trace!("train_label_net: pred_y=\n{pred_y} target=\n{target} kind={:?}",target.kind());
-                            pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
+                            Ok(pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean))
                         },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore|{
                             AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e|e.into())

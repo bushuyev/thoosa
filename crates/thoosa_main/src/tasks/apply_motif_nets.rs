@@ -550,7 +550,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} slices.size={:?}",  slices.size());
 
                 let slices_tensor = ThoTensor::new("".into(), slices)?;
-                let out = net.data().tho_forward(&slices_tensor, false);
+                let out = net.data().tho_forward(&slices_tensor, false)?;
 
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} out.size={:?}", out.size());
 
@@ -568,7 +568,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run_forward"))]
     fn run_forward(input: &ApplyMotifNetInput, slices: Tensor) -> Result<ThoTensor<MotifProbability, CachableId>, ThoosaError> {
         let slices = ThoTensor::new("".into(), slices)?;
-        Ok(input.motif_net.data().tho_forward(&slices, false))
+        Ok(input.motif_net.data().tho_forward(&slices, false)?)
     }
 }
 

@@ -566,7 +566,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run_forward"))]
     fn run_forward(input: &ApplyMotifNetInput, slices: Tensor) -> Result<ThoTensor<MotifProbability, CachableId>, ThoosaError> {
         let slices = ThoTensor::new("".into(), slices)?;
-        Ok(input.motif_net.data().tho_forward(&slices, false))
+        Ok(input.motif_net.data().tho_forward(&slices, false)?)
     }
 }
 
@@ -785,7 +785,7 @@ pub(crate) mod tests {
 
                     debug!("motif_node_2: 0. input.size={:?}", r.size());
 
-                    r
+                    Ok(r)
                 })),
                 None,
             )
@@ -795,14 +795,14 @@ pub(crate) mod tests {
                     SeqBuilder::new(num_features, None)
                         .closure(
                             Arc::new(Box::new(move |t: &Tensor| {
-                                t.pow_tensor_scalar(2)
+                                Ok(t.f_pow_tensor_scalar(2)?)
                             })),
                             None,
                         )
                         .conv_1d("energy", l as u32, 1, 1, cfg, Some(Arc::clone(&ones)))
                         .closure(
                             Arc::new(Box::new(move |t: &Tensor| {
-                                t.clamp_min(1e-12) //.sqrt()
+                                Ok(t.f_clamp_min(1e-12)?) //.sqrt()
                             })),
                             None,
                         )
@@ -849,7 +849,7 @@ pub(crate) mod tests {
         let test_net = dummy_motif_net::<AnyDims, AnyDims>(100, 1., Cpu, "test", &motif_t.i((0, ..)), 1)?;
 
         let resource = ThoTensor::new("".into(), resource_a_t.shallow_clone())?;
-        let out = test_net.tho_forward(&resource, false).t;//.i((0, .., 0));//channel[1], slices, vals[1]
+        let out = test_net.tho_forward(&resource, false)?.t;//.i((0, .., 0));//channel[1], slices, vals[1]
 
         /*plot_series_with_lanes(
             vec![

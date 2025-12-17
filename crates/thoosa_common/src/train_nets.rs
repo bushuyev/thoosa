@@ -1012,7 +1012,7 @@ pub fn train_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, B: 
                 target.size(),
                 target.kind()
             );
-            pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
+            Ok(pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean))
         },
         run_config.common_training_args.cycles as usize,
         optimizer.build(&var_store, run_config.common_training_args.lr)?,
@@ -1143,57 +1143,6 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
     }
 }
 
-pub async fn train_final_net_2<B: AsyncDataBatch<LabelNetsProbabilities, LabelsProbabilities>>(
-    run_config_values: &TrainFinalNetRunConfig,
-    label_nets_num: u32,
-    labels_num: u32,
-    batch: &mut B,
-    var_store: &VarStore,
-    device: &Device,
-) -> Result<(f32, FinalNetParams), ThoosaError> {
-    let final_node_params =
-        FinalNetParams::new(label_nets_num, labels_num, run_config_values.net.num_layers);
-    debug!("train_final_node: final_node_params={final_node_params:?}");
-
-    let optimizer = nn::Adam::default();
-    /* if let Some(adam_w) = run_config_values.adam_w {
-        debug!("train_final_nodes: setting adam_w={adam_w:?}");
-        optimizer = optimizer.beta1(adam_w.beta1).beta2(adam_w.beta2);
-    }*/
-
-    let loss = train_2(
-        device,
-        batch,
-        final_net(&final_node_params)
-            .build_tch_module::<Batch<LabelNetsProbabilities>, Batch<LabelsProbabilities>>(
-                &var_store.root(),
-            )?,
-        |pred: &Tensor, target: &Tensor| {
-            debug!(
-                "train_final: pred.size={:?} target.size={:?}",
-                pred.size(),
-                target.size()
-            );
-            trace!("train_final: pred=\n{pred} target=\n{target}");
-            let pred = pad_to(&pred, &target.size()).expect("pad_to failed");
-            debug!("train_final: padded pred.size={:?}", pred.size());
-
-            pred.cross_entropy_loss::<Tensor>(&target, None, Reduction::Mean, -100, 0.0)
-        },
-        run_config_values.common_training_args.cycles as usize,
-        optimizer.build(&var_store, run_config_values.common_training_args.lr)?,
-        |t: ThoBatch<LabelNetsProbabilities>| {
-            trace!("train_final: t=\n{t}");
-            debug!("train_final: t.size={:?} ", t.size());
-
-            t.as_ref().squeeze().into() //TODO move squeeze
-        },
-        None,
-    )
-    .await?;
-
-    Ok((loss, final_node_params))
-}
 
 pub fn train_final_net(
     run_config_values: &TrainFinalNetRunConfig,
@@ -1230,7 +1179,7 @@ pub fn train_final_net(
             let pred = pad_to(&pred, &target.size()).expect("pad_to failed");
             debug!("train_final: padded pred.size={:?}", pred.size());
 
-            pred.cross_entropy_loss::<Tensor>(&target, None, Reduction::Mean, -100, 0.0)
+            Ok(pred.cross_entropy_loss::<Tensor>(&target, None, Reduction::Mean, -100, 0.0))
         },
         run_config_values.common_training_args.cycles as usize,
         optimizer.build(&var_store, run_config_values.common_training_args.lr)?,
@@ -1295,7 +1244,7 @@ unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO>
     for ThoModuleWithStore<DI, DO>
 {
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
         self.module.tho_forward(t, train)
     }
 }
@@ -1346,7 +1295,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     }
 
     pub fn infer(&self, t: &ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> {
-        self.module.tho_forward(t, false)
+        self.module.tho_forward(t, false).unwrap()
     }
 
     pub fn var_store(&self) -> &VarStore {
@@ -1582,13 +1531,13 @@ pub fn motif_node_2(params: &MotifNetParams) -> Node {
 
                 debug!("motif_node_2: 0. input.size={:?}", r.size());
 
-                r
+                Ok(r)
             })),
             None,
         )
         // .batch_norm()
         .conv_1d("conv_1", 10, 1, 4, nd, None)
-        .func(Tensor::relu)
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .adaptive_max_pool(1, 4)
         .closure(
             Arc::new(Box::new(move |t: &Tensor| {
@@ -1597,7 +1546,7 @@ pub fn motif_node_2(params: &MotifNetParams) -> Node {
 
                 debug!("motif_node_2: 1. input.size={:?}", r);
 
-                r
+                Ok(r)
             })),
             None,
         )
@@ -1607,7 +1556,7 @@ pub fn motif_node_2(params: &MotifNetParams) -> Node {
             #[cfg(debug_assertions)]
             "motif_node first layer".to_string(),
         )
-        .func(Tensor::relu);
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()));
 
     for i in 0..params.num_layers as usize {
         net = net
@@ -1616,18 +1565,18 @@ pub fn motif_node_2(params: &MotifNetParams) -> Node {
                 #[cfg(debug_assertions)]
                 format!("motif_node  {i}th layer"),
             )
-            .func(Tensor::relu);
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
     }
 
     net
         // .linear_s(180)
-        .func(Tensor::relu)
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
             1,
             #[cfg(debug_assertions)]
             "motif_node last layer".to_string(),
         )
-        .func(Tensor::sigmoid)
+        .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
 }
 
@@ -1643,7 +1592,7 @@ pub fn motif_node(params: &MotifNetParams) -> Node {
             #[cfg(debug_assertions)]
             "motif_node first layer".to_string(),
         )
-        .func(Tensor::relu);
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()));
 
     for i in 0..params.num_layers as usize {
         net = net
@@ -1652,18 +1601,18 @@ pub fn motif_node(params: &MotifNetParams) -> Node {
                 #[cfg(debug_assertions)]
                 format!("motif_node  {i}th layer"),
             )
-            .func(Tensor::relu);
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()));
     }
 
     net
         // .linear_s(180)
-        // .func(Tensor::relu)
+        // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
             1,
             #[cfg(debug_assertions)]
             "motif_node last layer".to_string(),
         )
-        .func(Tensor::sigmoid)
+        .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
 }
 
@@ -2117,7 +2066,7 @@ impl LabelNetParams {
             .closure(
                 Arc::new(Box::new(move |t: &Tensor| {
                     debug!("label_net_fixed_num_slices: input.size={:?}", t.size());
-                    t.shallow_clone()
+                    Ok(t.shallow_clone())
                 })),
                 None,
             )
@@ -2140,16 +2089,16 @@ impl LabelNetParams {
                                     #[cfg(debug_assertions)]
                                     format!("label_net_fixed_num_slices: motif nets {i}th layer"),
                                 )
-                                .func(Tensor::relu);
+                                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()));
                         }
 
-                        net.func(Tensor::relu)
+                        net.func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
                             .linear_s(
                                 1,
                                 #[cfg(debug_assertions)]
                                 "label_net_fixed_num_slices: motif nets last layer".to_string(),
                             )
-                            // .func(Tensor::sigmoid)
+                            // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
                             .end_seq()
                     })
                     .collect(),
@@ -2180,7 +2129,7 @@ impl LabelNetParams {
                         t.size()
                     );
 
-                    t.shallow_clone()
+                    Ok(t.shallow_clone())
                 })),
                 Some(motif_nodes),
             )
@@ -2188,13 +2137,13 @@ impl LabelNetParams {
                 #[cfg(debug_assertions)]
                 "label_net_fixed_num_slices: first main layer".to_string(),
             )
-            // .func(Tensor::relu)
+            // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
             .linear_s(
                 1,
                 #[cfg(debug_assertions)]
                 "label_net_fixed_num_slices: final layer".to_string(),
             )
-            .func(Tensor::sigmoid)
+            .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
             .end_seq()
     }
 
@@ -2209,7 +2158,7 @@ impl LabelNetParams {
             .closure(
                 Arc::new(Box::new(move |t: &Tensor| {
                     debug!("label_node_max_padding: input.size={:?}", t.size());
-                    t.shallow_clone()
+                    Ok(t.shallow_clone())
                 })),
                 None,
             )
@@ -2232,16 +2181,16 @@ impl LabelNetParams {
                                     #[cfg(debug_assertions)]
                                     format!("label_net_max_padding: motif nets {i}-th layer"),
                                 )
-                                .func(Tensor::relu);
+                                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
                         }
 
-                        net.func(Tensor::relu)
+                        net.func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
                             .linear_s(
                                 1,
                                 #[cfg(debug_assertions)]
                                 "label_net_max_padding: motif nets last layer".to_string(),
                             )
-                            // .func(Tensor::sigmoid)
+                            // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
                             .end_seq()
                     })
                     .collect(),
@@ -2278,7 +2227,7 @@ impl LabelNetParams {
                         t_0.size()
                     );
 
-                    t_0
+                    Ok(t_0)
                 })),
                 Some(params.channels),
             )
@@ -2286,13 +2235,13 @@ impl LabelNetParams {
                 #[cfg(debug_assertions)]
                 "label_net_max_padding: first main layer".to_string(),
             )
-            // .func(Tensor::relu)
+            // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
             .linear_s(
                 1,
                 #[cfg(debug_assertions)]
                 "label_net_max_padding: final layer".to_string(),
             )
-            .func(Tensor::sigmoid)
+            .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
             .end_seq()
     }
 }
@@ -2305,7 +2254,7 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
         .closure(
             Arc::new(Box::new(move |t: &Tensor| {
                 debug!("any_len_label_node: input={t:?}");
-                t.shallow_clone()
+                Ok(t.shallow_clone())
             })),
             None,
         )
@@ -2317,7 +2266,7 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
             .closure(
                 Arc::new(Box::new(move |t: &Tensor| {
                     debug!("any_len_label_node: motif input={t:?}");
-                    t.shallow_clone()
+                    Ok(t.shallow_clone())
                 })),
                 None,
             );
@@ -2327,7 +2276,7 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
                     #[cfg(debug_assertions)]
                     "any_len_label_node 0".to_string(),
                 )
-                    .func(Tensor::relu);
+                    .func(|t|Tensor::f_relu(t).map_err(|e|e.into()));
             }
             builder
                 .end_seq()
@@ -2372,7 +2321,7 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
         .closure(
             Arc::new(Box::new(move |t: &Tensor| {
                 debug!("any_len_label_node: final input={t:?}");
-                t.shallow_clone()
+                Ok(t.shallow_clone())
             })),
             None,
         )
@@ -2382,19 +2331,19 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
             #[cfg(debug_assertions)]
             "any_len_label_node 0".to_string(),
         )
-        .func(Tensor::relu)
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
             num_features,
             #[cfg(debug_assertions)]
             "any_len_label_node 1".to_string(),
         )
-        .func(Tensor::relu)
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
             1,
             #[cfg(debug_assertions)]
             "any_len_label_node 2".to_string(),
         )
-        .func(Tensor::sigmoid)
+        .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
 }
 
@@ -2412,7 +2361,7 @@ pub fn flat_label_node(params: &LabelNetParams) -> Node {
                 let t_0 = t.flatten(1, 2);// - channels removed
                 debug!("flat_label_node flatten t.size={:?} t_0.size={:?}",t.size(),t_0.size());
 
-                t_0
+                Ok(t_0)
             })),
             Some(num_features),
         )
@@ -2421,19 +2370,19 @@ pub fn flat_label_node(params: &LabelNetParams) -> Node {
             #[cfg(debug_assertions)]
             "flat_label_node 0".to_string(),
         )
-        .func(Tensor::relu)
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
             num_features,
             #[cfg(debug_assertions)]
             "flat_label_node 1".to_string(),
         )
-        .func(Tensor::relu)
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
             1,
             #[cfg(debug_assertions)]
             "flat_label_node 2".to_string(),
         )
-        .func(Tensor::sigmoid)
+        .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
 }
 
@@ -2469,7 +2418,7 @@ pub fn final_net(params: &FinalNetParams) -> Node {
             #[cfg(debug_assertions)]
             "final_net: first layer".to_string(),
         )
-        .func(Tensor::relu);
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()));
 
     for i in 0..params.num_layers {
         net = net
@@ -2478,11 +2427,11 @@ pub fn final_net(params: &FinalNetParams) -> Node {
                 #[cfg(debug_assertions)]
                 format!("final_net: {i}th layer"),
             )
-            .func(Tensor::relu)
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
     }
 
     net
-        // .func(Tensor::relu)
+        // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
             params.out_features,
             #[cfg(debug_assertions)]
@@ -2848,7 +2797,7 @@ pub fn run_train_motif_net(
             let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
             debug!("run_train_motif_net: loss={loss}");
 
-            loss
+            Ok(loss)
         },
         run_config.common_training_args.cycles as usize,
         AdamW::default()
@@ -2882,7 +2831,7 @@ pub async fn run_train_motif_net_2(
             let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean).set_requires_grad(true);
             debug!("run_train_motif_net: pred_y ={pred_y} target={target} loss={loss}");
 
-            loss
+            Ok(loss)
         },
         run_config.common_training_args.cycles as usize,
         AdamW::default()
@@ -3949,7 +3898,7 @@ mod train_tests {
                         t_0.size()
                     );
 
-                    t_0
+                    Ok(t_0)
                 })),
                 None,
             )
@@ -3978,14 +3927,14 @@ mod train_tests {
 
         //sums and multiplies by k
         let r_0: ThoTensor<AnyDims, CachableId> =
-            utils::test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, true);
+            utils::test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, true)?;
         debug!("r_0.size={:?}", r_0.size());
 
         assert_eq!(Tensor::from_slice(&[4950.]), r_0.as_ref().i((0, 0, ..)));
         assert_eq!(
             Tensor::from_slice(&[9900.]),
             utils::test_net::<AnyDims, AnyDims>(100, 2., Cpu, "test_net")?
-                .tho_forward(&t, true)
+                .tho_forward(&t, true)?
                 .as_ref()
                 .i((0, 0, ..))
         );
@@ -4791,19 +4740,19 @@ mod train_tests {
                 #[cfg(debug_assertions)]
                 "test".to_string(),
             )
-            .func(Tensor::relu)
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
             .linear_s(
                 FEATURES * 16,
                 #[cfg(debug_assertions)]
                 "test".to_string(),
             )
-            .func(Tensor::relu)
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
             .linear_s(
                 10,
                 #[cfg(debug_assertions)]
                 "test".to_string(),
             )
-            // .func(Tensor::sigmoid)
+            // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
             .end_seq();
 
         let res_seq_1 = SeqBuilder::new(FEATURES, None)
@@ -4817,19 +4766,19 @@ mod train_tests {
                 #[cfg(debug_assertions)]
                 "test".to_string(),
             )
-            .func(Tensor::relu)
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
             .linear_s(
                 FEATURES * 16,
                 #[cfg(debug_assertions)]
                 "test".to_string(),
             )
-            .func(Tensor::relu)
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
             .linear_s(
                 10,
                 #[cfg(debug_assertions)]
                 "test".to_string(),
             )
-            // .func(Tensor::sigmoid)
+            // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
             .end_seq();
 
         let full = SeqBuilder::new(FEATURES, None)
@@ -4852,14 +4801,14 @@ mod train_tests {
                 #[cfg(debug_assertions)]
                 "test".to_string(),
             )
-            .func(Tensor::relu)
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
             .linear_feats(
                 20,
                 1,
                 #[cfg(debug_assertions)]
                 "test".to_string(),
             )
-            .func(Tensor::sigmoid)
+            .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
             .end_seq();
 
         let mut vs_0 = VarStore::new(Cuda(0));
@@ -4962,13 +4911,13 @@ mod train_tests {
 
             trace!("target=\n{target}");
 
-            let pred = net_full.tho_forward(&input.totype(kind).into(), true);
+            let pred = net_full.tho_forward(&input.totype(kind).into(), true)?;
 
-            let loss = pred.as_ref().binary_cross_entropy(
+            let loss = pred.as_ref().f_binary_cross_entropy(
                 &target.totype(kind),
                 None::<Tensor>,
                 Reduction::Mean,
-            );
+            )?;
             if split_i == 0 {
                 //TODO off-load to CPU
                 opt_split_0.backward_step(&loss);
@@ -5019,7 +4968,7 @@ mod train_tests {
                 .to_device(Cuda(0))
                 .into(),
                 false,
-            ); //0
+            )?; //0
             info!("pred_0=\n{pred_0}");
 
             let pred_1 = net_full.tho_forward(
@@ -5034,7 +4983,7 @@ mod train_tests {
                 .to_device(Cuda(0))
                 .into(),
                 false,
-            ); //1
+            )?; //1
             info!("pred_1=\n{pred_1}");
 
             assert!(pred_0.as_ref().squeeze().double_value(&[]) < 0.5);

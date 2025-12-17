@@ -267,15 +267,16 @@ where
 
                             let x_t = (train_step.x_f())(x_t_0);
 
-                            let pred_y = train_step.forward(&x_t, false);
+                            let pred_y = train_step.forward(&x_t, false)?;
 
-                            let valid_loss = (train_step.loss_fn())(&pred_y.as_ref(), &y_t.as_ref());
+                            let valid_loss = (train_step.loss_fn())(&pred_y.as_ref(), &y_t.as_ref())?;
                             let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
 
                             last_valid_loss[(idx % last_valid_loss.len() as u32) as usize] = valid_loss_f32;
                             debug!("train: last_valid_loss={last_valid_loss:?}  valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
 
-                        });
+                            Ok::<_, ThoosaError>(())
+                        })?;
                     }
 
                 }
@@ -490,7 +491,7 @@ where
         &self.device
     }
 
-    fn forward(&self, x_t: &ThoBatch<DI>, train: bool) -> ThoBatch<DO> {
+    fn forward(&self, x_t: &ThoBatch<DI>, train: bool) -> Result<ThoBatch<DO>, ThoosaError> {
         let net = self.net.lock();
         net.tho_forward(x_t, train)
     }
@@ -540,12 +541,12 @@ where
 
         debug!("train: device={:?}  x_t.size={:?}", self.device, x_t.size());
 
-        let predicted_y = self.forward(&x_t, true);
+        let predicted_y = self.forward(&x_t, true)?;
         debug!("train: 1. cuda_mem={:?}", cuda_mem());
         trace!("train: x_t=\n{x_t}");
         x_t.drop();
 
-        let loss = (self.loss_fn)(predicted_y.as_ref(), &expected_y.as_ref());
+        let loss = (self.loss_fn)(predicted_y.as_ref(), &expected_y.as_ref())?;
 
         {
             let mut opt = self.opt.lock();
