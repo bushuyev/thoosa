@@ -368,7 +368,7 @@ where
             ).unwrap();
             */
 
-            let (x,y) = mix_x_binary_with_labels(&motifs, &random);
+            let (x,y) = mix_x_binary_with_labels(&motifs, &random)?;
 
             debug!("MotifsBatch::train_batch: motifs={:?} random={:?}", motifs.device(), random.device());
             debug!("MotifsBatch::train_batch: x={:?} y={:?}", x.device(), y.device());

@@ -348,7 +348,7 @@ where
                                                 Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())
                                             }).collect::<Result<Vec<_>, ThoosaError>>()?, 0);
 
-                                            Ok::<_, ThoosaError>(mix_x_binary_with_labels(&x_1, &x_0))
+                                            mix_x_binary_with_labels(&x_1, &x_0)
                                         })?;
 
                                         debug!("ResourcesBatch::train_batch_iter: x.size={:?} y.size={:?}", x.size(), y.size());
@@ -1013,7 +1013,7 @@ mod tests {
                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.as_ref().copy()).collect::<Vec<_>>(), 0);
                         let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.as_ref().copy()).collect::<Vec<_>>(), 0);
 
-                        let (x,y) = mix_x_binary_with_labels(&x_1, &x_0);
+                        let (x,y) = mix_x_binary_with_labels(&x_1, &x_0)?;
 
                          Ok((
                             ThoTensor::<Batch<ChannelsData2>, SimpleId>::new("".into(), x),
