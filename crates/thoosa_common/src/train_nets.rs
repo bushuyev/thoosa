@@ -824,7 +824,7 @@ impl<DI: Dims, DO: Dims> ClassTensorsLoaderData<DI, DO> {
 #[derive(Debug)]
 pub struct TrainLabelNetsRunConfigResult {
     select_motifs_for_label_run_ids: Vec<RunId>,
-    label: String,
+    pub label: String,
     pub loss: f32,
     label_node_params: LabelNetParams,
     train_label_nets_run_config: TrainLabelNetsRunConfig,

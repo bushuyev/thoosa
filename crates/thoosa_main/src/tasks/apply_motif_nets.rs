@@ -506,6 +506,7 @@ where
 impl <C> AsyncStage for ApplyMotifNet<C> where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
     fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> + Send {
 
 
