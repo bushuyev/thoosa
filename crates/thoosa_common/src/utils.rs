@@ -1698,7 +1698,7 @@ pub mod tests {
     }
 
     #[test]
-    fn mix_basic_shapes_and_labels() {
+    fn mix_basic_shapes_and_labels() -> Result<(), ThoosaError> {
         let m = 4i64;
         let n = 3i64;
 
@@ -1709,7 +1709,7 @@ pub mod tests {
         let a = Tensor::from_slice(&va).reshape(&[m, n]);
         let b = Tensor::from_slice(&vb).reshape(&[m, n]);
 
-        let (x, y) = mix_x_binary_with_labels(&a, &b);
+        let (x, y) = mix_x_binary_with_labels(&a, &b)?;
         debug!("mix_basic_shapes_and_labels: x=\n{x} y=\n{y}");
 
         // Shapes
@@ -1736,6 +1736,8 @@ pub mod tests {
                 assert_eq!(label, 1, "Row {i} came from A, expected label 1");
             }
         }
+
+        Ok(())
     }
 }
 
@@ -2222,7 +2224,7 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
 }
 
 //TODO check GPT
-pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> (Tensor, Tensor) {
+pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> Result<(Tensor, Tensor), ThoosaError> {
     let [ma, na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
     let [mb, nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
     // assert_eq!((na, nb), (na, na), "X1 and X0 must have same n");
@@ -2233,7 +2235,7 @@ pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> (Tensor, Tensor) 
     let two_m = ma * 2;
 
     // X0 = [A; B]
-    let x0 = Tensor::cat(&[x_1, x_0], 0);
+    let x0 = Tensor::f_cat(&[x_1, x_0], 0)?;
 
     // Choose a reasonable dtype for Y (float if A is floating, else Float)
     let y_kind = match x_0.kind() {
@@ -2242,20 +2244,20 @@ pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> (Tensor, Tensor) 
     };
 
     // Y0 = [ones(m,1); zeros(m,1)]
-    let y0 = Tensor::cat(
+    let y0 = Tensor::f_cat(
         &[
-            Tensor::ones(&[ma, 1], (y_kind, device)),
-            Tensor::zeros(&[mb, 1], (y_kind, device)),
+            Tensor::f_ones(&[ma, 1], (y_kind, device))?,
+            Tensor::f_zeros(&[mb, 1], (y_kind, device))?,
         ],
         0,
-    );
+    )?;
 
     // Single random permutation applied to both X and Y
-    let perm = Tensor::randperm(two_m, (Kind::Int64, device));
-    let x = x0.index_select(0, &perm);
-    let y = y0.index_select(0, &perm);
+    let perm = Tensor::f_randperm(two_m, (Kind::Int64, device))?;
+    let x = x0.f_index_select(0, &perm)?;
+    let y = y0.f_index_select(0, &perm)?;
 
-    (x, y)
+    Ok((x, y))
 }
 
 
