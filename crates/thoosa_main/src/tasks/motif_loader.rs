@@ -310,7 +310,7 @@ where
 
     let tmp_cache: TmpCached<ThoTensor<ChannelsData2, SimpleId>> = TmpCached::new("motifs", cache_area).await;
 
-    let configurable_loader = config_to_stage(&loader, &find_motifs_run_config);
+    let configurable_loader = config_to_stage(&loader, &find_motifs_run_config)?;
 
     for (resource_id, slices) in resource_ids_slices {
         let out_key = {
@@ -424,7 +424,7 @@ where
     let motif = ThoTensor::new(
         motif_id.clone(),
         Tensor::f_cat(tensors.as_slice(), 0)?,
-    );
+    )?;
 
     debug!("MotifLoader::run: motif of size {:?} is built for motif_id={motif_id} device={:?}", motif.size(), motif.t.device());
 
@@ -500,7 +500,7 @@ pub mod mock_motif_loader {
             H: IntoIterator<Item=(MotifLoaderInput, (MotifMeta, Tensor))>,
         {
             let data_map: Arc<HashMap<MotifLoaderInput, Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
-                (k.clone(), Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(k.motif_id.into(), v.1), v.0), 0)))
+                (k.clone(), Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(k.motif_id.into(), v.1).unwrap(), v.0), 0)))
             }).collect());
 
             self.mock.expect_run_cached().returning(move |input, ctx| {

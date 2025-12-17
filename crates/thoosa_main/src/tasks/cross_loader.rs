@@ -666,10 +666,10 @@ mod tests {
                     .collect::<Vec<f32>>();
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
-                ThoTensor::new(
+                Ok(ThoTensor::new(
                     Input::id(key).clone(),
                     Tensor::from_slice(v.as_slice()).view((1, 10)),
-                )
+                )?)
             },
             ThoDevice::from(Device::Cpu),
         ));

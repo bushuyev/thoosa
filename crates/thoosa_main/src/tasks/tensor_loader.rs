@@ -22,7 +22,8 @@ use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 // use crate::tasks::stages_seq::StagesSeq;
 
-type LoadFn = dyn Fn(&Resource, &Device) -> ThoTensor<ChannelsData2, SimpleId> + Sync + Send;
+type LoadFn =
+    dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData2, SimpleId>, ThoosaError> + Sync + Send;
 
 #[derive(cached_derive::Cached)]
 #[cache_name = "LoadedTensorId"]
@@ -75,7 +76,7 @@ where
         input
             .with_data_ref(0,
                            Arc::clone(&ctx), None, |resource: &Resource| {
-                                           let tensor = (self.loader_fn)(resource, &self.device);
+                                           let tensor = (self.loader_fn)(resource, &self.device)?;
                                            Ok(Arc::new(DevicesWrap::wrap(
                                                tensor,
                                                cache_area,
@@ -107,7 +108,10 @@ where
 {
     pub fn new<F>(loader_fn: F, device: ThoDevice) -> Self
     where
-        F: Fn(&Resource, &Device) -> ThoTensor<ChannelsData2, SimpleId> + Sync + Send + 'static,
+        F: Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData2, SimpleId>, ThoosaError>
+            + Sync
+            + Send
+            + 'static,
     {
         Self {
             device,
@@ -191,7 +195,9 @@ pub(crate) mod mock_tensor_loader {
         {
             let data_map: Arc<HashMap<Resource, Arc<DevicesWrap<ThoTensor<ChannelsData2, SimpleId>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
                 let id = format!("{}", k.file_stem());
-                (k, Arc::new(DevicesWrap::wrap(ThoTensor::new(id.into(), v), 0)))
+                let tensor = ThoTensor::new(id.into(), v)
+                    .expect("ThoTensor::new failed in MockTensorLoaderBuilder");
+                (k, Arc::new(DevicesWrap::wrap(tensor, 0)))
             }).collect());
 
             self.mock.expect_run_cached().returning(move |input, ctx|{
@@ -244,10 +250,10 @@ mod tests {
 
         let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
-                ThoTensor::new(
+                Ok(ThoTensor::new(
                     Input::id(key).clone(),
                     Tensor::from_slice(&data_0).view((-1, 1)),
-                )
+                )?)
             },
             ThoDevice::from(Device::Cpu),
         ));

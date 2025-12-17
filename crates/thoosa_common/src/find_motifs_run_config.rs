@@ -290,13 +290,16 @@ impl Runnable<TCD, TCDF, ()> for FindMotifsApplicable {
 
             // debug!("Applicable<TCD, TCD, ()> for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
 
-            Arc::new(ThoTensor::<ChannelsDataFiltered, CachableId>::new(
-                <FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(
-                    &self,
-                    Input::id(input.as_ref()),
-                ),
-                t,
-            ))
+            Arc::new(
+                ThoTensor::<ChannelsDataFiltered, CachableId>::new(
+                    <FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(
+                        &self,
+                        Input::id(input.as_ref()),
+                    ),
+                    t,
+                )
+                .expect("ThoTensor::new failed in FindMotifsApplicable::async_run"),
+            )
         } else {
             // Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
             panic!("todo")

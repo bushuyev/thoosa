@@ -355,8 +355,8 @@ where
 
 
                                         Ok((
-                                            ThoTensor::<Batch<MotifProbability>, SimpleId>::new("".into(), x),
-                                            ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y),
+                                            ThoTensor::<Batch<MotifProbability>, SimpleId>::new("".into(), x)?,
+                                            ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y)?,
                                         ))
                                     }.boxed()
                                 }),
@@ -762,9 +762,9 @@ mod tests {
         let motif_0_1_id = 1; //channel 0 motif 1
         let motif_1_0_id = 0; //channel 1 motif 0
 
-        let pulse_motif = Arc::new(ThoTensor::new("motif_0_0".into(), motifs_tensor(100, 3, MotifKind::Pulse)));
-        let triangle_motif = Arc::new(ThoTensor::new("motif_0_1".into(), motifs_tensor(100, 3, MotifKind::Triangle)));
-        let sin_motif = Arc::new(ThoTensor::new("motif_1_0".into(), motifs_tensor(100, 3, MotifKind::Sin)));
+        let pulse_motif = Arc::new(ThoTensor::new("motif_0_0".into(), motifs_tensor(100, 3, MotifKind::Pulse))?);
+        let triangle_motif = Arc::new(ThoTensor::new("motif_0_1".into(), motifs_tensor(100, 3, MotifKind::Triangle))?);
+        let sin_motif = Arc::new(ThoTensor::new("motif_1_0".into(), motifs_tensor(100, 3, MotifKind::Sin))?);
         let train_group = "train_group";
         let valid_group = "valid_group";
 
@@ -1016,8 +1016,8 @@ mod tests {
                         let (x,y) = mix_x_binary_with_labels(&x_1, &x_0)?;
 
                          Ok((
-                            ThoTensor::<Batch<ChannelsData2>, SimpleId>::new("".into(), x),
-                            ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y),
+                            ThoTensor::<Batch<ChannelsData2>, SimpleId>::new("".into(), x)?,
+                            ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y)?,
                         ))
                     })
                 }.boxed()

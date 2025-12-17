@@ -986,7 +986,7 @@ mod tests {
         futures::stream::iter(0..3)
             .map(|i|{
                 async {
-                    let tt:ThoTensor<AnyDims, SimpleId> = ThoTensor::new("zzz".into(), Tensor::rand(&[1006642, 1000], FLOAT_CPU));
+                    let tt:ThoTensor<AnyDims, SimpleId> = ThoTensor::new("zzz".into(), Tensor::rand(&[1006642, 1000], FLOAT_CPU)).unwrap();
                     drop(tt.copy_to_device(1).await.unwrap());
                     ()
                 }
