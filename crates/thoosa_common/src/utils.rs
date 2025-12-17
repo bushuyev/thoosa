@@ -1897,13 +1897,13 @@ where
 
         debug!("train: device={:?}  x_t.size={:?}",device,x_t.size());
 
-        let predicted_y = net.tho_forward(&x_t, true);
+        let predicted_y = net.tho_forward(&x_t, true)?;
         debug!("train: 1.predicted_y.size={:?} expected_y.size={:?} cuda_mem={:?}", predicted_y.size(), expected_y.size(), cuda_mem());
         trace!("train: x_t=\n{x_t}");
         x_t.drop();
         // unsafe { at_autocast_clear_cache(); }
 
-        let loss = loss_fn(predicted_y.as_ref(), &expected_y.as_ref());
+        let loss = loss_fn(predicted_y.as_ref(), &expected_y.as_ref())?;
 
         debug!("train: 2. cuda_mem={:?}", cuda_mem());
         trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
@@ -1925,17 +1925,17 @@ where
 
                 let x_t = x_f(x_t_0);
 
-                let pred_y = net.tho_forward(&x_t, true);
+                let pred_y = net.tho_forward(&x_t, true)?;
 
-                let valid_loss = loss_fn(&pred_y.as_ref(), &y_t.as_ref());
+                let valid_loss = loss_fn(&pred_y.as_ref(), &y_t.as_ref())?;
                 let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
 
                 last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
                 debug!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
 
-                listener.as_mut().map(|l|l.on_valid_cycle(idx as u32, valid_loss_f32))
+                Ok::<_, ThoosaError>(listener.as_mut().map(|l|l.on_valid_cycle(idx as u32, valid_loss_f32)))
 
-            }).take() {
+            })?.take() {
                 match rs {
                     ListenerResponse::Stop => {
                         break;
@@ -1984,13 +1984,13 @@ where
 
         debug!("train: device={:?}  x_t.size={:?}",device,x_t.size());
 
-        let predicted_y = net.tho_forward(&x_t, true);
+        let predicted_y = net.tho_forward(&x_t, true)?;
         debug!("train: 1. cuda_mem={:?}", cuda_mem());
         trace!("train: x_t=\n{x_t}");
         x_t.drop();
         // unsafe { at_autocast_clear_cache(); }
 
-        let loss = loss_fn(predicted_y.as_ref(), &expected_y);
+        let loss = loss_fn(predicted_y.as_ref(), &expected_y)?;
 
         debug!("train: 2. cuda_mem={:?}", cuda_mem());
         trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
@@ -2020,17 +2020,17 @@ where
 
                 let x_t = x_f(x_t_0);
 
-                let pred_y = net.tho_forward(&x_t, true);
+                let pred_y = net.tho_forward(&x_t, true)?;
 
-                let valid_loss = loss_fn(&pred_y.as_ref(), &y_t);
+                let valid_loss = loss_fn(&pred_y.as_ref(), &y_t)?;
                 let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
 
                 last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
                 debug!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
 
-                listener.as_mut().map(|l|l.on_valid_cycle(idx as u32, valid_loss_f32))
+                Ok::<_, ThoosaError>(listener.as_mut().map(|l|l.on_valid_cycle(idx as u32, valid_loss_f32)))
 
-            }).take() {
+            })?.take() {
                 match rs {
                     ListenerResponse::Stop => {
                         break;

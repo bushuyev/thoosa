@@ -85,7 +85,7 @@ fn apply_motif_node(motif_width: u32,  node_0_channel_0: &Box<dyn ThoModule<AnyD
     debug!("motif_node_input={motif_node_input:?}");
 
     let motif_node_input = ThoTensor::new("".into(), motif_node_input)?;
-    let motif_node_output = node_0_channel_0.tho_forward(&motif_node_input, true);
+    let motif_node_output = node_0_channel_0.tho_forward(&motif_node_input, true)?;
 
     debug!("motif_node_output={motif_node_output:?}");
 
