@@ -818,7 +818,7 @@ pub fn kick_register_cuda_hooks() {
 pub struct DummyListener;
 
 impl TrainListener for DummyListener {
-    fn on_valid_cycle(&mut self, _cycle: usize, _loss: f32) -> ListenerResponse {
+    fn on_valid_cycle(&mut self, cycle: u32, loss: f32) -> ListenerResponse {
         ListenerResponse::Nope
     }
 }
@@ -1854,7 +1854,7 @@ pub trait TrainListener: Send + Sync {
     fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<ListenerResponse> {
         async {ListenerResponse::Nope}.boxed()
     }
-    fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse;
+    fn on_valid_cycle(&mut self, cycle: u32, loss: f32) -> ListenerResponse;
 }
 
 pub enum ListenerResponse {
@@ -1869,7 +1869,7 @@ pub async fn train_3<F, DI: Dims, DO: Dims>(
     data: &dyn AsyncDataBatch<DI, DO>,
     net: Box<dyn ThoModule<Batch<DI>, Batch<DO>>>,
     loss_fn: LossFp,
-    cycles: usize,
+    cycles: u32,
     mut opt: Optimizer,
     x_f: &F,
     mut listener: Option<&mut dyn TrainListener>,
@@ -1939,7 +1939,7 @@ where
                     let valid_loss = loss_fn(&pred_y.as_ref(), &y_t.as_ref());
                     let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
 
-                    last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
+                    last_valid_loss[(idx % last_valid_loss.len() as u32) as usize] = valid_loss_f32;
                     debug!("train: last_valid_loss={last_valid_loss:?}  valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
 
                     listener.as_mut().map(|l|l.on_valid_cycle(idx, valid_loss_f32))
@@ -2033,7 +2033,7 @@ where
                 last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
                 debug!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
 
-                listener.as_mut().map(|l|l.on_valid_cycle(idx, valid_loss_f32))
+                listener.as_mut().map(|l|l.on_valid_cycle(idx as u32, valid_loss_f32))
 
             }).take() {
                 match rs {
@@ -2128,7 +2128,7 @@ where
                 last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
                 debug!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
 
-                listener.as_mut().map(|l|l.on_valid_cycle(idx, valid_loss_f32))
+                listener.as_mut().map(|l|l.on_valid_cycle(idx as u32, valid_loss_f32))
 
             }).take() {
                 match rs {

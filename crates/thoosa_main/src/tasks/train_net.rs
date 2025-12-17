@@ -93,8 +93,8 @@ where
 {
 
 }
-
-pub struct TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF>
+//TODO too many type params
+pub struct TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -107,6 +107,7 @@ where
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
+    FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
     batch:BF,
     net:NF,
@@ -115,10 +116,11 @@ where
     loss_fn:LossFp,
     optimizer:FO,
     x_f:XF,
+    cycles:FC,
     pd:PhantomData<(C, L, DX, DY, BF, P, RC)>
 }
 
-impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF> Debug for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF>
+impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> Debug for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -131,13 +133,14 @@ where
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
+    FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TrainNet").finish()
     }
 }
 
-impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF> TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF>
+impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -150,13 +153,14 @@ where
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
+    FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
-    pub fn new(batch:BF, net:NF,opt_config:Arc<OptConfig>,run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >, loss_fn:LossFp, optimizer:FO, x_f:XF) -> Self {
-        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f }
+    pub fn new(batch:BF, net:NF,opt_config:Arc<OptConfig>,run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >, loss_fn:LossFp, optimizer:FO, x_f:XF, cycles:FC) -> Self {
+        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, cycles }
     }
 }
 
-impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF> Stage for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF>
+impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> Stage for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -169,6 +173,7 @@ where
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
+    FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
     type Ctx = C;
     type In<'a> = TrainNetInput;
@@ -176,7 +181,7 @@ where
 }
 
 
-impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF> AsyncStage for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF>
+impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> AsyncStage for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -189,6 +194,7 @@ where
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
+    FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainNet::run"))]
@@ -198,23 +204,20 @@ where
 
         async move {
 
-
             let (var_store, node_params, run_config, loss) = opt_train_2::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),
                 async move |vs: &VarStore, run_config: RC, _listener| {
-
-
 
                     let batch = (self.batch)(&run_config);
                     let (node, params) = (self.net)(&run_config, vs)?;
                     let optimizer = (self.optimizer)(&run_config, vs)?;
 
                     let r = train_3(
-                        &Cuda(0), //TODO
+                        &ThoDevice::from(device_idx),
                         &batch,
                         node,
                         self.loss_fn,
-                        100, //TODO self.opt_config.,
+                        (self.cycles)(&run_config), //TODO self.opt_config.,
                         optimizer,
                         &self.x_f,
                         None
@@ -222,25 +225,6 @@ where
 
                     Ok((r, params))
 
-                    // let apply_motif_nets = Arc::clone(&apply_motif_nets);
-                    // let label = label.clone();
-                    // let resources_batch = (self.batch)(100);
-                    //
-                    // //TODO build proper LabelNetParams
-                    // let num_layers = match run_config.net {
-                    //     LabelNetTypeArgs::MaxPadding(MaxPaddingNetArgs{num_layers}) => {
-                    //         num_layers
-                    //     }
-                    //     LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs{num_layers, ..}) => {
-                    //         num_layers
-                    //     }
-                    // };
-                    //
-                    // let params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
-                    // let loss = train_label_net_2(&run_config, &resources_batch, &ThoDevice::from(device_idx), vs, params.clone(), Arc::clone(&ctx), &label).await?;
-                    //
-                    // Ok((loss, params))
-                    // todo!()
                 },
                 run_config_source,
                 ThoDevice::from(device_idx).into(),

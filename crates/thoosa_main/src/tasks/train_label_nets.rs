@@ -259,12 +259,10 @@ where
         let store = Arc::clone(&self.store);
         let cache_area = cache_area.clone();
         let channels = self.ws.read().channels() as i64;
-        let max_input = 10_000; //self.ws.read().max_input() as i64;
-        let slices_len = (max_input as u32 - self.apply_motif_nets.motif_width)/self.apply_motif_nets.slice_step + 1;
         let num_nets = self.apply_motif_nets.num_nets() as u32;
 
 
-        debug!("TrainLabelNets::run: channels={channels} max_input={max_input} self.apply_motif_nets.slice_step={} slices_len={slices_len}", self.apply_motif_nets.slice_step);
+        debug!("TrainLabelNets::run: channels={channels} self.apply_motif_nets.slice_step={}", self.apply_motif_nets.slice_step);
 
         async move {
 
@@ -320,7 +318,7 @@ where
                     let label = label.clone();
                     let label_ = label.clone();
 
-                    let train_net:Arc<TrainNet<C, L, _, _, _, _, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfig, _, LabelNetParams, _, _>> = Arc::new(TrainNet::new(
+                    let train_net:Arc<TrainNet<C, L, _, _, _, _, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfig, _, LabelNetParams, _, _, _>> = Arc::new(TrainNet::new(
                         move |rc:&TrainLabelNetsRunConfig| {
                             let apply_motif_nets = Arc::clone(&apply_motif_nets);
 
@@ -366,8 +364,19 @@ where
                             )
                         },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
-                            let net_params = LabelNetParams::new(channels as u32, num_nets, 10, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
-                            Ok((any_len_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
+                            match rc.net {
+                                LabelNetTypeArgs::MaxPadding(_) => {
+                                    todo!()
+                                }
+                                LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs {
+                                    num_layers, slices_len
+                                }) => {
+                                    let net_params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
+
+                                    Ok((any_len_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
+                                }
+                            }
+
                         },
                         opt_config,
                         train_motifs_nodes_run_configs,
@@ -384,6 +393,9 @@ where
                         |t:ThoBatch<MotifProbability>| {
                             debug!("train_label_net: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
                             t
+                        },
+                        |rc:&TrainLabelNetsRunConfig|{
+                            rc.common_training_args.cycles
                         }
                     ));
 
@@ -673,126 +685,6 @@ where
 
 }
 
-pub async fn train_label_net_2<C>(
-    run_config: &TrainLabelNetsRunConfig,
-    batch: &dyn AsyncDataBatch<MotifProbability, LabelProbability>,
-    device: &Device,
-    vs: &VarStore, net_params: LabelNetParams,
-    ctx: Arc<RwLock<C>>,
-    label: &str
-) -> Result<f32, ThoosaError>
-where
-    C:RunCtx
-{
-    debug!("train_label_net:  ");
-
-    let device = device.clone();
-
-    let optimizer = AdamW::default().amsgrad(true);
-
-    //TODO
-    // if let Some(adam_w) = run_config.common_training_args.adam_w {
-    //     debug!("train_label_nodes: setting adam_w={adam_w:?}");
-    //     optimizer = optimizer.beta1(adam_w.beta1).beta2(adam_w.beta2);
-    // }
-
-    debug!("train_label_net: cuda_mem={:?}", cuda_mem());
-    // C::purge_gpu_caches(Arc::clone(&ctx)).await?;
-    // ctx.purge_gpu_caches().await?;
-    pub struct PurgeCacheListener<C>
-    where
-        C:RunCtx{
-        ctx:Arc<RwLock<C>>
-    };
-
-    impl <C>  PurgeCacheListener<C>
-    where
-        C:RunCtx{
-        pub fn new(ctx: Arc<RwLock<C>>) -> Self {
-            Self { ctx }
-        }
-    }
-
-    impl <C> TrainListener for PurgeCacheListener<C>
-    where
-        C:RunCtx{
-        fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<ListenerResponse> {
-            let acquired_permits = self.ctx.read().acquired_permits();
-            let name = self.ctx.read().name();
-            Box::pin(async move {
-                let mut cnt = 0;
-                loop {
-
-                    match GlobalCtx::global().acquire_many(1, MAX_PERMITS-acquired_permits, Arc::new(SimpleId::from(name))).await {
-                        Ok(permits) => {
-                            info!("got {permits:?} purging all");
-                            match GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await {
-                                    Ok(_) => {
-                                        info!("dump_all_to_cpu done");
-                                        break
-                                    }
-                                    Err(e) => {
-                                        info!("dump_all_to_cpu failed {e:?}");
-                                    }
-                            }
-                            // match C::purge_gpu_caches(Arc::clone(&self.ctx)).await{
-                            //     Ok(_) => {
-                            //         info!("purging done");
-                            //         break
-                            //     }
-                            //     Err(e) => {
-                            //         info!("purging failed {e:?}");
-                            //     }
-                            // }
-                        }
-                        Err(e) => {
-                            info!("can't get permits cnt={cnt}");
-                            if cnt > 1000 {
-                                break
-                            } else {
-                                cnt+=1;
-                                tokio::task::yield_now().await;
-                            }
-                        }
-                    }
-                }
-
-
-                ListenerResponse::Nope
-            })
-        }
-
-
-        fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse {
-            ListenerResponse::Nope
-        }
-    }
-
-    let loss = train_3(
-        &device,
-        batch,
-        any_len_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?,
-        |pred: &Tensor, target: &Tensor| {
-            debug!("train_label_net: pred.size={:?}", pred.size());
-            let pred_y = pred;//.squeeze();
-            debug!("train_label_net: pred_y={:?} target={:?} kind={:?}",pred_y.size(),target.size(),target.kind());
-            trace!("train_label_net: pred_y=\n{pred_y} target=\n{target} kind={:?}",target.kind());
-            pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
-        },
-        run_config.common_training_args.cycles as usize,
-        optimizer.build(&vs, run_config.common_training_args.lr)?,
-        &|t| {
-            debug!("train_label_net: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
-            t
-        },
-        Some(&mut PurgeCacheListener::new(ctx)),
-    )
-        .await?;
-
-    Ok(loss)
-}
-
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1001,9 +893,7 @@ mod tests {
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(100)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(8)),
-                    NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptMaxEvals), Val::Int(10)),
-                    NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::OptNInit), Val::Int(10)),
-                    NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), Val::Int(3)),
+                    // NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), Val::Int(3)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::SlicesLen)), Val::Int(1000)),//TODO used as num features in any_len_label_node
                 ]),
                 vec![
@@ -1011,7 +901,8 @@ mod tests {
                 ],
             ),
             vec![
-                Hyperparameter::UniformFloat{name: TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.0001, upper: 0.001}
+                Hyperparameter::UniformFloat{name: TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.0001, upper: 0.001},
+                Hyperparameter::UniformInt{name: TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), lower: 1, upper: 10}
             ],
         );
 

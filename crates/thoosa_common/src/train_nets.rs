@@ -1466,7 +1466,7 @@ impl TrainMotifsNetsRunConfig {
     pub fn new(id: Option<RunId>) -> Self {
         Self {
             id,
-            common_training_args: CommonTrainingRunConfig::new(1, 1, 0.1, 1, 1),
+            common_training_args: CommonTrainingRunConfig::new(1, 1, 0.1),
             num_layers: 1,
             step: 1,
         }
@@ -1487,13 +1487,6 @@ pub struct CommonTrainingRunConfig {
     #[run_config]
     pub lr: f64,
 
-    #[in_map]
-    #[run_config]
-    pub opt_max_evals: u32,
-
-    #[in_map]
-    #[run_config]
-    pub opt_n_init: u32,
 }
 
 impl CommonTrainingRunConfig {
@@ -1501,15 +1494,11 @@ impl CommonTrainingRunConfig {
         cycles: u32,
         batch_size: u32,
         lr: f64,
-        opt_max_evals: u32,
-        opt_n_init: u32,
     ) -> Self {
         Self {
             cycles,
             batch_size,
             lr,
-            opt_max_evals,
-            opt_n_init,
         }
     }
 }
@@ -2049,7 +2038,7 @@ pub struct LabelNetParams {
     motif_nets: u32,
     motif_layers: u32,
     pub slices_len: u32,
-    net_type: LabelNetTypeParams,
+    pub net_type: LabelNetTypeParams,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2321,24 +2310,28 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
             None,
         )
         .split1(
-            SeqBuilder::new(num_features, None)
-                .linear_s(num_features,
-                      #[cfg(debug_assertions)]
-                      "split1".into()
-                )
-                .linear_s(
+
+        {
+            let mut seq_builder = SeqBuilder::new(num_features, None);
+            let mut builder = seq_builder
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor| {
+                    debug!("any_len_label_node: motif input={t:?}");
+                    t.shallow_clone()
+                })),
+                None,
+            );
+            for _ in 0..params.motif_layers {
+                builder = builder.linear_s(
                     num_features,
                     #[cfg(debug_assertions)]
                     "any_len_label_node 0".to_string(),
                 )
-                .func(Tensor::relu)
-                .linear_s(
-                    num_features,
-                    #[cfg(debug_assertions)]
-                    "any_len_label_node 1".to_string(),
-                )
-                .func(Tensor::relu)
-                .end_seq(),
+                    .func(Tensor::relu);
+            }
+            builder
+                .end_seq()
+            },
 
             Box::new(move |t: &Tensor| {
                 debug!("any_len_label_node: t.size={:?}", t.size());
@@ -2352,11 +2345,13 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
                 ranges.into_iter().map(|start| {
 
                     let t = if start as u32 + num_features > dim_size  {
+                        debug!("any_len_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?} padding to {:?}", start as u32 + num_features, t.size(), [batch_size, motif_nets, num_features as i64]);
                         pad_to(&t.narrow(2, start, (dim_size as i64 - start)), &[batch_size, motif_nets, num_features as i64]).unwrap()
                     } else {
+                        debug!("any_len_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?}", start as u32 + num_features, t.size());
                         t.narrow(2, start, num_features as i64)
                     };
-                    debug!("any_len_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?}", start as u32 + num_features, t.size());
+
                     t
                 }).collect()
             }),
@@ -2530,7 +2525,7 @@ impl PlotVecf32 {
 }
 
 impl TrainListener for PlotVecf32 {
-    fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse {
+    fn on_valid_cycle(&mut self, cycle: u32, loss: f32) -> ListenerResponse {
         self.data.push(loss);
 
         //TODO move into another listener
@@ -4686,7 +4681,7 @@ mod train_tests {
 
         let run_config = TrainLabelNetsRunConfig::new(
             Some(1),
-            CommonTrainingRunConfig::new(10, 10, 0.1, 10, 3),
+            CommonTrainingRunConfig::new(10, 10, 0.1),
             LabelNetTypeArgs::MaxPadding(MaxPaddingNetArgs::new(3)),
         );
 
@@ -4712,7 +4707,7 @@ mod train_tests {
 
         let run_config = TrainLabelNetsRunConfig::new(
             Some(1),
-            CommonTrainingRunConfig::new(10, 10, 0.1, 10, 3),
+            CommonTrainingRunConfig::new(10, 10, 0.1),
             LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs {
                 num_layers: 3,
                 slices_len: MAX_SLICES_LEN as u32,
@@ -5224,7 +5219,7 @@ mod train_tests {
 
         let run_config = TrainLabelNetsRunConfig::new(
             Some(1),
-            CommonTrainingRunConfig::new(10, BATCH_SIZE as u32, 0.1, 10, 3),
+            CommonTrainingRunConfig::new(10, BATCH_SIZE as u32, 0.1),
             LabelNetTypeArgs::MaxPadding(MaxPaddingNetArgs::new(3)),
         );
 
@@ -5267,8 +5262,6 @@ mod train_tests {
                     cycles: 10.into(),
                     batch_size: 10.into(),
                     lr: (0.01..0.1).into(),
-                    opt_max_evals: 10.into(),
-                    opt_n_init: 3.into(),
                 },
                 net: LabelNetTypeArgsRangeOrValue::MaxPadding(MaxPaddingNetArgsRangeOrValue {
                     num_layers: 3.into(),
@@ -5420,7 +5413,7 @@ mod train_tests {
         let (loss, final_params) = super::train_final_net(
             &TrainFinalNetRunConfig::new(
                 Some(1),
-                CommonTrainingRunConfig::new(10, 10, 0.1, 10, 3),
+                CommonTrainingRunConfig::new(10, 10, 0.1),
                 FinalNetArgs::new(3),
             ),
             LABEL_NETS_SIZE as u32,
