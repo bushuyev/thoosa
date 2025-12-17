@@ -29,6 +29,7 @@ use thoosa_common::dims::{Batch, MotifProbability, Slice};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore, TrainMotifsNetsResult};
+use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
@@ -217,7 +218,7 @@ where
                          Arc::clone(&input),
                          ctx,
                          Contexts::new(
-                             SplitsAdjusterContextImpl::new(input._size().into(), SingleDimTensorOutputBuilder::new("".into(), 0, &[slices,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
+                             SplitsAdjusterContextImpl::new(input._size().into(), SingleDimTensorOutputBuilder::new("".into(), 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
                              NoopRunnableContext {},
                              PermitsAndDumpToCpuAdjustableContex::new(
                                  PermitsAdjustContextImpl::new(ctx_name),
@@ -527,7 +528,15 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
                 let motif_width = net.extra().motif_net_params.num_features() as i64;
 
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} c={c} motif_width={motif_width} input.t.size={:?}", input.t.size());
-                let slices = input.t.i((c, ..)).unfold(0, motif_width, 1); //.reshape([-1, motif_width]);
+                let t = input.t.i((c, ..));
+                let t  = if t.size()[0] >= motif_width {
+                    t
+                } else {
+                    debug!("ApplyMotifNet::run, ok: motif_id={motif_id} padding t.size={:?} to motif_width={motif_width}", t.size());
+                    pad_to(&t, &[motif_width])?
+                };
+
+                let slices = t.unfold(0, motif_width, 1); //.reshape([-1, motif_width]);
 
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} slices.size={:?}",  slices.size());
 
@@ -596,21 +605,30 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_without_oom() -> Result<(), ThoosaError> {
-        test_apply_motif_nets_3_channels_2_motifs(None).await
+        test_apply_motif_nets_3_channels_2_motifs(None, 4000).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_apply_motif_nets_3_channels_2_motifs_without_oom_uneven() -> Result<(), ThoosaError> {
+        test_apply_motif_nets_3_channels_2_motifs(None, 4321).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_with_oom() -> Result<(), ThoosaError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(1000)).await
+        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000).await
     }
 
-    async fn test_apply_motif_nets_3_channels_2_motifs(trigger_oom_len: Option<usize>) -> Result<(), ThoosaError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_apply_motif_nets_3_channels_2_motifs_with_oom_uneven() -> Result<(), ThoosaError> {
+        test_apply_motif_nets_3_channels_2_motifs(Some(987), 4321).await
+    }
+
+    async fn test_apply_motif_nets_3_channels_2_motifs(trigger_oom_len: Option<usize>, input_n_0: usize) -> Result<(), ThoosaError> {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
 
-        let input_n_0 = 4000;
 
         let find_motifs_run_id:RunId = 1;
         let select_motifs_run_id:RunId = 2;

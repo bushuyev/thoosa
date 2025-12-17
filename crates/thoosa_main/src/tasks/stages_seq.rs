@@ -223,6 +223,15 @@ where
     }
 }
 
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test(){
+
+    }
+
+}
 
 // #[async_trait]
 // impl<A, B> Cached for StageChainOption<A, B>
