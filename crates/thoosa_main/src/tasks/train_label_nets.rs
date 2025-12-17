@@ -28,7 +28,7 @@ use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
 use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train_2, CommonTrainingRunConfig, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
-use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, train_2, train_3, ListenerResponse, TrainListener};
+use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, train_2, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::{shuffle_and_chunk_with_rng, CopyToDevice, ThoosaError};
