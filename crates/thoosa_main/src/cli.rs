@@ -85,7 +85,7 @@ use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEucl
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
-use crate::tasks::train_label_nets::{TrainLabelNets, TrainLabelNetsInput};
+use crate::tasks::train_label_nets::{new_train_label_nets_with_ml, TrainLabelNets, TrainLabelNetsInput};
 use crate::tasks::train_motif_nets::{TrainMotifNets, TrainMotifNetInput};
 
 #[derive(Parser, Clone, Debug)]
@@ -488,7 +488,7 @@ where
                 true,
                 async |run_configs| {
 
-                    TrainLabelNets::<_, RunCtx2>::new(
+                    new_train_label_nets_with_ml(
                         train_label_nets_args.select_motifs_run_id.clone(),
                         loader_2,
                         run_configs,
@@ -679,7 +679,7 @@ where
                 true,
                 async |run_configs| {
 
-                    TrainLabelNets::<_, RunCtx2>::new(
+                    new_train_label_nets_with_ml(
                         select_motifs_run_ids,
                         loader_2,
                         run_configs,
