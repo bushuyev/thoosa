@@ -621,8 +621,6 @@ where
                     cycles: RangeOrValue::Value(10),
                     batch_size: RangeOrValue::Value(11),
                     lr: RangeOrValue::Value(0.0001),
-                    opt_max_evals: RangeOrValue::Value(10),
-                    opt_n_init: RangeOrValue::Value(3),
                 },
                 num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
                 step: RangeOrValue::Value(10),
@@ -658,8 +656,6 @@ where
                     cycles: RangeOrValue::Value(10),
                     batch_size: RangeOrValue::Value(11),
                     lr: RangeOrValue::Value(0.0001),
-                    opt_max_evals: RangeOrValue::Value(10),
-                    opt_n_init: RangeOrValue::Value(3),
                 },
                 net: LabelNetTypeArgsRangeOrValue::FixedNumSlices(FixedNumSlicesNetArgsRangeOrValue{
                     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
