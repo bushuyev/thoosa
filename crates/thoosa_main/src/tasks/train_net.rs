@@ -5,13 +5,12 @@ use std::sync::Arc;
 use std::time::Instant;
 use futures_util::StreamExt;
 use log::{debug, info, trace};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tch::Device;
-use tch::Device::{Cpu, Cuda};
-use tch::nn::{AdamW, Optimizer, VarStore};
+use tch::nn::{Optimizer, VarStore};
 use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::{OutId, RunCtx};
-use caching_runner::common::runnable::{AsyncStage, Stage};
+use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::batches::AsyncDataBatch;
 use thoosa_common::cuda_utils::cuda_mem;
@@ -217,18 +216,79 @@ where
                     let (node, params) = (self.net)(&run_config, vs)?;
                     let optimizer = (self.optimizer)(&run_config, vs)?;
 
-                    let r = train_3(
-                        &ThoDevice::from(device_idx),
-                        &batch,
+                    let device = Device::from(ThoDevice::from(device_idx));
+                    let cycles = (self.cycles)(&run_config);
+
+                    let train_step = Arc::new(TrainStep::new(
+                        device,
                         node,
-                        self.loss_fn,
-                        (self.cycles)(&run_config), //TODO self.opt_config.,
                         optimizer,
                         &self.x_f,
-                        None
-                    ).await?;
+                        self.loss_fn,
+                    ));
 
-                    Ok((r, params))
+                    debug!("train: device={:?} cycles={}", train_step.device(), cycles);
+                    {
+                        let opt = train_step.opt.lock();
+                        debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
+                    }
+
+                    let mut last_valid_loss = [0f32; 3];
+                    let mut listener: Option<&mut dyn TrainListener> = None;
+
+                    for idx in 1..cycles {
+                        debug!("train:  0. cuda_mem={:?}", cuda_mem());
+                        let mut batches = batch.train_batch_stream().await;
+                        debug!("train:  1. cuda_mem={:?}", cuda_mem());
+                        while let Some(Ok((x_t_0, expected_y))) = batches.next().await {
+                            let input = TrainStepInput::new(x_t_0, expected_y);
+                            train_step.clone().do_run(&input, Arc::clone(&ctx))?;
+
+                            if let Some(listener) = listener.as_mut() {
+                                listener.on_cycle(0, 0.0).await;
+                            }
+                        }
+
+                        if idx % 10 == 0 || idx == cycles - 1 {
+
+                            debug!("train:  0. cuda_mem={:?}", cuda_mem());
+                            let mut batches = batch.valid_batch_stream().await;
+                            debug!("train:  1. cuda_mem={:?}", cuda_mem());
+                            while let Some(Ok((x_t_0,y_t))) = batches.next().await {
+                                if let Some(rs) = tch::no_grad(||{
+
+                                    let x_t = (train_step.x_f())(x_t_0);
+
+                                    let pred_y = train_step.forward(&x_t, false);
+
+                                    let valid_loss = (train_step.loss_fn())(&pred_y.as_ref(), &y_t.as_ref());
+                                    let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
+
+                                    last_valid_loss[(idx % last_valid_loss.len() as u32) as usize] = valid_loss_f32;
+                                    debug!("train: last_valid_loss={last_valid_loss:?}  valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+
+                                    listener.as_mut().map(|l|l.on_valid_cycle(idx, valid_loss_f32))
+
+                                }).take() {
+                                    match rs {
+                                        ListenerResponse::Stop => {
+                                            break;
+                                        }
+                                        ListenerResponse::UpdateLR(lr) => {
+                                            train_step.set_lr(lr);
+                                        }
+                                        ListenerResponse::Nope => {}
+                                    }
+                                }
+                            }
+
+                        }
+                        info!(".");
+                        std::io::stdout().flush()?;
+                    }
+                    debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+
+                    Ok((last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32, params))
 
                 },
                 run_config_source,
@@ -241,44 +301,147 @@ where
     }
 }
 
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="train_3"))]
-pub async fn train_3<F, DI: Dims, DO: Dims>(
-    device: &Device,
-    data: &dyn AsyncDataBatch<DI, DO>,
-    net: Box<dyn ThoModule<Batch<DI>, Batch<DO>>>,
+pub struct TrainStepInput<DI: Dims, DO: Dims> {
+    id: SimpleId,
+    x: Mutex<Option<ThoBatch<DI>>>,
+    expected_y: Mutex<Option<ThoBatch<DO>>>,
+}
+
+impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
+    fn new(x: ThoBatch<DI>, expected_y: ThoBatch<DO>) -> Self {
+        Self {
+            id: "train_step".into(),
+            x: Mutex::new(Some(x)),
+            expected_y: Mutex::new(Some(expected_y)),
+        }
+    }
+
+    fn take(&self) -> Option<(ThoBatch<DI>, ThoBatch<DO>)> {
+        let x = self.x.lock().take();
+        let expected_y = self.expected_y.lock().take();
+
+        match (x, expected_y) {
+            (Some(x), Some(expected_y)) => Some((x, expected_y)),
+            _ => None,
+        }
+    }
+}
+
+impl<DI: Dims, DO: Dims> Input for TrainStepInput<DI, DO> {
+    fn id(&self) -> &SimpleId {
+        &self.id
+    }
+}
+
+impl<DI: Dims, DO: Dims> WithId for TrainStepInput<DI, DO> {
+    type ID = SimpleId;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl<DI: Dims, DO: Dims> Debug for TrainStepInput<DI, DO> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TrainStepInput").finish()
+    }
+}
+
+pub struct TrainStep<'xf, F, DI: Dims, DO: Dims, C: RunCtx> {
+    device: Device,
+    net: Mutex<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>,
+    opt: Mutex<Optimizer>,
+    x_f: &'xf F,
     loss_fn: LossFp,
-    cycles: u32,
-    mut opt: Optimizer,
-    x_f: &F,
-    mut listener: Option<&mut dyn TrainListener>,
-) -> Result<f32, ThoosaError>
+    pd: PhantomData<C>,
+}
+
+impl<'xf, F, DI: Dims, DO: Dims, C: RunCtx> Debug for TrainStep<'xf, F, DI, DO, C> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TrainStep").finish()
+    }
+}
+
+impl<'xf, F, DI, DO, C> TrainStep<'xf, F, DI, DO, C>
 where
-    F: Fn(ThoBatch<DI>) -> ThoBatch<DI>,
+    DI: Dims,
+    DO: Dims,
+    C: RunCtx,
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    debug!("train: device={:?} cycles={}", device, cycles);
-    debug!("train: opt={opt:?} optimizer_size={}",optimizer_mem_size(&opt));
+    fn new(device: Device, net: Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, opt: Optimizer, x_f: &'xf F, loss_fn: LossFp) -> Self {
+        Self {
+            device,
+            net: Mutex::new(net),
+            opt: Mutex::new(opt),
+            x_f,
+            loss_fn,
+            pd: PhantomData,
+        }
+    }
 
-    let mut last_valid_loss = [0f32; 3];
+    fn device(&self) -> &Device {
+        &self.device
+    }
 
-    for idx in 1..cycles {
-        debug!("train:  0. cuda_mem={:?}", cuda_mem());
-        let mut batches = data.train_batch_stream().await;
-        debug!("train:  1. cuda_mem={:?}", cuda_mem());
-        while let Some(Ok((x_t_0,expected_y))) = batches.next().await {
-            debug!("train: device={:?} x_t_0.size={:?} expected_y.size={:?}", device, x_t_0.size(), expected_y.size());
-            debug!("train: 0. cuda_mem={:?}", cuda_mem());
+    fn forward(&self, x_t: &ThoBatch<DI>, train: bool) -> ThoBatch<DO> {
+        let net = self.net.lock();
+        net.tho_forward(x_t, train)
+    }
 
-            let x_t = x_f(x_t_0);
+    fn x_f(&self) -> &F {
+        self.x_f
+    }
 
-            debug!("train: device={:?}  x_t.size={:?}",device,x_t.size());
+    fn loss_fn(&self) -> LossFp {
+        self.loss_fn
+    }
 
-            let predicted_y = net.tho_forward(&x_t, true);
-            debug!("train: 1. cuda_mem={:?}", cuda_mem());
-            trace!("train: x_t=\n{x_t}");
-            x_t.drop();
-            // unsafe { at_autocast_clear_cache(); }
+    fn set_lr(&self, lr: f64) {
+        let mut opt = self.opt.lock();
+        opt.set_lr(lr);
+    }
+}
 
-            let loss = loss_fn(predicted_y.as_ref(), &expected_y.as_ref());
+impl<'xf, F, DI, DO, C> Stage for TrainStep<'xf, F, DI, DO, C>
+where
+    DI: Dims,
+    DO: Dims,
+    C: RunCtx,
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
+{
+    type Ctx = C;
+    type In<'a> = TrainStepInput<DI, DO>;
+    type Out = ();
+}
+
+impl<'xf, F, DI, DO, C> SyncStage for TrainStep<'xf, F, DI, DO, C>
+where
+    DI: Dims,
+    DO: Dims,
+    C: RunCtx,
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
+{
+    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
+        let _ = ctx;
+        let (x_t_0, expected_y) = input.take().ok_or_else(|| ThoosaError::new("TrainStepInput already consumed"))?;
+
+        debug!("train: device={:?} x_t_0.size={:?} expected_y.size={:?}", self.device, x_t_0.size(), expected_y.size());
+        debug!("train: 0. cuda_mem={:?}", cuda_mem());
+
+        let x_t = (self.x_f)(x_t_0);
+
+        debug!("train: device={:?}  x_t.size={:?}", self.device, x_t.size());
+
+        let predicted_y = self.forward(&x_t, true);
+        debug!("train: 1. cuda_mem={:?}", cuda_mem());
+        trace!("train: x_t=\n{x_t}");
+        x_t.drop();
+
+        let loss = (self.loss_fn)(predicted_y.as_ref(), &expected_y.as_ref());
+
+        {
+            let mut opt = self.opt.lock();
 
             debug!("train: 2. cuda_mem={:?}", cuda_mem());
             debug!("train: loss={loss}");
@@ -292,56 +455,11 @@ where
             opt.backward_step(&loss);
 
             debug!("train: 3. cuda_mem={:?}  optimizer_size={}",cuda_mem(),optimizer_mem_size(&opt));
-            debug!("train: device={:?}  backward_step done in {}",device,t1.elapsed().as_millis());
-
-            if let  Some(listener) = listener.as_mut() {
-                listener.on_cycle(0, 0.0).await;
-            }
+            debug!("train: device={:?}  backward_step done in {}",self.device,t1.elapsed().as_millis());
         }
 
-
-
-
-        if idx % 10 == 0 || idx == cycles - 1 {
-
-            debug!("train:  0. cuda_mem={:?}", cuda_mem());
-            let mut batches = data.valid_batch_stream().await;
-            debug!("train:  1. cuda_mem={:?}", cuda_mem());
-            while let Some(Ok((x_t_0,y_t))) = batches.next().await {
-                if let Some(rs) = tch::no_grad(||{
-
-                    let x_t = x_f(x_t_0);
-
-                    let pred_y = net.tho_forward(&x_t, false);
-
-                    let valid_loss = loss_fn(&pred_y.as_ref(), &y_t.as_ref());
-                    let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
-
-                    last_valid_loss[(idx % last_valid_loss.len() as u32) as usize] = valid_loss_f32;
-                    debug!("train: last_valid_loss={last_valid_loss:?}  valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
-
-                    listener.as_mut().map(|l|l.on_valid_cycle(idx, valid_loss_f32))
-
-                }).take() {
-                    match rs {
-                        ListenerResponse::Stop => {
-                            break;
-                        }
-                        ListenerResponse::UpdateLR(lr) => {
-                            opt.set_lr(lr);
-                        }
-                        ListenerResponse::Nope => {}
-                    }
-                }
-            }
-
-        }
-        info!(".");
-        std::io::stdout().flush()?;
+        Ok(())
     }
-    debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
-
-    Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
 }
 
 
