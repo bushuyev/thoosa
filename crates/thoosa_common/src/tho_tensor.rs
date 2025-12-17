@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use crate::applicables::ThoDevice;
 use crate::copy_ctx::CopyCtx;
 use crate::cuda_utils::tensor_mem_size;
@@ -370,6 +371,12 @@ pub struct ThoTensor<D: Dims, Id: Named + Debug + Clone> {
     tracking: parking_lot::RwLock<Vec<&'static str>>,
 
     pd: PhantomData<D>,
+}
+
+impl<D: Dims, Id: Named + Debug + Clone> Borrow<Tensor> for ThoTensor<D, Id> {
+    fn borrow(&self) -> &Tensor {
+        &self.t
+    }
 }
 
 impl<D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
