@@ -233,7 +233,7 @@ impl Select<MotifSlicesSelector> for ThoTensor<MotifSlices, DataId> {
 
         let sub_tensor = self.t_ref().f_i((ranges[0].clone(), ranges[1].clone()))?;
 
-        Ok(ThoTensor::new(self.id().clone(), sub_tensor))
+        Ok(ThoTensor::new(self.id().clone(), sub_tensor)?)
     }
 }
 

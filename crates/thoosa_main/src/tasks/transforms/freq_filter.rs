@@ -41,7 +41,7 @@ impl<C> FreqFilter<C>
 where
     C: RunCtx + 'static,
 {
-    pub fn new(filter_config: &InputFilter) -> Self {
+    pub fn new(filter_config: &InputFilter) -> Result<Self, ThoosaError> {
         let band_pass_tensor = match filter_config {
             InputFilter::Conv1(_) => {
                 None//TODO
@@ -59,14 +59,14 @@ where
                 Some(ThoTensor::new(
                     format!("{}-{}", band_pass_config.low_hz, high_hz).into(),
                     kernel
-                ))
+                )?)
 
             }
         };
-        Self {
+        Ok(Self {
             band_pass_tensor,
             _ctx: PhantomData,
-        }
+        })
     }
 }
 
@@ -138,10 +138,10 @@ where
                        Ok(output)
                    })?;
 
-                   Ok(ThoTensor::new(self.out_id(tensor.id()), t))
+                   Ok(ThoTensor::new(self.out_id(tensor.id()), t)?)
 
                } else {
-                   Ok(ThoTensor::new(self.out_id(tensor.id()), t))
+                   Ok(ThoTensor::new(self.out_id(tensor.id()), t)?)
                }
            })
             .await?;
@@ -178,12 +178,12 @@ mod tests {
             padding: 0,
         });
 
-        let bf = FreqFilter::new(&filter_config);
+        let bf = FreqFilter::new(&filter_config)?;
 
         let ctx = Arc::new(RwLock::new(RunCtx2::new(1, 1, "test")));
 
         let r = Arc::new(bf).run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new("test".into(), Tensor::rand(&[20, 100], FLOAT_CPU)), 0)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::new("test".into(), Tensor::rand(&[20, 100], FLOAT_CPU))?, 0)),
             ctx.clone()
         ).await?;
 

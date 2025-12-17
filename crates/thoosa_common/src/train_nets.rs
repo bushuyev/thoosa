@@ -4315,7 +4315,7 @@ mod train_tests {
 
     fn dummy_runner() -> Arc<ThoRunner> {
         Arc::new(ThoRunner::new(&[1, 1], move |key, _| {
-            ThoTensor::new(Input::id(key).clone(), Tensor::rand([100, 3], FLOAT_CPU))
+            ThoTensor::new(Input::id(key).clone(), Tensor::rand([100, 3], FLOAT_CPU)).unwrap()
         }))
     }
 

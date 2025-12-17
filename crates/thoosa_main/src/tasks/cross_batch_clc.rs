@@ -334,18 +334,18 @@ mod tests {
             0.00, 0.01, 0.02,
             0.10, 0.11, 0.12,
             0.20, 0.21, 0.22,
-        ]).view((3,3)));
+        ]).view((3,3)))?;
         let tensor_01 = ThoTensor::new("1".into(), Tensor::from_slice(&[
             1.00, 1.01, 1.02, 1.03,
             1.10, 1.11, 1.12, 1.13,
             1.20, 1.21, 1.22, 1.23,
-        ]).view((3,4)));
+        ]).view((3,4)))?;
 
         let tensor_1 = ThoTensor::new("2".into(), Tensor::from_slice(&[
             2.00, 2.01,
             2.10, 2.11,
             2.20, 2.21,
-        ]).view((3,2)));
+        ]).view((3,2)))?;
 
         let tensors = [&tensor_00, &tensor_01, &tensor_1];
 

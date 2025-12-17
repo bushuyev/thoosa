@@ -106,10 +106,10 @@ mod tests {
             SingleDimTensorOutputBuilder::new("test".into(), 0, &[10], FLOAT_CPU, BuildAs::Append),
         );
 
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[0, 1, 2])));
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5])));
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8])));
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[9])));
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[0, 1, 2]))?);
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5]))?);
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8]))?);
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[9]))?);
 
         let out = builder.build().await?;
 
@@ -131,9 +131,9 @@ mod tests {
             SingleDimTensorOutputBuilder::new("test".into(), 0, &[3], FLOAT_CPU, BuildAs::Sum),
         );
 
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[0, 1, 2])));
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5])));
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8])));
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[0, 1, 2]))?);
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5]))?);
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8]))?);
 
         let out = builder.build().await?;
 

@@ -944,7 +944,7 @@ mod motifs_tests {
         let runner = Arc::new(ThoRunner::new(&[10, 2], move |key, device| {
             debug!("loader_fn: thread={:?}", std::thread::current().name());
 
-            ThoTensor::new(Input::id(key).clone(), test_tensor(key))
+            ThoTensor::new(Input::id(key).clone(), test_tensor(key)).unwrap()
         }));
 
         let motifs_tensors = futures::executor::block_on(super::motifs_to_tensor_2(

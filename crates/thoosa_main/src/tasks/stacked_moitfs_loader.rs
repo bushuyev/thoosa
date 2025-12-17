@@ -366,19 +366,22 @@ where
             let select_motifs_run_id = vec![];//can be used to return select_motifs_run_i ran earlier on find_motifs_run_id
             let find_and_select_motifs_id = SimpleId(format!("{find_motifs_run_id}_{select_motifs_run_id:?}").leak());
 
+            let motifs = ThoTensor::new(
+                find_and_select_motifs_id.clone(),
+                channels_motifs_t,
+            )?;
+            let motif_avg_dists = ThoTensor::new(
+                find_and_select_motifs_id,
+                channels_motif_avg_dists_t,
+            )?;
+
             Ok(Arc::new(DevicesWrap::wrap(StackedMotifsOutput::new(
                 StackedMotifsOutputId::new(find_motifs_run_id, select_motifs_run_id),
                 DataWithExtra::new(
-                    ThoTensor::new(
-                        find_and_select_motifs_id.clone(),
-                        channels_motifs_t
-                    ),
+                    motifs,
                     (channels_motif_ids, Arc::clone(&input.find_motifs_run_config), vec![])
                 ),
-                 ThoTensor::new(
-                    find_and_select_motifs_id,
-                    channels_motif_avg_dists_t
-                )
+                motif_avg_dists,
             ), cache_area)))
 
         })
