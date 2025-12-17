@@ -49,7 +49,7 @@ impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SimpleId> {
         let sub = ThoTensor::new(
             SimpleId::from(format!("{}:{ranges:?}", self.id().0)),
             stacked,
-        );
+        )?;
 
         trace!("ChannelsData2::select: Vec sub.t=\n{}", sub.t_ref());
 
@@ -81,7 +81,7 @@ impl Select<ChannelsData2Selector> for ThoTensor<ChannelsData2, SimpleId> {
 
         let sub_tensor = self.t_ref().f_i((ranges[0].clone(), ranges[1].clone()))?;
 
-        Ok(ThoTensor::new(self.id().clone(), sub_tensor))
+        Ok(ThoTensor::new(self.id().clone(), sub_tensor)?)
     }
 }
 

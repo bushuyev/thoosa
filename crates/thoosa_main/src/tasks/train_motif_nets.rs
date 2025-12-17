@@ -190,8 +190,24 @@ where
             let out_key = Arc::clone(&out_key);
 
             tokio::spawn(async move {
-                let motif = motif_loader.run(Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::all_slices(motif_id_rate.0.into()))), Arc::clone(&ctx)).await?;
-                let random_slices = random_slices_loader.run(Arc::new(DevicesWrap::wrap_cpu(SlicesLoaderInput::new(motif_id_rate.0.into(), motif.size().dim_0() as u32))), Arc::clone(&ctx)).await?;
+                let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>> =
+                    motif_loader
+                        .run(
+                            Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::all_slices(
+                                motif_id_rate.0.into(),
+                            ))),
+                            Arc::clone(&ctx),
+                        )
+                        .await?;
+                let random_slices = random_slices_loader
+                    .run(
+                        Arc::new(DevicesWrap::wrap_cpu(SlicesLoaderInput::new(
+                            motif_id_rate.0.into(),
+                            motif.size().dim_0() as u32,
+                        ))),
+                        Arc::clone(&ctx),
+                    )
+                    .await?;
 
 
                 // let batch_ref = &batch;

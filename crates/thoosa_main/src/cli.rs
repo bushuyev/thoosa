@@ -374,14 +374,17 @@ where
                 &store,
                 true,
                 |run_configs| {
-                    Arc::new(crate::tasks::find_motifs::FindMotifsStage::new(
-                        &ws,
-                        &store,
-                        loader_2,
-                        run_configs,
-                        find_motifs_args.fixed_config.clone(), //FixedFindMotifsConfig::new(None, 10_000, false, None),
-                        ThoDevice::from(1),
-                    ))
+                    Arc::new(
+                        crate::tasks::find_motifs::FindMotifsStage::new(
+                            &ws,
+                            &store,
+                            loader_2,
+                            run_configs,
+                            find_motifs_args.fixed_config.clone(), //FixedFindMotifsConfig::new(None, 10_000, false, None),
+                            ThoDevice::from(1),
+                        )
+                        .expect("FindMotifsStage::new failed"),
+                    )
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
             ).await?;
@@ -568,14 +571,17 @@ where
                 &store,
                 true,
                 |run_configs| {
-                    Arc::new(crate::tasks::find_motifs::FindMotifsStage::new(
-                        &ws,
-                        &store,
-                        Arc::clone(&loader_2),
-                        run_configs,
-                        FixedFindMotifsConfig::new(None, 10_000, false, None),
-                        ThoDevice::from(1),
-                    ))
+                    Arc::new(
+                        crate::tasks::find_motifs::FindMotifsStage::new(
+                            &ws,
+                            &store,
+                            Arc::clone(&loader_2),
+                            run_configs,
+                            FixedFindMotifsConfig::new(None, 10_000, false, None),
+                            ThoDevice::from(1),
+                        )
+                        .expect("FindMotifsStage::new failed"),
+                    )
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
             ).await?;
@@ -2606,7 +2612,7 @@ pub async fn run_grid</*ResConf, */RCRV, F, RC, ST, CtxF>(
     ctx_f: CtxF,
 ) -> Result<Vec<RunId>, ThoosaError>
 where
-    F: FnOnce(Vec<RC>) -> Arc<ST>,
+    F: FnOnce(Vec<RC>) -> Arc<ST>,//TODO return Result
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
@@ -3754,7 +3760,7 @@ mod cli_tests {
             ThoTensor::new(
                 Input::id(key).clone(),
                 Tensor::load(&path).expect(format!("can't open {path:?}").as_str()),
-            )
+            ).unwrap()
         }));
 
         // let devices = vec![Cpu, Cpu];

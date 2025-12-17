@@ -169,10 +169,10 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             pd: PhantomData,
         }
     }
-    pub fn to_device(&self, d: Device) -> ThoTensor<D, Id> {
+    pub fn to_device(&self, d: Device) -> Result<ThoTensor<D, Id>, ThoosaError> {
         ThoTensor::new(self.id.clone(), self.t.to_device(d))
     }
-    pub fn contiguous(&self) -> ThoTensor<D, Id> {
+    pub fn contiguous(&self) -> Result<ThoTensor<D, Id>, ThoosaError> {
         ThoTensor::new(self.id.clone(), self.t.contiguous())
     }
 
@@ -431,17 +431,17 @@ impl<D: Dims, Id: Named + Debug + Clone> Debug for ThoTensor<D, Id> {
 }
 
 impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
-    pub fn new(id: Id, tensor: Tensor) -> Self {
-        Self {
+    pub fn new(id: Id, tensor: Tensor) -> Result<Self, ThoosaError> {
+        Ok(Self {
             id,
             t: if tensor.is_contiguous() {
                 tensor
             } else {
-                tensor.contiguous()
+                tensor.f_contiguous()?
             },
             tracking: Default::default(),
             pd: PhantomData,
-        }
+        })
     }
 
     pub fn zeros(id: Id, size: impl IntList, options: (Kind, Device)) -> Self {
@@ -465,7 +465,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
 
 
 
-    pub fn add(&self, rhs: &ThoTensor<D, Id>) -> ThoTensor<D, Id> {
+    pub fn add(&self, rhs: &ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoosaError> {
         ThoTensor::new(self.id.clone(), &self.t + &rhs.t)
     }
 
@@ -481,10 +481,10 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             mm_r.size()
         );
 
-        Ok(ThoTensor::new(self.id.clone(), mm_r))
+        Ok(ThoTensor::new(self.id.clone(), mm_r)?)
     }
 
-    pub fn sum(&self, k: Kind) -> ThoTensor<D, Id> {
+    pub fn sum(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoosaError> {
         ThoTensor::new(self.id.clone(), self.t.sum(k))
     }
 
@@ -492,7 +492,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         Ok(ThoTensor::new(
             self.id.clone(),
             panic_to_err!(self.t.f_sum_dim_intlist(dim, false, self.t.kind()))?,
-        ))
+        )?)
     }
 
     pub fn hadamard<RD: Dims>(
@@ -500,10 +500,10 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         rhs: &ThoTensor<RD, Id>,
         to_id: Id,
     ) -> Result<ThoTensor<D, Id>, ThoosaError> {
-        Ok(ThoTensor::new(to_id, self.t.f_multiply(&rhs.t)?))
+        Ok(ThoTensor::new(to_id, self.t.f_multiply(&rhs.t)?)?)
     }
 
-    pub fn mean(&self, k: Kind) -> ThoTensor<D, Id> {
+    pub fn mean(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoosaError> {
         ThoTensor::new(self.id.clone(), self.t.mean(k))
     }
 
@@ -544,7 +544,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
                     .collect::<Vec<&Tensor>>()
                     .as_slice(),
             )?,
-        ))
+        )?)
     }
 
     // No-params variant: transform tensor with a function that only needs &Tensor
@@ -626,7 +626,7 @@ where
 
         // debug!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
 
-        Ok(ThoTensor::new(self.id.clone(), copy))
+        Ok(ThoTensor::new(self.id.clone(), copy)?)
     }
 }
 

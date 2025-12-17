@@ -4535,7 +4535,7 @@ mod motif_find_tests {
             ThoTensor::new(
                 Input::id(key).clone(),
                 Tensor::from_slice(v.as_slice()).view((1, 10)),
-            )
+            ).unwrap()
         }));
 
         /*

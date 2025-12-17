@@ -237,7 +237,15 @@ where
         debug!("ApplyMotifNets::run: matches={matches:?}");
 
 
-        Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), Tensor::concat(&matches.into_iter().map(|v|v.t).collect::<Vec<_>>(), 1).transpose(0,1)), cache_area)))
+        let tensor = ThoTensor::new(
+            "".into(),
+            Tensor::f_concat(
+                &matches.into_iter().map(|v| v.t).collect::<Vec<_>>(), 1
+            )?
+            .f_transpose(0, 1)?,
+        )?;
+
+        Ok(Arc::new(DevicesWrap::wrap(tensor, cache_area)))
 
     }
 
@@ -541,7 +549,8 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
 
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} slices.size={:?}",  slices.size());
 
-                let out = net.data().tho_forward(&ThoTensor::new("".into(), slices), false);
+                let slices_tensor = ThoTensor::new("".into(), slices)?;
+                let out = net.data().tho_forward(&slices_tensor, false);
 
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} out.size={:?}", out.size());
 
@@ -557,8 +566,9 @@ where
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run_forward"))]
-    fn run_forward(input: &ApplyMotifNetInput, slices: Tensor) -> ThoTensor<MotifProbability, CachableId> {
-        input.motif_net.data().tho_forward(&ThoTensor::new("".into(), slices), false)
+    fn run_forward(input: &ApplyMotifNetInput, slices: Tensor) -> Result<ThoTensor<MotifProbability, CachableId>, ThoosaError> {
+        let slices = ThoTensor::new("".into(), slices)?;
+        Ok(input.motif_net.data().tho_forward(&slices, false))
     }
 }
 
@@ -639,9 +649,9 @@ pub(crate) mod tests {
         let motif_0_1_id = 1; //channel 0 motif 1
         let motif_1_0_id = 0; //channel 1 motif 0
 
-        let motif_0_0 = Arc::new(ThoTensor::new("motif_0_0".into(), motifs_tensor(100, 3, MotifKind::Pulse)));
-        let motif_0_1 = Arc::new(ThoTensor::new("motif_0_1".into(), motifs_tensor(100, 3, MotifKind::Triangle)));
-        let motif_1_0 = Arc::new(ThoTensor::new("motif_1_0".into(), motifs_tensor(100, 3, MotifKind::Sin)));
+        let motif_0_0 = Arc::new(ThoTensor::new("motif_0_0".into(), motifs_tensor(100, 3, MotifKind::Pulse))?);
+        let motif_0_1 = Arc::new(ThoTensor::new("motif_0_1".into(), motifs_tensor(100, 3, MotifKind::Triangle))?);
+        let motif_1_0 = Arc::new(ThoTensor::new("motif_1_0".into(), motifs_tensor(100, 3, MotifKind::Sin))?);
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 3, 100, input_n_0 as u32)
@@ -706,7 +716,7 @@ pub(crate) mod tests {
         let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
         let out = apply_motif_nets.run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new("test_batch".into(), resource_a_t), 0)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::new("test_batch".into(), resource_a_t)?, 0)),
             Arc::clone(&run_ctx)
         ).await?;
 

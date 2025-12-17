@@ -29,9 +29,9 @@ fn test_motif_node() -> Result<(), ThoosaError>{
     // let node_1_channel_0 = motif_node_2(&MotifNetParams::new(motif_width, 3, 1)).build_tch_module::<AnyDims, AnyDims>(&vs.root())?;
     // let node_0_channel_1 = motif_node_2(&MotifNetParams::new(motif_width, 3, 1)).build_tch_module::<AnyDims, AnyDims>(&vs.root())?;
 
-    let node_0_channel_0_output = apply_motif_node(motif_width, &node_0_channel_0, &make_batch(777, 4)?, 0);
-    let node_0_channel_0_output = apply_motif_node(motif_width, &node_0_channel_0, &make_batch(1111, 4)?, 0);
-    let node_0_channel_0_output = apply_motif_node(motif_width, &node_0_channel_0, &make_batch(1000, 4)?, 0);
+    let node_0_channel_0_output = apply_motif_node(motif_width, &node_0_channel_0, &make_batch(777, 4)?, 0)?;
+    let node_0_channel_0_output = apply_motif_node(motif_width, &node_0_channel_0, &make_batch(1111, 4)?, 0)?;
+    let node_0_channel_0_output = apply_motif_node(motif_width, &node_0_channel_0, &make_batch(1000, 4)?, 0)?;
     // let node_1_channel_0_output = apply_motif_node(motif_width, batch_len, node_1_channel_0, &batch, 0);
     // let node_0_channel_1_output = apply_motif_node(motif_width, batch_len, node_0_channel_1, &batch, 0);
 
@@ -64,7 +64,7 @@ fn test_label_node() -> Result<(), ThoosaError>{
 
     let node = any_len_label_node(&LabelNetParams::new(0, 3, 0, 100, FixedNumSlices(FixedNumSlicesNetParams{}))).build_tch_module::<AnyDims, AnyDims>(&vs.root())?;
 
-    let motif_node_output = node.tho_forward(&ThoTensor::new("".into(), Tensor::rand(&[8, 3, 9901], FLOAT_CPU)), true);
+    let motif_node_output = node.tho_forward(&ThoTensor::new("".into(), Tensor::rand(&[8, 3, 9901], FLOAT_CPU)).unwrap(), true);
     // let motif_node_output = node.tho_forward(&ThoTensor::new("".into(), Tensor::rand(&[10, 3, 123], FLOAT_CPU)), true);
 
     debug!("motif_node_output={motif_node_output:?}");
@@ -74,7 +74,7 @@ fn test_label_node() -> Result<(), ThoosaError>{
 
 
 
-fn apply_motif_node(motif_width: u32,  node_0_channel_0: &Box<dyn ThoModule<AnyDims, AnyDims>>, batch: &Tensor, channel: i64) -> Tensor {
+fn apply_motif_node(motif_width: u32,  node_0_channel_0: &Box<dyn ThoModule<AnyDims, AnyDims>>, batch: &Tensor, channel: i64) -> Result<Tensor, ThoosaError> {
     debug!("batch={batch:?}");
     let tensor_single_channel = batch.i((.., channel, ..));
 
@@ -84,7 +84,8 @@ fn apply_motif_node(motif_width: u32,  node_0_channel_0: &Box<dyn ThoModule<AnyD
 
     debug!("motif_node_input={motif_node_input:?}");
 
-    let motif_node_output = node_0_channel_0.tho_forward(&ThoTensor::new("".into(), motif_node_input), true);
+    let motif_node_input = ThoTensor::new("".into(), motif_node_input)?;
+    let motif_node_output = node_0_channel_0.tho_forward(&motif_node_input, true);
 
     debug!("motif_node_output={motif_node_output:?}");
 
@@ -92,5 +93,5 @@ fn apply_motif_node(motif_width: u32,  node_0_channel_0: &Box<dyn ThoModule<AnyD
 
     debug!("final_output={final_output:?}");
 
-    final_output
+    Ok(final_output)
 }
