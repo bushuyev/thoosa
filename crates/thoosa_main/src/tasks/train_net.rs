@@ -3,14 +3,20 @@ use std::io::Write;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Instant;
-use futures_util::StreamExt;
+use std::collections::{HashMap, HashSet};
+use futures_util::{future::BoxFuture, StreamExt};
 use log::{debug, info, trace};
 use parking_lot::{Mutex, RwLock};
 use tch::Device;
 use tch::nn::{Optimizer, VarStore};
-use caching_runner::common::cachable::{Cached, DevicesWrap};
-use caching_runner::common::{OutId, RunCtx};
+use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use caching_runner::common::{OutId, PermitsCtx, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use caching_runner::global_ctx::GlobalCtx;
+use caching_runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use caching_runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::batches::AsyncDataBatch;
 use thoosa_common::cuda_utils::cuda_mem;
@@ -18,14 +24,15 @@ use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{opt_train_2, CommonTrainingRunConfig, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetTypeArgs, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult};
-use thoosa_common::utils::{optimizer_mem_size, ListenerResponse, TrainListener};
+use thoosa_common::utils::{optimizer_mem_size, TrainListener};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{Adjustable, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, SimpleId, WithId};
+use thoosa_shared::CopyToDevice;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::MotifsCtx;
@@ -102,8 +109,8 @@ pub struct TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
-    DX: Dims, DY: Dims,
-    B:AsyncDataBatch<DX, DY>,
+    DX: Dims + 'static, DY: Dims + 'static,
+    B:AsyncDataBatch<DX, DY> + 'static,
     BF:Fn(&RC)->B +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
@@ -128,8 +135,8 @@ impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> Debug for TrainNet<C, L, B,
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
-    DX: Dims, DY: Dims,
-    B:AsyncDataBatch<DX, DY>,
+    DX: Dims + 'static, DY: Dims + 'static,
+    B:AsyncDataBatch<DX, DY> + 'static,
     BF:Fn(&RC)->B +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
@@ -148,8 +155,8 @@ impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> TrainNet<C, L, B, BF, DX, D
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
-    DX: Dims, DY: Dims,
-    B:AsyncDataBatch<DX, DY>,
+    DX: Dims + 'static, DY: Dims + 'static,
+    B:AsyncDataBatch<DX, DY> + 'static,
     BF:Fn(&RC)->B +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
@@ -161,6 +168,124 @@ where
 {
     pub fn new(batch:BF, net:NF,opt_config:Arc<OptConfig>,run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >, loss_fn:LossFp, optimizer:FO, x_f:XF, cycles:FC) -> Self {
         Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, cycles }
+    }
+
+    fn run_inner(
+        self: Arc<Self>,
+        ctx: Arc<RwLock<C>>,
+        device_idx: usize,
+        vs: &VarStore,
+        run_config: RC,
+    ) -> BoxFuture<'static, Result<(f32, NP), ThoosaError>> {
+        let batch = (self.batch)(&run_config);
+        let (node, params) = match (self.net)(&run_config, vs) {
+            Ok(v) => v,
+            Err(e) => return Box::pin(async { Err(e) }),
+        };
+        let optimizer = match (self.optimizer)(&run_config, vs) {
+            Ok(v) => v,
+            Err(e) => return Box::pin(async { Err(e) }),
+        };
+
+        let device = Device::from(ThoDevice::from(device_idx));
+        let cycles = (self.cycles)(&run_config);
+        let x_f = {
+            let this = Arc::clone(&self);
+            Arc::new(move |batch: ThoBatch<DX>| (this.x_f)(batch))
+        };
+
+        let train_step = Arc::new(TrainStep::new(
+            device,
+            node,
+            optimizer,
+            x_f,
+            self.loss_fn,
+        ));
+
+        let ctx_name = ctx.read().name();
+        let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+        let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
+
+        Box::pin(async move {
+            debug!("train: device={:?} cycles={}", train_step.device(), cycles);
+            {
+                let opt = train_step.opt.lock();
+                debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
+            }
+
+            let oom_handler = OOMHandler::new(
+                vec![
+                    Adjusters::RunContext(Box::new(PermitsAdjuster::new(
+                        MAX_PERMITS,
+                        *PermitStep::TWENTY,
+                        {
+                            let out_id = Arc::clone(&out_id);
+                            move |n| GlobalCtx::global().acquire_many(
+                                device_idx,
+                                n,
+                                Arc::clone(&out_id),
+                            )
+                        },
+                    ))),
+                    Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                ],
+                None,
+            );
+
+            let mut last_valid_loss = [0f32; 3];
+
+            for idx in 1..cycles {
+                debug!("train:  0. cuda_mem={:?}", cuda_mem());
+                let mut batches = batch.train_batch_stream().await;
+                debug!("train:  1. cuda_mem={:?}", cuda_mem());
+                while let Some(Ok((x_t_0, expected_y))) = batches.next().await {
+                    let input = Arc::new(TrainStepInput::new(x_t_0, expected_y));
+
+                    oom_handler.run(
+                        &train_step,
+                        Arc::clone(&input),
+                        Arc::clone(&ctx),
+                        Contexts::new(
+                            NoopInputContext(None),
+                            NoopRunnableContext {},
+                            PermitsAndDumpToCpuAdjustableContex::new(
+                                PermitsAdjustContextImpl::new(ctx_name),
+                                DumpToCpuContextImpl::new(&dump_to_cpu_exclude),
+                            ),
+                        ),
+                    ).await?;
+
+                }
+
+                if idx % 10 == 0 || idx == cycles - 1 {
+
+                    debug!("train:  0. cuda_mem={:?}", cuda_mem());
+                    let mut batches = batch.valid_batch_stream().await;
+                    debug!("train:  1. cuda_mem={:?}", cuda_mem());
+                    while let Some(Ok((x_t_0,y_t))) = batches.next().await {
+                        tch::no_grad(||{
+
+                            let x_t = (train_step.x_f())(x_t_0);
+
+                            let pred_y = train_step.forward(&x_t, false);
+
+                            let valid_loss = (train_step.loss_fn())(&pred_y.as_ref(), &y_t.as_ref());
+                            let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
+
+                            last_valid_loss[(idx % last_valid_loss.len() as u32) as usize] = valid_loss_f32;
+                            debug!("train: last_valid_loss={last_valid_loss:?}  valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+
+                        });
+                    }
+
+                }
+                info!(".");
+                std::io::stdout().flush()?;
+            }
+            debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+
+            Ok((last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32, params))
+        })
     }
 }
 
@@ -207,89 +332,17 @@ where
         let device_idx = ctx.read().device_idx();
 
         async move {
+            let ctx_for_train = Arc::clone(&ctx);
+            let self_for_train = Arc::clone(&self);
+            let device_idx_for_train = device_idx;
 
             let (var_store, node_params, run_config, loss) = opt_train_2::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),
-                async move |vs: &VarStore, run_config: RC, _listener| {
+                move |vs: &VarStore, run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
+                    let ctx = Arc::clone(&ctx_for_train);
+                    let self_arc = Arc::clone(&self_for_train);
 
-                    let batch = (self.batch)(&run_config);
-                    let (node, params) = (self.net)(&run_config, vs)?;
-                    let optimizer = (self.optimizer)(&run_config, vs)?;
-
-                    let device = Device::from(ThoDevice::from(device_idx));
-                    let cycles = (self.cycles)(&run_config);
-
-                    let train_step = Arc::new(TrainStep::new(
-                        device,
-                        node,
-                        optimizer,
-                        &self.x_f,
-                        self.loss_fn,
-                    ));
-
-                    debug!("train: device={:?} cycles={}", train_step.device(), cycles);
-                    {
-                        let opt = train_step.opt.lock();
-                        debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
-                    }
-
-                    let mut last_valid_loss = [0f32; 3];
-                    let mut listener: Option<&mut dyn TrainListener> = None;
-
-                    for idx in 1..cycles {
-                        debug!("train:  0. cuda_mem={:?}", cuda_mem());
-                        let mut batches = batch.train_batch_stream().await;
-                        debug!("train:  1. cuda_mem={:?}", cuda_mem());
-                        while let Some(Ok((x_t_0, expected_y))) = batches.next().await {
-                            let input = TrainStepInput::new(x_t_0, expected_y);
-                            train_step.clone().do_run(&input, Arc::clone(&ctx))?;
-
-                            if let Some(listener) = listener.as_mut() {
-                                listener.on_cycle(0, 0.0).await;
-                            }
-                        }
-
-                        if idx % 10 == 0 || idx == cycles - 1 {
-
-                            debug!("train:  0. cuda_mem={:?}", cuda_mem());
-                            let mut batches = batch.valid_batch_stream().await;
-                            debug!("train:  1. cuda_mem={:?}", cuda_mem());
-                            while let Some(Ok((x_t_0,y_t))) = batches.next().await {
-                                if let Some(rs) = tch::no_grad(||{
-
-                                    let x_t = (train_step.x_f())(x_t_0);
-
-                                    let pred_y = train_step.forward(&x_t, false);
-
-                                    let valid_loss = (train_step.loss_fn())(&pred_y.as_ref(), &y_t.as_ref());
-                                    let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
-
-                                    last_valid_loss[(idx % last_valid_loss.len() as u32) as usize] = valid_loss_f32;
-                                    debug!("train: last_valid_loss={last_valid_loss:?}  valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
-
-                                    listener.as_mut().map(|l|l.on_valid_cycle(idx, valid_loss_f32))
-
-                                }).take() {
-                                    match rs {
-                                        ListenerResponse::Stop => {
-                                            break;
-                                        }
-                                        ListenerResponse::UpdateLR(lr) => {
-                                            train_step.set_lr(lr);
-                                        }
-                                        ListenerResponse::Nope => {}
-                                    }
-                                }
-                            }
-
-                        }
-                        info!(".");
-                        std::io::stdout().flush()?;
-                    }
-                    debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
-
-                    Ok((last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32, params))
-
+                    self_arc.run_inner(ctx, device_idx_for_train, vs, run_config)
                 },
                 run_config_source,
                 ThoDevice::from(device_idx).into(),
@@ -303,27 +356,25 @@ where
 
 pub struct TrainStepInput<DI: Dims, DO: Dims> {
     id: SimpleId,
-    x: Mutex<Option<ThoBatch<DI>>>,
-    expected_y: Mutex<Option<ThoBatch<DO>>>,
+    x: ThoBatch<DI>,
+    expected_y: ThoBatch<DO>,
 }
 
 impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
     fn new(x: ThoBatch<DI>, expected_y: ThoBatch<DO>) -> Self {
         Self {
             id: "train_step".into(),
-            x: Mutex::new(Some(x)),
-            expected_y: Mutex::new(Some(expected_y)),
+            x,
+            expected_y,
         }
     }
 
-    fn take(&self) -> Option<(ThoBatch<DI>, ThoBatch<DO>)> {
-        let x = self.x.lock().take();
-        let expected_y = self.expected_y.lock().take();
+    fn x(&self) -> ThoBatch<DI> {
+        self.x.shallow_clone::<Batch<DI>>()
+    }
 
-        match (x, expected_y) {
-            (Some(x), Some(expected_y)) => Some((x, expected_y)),
-            _ => None,
-        }
+    fn expected_y(&self) -> ThoBatch<DO> {
+        self.expected_y.shallow_clone::<Batch<DO>>()
     }
 }
 
@@ -347,29 +398,84 @@ impl<DI: Dims, DO: Dims> Debug for TrainStepInput<DI, DO> {
     }
 }
 
-pub struct TrainStep<'xf, F, DI: Dims, DO: Dims, C: RunCtx> {
+impl<DI: Dims, DO: Dims> Data for TrainStepInput<DI, DO> {
+    type Metrics = <ThoBatch<DI> as Data>::Metrics;
+
+    fn size(&self) -> Self::Metrics {
+        <ThoBatch<DI> as Data>::size(&self.x)
+    }
+
+    fn device(&self) -> usize {
+        self.x.device()
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.x.mem_size() + self.expected_y.mem_size()
+    }
+}
+
+impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
+    type O<'o> = TrainStepInput<DI, DO>;
+
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+        P: PermitsCtx,
+    {
+        let _ = permits_ctx;
+        let _ = trace_ctx;
+
+        let x = if self.x.device() == to_device_idx {
+            self.x()
+        } else {
+            self.x.copy_to_device(to_device_idx).await?
+        };
+
+        let expected_y = if self.expected_y.device() == to_device_idx {
+            self.expected_y()
+        } else {
+            self.expected_y.copy_to_device(to_device_idx).await?
+        };
+
+        let input = TrainStepInput::new(x, expected_y);
+
+        do_run(&input)
+    }
+}
+
+impl<DI: Dims, DO: Dims> WithSelectDataRef<()> for TrainStepInput<DI, DO> {
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+        P: PermitsCtx,
+    {
+        self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run).await
+    }
+}
+
+pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: Device,
     net: Mutex<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>,
     opt: Mutex<Optimizer>,
-    x_f: &'xf F,
+    x_f: Arc<F>,
     loss_fn: LossFp,
     pd: PhantomData<C>,
 }
 
-impl<'xf, F, DI: Dims, DO: Dims, C: RunCtx> Debug for TrainStep<'xf, F, DI, DO, C> {
+impl<F, DI: Dims, DO: Dims, C: RunCtx> Debug for TrainStep<F, DI, DO, C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TrainStep").finish()
     }
 }
 
-impl<'xf, F, DI, DO, C> TrainStep<'xf, F, DI, DO, C>
+impl<F, DI, DO, C> TrainStep<F, DI, DO, C>
 where
     DI: Dims,
     DO: Dims,
     C: RunCtx,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    fn new(device: Device, net: Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, opt: Optimizer, x_f: &'xf F, loss_fn: LossFp) -> Self {
+    fn new(device: Device, net: Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, opt: Optimizer, x_f: Arc<F>, loss_fn: LossFp) -> Self {
         Self {
             device,
             net: Mutex::new(net),
@@ -389,8 +495,8 @@ where
         net.tho_forward(x_t, train)
     }
 
-    fn x_f(&self) -> &F {
-        self.x_f
+    fn x_f(&self) -> Arc<F> {
+        Arc::clone(&self.x_f)
     }
 
     fn loss_fn(&self) -> LossFp {
@@ -403,7 +509,7 @@ where
     }
 }
 
-impl<'xf, F, DI, DO, C> Stage for TrainStep<'xf, F, DI, DO, C>
+impl<F, DI, DO, C> Stage for TrainStep<F, DI, DO, C>
 where
     DI: Dims,
     DO: Dims,
@@ -415,7 +521,7 @@ where
     type Out = ();
 }
 
-impl<'xf, F, DI, DO, C> SyncStage for TrainStep<'xf, F, DI, DO, C>
+impl<F, DI, DO, C> SyncStage for TrainStep<F, DI, DO, C>
 where
     DI: Dims,
     DO: Dims,
@@ -424,7 +530,8 @@ where
 {
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
         let _ = ctx;
-        let (x_t_0, expected_y) = input.take().ok_or_else(|| ThoosaError::new("TrainStepInput already consumed"))?;
+        let x_t_0 = input.x();
+        let expected_y = input.expected_y();
 
         debug!("train: device={:?} x_t_0.size={:?} expected_y.size={:?}", self.device, x_t_0.size(), expected_y.size());
         debug!("train: 0. cuda_mem={:?}", cuda_mem());
@@ -460,6 +567,27 @@ where
 
         Ok(())
     }
+}
+
+impl<F, DI, DO, C> OutId for TrainStep<F, DI, DO, C>
+where
+    DI: Dims,
+    DO: Dims,
+    C: RunCtx,
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
+{
+    fn out_id<'a>(&self, _input_id: &SimpleId) -> () {
+        ()
+    }
+}
+
+impl<F, DI, DO, C> Adjustable for TrainStep<F, DI, DO, C>
+where
+    DI: Dims,
+    DO: Dims,
+    C: RunCtx,
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
+{
 }
 
 
