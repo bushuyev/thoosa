@@ -34,7 +34,7 @@ pub trait PermitsCtx: Named + Debug + Send + Sync {
     fn acquired_permits(&self) -> NumPermits;
 }
 
-pub trait RunCtx: PermitsCtx {
+pub trait RunCtx: PermitsCtx {//TODO remove PermitsCtx from RunCtx
     fn device_idx(&self) -> usize;
 
     fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
