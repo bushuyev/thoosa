@@ -1,4 +1,4 @@
-use crate::permits::NumPermits;
+use crate::permits::{NumPermits, MAX_PERMITS};
 use crate::permits::runner_queue::Arbiter;
 use crate::permits::{PermitSource, RunnerPerm};
 use crate::purge::FuturesRunnerMapPurger;
@@ -69,11 +69,16 @@ static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
 #[cfg_attr(test, automock)]
 impl GlobalCtx {
     fn new(device_count: usize) -> Self {
+        debug!("GlobalCtx::new: device_count={device_count}");
+        let semaphores = (0..device_count)
+            // .map(|_| Box::new(RunnerSemaphore::new(100)) as Box<dyn PermitSource>) //TODO config
+            .map(|device_idx| Box::new(Arbiter::new(MAX_PERMITS, device_idx)) as Box<dyn PermitSource>)
+            .collect();
+
+        debug!("GlobalCtx::new: semaphores={semaphores:?}");
+
         Self {
-            semaphores: (0..device_count)
-                // .map(|_| Box::new(RunnerSemaphore::new(100)) as Box<dyn PermitSource>) //TODO config
-                .map(|device_idx| Box::new(Arbiter::new(100, device_idx)) as Box<dyn PermitSource>)
-                .collect(),
+            semaphores,
 
             device_count,
 
@@ -93,6 +98,8 @@ impl GlobalCtx {
     }
 
     pub fn init_devices(count: usize) -> &'static GlobalCtx {
+        debug!("GlobalCtx::init_devices: device_count={count}");
+
         GLOBAL_CTX
             .set(GlobalCtx::new(count))
             .expect("`init_devices` must only be called once at program start");

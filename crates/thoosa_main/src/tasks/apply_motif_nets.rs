@@ -183,7 +183,7 @@ where
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
-        let out_id = Arc::new(self.out_id(WithId::id(&input))) as Arc<dyn CachableIdTr>;
+
 
         debug!("ApplyMotifNets::run: self.loaded_motif_nets.len={:?}", self.apply_motif_nets.len());
 
@@ -195,8 +195,9 @@ where
         let matches = futures::stream::iter(apply_motif_nets.into_iter())
             .map(|apply_motif_net|{
                 let input = Arc::clone(&input);
-                let out_id = Arc::clone(&out_id);
-                let ctx = Arc::clone(&ctx);
+                let out_id = apply_motif_net.out_id(&input.id());
+                let apply_motif_net_ctx = ctx.write().branch(format!("apply_motif_net_ctx_{}", out_id).leak());
+                let out_id = Arc::new(out_id) as Arc<dyn CachableIdTr>;
                 let slice_step = self.slice_step;
 
                 let slices = ((input.size().dim::<1>() as u32 - self.motif_width)/slice_step) as i64 + 1;
@@ -217,7 +218,7 @@ where
                          ], None).run(
                          &apply_motif_net,
                          Arc::clone(&input),
-                         ctx,
+                         apply_motif_net_ctx,
                          Contexts::new(
                              SplitsAdjusterContextImpl::new(input._size().into(), SingleDimTensorOutputBuilder::new("".into(), 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
                              NoopRunnableContext {},

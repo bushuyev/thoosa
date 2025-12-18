@@ -87,7 +87,7 @@ where
     R:RunCtx + MotifsCtx + Adjustable + 'static
 {
     let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-        "".into(), ws, store, select_motifs_run_ids.clone(), Arc::clone(&stage_ctx),
+        "".into(), ws, store, select_motifs_run_ids.clone(), stage_ctx,
         #[cfg(test)]
         None
     ).await?);
@@ -99,7 +99,7 @@ where
     ));
 
 
-    TrainLabelNets::new_lm(
+    TrainLabelNets::new(
         select_motifs_run_ids,
         loader,
         motif_loader,
@@ -107,7 +107,6 @@ where
         run_configs,
         ws,
         store,
-        Arc::clone(&stage_ctx),
         opt_config,
     ).await
 }
@@ -119,7 +118,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
 
-    pub async fn new_lm<R>(
+    pub async fn new(
         select_motifs_run_ids: Vec<RunId>,
         loader: Arc<L>,
         motif_loader: Arc<LM>,
@@ -127,11 +126,8 @@ where
         run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
-        stage_ctx:Arc<parking_lot::RwLock<R>>,
         opt_config:Arc<OptConfig>
     ) -> Result<Self, ThoosaError>
-    where
-        R:RunCtx + MotifsCtx + Adjustable + 'static
     {
         Ok(Self {
             run_configs: Arc::new(run_configs),
@@ -296,8 +292,8 @@ where
                         let out_id = SimpleId::from(new_name.clone());  //self.out_id(input.id());
                         Arc::new(out_id) as Arc<dyn CachableIdTr>
                     };
-                    let ctx = Arc::clone(&ctx).read().branch(&new_name);
-                    let ctx_0 = Arc::clone(&ctx);
+                    let train_label_ctx = Arc::clone(&ctx).write().branch(&new_name);
+                    let train_label_ctx_batch =  Arc::clone(&ctx).write().branch(&format!("Train_{label}_batch"));
                     // if ctx.read().acquired_permits() == 0 {
                     //     let result = GlobalCtx::global()
                     //         .acquire_many(device_idx, 1, out_key.clone())
@@ -360,7 +356,7 @@ where
                                         ))
                                     }.boxed()
                                 }),
-                                Arc::clone(&ctx)
+                                train_label_ctx_batch.write().branch(format!("Train_{label}_{}_Batch", rc.id.unwrap_or(0)).leak())//TODO unwrap_or 0
                             )
                         },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
@@ -399,7 +395,7 @@ where
                         }
                     ));
 
-                    let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap_cpu(TrainNetInput::new("".into()))), Arc::clone(&ctx_0)).await?).unwrap().take_data(0).await?;
+                    let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap_cpu(TrainNetInput::new("".into()))), Arc::clone(&train_label_ctx)).await?).unwrap().take_data(0).await?;
                     Ok(
                         TrainLabelNetsRunConfigResult::new(
                             select_motifs_run_ids,//TODO
