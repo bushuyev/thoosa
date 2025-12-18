@@ -73,18 +73,19 @@ where
     ) -> Result<<Self as Adjuster<C>>::A, ThoosaError> {
         debug!("DumpToCpu::adjust: adjustable={adjustable:?}");
 
-        assert_eq!(adjustable.read().acquired_permits(), MAX_PERMITS);
+        let device_idx  = {
+            let guard = adjustable.read();
+            let acquired_permits = guard.acquired_permits();
+            assert_eq!(acquired_permits, MAX_PERMITS, "not enough permits {}", acquired_permits);
+            guard.device_idx()
+        };
 
         let ids_to_exclude = adjust_context.ids_to_exclude();
-        let device_idx = adjustable.read().device_idx();
         GlobalCtx::global()
             .dump_all_to_cpu(ids_to_exclude, device_idx)
             .await?;
 
-        debug!(
-            "DumpToCpu::adjust done: is_all_on_cpu={}",
-            GlobalCtx::global().is_all_on_cpu(device_idx)
-        );
+        debug!("DumpToCpu::adjust done: is_all_on_cpu={}",GlobalCtx::global().is_all_on_cpu(device_idx));
 
         Ok(Arc::clone(adjustable))
     }

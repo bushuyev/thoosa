@@ -809,15 +809,15 @@ pub(crate) mod tests {
                         .end_seq()
                 ],
                 Box::new(move |t: &Tensor| {
-                    vec![
+                    Ok(vec![
                         t.shallow_clone(),
                         t.shallow_clone()
-                    ]
+                    ])
                 }),
                 Box::new(move |num_denom: Vec<Tensor>| {
                     let [num, denom] = <[Tensor; 2]>::try_from(num_denom).unwrap();
 
-                    (num / denom).squeeze_dim(1)
+                    Ok((num / denom).squeeze_dim(1))
                 }),
             ).end_seq();
 
