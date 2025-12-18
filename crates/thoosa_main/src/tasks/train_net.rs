@@ -328,14 +328,14 @@ where
         let device_idx = ctx.read().device_idx();
 
         async move {
-            let ctx_for_train = Arc::clone(&ctx);
+            // let ctx_for_train = Arc::clone(&ctx);
             let self_for_train = Arc::clone(&self);
             let device_idx_for_train = device_idx;
 
             let (var_store, node_params, run_config, loss) = opt_train_2::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),
                 move |vs: &VarStore, run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
-                    let ctx = Arc::clone(&ctx_for_train);
+                    let ctx = Arc::clone(&ctx);
                     let self_arc = Arc::clone(&self_for_train);
 
                     self_arc.run_inner(ctx, device_idx_for_train, vs, run_config)
