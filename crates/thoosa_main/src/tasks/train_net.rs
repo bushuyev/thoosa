@@ -30,7 +30,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{panic_to_err, ThoosaError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, SimpleId, WithId};
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::val::{NamedRange, NamedVal};
@@ -560,7 +560,11 @@ where
             debug!("train: 2.1 cuda_mem={:?}", cuda_mem());
             let t1 = Instant::now();
 
-            opt.backward_step(&loss);
+            panic_to_err!({
+                opt.backward_step(&loss);
+                Ok::<_, ThoosaError>(())//TODO make panic_to_err to handle void functions
+            })?;
+
 
             debug!("train: 3. cuda_mem={:?}  optimizer_size={}",cuda_mem(),optimizer_mem_size(&opt));
             debug!("train: device={:?}  backward_step done in {}",self.device,t1.elapsed().as_millis());

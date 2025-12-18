@@ -502,6 +502,7 @@ where
     let mut push_group = |start: usize, len: usize| {
         let s = start as i64;
         let l = len as i64;
+        debug!("fold_mask: s={s} l={l:?}");
         let chunk = full.narrow(dim as i64, s, l);
         let reduced = reduce(chunk);
         out.push(reduced);
