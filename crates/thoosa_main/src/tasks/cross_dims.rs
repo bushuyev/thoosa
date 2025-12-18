@@ -72,12 +72,10 @@ impl Select<ChannelsData2Selector> for ThoTensor<ChannelsData2, SimpleId> {
         // if ranges[1].start > 48 {
         //     ranges[1].start -=48;
         // }
-
         // if ranges[1].end < self.size()[1]-100 {
         //     ranges[1].end +=100;
         // }
-
-        debug!("ChannelsData2Selector::subview 2. ranges={ranges:?}");
+        // debug!("ChannelsData2Selector::subview 2. ranges={ranges:?}");
 
         let sub_tensor = self.t_ref().f_i((ranges[0].clone(), ranges[1].clone()))?;
 
