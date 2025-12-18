@@ -44,13 +44,13 @@ pub enum Node {
     },
     Par {
         elts: Vec<Node>,
-        split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
     },
     Split1 {
         node: Box<Node>,
-        split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
     },
     Conv1d {
         path:&'static str,
@@ -299,8 +299,8 @@ impl SeqBuilder {
     pub fn split(
         &mut self,
         elts: Vec<Node>,
-        split: Box<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
-        join: Box<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+        split: Box<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
+        join: Box<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
     ) -> &mut Self {
         self.elts.push(Node::Par {
             elts,
@@ -314,8 +314,8 @@ impl SeqBuilder {
     pub fn split1(
         &mut self,
         node: Node,
-        split: Box<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
-        join: Box<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+        split: Box<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
+        join: Box<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
     ) -> &mut Self {
         self.elts.push(Node::Split1 {
             node: Box::new(node),

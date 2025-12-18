@@ -1,41 +1,41 @@
+use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::run_ctx_2::MotifsCtx;
+use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use caching_runner::common::{OutId, PermitsCtx, RunCtx};
+use caching_runner::global_ctx::GlobalCtx;
+use caching_runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use caching_runner::permits::{PermitStep, MAX_PERMITS};
+use futures_util::{future::BoxFuture, StreamExt};
+use log::{debug, info, trace};
+use parking_lot::{Mutex, RwLock};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::io::Write;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Instant;
-use std::collections::{HashMap, HashSet};
-use futures_util::{future::BoxFuture, StreamExt};
-use log::{debug, info, trace};
-use parking_lot::{Mutex, RwLock};
-use tch::Device;
 use tch::nn::{Optimizer, VarStore};
-use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
-use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
-use caching_runner::common::{OutId, PermitsCtx, RunCtx};
-use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use caching_runner::global_ctx::GlobalCtx;
-use caching_runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-use caching_runner::permits::{PermitStep, MAX_PERMITS};
+use tch::Device;
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::batches::AsyncDataBatch;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{opt_train_2, CommonTrainingRunConfig, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetTypeArgs, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{opt_train_2, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetTypeArgs, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{optimizer_mem_size, TrainListener};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
-use thoosa_shared::{panic_to_err, ThoosaError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, SimpleId, WithId};
-use thoosa_shared::CopyToDevice;
 use thoosa_shared::val::{NamedRange, NamedVal};
-use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::run_ctx_2::MotifsCtx;
+use thoosa_shared::CopyToDevice;
+use thoosa_shared::{panic_to_err, ThoosaError};
 
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
@@ -105,9 +105,8 @@ where
 
 }
 //TODO too many type params
-pub struct TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
+pub struct TrainNet<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
@@ -128,12 +127,11 @@ where
     optimizer:FO,
     x_f:XF,
     cycles:FC,
-    pd:PhantomData<(C, L, DX, DY, BF, P, RC)>
+    pd:PhantomData<(C, DX, DY, BF, P, RC)>
 }
 
-impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> Debug for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
+impl<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> Debug for TrainNet<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
@@ -151,9 +149,8 @@ where
     }
 }
 
-impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
+impl<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> TrainNet<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
@@ -290,9 +287,8 @@ where
     }
 }
 
-impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> Stage for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
+impl<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> Stage for TrainNet<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims, DY: Dims,
     B:AsyncDataBatch<DX, DY>,
@@ -311,9 +307,8 @@ where
 }
 
 
-impl<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> AsyncStage for TrainNet<C, L, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
+impl<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> AsyncStage for TrainNet<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
@@ -599,10 +594,92 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::tasks::cross_dims::ChannelsData2;
+    use std::sync::Arc;
+    use tch::nn::{AdamW, OptimizerConfig, VarStore};
+    use tch::Device::Cpu;
+    use tch::kind::FLOAT_CPU;
+    use tch::Tensor;
+    use caching_runner::common::MockRunCtx;
+    use thoosa_common::batches::mock_async_data_batch;
+    use thoosa_common::batches::mock_async_data_batch::MockTestBatch;
+    use thoosa_common::dims::{Batch, Dims, MotifProbability, ThoBatch};
+    use thoosa_common::train_nets::{dummy_label_net, OptConfig};
+    use thoosa_properties_map_derive::ThoosaPropertiesMap;
+    use thoosa_run_config_args::OptRunConfigSource;
+    use thoosa_run_config_args_derive::ThoosaRunConfig;
+    use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::{RangeOrValue, ThoosaError};
+    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::traits::MonoMetrics;
+    use crate::tasks::train_net::TrainNet;
+
+    #[derive(Clone, Debug)]
+    struct DummyX;
+    impl Dims for DummyX { type Metrics = MonoMetrics<1, 2>; }
+
+
+    #[derive(Clone, Debug)]
+    struct DummyY;
+    impl Dims for DummyY { type Metrics = MonoMetrics<1, 2>; }
+
+    #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
+    #[run_config_opt]
+    struct DummyRunConfig {
+        #[in_map]
+        pub id: Option<RunId>,
+
+        #[in_map]
+        #[run_config]
+        pub num_layers: u32,
+    }
+
+    impl DummyRunConfig {
+        pub fn new(id: Option<RunId>, num_layers: u32) -> Self {
+            Self { id, num_layers }
+        }
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_0(){
 
+        let batch = |rc:&DummyRunConfig| mock_async_data_batch::build().finish();
+        let net_fn = |rc:&DummyRunConfig, vs:&VarStore|{
+            Ok((
+                dummy_label_net::<Batch<DummyX>, Batch<DummyY>>(10, 1., Cpu, "test")?,
+                ()//Net params, dummy
+            ))
+        };
+        let opt_config = Arc::new(OptConfig::new(10, 3));
+        let run_config = Arc::new(DummyRunConfigRangeOrValue {
+            id: Some(1),
+            num_layers: RangeOrValue::Value(3),
+        }.opt_run_configs());
+        let loss_fn = |pred:&Tensor, target:&Tensor| {
+            Ok::<_, ThoosaError>(Tensor::zeros([1], FLOAT_CPU))
+        };
+        let optimizer = |rc:&DummyRunConfig, vs: &VarStore|{
+            AdamW::default().amsgrad(true).build(&vs, 0.001).map_err(|e|ThoosaError::from(e))
+        };
+        let x_f = |t:ThoBatch<DummyX>| {
+            t
+        };
+        let cycles = |rc:&DummyRunConfig|{
+            10
+        };
+
+        let train_net:TrainNet<MockRunCtx, _, _, _, _, _, _, _, (), _, _, _> = TrainNet::new(
+            batch,
+            net_fn,
+            opt_config,
+            run_config,
+            loss_fn,
+            optimizer,
+            x_f,
+            cycles
+        );
+
+        //TODO OOM
     }
 
 }

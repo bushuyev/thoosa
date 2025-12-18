@@ -115,8 +115,8 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
 
 pub struct MyParallel<DI: Dims, DO: Dims> {
     layers: Vec<Box<dyn ThoModule<DI, DO>>>,
-    split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
-    join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+    split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
+    join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
 }
 
 impl<DI: Dims, DO: Dims> Debug for MyParallel<DI, DO> {
@@ -128,8 +128,8 @@ impl<DI: Dims, DO: Dims> Debug for MyParallel<DI, DO> {
 impl<DI: Dims, DO: Dims> MyParallel<DI, DO> {
     pub fn new(
         layers: Vec<Box<dyn ThoModule<DI, DO>>>,
-        split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
     ) -> Self {
         assert!(layers.len() > 0, "layers len == 0");
 
@@ -151,12 +151,12 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyParallel<DI, DO> {
     fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
         debug!("MyParallel::forward: xs={:?}", t.size());
         let t = (self.join)(
-            (self.split)(t.as_ref())
+            (self.split)(t.as_ref())?
                 .into_iter()
                 .zip(self.layers.iter())
                 .map(|(t, net)| net.tho_forward(&t.into(), train).map(|v|v.as_ref().shallow_clone()))
                 .collect::<Result<Vec<Tensor>, ThoosaError>>()?,
-        );
+        )?;
 
         debug!("MyParallel::forward: t={:?}", t.size());
 
@@ -166,8 +166,8 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyParallel<DI, DO> {
 /////
 pub struct Split1<DI: Dims, DO: Dims> {
     layer: Box<dyn ThoModule<DI, DO>>,
-    split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
-    join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+    split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
+    join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
 }
 
 impl<DI: Dims, DO: Dims> Debug for Split1<DI, DO> {
@@ -179,8 +179,8 @@ impl<DI: Dims, DO: Dims> Debug for Split1<DI, DO> {
 impl<DI: Dims, DO: Dims> Split1<DI, DO> {
     pub fn new(
         layer: Box<dyn ThoModule<DI, DO>>,
-        split: Arc<dyn Fn(&Tensor) -> Vec<Tensor> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> Tensor + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
     ) -> Self {
 
         Self {
@@ -199,11 +199,11 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for Split1<DI, DO> {
     fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
         debug!("MyParallel::forward: xs={:?}", t.size());
         let t = (self.join)(
-            (self.split)(t.as_ref())
+            (self.split)(t.as_ref())?
                 .into_iter()
                 .map(|split_t| self.layer.tho_forward(&split_t.into(), train).map(|v|v.as_ref().shallow_clone()))
                 .collect::<Result<Vec<Tensor>, ThoosaError>>()?,
-        );
+        )?;
 
         debug!("MyParallel::forward: t={:?}", t.size());
 
@@ -475,7 +475,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLin
                 #[cfg(debug_assertions)]
                 error!("failed layer descr: {} ", self.descr);
 
-                panic!("{:?}", e);
+                Err(e.into())
             }
         }
     }
@@ -657,12 +657,12 @@ mod tch_tests {
             .split(
                 vec![res_seq, conv_seq],
                 Box::new(|t: &Tensor| {
-                    vec![
+                    Ok(vec![
                         t.i((.., 0, ..)).view((10, 1, 10)),
                         t.i((.., 1, ..)).view((10, 1, 10)),
-                    ]
+                    ])
                 }),
-                Box::new(|t: Vec<Tensor>| Tensor::stack(t.as_slice(), 1).squeeze()),
+                Box::new(|t: Vec<Tensor>| Ok(Tensor::stack(t.as_slice(), 1).squeeze())),
             )
             .end_seq();
 
@@ -943,8 +943,8 @@ mod tch_tests {
                             ) //2 weight bias
                             .end_seq(),
                     ],
-                    Box::new(move |t: &Tensor| vec![t.i((.., 0, ..)), t.i((.., 1, ..))]),
-                    Box::new(move |t: Vec<Tensor>| Tensor::concat(t.as_slice(), 1)),
+                    Box::new(move |t: &Tensor| Ok(vec![t.i((.., 0, ..)), t.i((.., 1, ..))])),
+                    Box::new(move |t: Vec<Tensor>| Ok(Tensor::concat(t.as_slice(), 1))),
                 )
                 .linear_s(
                     10,

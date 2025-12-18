@@ -57,8 +57,12 @@ impl <'a, DX:Dims, DY:Dims> ThoBatchIter<'a, DX, DY> {
 #[async_trait]
 pub trait AsyncDataBatch<DX: Dims, DY: Dims>: Debug + Send + Sync {
     /// returns (inputs, labels)
-    async fn train_batch(&self) -> Result<(ThoBatch<DX>, Tensor), ThoosaError>;
-    async fn valid_batch(&self) -> Result<(ThoBatch<DX>, Tensor), ThoosaError>;
+    async fn train_batch(&self) -> Result<(ThoBatch<DX>, Tensor), ThoosaError>{
+        todo!()
+    }
+    async fn valid_batch(&self) -> Result<(ThoBatch<DX>, Tensor), ThoosaError> {
+        todo!()
+    }
 
     async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoosaError>> {
         todo!()
@@ -66,6 +70,41 @@ pub trait AsyncDataBatch<DX: Dims, DY: Dims>: Debug + Send + Sync {
 
     async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoosaError>> {
         todo!()
+    }
+}
+
+pub mod mock_async_data_batch {
+    use mockall::mock;
+    use crate::batches::AsyncDataBatch;
+    use crate::dims::Dims;
+
+    mock!{
+
+        #[derive(Debug)]
+        pub TestBatch<DX: Dims, DY: Dims> {
+
+        }
+
+        impl<DX: Dims, DY: Dims> AsyncDataBatch<DX, DY> for TestBatch<DX, DY>{
+
+        }
+
+    }
+
+    pub struct MockAsyncDataBatchBuilder<DX: Dims, DY: Dims>  {
+        mock: MockTestBatch<DX, DY>
+    }
+
+    impl<DX: Dims, DY: Dims> MockAsyncDataBatchBuilder<DX, DY> {
+        pub fn finish(self) -> MockTestBatch<DX, DY>{
+            self.mock
+        }
+    }
+
+    pub fn build<DX: Dims, DY: Dims>()->MockAsyncDataBatchBuilder<DX, DY> {
+        MockAsyncDataBatchBuilder {
+            mock: Default::default(),
+        }
     }
 }
 
