@@ -168,7 +168,7 @@ impl ThoosaError {
     }
 
     pub fn new_with_error(msg: impl Into<String> + Display, what: MyError) -> Self {
-        error!("ThoosaError::new: msg={}", msg);
+        trace!("ThoosaError::new: msg={}", msg);
         let backtrace = Backtrace::capture();
 
         debug!("{}", backtrace.to_string());

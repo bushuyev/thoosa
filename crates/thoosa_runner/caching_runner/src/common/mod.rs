@@ -1,6 +1,6 @@
 // removed unused feature gate to reduce warnings
 
-use crate::permits::{NumPermits, RunnerPerm};
+use crate::permits::{NumPermits, RunnerPerm, MAX_PERMITS};
 use ambassador::delegatable_trait;
 use futures_util::future::BoxFuture;
 use async_trait::async_trait;
@@ -46,7 +46,7 @@ pub trait RunCtx: PermitsCtx {//TODO remove PermitsCtx from RunCtx
 
     fn cache_area(&self) -> u64;
 
-    fn branch(&self, new_name:&str)-> Arc<RwLock<Self>> {
+    fn branch(&mut self, new_name:&str)-> Arc<RwLock<Self>> {
         todo!()
     }
 }
@@ -86,7 +86,7 @@ pub mod mock_run_ctx {
             fn device_idx(&self) -> usize;
             fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>;
             fn cache_area(&self) -> u64;
-            fn branch(&self, new_name:&str)-> Arc<RwLock<Self>>;
+            fn branch(&mut self, new_name:&str)-> Arc<RwLock<Self>>;
         }
 
     }

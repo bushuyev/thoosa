@@ -23,7 +23,7 @@ pub struct RunCtx2 {
     device_idx: usize,
     cache_area: u64,
     name: &'static str,
-    perms: TorchPermsCtx,
+    pub(crate) perms: TorchPermsCtx,//TODO pub
 
     loaded_raw_tensors:Vec<SimpleId>,
     batched_motifs_id:Vec<StackedMotifsOutputId>
@@ -104,8 +104,11 @@ impl RunCtx for RunCtx2 {
         self.cache_area
     }
 
-    fn branch(&self, new_name: &str) -> Arc<RwLock<Self>> {
-        Arc::new(parking_lot::RwLock::new(RunCtx2::new(self.device_idx, self.cache_area, new_name.to_string().leak())))//TODO
+    fn branch(&mut self, new_name: &str) -> Arc<RwLock<Self>> {
+
+        let mut ctx2 = RunCtx2::new(self.device_idx, self.cache_area, new_name.to_string().leak());
+        ctx2.perms.permits = mem::take(&mut self.perms.permits);
+        Arc::new(parking_lot::RwLock::new(ctx2))
     }
 }
 

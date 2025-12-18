@@ -289,11 +289,13 @@ where
 
         debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
         for stage in self.run_config_stages.iter() {
-            let ctx_arc = Arc::clone(&ctx);
+            let ctx_arc = ctx.write().branch(format!("find_motifs_for_rc_{}", stage.run_config.id.unwrap_or(0)).leak());
             let input_arc = Arc::clone(&input);
             let cross_loader_arc = Arc::clone(&stage.cross_loader);
 
-            js.spawn(async move { cross_loader_arc.run(input_arc, ctx_arc).await });
+            js.spawn(async move {
+                cross_loader_arc.run(input_arc, ctx_arc).await
+            });
         }
 
         // let results =js.join_all().await;

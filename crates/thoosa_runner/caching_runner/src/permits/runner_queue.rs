@@ -3,12 +3,11 @@ use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use log::{error, info, trace};
+use log::{error, info, trace, debug};
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{MyError, ThoosaError};
 use tokio::sync::{Notify, Semaphore, TryAcquireError, mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tracing::debug;
 
 /// ---------- FIFO Arbiter built on tokio::Semaphore ----------
 
@@ -21,7 +20,7 @@ pub struct Arbiter {
     capacity: NumPermits,
     worker: Option<JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
-    granted_counts_len: Arc<AtomicUsize>,
+    granted_counts_len: Arc<AtomicUsize>,//TODO remove?
     device_idx: usize
 }
 
@@ -34,11 +33,14 @@ struct Req {
 
 impl Arbiter {
     pub fn new(capacity: NumPermits, device_idx: usize) -> Self {
+        debug!("Arbiter::new: capacity={capacity} device_idx={device_idx}");
+
         let (tx, rx) = mpsc::channel::<Req>(1024);
         let sem = Arc::new(Semaphore::new(capacity as usize));
         let notify = Arc::new(Notify::new());
         let shutdown = Arc::new(AtomicBool::new(false));
         let granted_counts_len = Arc::new(AtomicUsize::new(0));
+
         let worker = Self::spawn(
             Arc::clone(&sem),
             Arc::clone(&notify),
@@ -73,20 +75,25 @@ impl Arbiter {
         let tx = self
             .tx
             .as_ref()
-            .ok_or_else(|| MyError::SomethingElse("arbiter closed".to_string()))?;
+            .ok_or_else(|| MyError::SomethingElse("acquire_rq 0".to_string()))?;
 
         tx.send(Req {
             needed,
             reply,
-            requester_id,
+            requester_id: requester_id.clone(),
         })
         .await
-        .map_err(|_| MyError::SomethingElse("arbiter closed".to_string()))?;
+        .map_err(|_| MyError::SomethingElse("acquire_rq 0 1".to_string()))?;
 
-        recv.await.map_err(|_| MyError::SomethingElse("arbiter closed".to_string()))?
+        recv.await.map_err(|e| {
+            debug!("Arbiter::send_acquire_rq: e={e:?}, requester_id={requester_id:?}");
+            MyError::SomethingElse(format!("e={e:?}"))
+        })?
     }
 
     pub async fn shutdown(&mut self) {
+        debug!("Arbiter::shutdown: self.granted_counts_len={:?}", self.granted_counts_len);
+
         self.shutdown.store(true, Ordering::Release);
         self.notify.notify_waiters();
         if let Some(tx) = self.tx.take() {
@@ -106,6 +113,7 @@ impl Arbiter {
         device_idx: usize,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
+            debug!("Arbiter::spawn: device_idx={device_idx}");
             let mut q: VecDeque<Req> = VecDeque::new();
 
             // Track repeated OutOfPermits per requester_id to trigger escalation.
@@ -119,6 +127,8 @@ impl Arbiter {
             let (drop_tx, mut drop_rx) = mpsc::unbounded_channel::<Arc<dyn CachableIdTr>>();
             loop {
                 if shutdown.load(Ordering::Acquire) {
+                    debug!("Arbiter::spawn: shutting down device_idx={device_idx}");
+
                     while let Some(Req { reply, .. }) = q.pop_front() {
                         let _ =
                             reply.send(Err(MyError::SomethingElse("arbiter closed".into()).into()));
@@ -133,7 +143,7 @@ impl Arbiter {
 
                 match super_id.take() {
                     Some(sc) => {
-
+                        debug!("Arbiter::spawn: device_idx={device_idx} sc={sc:?}");
 
                         while let Some(rq) = q.pop_front() {
                             if rq.requester_id.as_ref().eq(sc.as_ref()) {
@@ -150,6 +160,7 @@ impl Arbiter {
                                                 Arc::clone(&rq.requester_id),
                                             ),
                                         );
+                                        debug!("Arbiter::spawn: sending super Ok reply to {:?}", rq.requester_id);
                                         let _ = rq.reply.send(Ok(perm));
                                         fail_counts.remove(&rq.requester_id);
                                         super_id = None;
@@ -162,6 +173,7 @@ impl Arbiter {
                                     }
                                 }
                             } else {
+                                debug!("Arbiter::spawn: sending super OutOfPermits reply to {:?}", rq.requester_id);
                                 match rq.reply.send(Err(MyError::OutOfPermits.into())){
                                     Ok(_) => {
                                         trace!("");
@@ -180,13 +192,19 @@ impl Arbiter {
                             };
                             match Arc::clone(&sem).try_acquire_many_owned(front.needed as u32) {
                                 Ok(inner) => {
+                                    debug!("Arbiter::spawn: device_idx={device_idx} acquired {}", front.needed);
+
                                     let Req {
                                         needed: _,
                                         reply,
                                         requester_id,
                                     } = q.pop_front().unwrap();
+
                                     granted_counts.insert(requester_id.clone(), inner.num_permits());
+
                                     granted_counts_len.store(granted_counts.len(), Ordering::Release);
+
+                                    debug!("Arbiter::spawn: sending Ok reply to {:?}", requester_id);
                                     let _ = reply.send(Ok(RunnerPerm::with_drop_signal(
                                         inner,
                                         DropSignal::new(
@@ -200,9 +218,12 @@ impl Arbiter {
                                     // loop to try the new head
                                 }
                                 Err(TryAcquireError::NoPermits) => {
+                                    debug!("Arbiter::spawn: device_idx={device_idx} TryAcquireError::NoPermits: q.len={} front.needed={}", q.len(), front.needed);
                                     if q.len() >= 2 && front.needed > 1 {
                                         // Pop and fail the head to trigger drop/degradation.
                                         let Req { reply, requester_id, .. } = q.pop_front().unwrap();
+                                        debug!("Arbiter::spawn: sending OutOfPermits reply to {:?}", requester_id);
+
                                         let _ = reply.send(Err(MyError::OutOfPermits.into()));
                                         let c = fail_counts.entry(requester_id.clone()).or_insert(0);
                                         *c += 1;
@@ -213,7 +234,9 @@ impl Arbiter {
                                         break;
                                     }
                                 }
-                                Err(_) => {
+                                Err(e) => {
+                                    debug!("Arbiter::spawn: device_idx={device_idx} got e={e:?}");
+
                                     let Req { reply, .. } = q.pop_front().unwrap();
                                     let _ = reply
                                         .send(
@@ -231,9 +254,12 @@ impl Arbiter {
                 tokio::select! {
                     Some(req) = rx.recv() => {
                         'done: {
+                            debug!("Arbiter::spawn loop: req={req:?}");
                             for mut rq in &mut q {
                                 if rq.requester_id.eq(&req.requester_id) {
+                                    debug!("Arbiter::spawn loop: rq.requester_id={:?} is in the loop ", rq.requester_id);
                                     rq.needed = req.needed;
+                                    req.reply.send(Err(MyError::OutOfPermits.into())).expect("send back failed");
                                     break 'done;
                                 }
                             }
@@ -274,12 +300,13 @@ impl Arbiter {
                             }
                             Err(e) => {
                                 /* not enough yet → wait for next notify */
-                                trace!("Arbiter::spawn: e={e:?}");
+                                debug!("Arbiter::spawn: e={e:?}");
                             }
                         }
                     }
                 }
             }
+            debug!("Arbiter::spawn: after loop");
         })
     }
 }

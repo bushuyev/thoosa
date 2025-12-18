@@ -44,7 +44,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorView<'a, D, Id> {
 #[derive(Debug)]
 pub struct TorchPermsCtx {
     name: &'static str,
-    permits: Vec<RunnerPerm>,
+    pub permits: Vec<RunnerPerm>,//TODO pub
 }
 
 impl TorchPermsCtx {
