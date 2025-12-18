@@ -318,7 +318,7 @@ where
                     let label = label.clone();
                     let label_ = label.clone();
 
-                    let train_net:Arc<TrainNet<C, L, _, _, _, _, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfig, _, LabelNetParams, _, _, _>> = Arc::new(TrainNet::new(
+                    let train_net:Arc<TrainNet<C, _, _, _, _, _, _, _, _, _, _, _>> = Arc::new(TrainNet::new(
                         move |rc:&TrainLabelNetsRunConfig| {
                             let apply_motif_nets = Arc::clone(&apply_motif_nets);
 
@@ -340,13 +340,13 @@ where
 
                                             debug!("ResourcesBatch::train_batch_iter: max_input={max_input}");
 
-                                            let x_1 = Tensor::stack(&x_1.into_iter().map(|v|{
+                                            let x_1 = Tensor::f_stack(&x_1.into_iter().map(|v|{
                                                 Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())//TODO
-                                            }).collect::<Result<Vec<_>, ThoosaError>>()?, 0);
+                                            }).collect::<Result<Vec<_>, ThoosaError>>()?, 0)?;
 
-                                            let x_0 = Tensor::stack(&x_0.into_iter().map(|v|{
+                                            let x_0 = Tensor::f_stack(&x_0.into_iter().map(|v|{
                                                 Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())
-                                            }).collect::<Result<Vec<_>, ThoosaError>>()?, 0);
+                                            }).collect::<Result<Vec<_>, ThoosaError>>()?, 0)?;
 
                                             mix_x_binary_with_labels(&x_1, &x_0)
                                         })?;

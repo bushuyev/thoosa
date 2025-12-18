@@ -465,7 +465,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             impl thoosa_run_config_args::OptRunConfigSource for #range_or_value_struct_ident {
                 type P =  #fields_enum_ident;
 
-                fn opt_run_configs(&self) -> thoosa_shared::run_configs::OptRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>, Vec<Hyperparameter<#fields_enum_ident>>, #fields_enum_ident> {
+                fn opt_run_configs(&self) -> thoosa_shared::run_configs::OptRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>, Vec<thoosa_shared::hyperparameter::Hyperparameter<#fields_enum_ident>>, #fields_enum_ident> {
                     let mut const_params = Vec::new();
                     let mut grid_params = Vec::new();
                     let mut opt_params = Vec::new();

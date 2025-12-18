@@ -204,10 +204,6 @@ where
         self.0.is_some()
     }
 
-    // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics {
-    //     unimplemented!()
-    // }
-
     async fn build_final_output(self) -> Result<R::Out, ThoosaError> {
         self.0.ok_or(ThoosaError::new("no final output"))
     }

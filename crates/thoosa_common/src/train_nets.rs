@@ -32,7 +32,7 @@ use std::rc::Rc;
 
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
-use tch::nn::{AdamW, ConvConfig, OptimizerConfig, VarStore};
+use tch::nn::{init, AdamW, ConvConfig, LinearConfig, OptimizerConfig, VarStore};
 use tch::{nn, Device, IndexOp, Reduction, Tensor};
 
 use thoosa_shared::{clc_step, slices_len};
@@ -2103,7 +2103,7 @@ impl LabelNetParams {
                     })
                     .collect(),
                 Box::new(move |t: &Tensor| {
-                    (0..motif_nodes)
+                    Ok((0..motif_nodes)
                         .map(|net_i| {
                             debug!(
                                 "label_net_fixed_num_slices: split, t.size={:?}  net_i={net_i}",
@@ -2111,15 +2111,15 @@ impl LabelNetParams {
                             );
                             t.i((.., net_i as i64, ..))
                         })
-                        .collect()
+                        .collect())
                 }), //label batch, channel, max_motif_nets, max slices
                 Box::new(move |t: Vec<Tensor>| {
                     debug!("label_net_fixed_num_slices: join t={t:?}");
 
-                    let out = Tensor::concat(t.as_slice(), 1); //.mean_dim(1, false, Float);
+                    let out = Tensor::f_concat(t.as_slice(), 1)?; //.mean_dim(1, false, Float);
                     debug!("label_net_fixed_num_slices: join out={:?}", out.size());
 
-                    out
+                    Ok(out)
                 }),
             )
             .closure(
@@ -2195,7 +2195,7 @@ impl LabelNetParams {
                     })
                     .collect(),
                 Box::new(move |t: &Tensor| {
-                    (0..motif_nodes)
+                    Ok((0..motif_nodes)
                         .map(|net_i| {
                             debug!(
                                 "label_net_max_padding: split, t.size={:?} net_i={net_i}",
@@ -2203,15 +2203,15 @@ impl LabelNetParams {
                             );
                             t.i((.., .., net_i as i64, ..))
                         })
-                        .collect()
+                        .collect())
                 }), //label batch, channel, max_motif_nets, max slices
                 Box::new(move |t: Vec<Tensor>| {
                     debug!("label_net_max_padding: join t={t:?}");
 
-                    let out = Tensor::stack(t.as_slice(), 1).mean_dim(1, false, Float);
+                    let out = Tensor::f_stack(t.as_slice(), 1)?.f_mean_dim(1, false, Float)?;
                     debug!("label_net_max_padding: join out={:?}", out.size());
 
-                    out
+                    Ok(out)
                 }),
             )
             .closure(
@@ -2291,7 +2291,7 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
                 debug!("any_len_label_node: ranges={ranges:?}");
 
 
-                ranges.into_iter().map(|start| {
+                Ok(ranges.into_iter().map(|start| {
 
                     let t = if start as u32 + num_features > dim_size  {
                         debug!("any_len_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?} padding to {:?}", start as u32 + num_features, t.size(), [batch_size, motif_nets, num_features as i64]);
@@ -2302,19 +2302,18 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
                     };
 
                     t
-                }).collect()
+                }).collect())
             }),
             Box::new(move |res: Vec<Tensor>| {
                 debug!("any_len_label_node: res={res:?}");
 
-                let conct = Tensor::concat(res.as_slice(), 1);
-                debug!("any_len_label_node: conct={:?}", conct.size());
+                let all = Tensor::f_concat(res.as_slice(), 1)?;
+                debug!("any_len_label_node: all.size={:?}", all.size());
 
-                // let r = conct.flatten(1, 2).adaptive_avg_pool1d(num_features as i64);//.i((0, ..num_features as i64)); //
-                let r = conct.mean_dim(1, false, None);//.i((0, ..num_features as i64)); //
+                let r = all.f_mean_dim(1, false, None)?;//.i((0, ..num_features as i64)); //
                 debug!("any_len_label_node: r.size={:?}", r.size());
 
-                r
+                Ok(r)
 
             })
         )
@@ -3741,6 +3740,48 @@ impl FixedNumSlicesNetArgs {
     }
 }
 
+///sums and multiplies inputs by k
+pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
+    num_features: u32,
+    k: f64,
+    device: Device,
+    descr: &str,
+) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> {
+    let vs = VarStore::new(device);
+
+    SeqBuilder::new(num_features, None)
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor| {
+                debug!(
+                        "test_label_net: merged final in flatten t.size()={:?}",
+                        t.size()
+                    );
+
+                let t_0 = t.sum_dim_intlist(&[1, 2][..], false, None);
+                debug!(
+                        "test_label_net: merged final out flatten t_0.size()={:?}",
+                        t_0.size()
+                    );
+
+                Ok(t_0)
+            })),
+            None,
+        )
+        .linear_s_with_conf(
+            1,
+            LinearConfig {
+                ws_init: init::Init::Const(k), //conflicts with ctor's init
+                bs_init: None,
+                bias: false,
+            },
+            #[cfg(debug_assertions)]
+            descr,
+        )
+        .end_seq()
+        .build_tch_module(&vs.root())
+}
+
+
 #[cfg(test)]
 mod train_tests {
     use crate::applicables::ThoRunner;
@@ -3755,7 +3796,7 @@ mod train_tests {
     use crate::simp::DummyDs;
     use crate::tho_tensor::ThoTensor;
     use crate::{train_nets, utils};
-    use crate::train_nets::{load_channels_motifs, motif_node, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, InputFilterRangeOrValue, LabelNetApplicable, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LabelNetsApplicable, LoadMotifNetOutput, LoadingTensorsDataBatch, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MaxPaddingNetParams, MotifsNetsSelectionApplicable, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
+    use crate::train_nets::{dummy_label_net, load_channels_motifs, motif_node, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, InputFilterRangeOrValue, LabelNetApplicable, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LabelNetsApplicable, LoadMotifNetOutput, LoadingTensorsDataBatch, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MaxPaddingNetParams, MotifsNetsSelectionApplicable, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore,
     };
@@ -3875,46 +3916,6 @@ mod train_tests {
         Ok(())
     }
 
-    ///sums and multiplies inputs by k
-    pub fn test_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
-        num_features: u32,
-        k: f64,
-        device: Device,
-        descr: &str,
-    ) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> {
-        let vs = VarStore::new(device);
-
-        SeqBuilder::new(num_features, None)
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor| {
-                    debug!(
-                        "test_label_net: merged final in flatten t.size()={:?}",
-                        t.size()
-                    );
-
-                    let t_0 = t.sum_dim_intlist(&[1, 2][..], false, None);
-                    debug!(
-                        "test_label_net: merged final out flatten t_0.size()={:?}",
-                        t_0.size()
-                    );
-
-                    Ok(t_0)
-                })),
-                None,
-            )
-            .linear_s_with_conf(
-                1,
-                LinearConfig {
-                    ws_init: init::Init::Const(k), //conflicts with ctor's init
-                    bs_init: None,
-                    bias: false,
-                },
-                #[cfg(debug_assertions)]
-                descr,
-            )
-            .end_seq()
-            .build_tch_module(&vs.root())
-    }
 
     #[test]
     fn test_test_net() -> Result<(), ThoosaError> {
@@ -4268,93 +4269,6 @@ mod train_tests {
         }))
     }
 
-    // #[test] TODO
-    fn test_apply_label_nets_max_padding() -> Result<(), ThoosaError> {
-        set_max_level(Debug);
-        reset_print_options();
-
-        let input_n = 1000;
-        let motif_width = 100u32;
-        let step = 10; //1 - step==motif_width slices do not overlap so net output - sum(slice)*k
-        let slices = (input_n - motif_width) / step + 1;
-
-        //batch 2 x channels 2 x n 1000
-        let t_0 = lin_test_tensor(input_n as i64, 2);
-        // let t_1 = lin_test_tensor(input_n as i64 / 2, 2);
-        // let batch = Tensor::stack(&[t_0, t_1], 0);
-
-        let applicable = block_on(LabelNetsApplicable::load_all_filtered_by_run_ids(
-            Some(&[1, 2]),
-            vec!["Label_0".to_string(), "Label_1".to_string()],
-            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(
-                step as i32,
-                motif_width as i32,
-                vec![vec![(0, 1.0), (1, 1.0)], vec![(2, 1.0)]],
-            ))),
-            &Arc::new(RwLock::new(
-                WsMockBuilder::new(None, 2, 100, input_n)
-                    .with_load_motif_nets(vec![
-                        vec![
-                            //channel 0
-                            utils::motif_test_net(motif_width, 1., Cpu),
-                            utils::motif_test_net(motif_width, 2., Cpu),
-                        ],
-                        vec![
-                            //channel 1
-                            utils::motif_test_net(motif_width, 0., Cpu), //dummy
-                            utils::motif_test_net(motif_width, 0., Cpu), //dummy
-                            utils::motif_test_net(motif_width, 10., Cpu), //taken in with_label_nets by motif_id as index
-                        ],
-                    ])
-                    .with_label_nets(HashMap::from([
-                        (
-                            "Label_0".to_string(),
-                            label_test_nets(
-                                slices,
-                                1.,
-                                LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new()),
-                                Cpu,
-                            ),
-                        ),
-                        (
-                            "Label_1".to_string(),
-                            label_test_nets(
-                                slices,
-                                10.,
-                                LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new()),
-                                Cpu,
-                            ),
-                        ),
-                    ]))
-                    .build(),
-            )),
-            Cpu,
-            &dummy_runner(),
-        ));
-
-        let tho_tensor = applicable.run(t_0.unsqueeze(0).into(), ())?;
-        let t_0_applied = tho_tensor.as_ref();
-        debug!("t_0_applied={t_0_applied:?}");
-        trace!("t_0_applied=\n{t_0_applied}");
-
-        assert!(t_0_applied.view((1, -1)).allclose(
-            &Tensor::from_slice(&[
-                4.5454e6_f32,
-                9.0909e6,
-                9.0909e7,
-                0.0000e0,
-                4.5454e7,
-                9.0909e7,
-                9.0909e8,
-                0.0000e0
-            ]),
-            1e3,
-            1e3,
-            false
-        ));
-
-        Ok(())
-    }
 
     fn label_test_nets(
         num_features: u32,
@@ -4375,7 +4289,7 @@ mod train_tests {
             Box::new(move || LabelNetParams::new(2, 3, 3, 100, params.clone())),
             Box::new(move || {
                 ThoModuleWithStore::new("".into(),
-                                        test_label_net(num_features, k, device, "test_label_net").unwrap(),
+                                        dummy_label_net(num_features, k, device, "test_label_net").unwrap(),
                 )
             }),
         )]
@@ -4786,13 +4700,13 @@ mod train_tests {
                 vec![res_seq_0, res_seq_1],
                 Box::new(move |t: &Tensor| {
                     debug!("split: t={t:?}");
-                    vec![t.i((.., 0, ..)), t.i((.., 1, ..))]
+                    Ok(vec![t.i((.., 0, ..)), t.i((.., 1, ..))])
                 }), //label batch, channel, max_motif_nets, max slices
                 Box::new(move |t: Vec<Tensor>| {
                     debug!("join: in t={t:?}");
-                    let t = Tensor::concat(t.as_slice(), 1);
+                    let t = Tensor::f_concat(t.as_slice(), 1)?;
                     debug!("join: t={t:?}");
-                    t
+                    Ok(t)
                 }),
             )
             .linear_feats(
