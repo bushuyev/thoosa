@@ -138,8 +138,6 @@ pub struct SimpleId(pub &'static str);
 unsafe impl Send for SimpleId {}
 unsafe impl Sync for SimpleId {}
 
-
-
 impl Named for SimpleId {
     fn name(&self) -> &'static str {
         "SimpleId"

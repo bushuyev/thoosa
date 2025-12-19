@@ -81,6 +81,7 @@ use caching_runner::common::runnable::AsyncStage;
 use caching_runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
+use thoosa_shared::perf_logging::{format_perf_map, PERF};
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
@@ -248,6 +249,7 @@ where
         //attempted to set a logger after the logging system was already initialized - no #[cfg(test)] on tests mod
         panic!("Can't init log: {:?}", e.to_string());
     }
+    thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("info");
 
     let store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
 
@@ -844,6 +846,8 @@ where
             warn!("No command");
         }
     }
+
+    info!("\n{}", format_perf_map(&PERF));
 
     Ok(())
 }
