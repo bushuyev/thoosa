@@ -417,7 +417,7 @@ pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoosaError> {
         })
         .collect::<Vec<i64>>();
 
-    Ok(input.pad(pad_idx.as_slice(), "constant", 0.))
+    input.f_pad(pad_idx.as_slice(), "constant", 0.).map_err(|e|ThoosaError::new(e.to_string()))
 }
 
 pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tensor, ThoosaError> {

@@ -83,7 +83,7 @@ impl Arbiter {
             requester_id: requester_id.clone(),
         })
         .await
-        .map_err(|_| MyError::SomethingElse("acquire_rq 0 1".to_string()))?;
+        .map_err(|e| MyError::SomethingElse(format!("send_acquire_rq: e={e:?}")))?;
 
         recv.await.map_err(|e| {
             debug!("Arbiter::send_acquire_rq: e={e:?}, requester_id={requester_id:?}");

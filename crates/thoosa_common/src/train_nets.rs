@@ -2295,14 +2295,14 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
 
                     let t = if start as u32 + num_features > dim_size  {
                         debug!("any_len_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?} padding to {:?}", start as u32 + num_features, t.size(), [batch_size, motif_nets, num_features as i64]);
-                        pad_to(&t.narrow(2, start, (dim_size as i64 - start)), &[batch_size, motif_nets, num_features as i64]).unwrap()
+                        pad_to(&t.f_narrow(2, start, (dim_size as i64 - start))?, &[batch_size, motif_nets, num_features as i64])?
                     } else {
                         debug!("any_len_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?}", start as u32 + num_features, t.size());
-                        t.narrow(2, start, num_features as i64)
+                        t.f_narrow(2, start, num_features as i64)?
                     };
 
-                    t
-                }).collect())
+                    Ok(t)
+                }).collect::<Result<Vec<Tensor>, ThoosaError>>()?)
             }),
             Box::new(move |res: Vec<Tensor>| {
                 debug!("any_len_label_node: res={res:?}");
