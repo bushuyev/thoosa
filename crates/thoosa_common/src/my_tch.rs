@@ -454,18 +454,8 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLin
         #[cfg(debug_assertions)]
         {
             debug!("Module for MyLinear::forward: descr={}", self.descr);
-            debug!(
-                "Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}",
-                self.ws.device(),
-                self.bs.as_ref().map(|bs| bs.device()),
-                t.device()
-            );
-            debug!(
-                "Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}",
-                self.ws.size(),
-                self.bs.as_ref().map(|bs| bs.size()),
-                t.size()
-            );
+            debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()),t.device());
+            debug!("Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}",self.ws.size(),self.bs.as_ref().map(|bs| bs.size()),t.size());
         }
         match t.as_ref().f_linear(&self.ws, self.bs.as_ref()) {
             //TODO error

@@ -1,7 +1,7 @@
-use crate::common::RunCtx;
+use crate::common::{DropIf, RunCtx};
 use crate::global_ctx::GlobalCtx;
 use crate::oom_handler::{Adjuster, RunCtxContext};
-use crate::permits::MAX_PERMITS;
+use crate::permits::{RunnerPerm, MAX_PERMITS};
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
 use log::debug;
@@ -11,7 +11,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, SimpleId};
 
 #[derive(Debug)]
 pub struct DumpToCpu<A>
@@ -71,14 +71,41 @@ where
         adjustable: &<Self as Adjuster<C>>::A,
         adjust_context: &mut C,
     ) -> Result<<Self as Adjuster<C>>::A, ThoosaError> {
-        debug!("DumpToCpu::adjust: adjustable={adjustable:?}");
 
-        let device_idx  = {
+
+        let (device_idx, mut acquired_permits,  ctx_name)  = {
             let guard = adjustable.read();
-            let acquired_permits = guard.acquired_permits();
-            assert_eq!(acquired_permits, MAX_PERMITS, "not enough permits {}", acquired_permits);
-            guard.device_idx()
+            // assert_eq!(acquired_permits, MAX_PERMITS, "not enough permits {}", acquired_permits);
+
+            (guard.device_idx(), guard.acquired_permits(), guard.name())
         };
+
+        debug!("DumpToCpu::adjust: adjustable={adjustable:?} acquired_permits={acquired_permits}");
+
+        if acquired_permits < MAX_PERMITS {
+            let mut try_count = 0;
+            loop {
+
+                match GlobalCtx::global().acquire_many(device_idx, MAX_PERMITS - acquired_permits, Arc::new(SimpleId(format!("dump_to_cpu_for_{}", ctx_name).leak()))).await {
+                    Ok(permits) => {
+                        debug!("DumpToCpu::adjust: acquired {permits:?} on {try_count}");
+
+                        adjustable.write().add_permit(permits);
+                        break
+                    }
+                    Err(e) => {
+                        debug!("DumpToCpu::adjust: can't acquire {acquired_permits} on {try_count} try, got {e:?}");
+                        adjustable.write().drop_permits(DropIf::Always);
+                        acquired_permits = 0;
+                    }
+                }
+
+                try_count+=1;
+                if try_count > 1000 {
+                    return Err(ThoosaError::new("Can't get permits for dumping to CPU"));
+                }
+            }
+        }
 
         let ids_to_exclude = adjust_context.ids_to_exclude();
         GlobalCtx::global()
