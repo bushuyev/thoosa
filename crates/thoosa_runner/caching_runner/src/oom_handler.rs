@@ -262,7 +262,7 @@ where
         }
     }
 
-    // #[instrument]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="OOMHandler::run"))]
     pub async fn run<W>(
         &self,
         task: &Arc<R>,
@@ -389,7 +389,7 @@ where
                 };
                 debug!("AsyncOOMHandler::run: input_id={input_id:?} prepared_input={prepared_input:?}");
 
-                let wrapped = task
+                let wrapped = task//TODO run cached?
                     .run(Arc::clone(&prepared_input), Arc::clone(&run_ctx))
                     .await?;
 
@@ -454,7 +454,7 @@ where
             run_context.write().add_permit(permit);
         }
 
-        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}   acquired_permits={:?}", os_thread_id(), run_context.read().acquired_permits());
+        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} acquired_permits={:?}", os_thread_id(), run_context.read().acquired_permits());
 
         let mut i = 0;
 
@@ -525,11 +525,11 @@ where
 
                                 let task_to_run = task_adjusted.clone().unwrap_or_else(|| Arc::clone(&task));
 
+                                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} before acquire_one ",os_thread_id());
+
                                 if run_context.read().acquired_permits() == 0 {
-                                    let result = GlobalCtx::global()
-                                        .acquire_many(device_idx, 1, out_key.clone())
-                                        .await?;
-                                    run_context.write().add_permit(result);
+                                    let permit = GlobalCtx::global().acquire_one(device_idx, Arc::clone(&out_key)).await?;
+                                    run_context.write().add_permit(permit);
                                 }
 
                                 debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",os_thread_id(), run_context.read().acquired_permits());
@@ -611,7 +611,11 @@ where
 
                 Err(MyError::SomethingElse(format!("all failed: task={task:?}")).into())
             }
-            Ok(o) => Ok(o),
+            Ok(o) => {
+                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} done without oom ", os_thread_id());
+
+                Ok(o)
+            },
         }
 }
 

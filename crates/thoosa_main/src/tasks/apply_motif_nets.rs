@@ -185,7 +185,7 @@ where
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
-        debug!("ApplyMotifNets::run: self.loaded_motif_nets.len={:?}", self.apply_motif_nets.len());
+        debug!("ApplyMotifNets::run: self.loaded_motif_nets.len={:?} input={input:?}", self.apply_motif_nets.len());
 
 
         let apply_motif_nets = self.apply_motif_nets.clone();
