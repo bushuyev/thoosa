@@ -103,7 +103,7 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
 
     quote! {
         {
-            let __with_data_permits_ctx = ::std::sync::Arc::clone(&(#permits_ctx_expr));
+            // let __with_data_permits_ctx = ::std::sync::Arc::clone(&(#permits_ctx_expr));
             let __with_data_device = #device_expr;
             async {
                 let to_device_idx = __with_data_device;

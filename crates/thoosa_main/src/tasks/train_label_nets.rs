@@ -63,7 +63,7 @@ where
         Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>,
         TrainLabelNetsRunConfigFields,
     >>,
-    loader: Arc<L>,
+    pd: PhantomData<L>,
     motif_loader: Arc<LM>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     apply_motif_nets:Arc<ApplyMotifNets<C>>,
@@ -101,7 +101,6 @@ where
 
     TrainLabelNets::new(
         select_motifs_run_ids,
-        loader,
         motif_loader,
         apply_motif_nets,
         run_configs,
@@ -120,7 +119,6 @@ where
 
     pub async fn new(
         select_motifs_run_ids: Vec<RunId>,
-        loader: Arc<L>,
         motif_loader: Arc<LM>,
         apply_motif_nets:Arc<ApplyMotifNets<C>>,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
@@ -131,7 +129,7 @@ where
     {
         Ok(Self {
             run_configs: Arc::new(run_configs),
-            loader,
+            pd: PhantomData,
             motif_loader,
             ws:Arc::clone(&ws),
             apply_motif_nets,
@@ -396,6 +394,8 @@ where
                     ));
 
                     let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap_cpu(TrainNetInput::new("".into()))), Arc::clone(&train_label_ctx)).await?).unwrap().take_data(0).await?;
+
+                    debug!("train_label_net: label={label_} result={result:?}");
                     Ok(
                         TrainLabelNetsRunConfigResult::new(
                             select_motifs_run_ids,//TODO
@@ -639,28 +639,66 @@ where
     Y:Dims+ 'static,
 {
     fn build_batch_stream<'a>(build_batch_fn:&'a BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: Arc<RwLock<C>>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<X>, ThoBatch<Y>), ThoosaError>> {
+
         futures_util::stream::iter(resource_indexes_for_batches)
             .map(move |batch_keys| {
                 let loader = Arc::clone(&loader);
                 let ctx = Arc::clone(&ctx);
                 let x_1 = Arc::clone(&x_1);
                 let x_0 = Arc::clone(&x_0);
-
+                let ctx_for_build_fn = ctx.write().branch("for_build_fn");
                 async move {
+                    debug!("ResourcesBatch::build_batch_stream: ctx={ctx:?}");
+
                     // load samples for this batch concurrently
-                    let (x_1_wrapped, x_0_wrapped) = futures_util::stream::iter(batch_keys)
+                    let (x_1_wrapped, x_0_wrapped) = futures_util::stream::iter(batch_keys)//(Vec<Arc<DevicesWrap<ThoTensor<LD, SimpleId>>>>, Vec<Arc<DevicesWrap<ThoTensor<LD, SimpleId>>>>)
                         .map(|index| {
                             let loader = Arc::clone(&loader);
                             let x_1 = Arc::clone(&x_1);
                             let x_0 = Arc::clone(&x_0);
-                            let ctx = Arc::clone(&ctx);
 
+                            debug!("ResourcesBatch::build_batch_stream: before move");
+
+                            let ( ctx_x1, ctx_x0) = {
+                                let mut guard = ctx.write();
+                                (guard.branch("x_1_batch_loader"), guard.branch("x_0_batch_loader"))
+                            };
                             async move {
-                                try_join!(
-                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_1[index].clone())), Arc::clone(&ctx)),
-                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_0[index].clone())), Arc::clone(&ctx))
-                                )
+                                // try_join!
+                                Ok::<_, ThoosaError>((
+                                    {
+
+                                        let param = Arc::new(DevicesWrap::wrap_cpu(x_1[index].clone()));
+                                        debug!("ResourcesBatch::build_batch_stream: got ctx_x1 ctx_x1={ctx_x1:?}");
+                                        let r = Arc::clone(&loader).run(param, ctx_x1).await?;
+                                        debug!("ResourcesBatch::build_batch_stream: ctx_x1 done");
+                                        r
+                                    },
+                                    {
+                                        debug!("ResourcesBatch::build_batch_stream: got ctx_x0 ctx_x0={ctx_x0:?}");
+                                        let r = Arc::clone(&loader).run(Arc::new(DevicesWrap::wrap_cpu(x_0[index].clone())), ctx_x0).await?;
+                                        debug!("ResourcesBatch::build_batch_stream: ctx_x0 done");
+                                        r
+                                    }
+                                ))
                             }
+
+                            //  async move {
+                            //     Ok((
+                            //         {
+                            //             let ctx_x1 = ctx.write().branch("x_1_batch_loader");
+                            //             Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_1[index].clone())), ctx_x1).await
+                            //         },
+                            //         {
+                            //             let ctx_x0 = ctx.write().branch("x_0_batch_loader");
+                            //             Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_1[index].clone())), ctx_x0).await
+                            //         },
+                            //     ));
+                            // }
+                            // async move {
+                            //     x_v
+                            // }
+
                         })
                         .buffered(10)//TODO config
                         .try_collect::<Vec<_>>()
@@ -672,10 +710,11 @@ where
                             a
                         });
 
-                    build_batch_fn(x_1_wrapped, x_0_wrapped, ctx).await
+                    build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).await
                 }
             })
-            .buffered(10)//TODO config
+            // .buffered(10)//TODO config
+            .buffer_unordered(10)
             .boxed()
     }
 

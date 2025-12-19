@@ -112,6 +112,12 @@ impl RunCtx for RunCtx2 {
     }
 }
 
+impl Drop for RunCtx2 {
+    fn drop(&mut self) {
+        debug!("Drop for RunCtx2::drop: name={:?} self.perms.permits.len={}", self.name, self.perms.permits.len());
+    }
+}
+
 
 pub trait MotifsCtx {
     fn add_stacked_motifs_id(&mut self, id:StackedMotifsOutputId);
