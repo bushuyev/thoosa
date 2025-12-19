@@ -37,7 +37,6 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
-use crate::tasks::apply_motif_nets_to_batch::ApplyMotifNetsToBatch;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::run_ctx_2::{MotifsCtx, RunCtx2};
 use rand::{rng, seq::SliceRandom};
@@ -664,40 +663,13 @@ where
                                 (guard.branch("x_1_batch_loader"), guard.branch("x_0_batch_loader"))
                             };
                             async move {
-                                // try_join!
-                                Ok::<_, ThoosaError>((
-                                    {
 
-                                        let param = Arc::new(DevicesWrap::wrap_cpu(x_1[index].clone()));
-                                        debug!("ResourcesBatch::build_batch_stream: got ctx_x1 ctx_x1={ctx_x1:?}");
-                                        let r = Arc::clone(&loader).run(param, ctx_x1).await?;
-                                        debug!("ResourcesBatch::build_batch_stream: ctx_x1 done");
-                                        r
-                                    },
-                                    {
-                                        debug!("ResourcesBatch::build_batch_stream: got ctx_x0 ctx_x0={ctx_x0:?}");
-                                        let r = Arc::clone(&loader).run(Arc::new(DevicesWrap::wrap_cpu(x_0[index].clone())), ctx_x0).await?;
-                                        debug!("ResourcesBatch::build_batch_stream: ctx_x0 done");
-                                        r
-                                    }
-                                ))
+                                try_join!(
+                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_1[index].clone())), ctx_x1),
+                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_0[index].clone())), ctx_x0)
+                                )
+
                             }
-
-                            //  async move {
-                            //     Ok((
-                            //         {
-                            //             let ctx_x1 = ctx.write().branch("x_1_batch_loader");
-                            //             Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_1[index].clone())), ctx_x1).await
-                            //         },
-                            //         {
-                            //             let ctx_x0 = ctx.write().branch("x_0_batch_loader");
-                            //             Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_1[index].clone())), ctx_x0).await
-                            //         },
-                            //     ));
-                            // }
-                            // async move {
-                            //     x_v
-                            // }
 
                         })
                         .buffered(10)//TODO config
@@ -713,8 +685,7 @@ where
                     build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).await
                 }
             })
-            // .buffered(10)//TODO config
-            .buffer_unordered(10)
+            .buffer_unordered(10)//TODO config
             .boxed()
     }
 
@@ -761,7 +732,7 @@ mod tests {
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
-    use crate::tasks::apply_motif_nets_to_batch::tests::motif_test_net_;
+    use crate::tasks::apply_motif_nets::motif_test_net_;
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::select_motifs::tests::motifs_tensor;
