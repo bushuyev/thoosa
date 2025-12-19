@@ -204,10 +204,11 @@ where
 
                 debug!("ApplyMotifNets::run: input.size={:?} self.motif_width={:?} slice_step={slice_step} slices={slices} min_split_len={min_split_len} overlap_len={overlap_len}", input.size(), self.motif_width);
 
-                tokio::spawn(async move {
+                tokio::spawn(
+                    async move {
                     let map = HashMap::new();
 
-                     AsyncOOMHandler::new(
+                     let r= AsyncOOMHandler::new(
                          vec![
                              Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, Arc::clone(&out_id))))),
                              Adjusters::RunContext(Box::new(DumpToCpu::new())),
@@ -215,7 +216,8 @@ where
                                  [-1, min_split_len].into(),
                                  [-1, overlap_len].into()
                              ))), //MonoMetrics<0, 3> - 0 dim of 3-dimensional  Batch<ChannelsData>
-                         ], None).run(
+                         ], None)
+                     .run(
                          &apply_motif_net,
                          Arc::clone(&input),
                          apply_motif_net_ctx,
@@ -227,16 +229,21 @@ where
                                  DumpToCpuContextImpl::new(&map),
                              ),
                          ),
-                     ).await
-                 })
+                     ).await;
+                    debug!("ApplyMotifNets::run: r={r:?}");
+                    r
+                 }
+                )
 
             })
             .buffered(10)//TODO config, TODO - use buffer_unordered and then sort by motif_id?
             .try_collect::<Vec<_>>().await?
             .into_iter().
-            collect::<Result<Vec<_>, ThoosaError>>()?;
+            collect::<Result<Vec<_>, ThoosaError>>();
 
         debug!("ApplyMotifNets::run: matches={matches:?}");
+
+        let matches = matches?;
 
 
         let tensor = ThoTensor::new(

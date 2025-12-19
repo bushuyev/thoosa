@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::future::{BoxFuture, Shared};
 use parking_lot::RwLock;
+use log::debug;
 use cached_derive::Cached;
 use caching_runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_shared::applicables_runner::*;
@@ -127,9 +128,16 @@ where
     B::Out: Data + CopyToDevice +  WithId + Send + Sync + 'static
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+        let input_id = input.id().clone();
+        debug!("ABStage::run: input.id={input_id:?} ctx={ctx:?}");
 
         let output_a = Arc::clone(&self.stage_a).run_cached(input, Arc::clone(&ctx)).await?;
+
+        debug!("ABStage::run: input.id={input_id:?} a done");
+
         let output_b = Arc::clone(&self.stage_b).run_cached(output_a, ctx).await?;
+
+        debug!("ABStage::run: input.id={input_id:?} b done");
 
         Ok(output_b)
     }
