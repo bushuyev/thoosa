@@ -204,10 +204,10 @@ where
         let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
 
         Box::pin(async move {
-            debug!("train: device={:?} cycles={}", train_step.device(), cycles);
+            debug!("TrainNet::run_inner: device={:?} cycles={}", train_step.device(), cycles);
             {
                 let opt = train_step.opt.lock();
-                debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
+                debug!("TrainNet::run_inner: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
             }
 
             let oom_handler = OOMHandler::new(
@@ -232,11 +232,13 @@ where
             let mut last_valid_loss = [0f32; 3];
 
             for idx in 1..cycles {
-                debug!("train:  0. cuda_mem={:?}", cuda_mem());
+                debug!("TrainNet::run_inner, train:  0. cuda_mem={:?}", cuda_mem());
                 let mut batches = batch.train_batch_stream().await;
-                debug!("train:  1. cuda_mem={:?}", cuda_mem());
+                debug!("TrainNet::run_inner, train:  1. cuda_mem={:?} ", cuda_mem());
                 while let Some(Ok((x_t_0, expected_y))) = batches.next().await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, expected_y));
+
+                    debug!("TrainNet::run_inner, train:  before oom input.id={:?}", input.id());
 
                     oom_handler.run(
                         &train_step,
@@ -252,13 +254,15 @@ where
                         ),
                     ).await?;
 
+                    debug!("TrainNet::run_inner, train:  after oom input.id={:?}", input.id());
+
                 }
 
                 if idx % 10 == 0 || idx == cycles - 1 {
 
-                    debug!("train:  0. cuda_mem={:?}", cuda_mem());
+                    debug!("TrainNet::run_inner, valid:  0. cuda_mem={:?}", cuda_mem());
                     let mut batches = batch.valid_batch_stream().await;
-                    debug!("train:  1. cuda_mem={:?}", cuda_mem());
+                    debug!("TrainNet::run_inner, valid:  1. cuda_mem={:?}", cuda_mem());
                     while let Some(Ok((x_t_0,y_t))) = batches.next().await {
                         tch::no_grad(||{
 
@@ -280,7 +284,7 @@ where
                 info!(".");
                 std::io::stdout().flush()?;
             }
-            debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+            debug!("train: final valid last_valid_loss={last_valid_loss:?} avg_valid_loss={}",last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
 
             Ok((last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32, params))
         })
@@ -327,6 +331,8 @@ where
         let run_config_source = Arc::clone(&self.run_config_source);
         let device_idx = ctx.read().device_idx();
 
+        debug!("TrainNet::run: input.size={:?}", input.size());
+
         async move {
             // let ctx_for_train = Arc::clone(&ctx);
             let self_for_train = Arc::clone(&self);
@@ -335,6 +341,8 @@ where
             let (var_store, node_params, run_config, loss) = opt_train_2::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),
                 move |vs: &VarStore, run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
+                    debug!("TrainNet::run, about to call run_inner: run_config={:?}", run_config);
+
                     let ctx = Arc::clone(&ctx);
                     let self_arc = Arc::clone(&self_for_train);
 
@@ -529,16 +537,16 @@ where
         let x_t_0 = input.x();
         let expected_y = input.expected_y();
 
-        debug!("train: device={:?} x_t_0.size={:?} expected_y.size={:?}", self.device, x_t_0.size(), expected_y.size());
-        debug!("train: 0. cuda_mem={:?}", cuda_mem());
+        debug!("TrainStep::do_run: device={:?} x_t_0.size={:?} expected_y.size={:?}", self.device, x_t_0.size(), expected_y.size());
+        debug!("TrainStep::do_run: 0. cuda_mem={:?}", cuda_mem());
 
         let x_t = (self.x_f)(x_t_0);
 
-        debug!("train: device={:?}  x_t.size={:?}", self.device, x_t.size());
+        debug!("TrainStep::do_run: device={:?}  x_t.size={:?}", self.device, x_t.size());
 
         let predicted_y = self.forward(&x_t, true)?;
-        debug!("train: 1. cuda_mem={:?}", cuda_mem());
-        trace!("train: x_t=\n{x_t}");
+        debug!("TrainStep::do_run: 1. cuda_mem={:?}", cuda_mem());
+        trace!("TrainStep::do_run: x_t=\n{x_t}");
         x_t.drop();
 
         let loss = (self.loss_fn)(predicted_y.as_ref(), &expected_y.as_ref())?;
@@ -546,13 +554,13 @@ where
         {
             let mut opt = self.opt.lock();
 
-            debug!("train: 2. cuda_mem={:?}", cuda_mem());
-            debug!("train: loss={loss}");
-            trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
+            debug!("TrainStep::do_run: 2. cuda_mem={:?}", cuda_mem());
+            debug!("TrainStep::do_run: loss={loss}");
+            trace!("TrainStep::do_run: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
 
             predicted_y.drop();
             drop(expected_y);
-            debug!("train: 2.1 cuda_mem={:?}", cuda_mem());
+            debug!("TrainStep::do_run: 2.1 cuda_mem={:?}", cuda_mem());
             let t1 = Instant::now();
 
             panic_to_err!({
@@ -561,8 +569,8 @@ where
             })?;
 
 
-            debug!("train: 3. cuda_mem={:?}  optimizer_size={}",cuda_mem(),optimizer_mem_size(&opt));
-            debug!("train: device={:?}  backward_step done in {}",self.device,t1.elapsed().as_millis());
+            debug!("trTrainStep::do_runain: 3. cuda_mem={:?}  optimizer_size={}",cuda_mem(),optimizer_mem_size(&opt));
+            debug!("TrainStep::do_run: device={:?}  backward_step done in {}",self.device,t1.elapsed().as_millis());
         }
 
         Ok(())

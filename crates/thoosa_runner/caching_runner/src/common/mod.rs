@@ -134,19 +134,26 @@ pub mod mock_run_ctx {
             self
         }
 
-        pub fn with_branch(mut self)-> Self {
+        pub fn with_branch(mut self, depth: u8) -> Self {
             self.mock.expect_branch()
                 .with(always())
-                .returning(|_|{
-                    Arc::new(RwLock::new(build()
+                .returning(move |_| {
+                    let builder = build()
                         .with_device_idx(1)
                         .with_acquired_permits(100)
                         .with_add_permits()
                         .with_drop_permits(vec![IfNotMax])
-                        .with_cache_area(0)
-                        // .with_purge_gpu_caches()
-                        .finish()))
+                        .with_cache_area(0);
 
+                    Arc::new(RwLock::new(
+                        if depth == 0 {
+                            builder.finish()
+                        } else {
+                            builder
+                            .with_branch(depth - 1)
+                            .finish()
+                        }
+                    ))
                 });
 
             self
@@ -170,8 +177,7 @@ pub mod mock_run_ctx {
             .with_add_permits()
             .with_drop_permits(vec![IfNotMax])
             .with_cache_area(0)
-            // .with_purge_gpu_caches()
-            .with_branch()
+            .with_branch(4)
             .finish()
     }
 }

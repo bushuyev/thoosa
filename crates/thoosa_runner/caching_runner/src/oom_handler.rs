@@ -370,28 +370,44 @@ where
             run_context,
             contexts,
             |task, input, selector, device_idx, run_ctx| async move {
+                let input_id = input.id();
+                debug!("AsyncOOMHandler::run: input_id={input_id:?} run_ctx={run_ctx:?}");
+
                 let cache_area = input.cache_area();
                 let prepared_input = if let Some(selector) = selector {
+                    debug!("AsyncOOMHandler::run: input_id={input_id:?} selector={selector:?}");
+
                     let selected = input
                         .with_selected_data(device_idx, selector.clone(), |data| Ok(data))
                         .await?;
 
                     Arc::new(DevicesWrap::wrap(selected, cache_area))
                 } else {
+                    debug!("AsyncOOMHandler::run: input_id={input_id:?} no selector");
                     
                     Arc::clone(&input)
                 };
+                debug!("AsyncOOMHandler::run: input_id={input_id:?} prepared_input={prepared_input:?}");
 
                 let wrapped = task
                     .run(Arc::clone(&prepared_input), Arc::clone(&run_ctx))
                     .await?;
 
+                debug!("AsyncOOMHandler::run: input_id={input_id:?} got wrapped");
+
                 match Arc::try_unwrap(wrapped) {
-                    Ok(inner) => inner.take_data(device_idx).await,
-                    Err(_) => Err(MyError::SomethingElse(
-                        "AsyncOOMHandler: output is still shared".into(),
-                    )
-                    .into()),
+                    Ok(inner) => {
+                        debug!("AsyncOOMHandler::run: input_id={input_id:?} try_unwrap ok");
+                        let r = inner.take_data(device_idx).await;
+                        debug!("AsyncOOMHandler::run: input_id={input_id:?} take_data ok");
+
+                        r
+                    },
+                    Err(e) => {
+                        debug!("AsyncOOMHandler::run: input_id={input_id:?} try_unwrap failed: {e:?}");
+
+                        Err(MyError::SomethingElse("AsyncOOMHandler: output is still shared".into()).into())
+                    },
                 }
             },
         )
@@ -433,12 +449,12 @@ where
             Arc::new(out_id) as Arc<dyn CachableIdTr>
         };
 
-        if run_context.read().acquired_permits() == 0 {
-            let result = GlobalCtx::global()
-                .acquire_many(device_idx, 1, out_key.clone())
-                .await?;
-            run_context.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped 
-        }
+        // if run_context.read().acquired_permits() == 0 {
+        //     let result = GlobalCtx::global()
+        //         .acquire_many(device_idx, 1, out_key.clone())
+        //         .await?;
+        //     run_context.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
+        // }
 
 
         debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}   acquired_permits={:?}", os_thread_id(), run_context.read().acquired_permits());
@@ -537,7 +553,7 @@ where
 
                                         let all_done = contexts.input.all_done();
 
-                                        // debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}", os_thread_id());
+                                        debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}", os_thread_id());
 
                                         if all_done {
                                             run_context.write().drop_permits(DropIf::Always);
@@ -559,7 +575,7 @@ where
 
                                         match te.what() {
                                             MyError::OutOfMemory => {
-                                                // debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+                                                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                 if !adjuster.degrade(&mut contexts) {
                                                     match adjuster {
