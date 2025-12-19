@@ -348,12 +348,11 @@ impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNe
 
 
         let name = permits_ctx.read().name();
-        if permits_ctx.read().acquired_permits() == 0 {
-            let result = GlobalCtx::global()
-                .acquire_many(to_device_idx, 1, Arc::new(SimpleId(name)))
-                .await?;
-            permits_ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
-        }
+        let _permit =  if permits_ctx.read().acquired_permits() == 0 {
+            Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(self.id().clone())).await?)
+        } else {
+            None
+        };
 
         let t_1_batch = Arc::clone(&self.batch);
         let motif_net = Arc::clone(&self.motif_net);
@@ -366,45 +365,13 @@ impl WithSelectDataRef<ApplyMotifNetInputDeviceWrapperSelector> for ApplyMotifNe
         let __with_data_device = to_device_idx;
 
         let __device_idx = __with_data_device;
-        // let __with_data_var_0 = ::std::sync::Arc::clone(&(t_1_batch));
-        // let __with_data_var_1 = ::std::sync::Arc::clone(&(motif_net));
 
-        // let __with_data_handle_0 = ::tokio::spawn({
-        //     let __wrap = ::std::sync::Arc::clone(&__with_data_var_0);
-        //     let __device_idx = __device_idx;
-        //     async move {
-        //         __wrap.load_from_any_device(__device_idx).await?;
-        //         Ok::<(), ::thoosa_shared::ThoosaError>(())
-        //     }
-        // });
-
-        // let __with_data_handle_1 = ::tokio::spawn({
-        //     let __wrap = ::std::sync::Arc::clone(&__with_data_var_1);
-        //     let __device_idx = __device_idx;
-        //     async move {
-        //         __wrap.load_from_any_device(__device_idx).await?;
-        //         Ok::<(), ::thoosa_shared::ThoosaError>(())
-        //     }
-        // });
-
-        // let __with_data_handle_res_0 = __with_data_handle_0.await?;
-        // __with_data_handle_res_0?;
-        // let __with_data_handle_res_1 = __with_data_handle_1.await?;
-        // let __with_data_handle_res_1 = __with_data_handle_res_1?;
-
-        // let __with_data_guard_0 = __with_data_var_0.get_copied(__device_idx).await?;
-        // let __with_data_ref_0 = &*__with_data_guard_0;
         let __with_data_guard_1 = motif_net.load_from_any_device_(__device_idx).await?;
 
-        // let __with_data_guard_1 = motif_net.get_copied(__device_idx).await?;
         let __with_data_ref_1 = &*__with_data_guard_1;
 
-        // (|batch_v: &ThoTensor<Batch<ChannelsData2>, SimpleId>,
-        //   batched_motifs_output: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>| {
-        //
-        // })(__with_data_ref_0, __with_data_ref_1)
 
-        permits_ctx.write().drop_permits(DropIf::Always);
+        debug!("ApplyMotifNetInputDeviceWrapper::with_selected_data_ref: selected_batch={selected_batch:?}");
         do_run(&ApplyMotifNetInput::new(
             &selected_batch,
             __with_data_ref_1,

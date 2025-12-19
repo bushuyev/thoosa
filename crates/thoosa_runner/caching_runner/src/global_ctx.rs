@@ -144,9 +144,32 @@ impl GlobalCtx {
         &self,
         ordinal: usize,
         num_permits: NumPermits,
-        out_id: std::sync::Arc<dyn CachableIdTr>,
+        requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoosaError> {
-        self.semaphores[ordinal].acquire(num_permits, out_id).await
+        self.semaphores[ordinal].acquire(num_permits, requester_id).await
+    }
+
+    pub async fn acquire_one(
+        &self,
+        ordinal: usize,
+        requester_id: Arc<dyn CachableIdTr>,
+    ) -> Result<RunnerPerm, ThoosaError> {
+
+        let mut num_tries = 0;
+        loop {
+
+            if let Ok(permit) =self.semaphores[ordinal].acquire(1, Arc::clone(&requester_id)).await {
+
+                debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} got single permit on {num_tries} attempt");
+
+
+                return Ok(permit);
+            }
+            num_tries+=1;
+            if num_tries > 1000 {//TODO config
+                return Err(ThoosaError::new("Can't get single permit"));
+            }
+        }
     }
 
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
