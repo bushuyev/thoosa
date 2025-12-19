@@ -449,13 +449,10 @@ where
             Arc::new(out_id) as Arc<dyn CachableIdTr>
         };
 
-        // if run_context.read().acquired_permits() == 0 {
-        //     let result = GlobalCtx::global()
-        //         .acquire_many(device_idx, 1, out_key.clone())
-        //         .await?;
-        //     run_context.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
-        // }
-
+        if run_context.read().acquired_permits() == 0 {
+            let permit = GlobalCtx::global().acquire_one(device_idx, Arc::clone(&out_key)).await?;
+            run_context.write().add_permit(permit);
+        }
 
         debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}   acquired_permits={:?}", os_thread_id(), run_context.read().acquired_permits());
 

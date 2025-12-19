@@ -788,11 +788,12 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
         P:PermitsCtx
     {
-        let _permit = GlobalCtx::global().acquire_many(1, 1, Arc::new(SimpleId("with_data_ref")));//TODO .await?;
-        //TODO
-        // if to_device_idx > 0 {
-        //     assert!(permits_ctx.read().acquired_permits() > 0);
-        // }
+        let _permit =  if permits_ctx.read().acquired_permits() == 0 {
+            Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(self.id().clone())).await?)
+        } else {
+            None
+        };
+
 
         match self.load_from_any_device_(to_device_idx).await {
             Ok(v) => {
@@ -826,7 +827,8 @@ where
     async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
-        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+        P:PermitsCtx
     {
         let read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> = self.cached_data[to_device_idx].read().await;
 
@@ -835,6 +837,11 @@ where
                 .as_ref()
                 .expect("no value behind guard");
 
+            let _permit =  if permits_ctx.read().acquired_permits() == 0 {
+                Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(self.id().clone())).await?)
+            } else {
+                None
+            };
             let data: Self::O<'_> = base.subview(selector.clone())?;
 
             return Self::do_run_trace_owned(trace_ctx, do_run, data);
@@ -853,7 +860,11 @@ where
                 let sub_t: Self::O<'_> = src.subview(selector.clone())?;
 
                 debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
-
+                let _permit =  if permits_ctx.read().acquired_permits() == 0 {
+                    Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(self.id().clone())).await?)
+                } else {
+                    None
+                };
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
                 return Self::do_run_trace_owned(trace_ctx, do_run, data);

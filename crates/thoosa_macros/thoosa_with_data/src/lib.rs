@@ -103,12 +103,21 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
 
     quote! {
         {
-            // let __with_data_permits_ctx = ::std::sync::Arc::clone(&(#permits_ctx_expr));
+            let __with_data_permits_ctx = ::std::sync::Arc::clone(&(#permits_ctx_expr));
             let __with_data_device = #device_expr;
             async {
                 let to_device_idx = __with_data_device;
                 let __device_idx = to_device_idx;
 
+                let _permit = if __with_data_permits_ctx.read().acquired_permits() == 0 {
+                    let name = __with_data_permits_ctx.read().name();
+                    let permit = caching_runner::global_ctx::GlobalCtx::global()
+                        .acquire_one(to_device_idx, ::std::sync::Arc::new(::thoosa_shared::traits::SimpleId(name)))
+                        .await?;
+                    Some(permit)
+                } else {
+                    None
+                };
 
                 #(#prelude)*
                 #(#load_steps)*
