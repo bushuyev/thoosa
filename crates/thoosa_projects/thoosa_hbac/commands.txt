@@ -22,12 +22,12 @@ cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logg
 cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="group:pure group 1000" --run-config-cnt="{motif_selector: {ByLabelVariance:{"_dummy":"0"}}}"
 
 
-cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  train-motifs-nets --select-motifs-run-ids=3  --run-config-cnt="{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'max_loss': '0.1', 'opt_max_evals':'3', 'opt_n_init': '3'}, 'num_layers': '3..4'}"
+cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  train-motifs-nets --select-motifs-run-ids=3  --run-config-cnt="{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'max_loss': '0.1', 'opt_max_evals':'3', 'opt_n_init': '3'}, 'num_layers': '3..4', 'step':'10'}"
 
 
 
 
-cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=DEBUG --ws-path=/home/bu/tmp/ws_test_hbac/  train-label-nets --select-motifs-run-id=3 --train-resource-group="pure group 100" --valid-resource-group="group 1 labels/100/0-100"  --run-config-cnt="{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.0001', 'opt_max_evals':'10', 'opt_n_init': '3'}, 'net': {FixedNumSlices:{'num_layers':'3..5', 'slices_len':'0'}}}"
+cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=DEBUG --ws-path=/home/bu/tmp/ws_test_hbac/  train-label-nets --select-motifs-run-id=2072 --train-resource-group="pure group 100" --valid-resource-group="group 1 labels/100/0-100"  --run-config-cnt="{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.0001', 'opt_max_evals':'10', 'opt_n_init': '3'}, 'net': {FixedNumSlices:{'num_layers':'3..5', 'slices_len':'0'}}}"
 
 cargo run --release   -- --term-logger-level=INFO --write-logger-level=DEBUG --ws-path=/home/bu/tmp/ws_test_hbac/  train-final-net \
  --train-labels-run-ids=245 --train-labels-run-ids=246 --train-labels-run-ids=247 --train-labels-run-ids=248 --train-labels-run-ids=249 --train-labels-run-ids=250 \
