@@ -2634,10 +2634,12 @@ where
     let min_loss = Arc::new(RwLock::new(f32::MAX));
 
     let min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
+    
+    let grid_vals_sets = run_config_source.grid_to_vals();
 
-    info!("opt_train_2: running opt train {descr} ");
+    info!("opt_train_2: running opt train {descr} grid_vals_sets={grid_vals_sets:?}");
 
-    for grid_vals in run_config_source.grid_to_vals().into_iter() {
+    for grid_vals in grid_vals_sets.into_iter() {
         let const_vals = const_vals.clone();
         let grid_vals = grid_vals.clone();
         let mut train_clone = train.clone();
