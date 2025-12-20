@@ -588,6 +588,7 @@ where
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
             ).await?;
 
+            info!("find motifs done, find_motif_run_ids={find_motif_run_ids:?}");
 
 
             let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
@@ -620,7 +621,7 @@ where
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "select motifs"))),
             ).await?;
 
-            info!("all done: find_motif_run_ids={find_motif_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
+            info!("select motifs done: find_motif_run_ids={find_motif_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
 
 
             let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
@@ -657,17 +658,19 @@ where
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train motif nets"))),
             ).await?;
 
+            info!("train motif nets done: run_ids={run_ids:?}");
+
             ///////////////////
             let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue{
                 id: None,
                 common_training_args: CommonTrainingRunConfigRangeOrValue {
-                    cycles: RangeOrValue::Value(10),
-                    batch_size: RangeOrValue::Value(11),
+                    cycles: RangeOrValue::Value(100),
+                    batch_size: RangeOrValue::Value(20),
                     lr: RangeOrValue::Value(0.0001),
                 },
                 net: LabelNetTypeArgsRangeOrValue::FixedNumSlices(FixedNumSlicesNetArgsRangeOrValue{
-                    num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
-                    slices_len: RangeOrValue::Value(0)
+                    num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+                    slices_len: RangeOrValue::Value(1000)
                 }),
             };
 
@@ -696,6 +699,7 @@ where
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train label nets"))),
             ).await?;
 
+            info!("train label nets done: run_ids={run_ids:?}");
 
             /*if let Some(source_path) = run_all_params.import_source_path.as_ref() {
                 debug!("RunAll: init_resources");

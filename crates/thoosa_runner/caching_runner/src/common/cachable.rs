@@ -479,6 +479,7 @@ impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O
         //TODO add GlobalCtx::purge_lock just in case?
         debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx}",self.id);
         trace!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",self.id, self.cached_data);
+        assert!(self.cached_data.len() > to_device_idx, "Device index {to_device_idx}(cache len is {}) too big {:?}",self.cached_data.len(), self.id);
 
         if to_device_idx != 0 {
             *self.on_cpu_since.write() = None;
