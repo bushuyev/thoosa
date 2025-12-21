@@ -1404,11 +1404,11 @@ pub struct TrainMotifsNetsRunConfig {
 
     #[in_map]
     #[run_config]
-    num_layers: u32,
+    pub num_layers: u32,
 
     #[in_map]
     #[run_config]
-    step: u32,
+    pub step: u32,
 }
 
 impl TrainMotifsNetsRunConfig {
@@ -2634,7 +2634,7 @@ where
     let min_loss = Arc::new(RwLock::new(f32::MAX));
 
     let min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
-    
+
     let grid_vals_sets = run_config_source.grid_to_vals();
 
     info!("opt_train_2: running opt train {descr} grid_vals_sets={grid_vals_sets:?}");

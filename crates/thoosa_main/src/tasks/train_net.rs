@@ -110,7 +110,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
-    BF:Fn(&RC)->B +  Send + Sync + 'static,
+    BF:Fn(&RC)->BoxFuture<Result<B, ThoosaError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
@@ -135,7 +135,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
-    BF:Fn(&RC)->B +  Send + Sync + 'static,
+    BF:Fn(&RC)->BoxFuture<Result<B, ThoosaError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
@@ -154,7 +154,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
-    BF:Fn(&RC)->B +  Send + Sync + 'static,
+    BF:Fn(&RC)->BoxFuture<Result<B, ThoosaError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
@@ -174,7 +174,7 @@ where
         vs: &VarStore,
         run_config: RC,
     ) -> BoxFuture<'static, Result<(f32, NP), ThoosaError>> {
-        let batch = (self.batch)(&run_config);
+
         let (node, params) = match (self.net)(&run_config, vs) {
             Ok(v) => v,
             Err(e) => return Box::pin(async { Err(e) }),
@@ -204,6 +204,7 @@ where
         let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
 
         Box::pin(async move {
+            let batch = (self.batch)(&run_config).await?;
             debug!("TrainNet::run_inner: device={:?} cycles={}", train_step.device(), cycles);
             {
                 let opt = train_step.opt.lock();
@@ -296,7 +297,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims, DY: Dims,
     B:AsyncDataBatch<DX, DY>,
-    BF:Fn(&RC)->B +  Send + Sync + 'static,
+    BF:Fn(&RC)->BoxFuture<Result<B, ThoosaError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
@@ -316,7 +317,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
-    BF:Fn(&RC)->B +  Send + Sync + 'static,
+    BF:Fn(&RC)->BoxFuture<Result<B, ThoosaError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
@@ -602,8 +603,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::future::ready;
     use crate::tasks::cross_dims::ChannelsData2;
     use std::sync::Arc;
+    use futures_util::StreamExt;
     use tch::nn::{AdamW, OptimizerConfig, VarStore};
     use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
@@ -621,6 +624,7 @@ mod tests {
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::traits::MonoMetrics;
     use crate::tasks::train_net::TrainNet;
+    use futures::FutureExt;
 
     #[derive(Clone, Debug)]
     struct DummyX;
@@ -650,8 +654,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_0(){
-
-        let batch = |rc:&DummyRunConfig| mock_async_data_batch::build().finish();
         let net_fn = |rc:&DummyRunConfig, vs:&VarStore|{
             Ok((
                 dummy_label_net::<Batch<DummyX>, Batch<DummyY>>(10, 1., Cpu, "test")?,
@@ -677,7 +679,7 @@ mod tests {
         };
 
         let train_net:TrainNet<MockRunCtx, _, _, _, _, _, _, _, (), _, _, _> = TrainNet::new(
-            batch,
+            |rc:&DummyRunConfig| ready(Ok(mock_async_data_batch::build().finish())).boxed(),
             net_fn,
             opt_config,
             run_config,
