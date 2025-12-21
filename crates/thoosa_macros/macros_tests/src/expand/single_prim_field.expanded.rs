@@ -92,7 +92,7 @@ impl thoosa_run_config_args::OptRunConfigSource for SingleFieldRangeOrValue {
     ) -> thoosa_shared::run_configs::OptRunConfigs<
         Vec<thoosa_shared::val::NamedVal<SingleFieldFields>>,
         Vec<thoosa_shared::val::NamedRange<SingleFieldFields>>,
-        Vec<Hyperparameter<SingleFieldFields>>,
+        Vec<thoosa_shared::hyperparameter::Hyperparameter<SingleFieldFields>>,
         SingleFieldFields,
     > {
         let mut const_params = Vec::new();
