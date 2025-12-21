@@ -381,7 +381,7 @@ mod tests {
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::utils::{lin_t, plot_series, three_sigs_tensor, vec_f32_from};
     use thoosa_common::ws::FsWorkspace;
-    use thoosa_motifs::find::{plot_motif_slices, FixedFindMotifsConfig};
+    use thoosa_motifs::find::{FixedFindMotifsConfig};
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{DataId, SimpleId};
