@@ -127,6 +127,7 @@ where
     optimizer:FO,
     x_f:XF,
     cycles:FC,
+    descr:String,
     pd:PhantomData<(C, DX, DY, BF, P, RC)>
 }
 
@@ -163,8 +164,8 @@ where
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
-    pub fn new(batch:BF, net:NF,opt_config:Arc<OptConfig>,run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >, loss_fn:LossFp, optimizer:FO, x_f:XF, cycles:FC) -> Self {
-        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, cycles }
+    pub fn new(batch:BF, net:NF, opt_config:Arc<OptConfig>, run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >, loss_fn:LossFp, optimizer:FO, x_f:XF, cycles:FC, descr: String) -> Self {
+        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, cycles, descr }
     }
 
     fn run_inner(
@@ -339,6 +340,7 @@ where
             let self_for_train = Arc::clone(&self);
             let device_idx_for_train = device_idx;
 
+
             let (var_store, node_params, run_config, loss) = opt_train_2::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),
                 move |vs: &VarStore, run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
@@ -351,7 +353,7 @@ where
                 },
                 run_config_source,
                 ThoDevice::from(device_idx).into(),
-                "labels",
+                &self.descr,
             ).await?;
 
             Ok(Arc::new(DevicesWrap::wrap_cpu(TrainNetOutput::new("".into(), var_store, node_params, run_config, loss))))
@@ -686,7 +688,8 @@ mod tests {
             loss_fn,
             optimizer,
             x_f,
-            cycles
+            cycles,
+            "n/a".to_string()
         );
 
         //TODO OOM

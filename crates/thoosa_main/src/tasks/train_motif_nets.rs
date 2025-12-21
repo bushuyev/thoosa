@@ -225,21 +225,21 @@ where
                     Ok::<_, ThoosaError>(motif.extra().window)
                 })?;
 
-                let train_net:Arc<TrainNet<C, _, _, _, _, _, _, _, _, _, _, _>> = Arc::new(TrainNet::new(
-                     move |rc:&TrainMotifsNetsRunConfig| {
-                         let ctx = Arc::clone(&ctx_1);
-                         let motif = Arc::clone(&motif_1);
-                         let random_slices = Arc::clone(&random_slices_1);
-                         async move {
-                             MotifsBatch::new(motif, Arc::clone(&random_slices), rc.common_training_args.batch_size as i64, device_idx, cache_area, Arc::clone(&ctx)).await
-                         }.boxed()
-                    },
+                let train_net = Arc::new(TrainNet::new(
+                    move |rc:&TrainMotifsNetsRunConfig| {
+                        let ctx = Arc::clone(&ctx_1);
+                        let motif = Arc::clone(&motif_1);
+                        let random_slices = Arc::clone(&random_slices_1);
+                        async move {
+                            MotifsBatch::new(motif, Arc::clone(&random_slices), rc.common_training_args.batch_size as i64, device_idx, cache_area, Arc::clone(&ctx)).await
+                        }.boxed()
+                   },
                     move |rc:&TrainMotifsNetsRunConfig, vs: &VarStore| {
                         let params = MotifNetParams::new(motif_width, rc.num_layers, rc.step);
                         Ok((motif_node_2(&params).build_tch_module(&vs.root())?, params))
                     },
-                    opt_config.clone(),//TODO clone
-                    train_motifs_nodes_run_configs.clone(),//TODO clone
+                    opt_config.clone(), //TODO clone
+                    train_motifs_nodes_run_configs.clone(), //TODO clone
                     |pred: &Tensor, target: &Tensor| {
                         let pred_y = pred; //.i((.., 0));
 
@@ -256,7 +256,8 @@ where
                     },
                     |rc:&TrainMotifsNetsRunConfig|{
                         rc.common_training_args.cycles
-                    }
+                    },
+                    "motifs".to_string()
                 ));
 
                 let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap_cpu(TrainNetInput::new("".into()))), Arc::clone(&ctx)).await?).unwrap().take_data(0).await?;
