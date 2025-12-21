@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::future::ready;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
@@ -277,7 +278,6 @@ where
 
                 let train_motifs_nodes_run_configs = Arc::clone(&train_motifs_nodes_run_configs);
                 let loader = Arc::clone(&self.motif_loader);
-                let apply_motif_nets = Arc::clone(&self.apply_motif_nets);
                 let select_motifs_run_ids = self.select_motifs_run_ids.clone();
                 let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
 
@@ -291,12 +291,7 @@ where
                     };
                     let train_label_ctx = Arc::clone(&ctx).write().branch(&new_name);
                     let train_label_ctx_batch =  Arc::clone(&ctx).write().branch(&format!("Train_{label}_batch"));
-                    // if ctx.read().acquired_permits() == 0 {
-                    //     let result = GlobalCtx::global()
-                    //         .acquire_many(device_idx, 1, out_key.clone())
-                    //         .await?;
-                    //     ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
-                    // }
+
 
 
                     debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
@@ -311,51 +306,52 @@ where
                     let label = label.clone();
                     let label_ = label.clone();
 
-                    let train_net:Arc<TrainNet<C, _, _, _, _, _, _, _, _, _, _, _>> = Arc::new(TrainNet::new(
+                    let train_net = Arc::new(TrainNet::new(
                         move |rc:&TrainLabelNetsRunConfig| {
-                            let apply_motif_nets = Arc::clone(&apply_motif_nets);
+                            let label = label.clone();
+                            let loader = Arc::clone(&loader);
 
-                            ResourcesBatch::new(
-                                Arc::clone(&loader),
-                                rc.common_training_args.batch_size,
-                                Arc::clone(&resources_1_train),
-                                Arc::clone(&resources_1_valid),
-                                Arc::clone(&resources_0_train),
-                                Arc::clone(&resources_0_valid),
+                            ready(Ok(ResourcesBatch::new(
+                                   Arc::clone(&loader),
+                                   rc.common_training_args.batch_size,
+                                   Arc::clone(&resources_1_train),
+                                   Arc::clone(&resources_1_valid),
+                                   Arc::clone(&resources_0_train),
+                                   Arc::clone(&resources_0_valid),
+                                   Box::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SimpleId>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SimpleId>>>>, ctx: Arc<RwLock<C>>| {
+                                       async move {
+                                           let (x, y) = with_data!(ctx, ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<MotifProbability, SimpleId>], x_0:&[&ThoTensor<MotifProbability, SimpleId>]|{
+                                               debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
 
-                                Box::new(move |x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SimpleId>>>>,  x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SimpleId>>>>, ctx: Arc<RwLock<C>>|{
+                                               let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.size()[1]).max().expect("no max_input");
 
-                                    async move {
-                                        let (x,y) = with_data!(ctx, ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<MotifProbability, SimpleId>], x_0:&[&ThoTensor<MotifProbability, SimpleId>]|{
-                                            debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
+                                               debug!("ResourcesBatch::train_batch_iter: max_input={max_input}");
 
-                                            let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.size()[1]).max().expect("no max_input");
+                                               let x_1 = Tensor::f_stack(&x_1.into_iter().map(|v|{
+                                                   Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())//TODO
+                                               }).collect::<Result<Vec<_>, ThoosaError>>()?, 0)?;
 
-                                            debug!("ResourcesBatch::train_batch_iter: max_input={max_input}");
+                                               let x_0 = Tensor::f_stack(&x_0.into_iter().map(|v|{
+                                                   Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())
+                                               }).collect::<Result<Vec<_>, ThoosaError>>()?, 0)?;
 
-                                            let x_1 = Tensor::f_stack(&x_1.into_iter().map(|v|{
-                                                Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())//TODO
-                                            }).collect::<Result<Vec<_>, ThoosaError>>()?, 0)?;
+                                               mix_x_binary_with_labels(&x_1, &x_0)
+                                           })?;
 
-                                            let x_0 = Tensor::f_stack(&x_0.into_iter().map(|v|{
-                                                Ok(pad_to_2(v.as_ref(), &[channels, max_input], true)?.copy())
-                                            }).collect::<Result<Vec<_>, ThoosaError>>()?, 0)?;
-
-                                            mix_x_binary_with_labels(&x_1, &x_0)
-                                        })?;
-
-                                        debug!("ResourcesBatch::train_batch_iter: x.size={:?} y.size={:?}", x.size(), y.size());
+                                           debug!("ResourcesBatch::train_batch_iter: x.size={:?} y.size={:?}", x.size(), y.size());
 
 
-                                        Ok((
-                                            ThoTensor::<Batch<MotifProbability>, SimpleId>::new("".into(), x)?,
-                                            ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y)?,
-                                        ))
-                                    }.boxed()
-                                }),
-                                train_label_ctx_batch.write().branch(format!("Train_{label}_{}_Batch", rc.id.unwrap_or(0)).leak())//TODO unwrap_or 0
-                            )
-                        },
+                                           Ok((
+                                               ThoTensor::<Batch<MotifProbability>, SimpleId>::new("".into(), x)?,
+                                               ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y)?,
+                                           ))
+                                       }.boxed()
+                                   }),
+                                   train_label_ctx_batch.write().branch(format!("Train_{label}_{}_Batch", rc.id.unwrap_or(0)).leak()) //TODO unwrap_or 0
+                               ))).boxed()
+
+
+                       },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
                             match rc.net {
                                 LabelNetTypeArgs::MaxPadding(_) => {
@@ -389,7 +385,8 @@ where
                         },
                         |rc:&TrainLabelNetsRunConfig|{
                             rc.common_training_args.cycles
-                        }
+                        },
+                        "label".to_string()
                     ));
 
                     let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap_cpu(TrainNetInput::new("".into()))), Arc::clone(&train_label_ctx)).await?).unwrap().take_data(0).await?;

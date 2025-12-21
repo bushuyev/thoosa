@@ -145,6 +145,8 @@ where
     O: WithId + Data + CopyToDevice + Send + Sync,
 {
     id: <O as WithId>::ID,
+    //cpu_only
+    //gpu_copied
     cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,
     inflights: Box<[tokio::sync::Mutex<Option<Arc<tokio::sync::Notify>>>]>,
     cache_area: AtomicU64,
