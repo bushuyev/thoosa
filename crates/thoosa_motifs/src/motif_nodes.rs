@@ -16,7 +16,6 @@ use thoosa_common::train_nets::LabelNetTypeParams::FixedNumSlices;
 use thoosa_common::utils::{pad_to, plot_series};
 use thoosa_shared::{gen_motif, MotifKind, ThoosaError};
 use thoosa_shared::colors_iter::DistinctColorIter;
-use crate::find::plot_motif_slices;
 use crate::generators::noise::{generate_motifs_with_avg_distance, resource_tensor};
 
 #[test]
