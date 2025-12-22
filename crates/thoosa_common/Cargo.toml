@@ -33,6 +33,7 @@ libloading.workspace = true
 thoosa_shared = {path = "../thoosa_shared" }
 thoosa_store = {path = "../thoosa_store" }
 thoosa_shims = {path = "../thoosa_shims" }
+#caching_runner = {path = "../thoosa_runner/caching_runner"}
 
 thoosa_run_config_args = {path = "../thoosa_macros/thoosa_run_config_args" }
 thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args_derive" }
@@ -66,5 +67,6 @@ tokio.workspace = true
 tokio-utils.workspace = true
 libc = "0.2.175"
 anyhow = "1.0.99"
+tracing.workspace = true
 [build-dependencies]
 chrono.workspace = true

@@ -124,10 +124,7 @@ where
         let permits_to_acquire = adjust_context.to_acquire() - acquired_permits;
 
         let adjustable_name = adjustable.read().name();
-        debug!(
-            "PermitsAdjuster::adjust: name={adjustable_name} thread={:?} self.max={} permits_to_acquire/{}/ = adjust_context.to_acquire()/{}/ - acquired_permits/{acquired_permits}/",
-                                             std::thread::current().id(),self.max,   permits_to_acquire,      adjust_context.to_acquire()
-        );
+        debug!("PermitsAdjuster::adjust: name={adjustable_name} thread={:?} self.max={} permits_to_acquire/{}/ = adjust_context.to_acquire()/{}/ - acquired_permits/{acquired_permits}/",std::thread::current().id(),self.max,   permits_to_acquire,      adjust_context.to_acquire());
 
         if permits_to_acquire > 0 {
             match (self.acquire_fn)(permits_to_acquire).await {
@@ -142,12 +139,12 @@ where
                         MyError::OutOfPermits => {
                             debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name} acquired_permits={acquired_permits} Error: {te:?} device_idx={}", adjustable.read().device_idx());
 
-                            if adjustable.read().device_idx() != 0 {
+                           /* if adjustable.read().device_idx() != 0 {
                                 //not on CPU, TODO
                                 if let Err(e) = A::purge_gpu_caches(Arc::clone(adjustable)).await {
                                     debug!("PermitsAdjuster::adjust: purge_gpu_caches failed: {e:?}");
                                 };
-                            }
+                            }*/
                             adjustable.write().drop_permits(DropIf::Always);
 
                             *adjust_context.to_acquire_mut() = 0;

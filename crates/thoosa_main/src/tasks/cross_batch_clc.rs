@@ -89,7 +89,7 @@ where
 {
     batch_clc_fn: F,
     cross_batch_ctx: CUC,
-    unfold_params: UnfoldParams,
+    pub unfold_params: UnfoldParams,
     _ctx: PhantomData<C>,
 }
 
@@ -198,6 +198,7 @@ where
     where
         Self: Sized
     {
+        assert!(!input.resources_0.is_empty(), "CrossUnfoldClc::do_run: no input resources");
         let unfold_params = &self.unfold_params;
 
 
@@ -243,6 +244,8 @@ where
 
 
 pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SimpleId>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoosaError> {
+    assert!(!input.is_empty(), "unfold_and_cat: input is empty");
+
     let mut batch_0_sizes = vec![];
 
     let batch_0_tensors = input
@@ -251,24 +254,24 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SimpleId>], unfold_para
         .map(|t| {
 
 
-            let unfolded = t.t_ref().unfold(
+            let unfolded = t.t_ref().f_unfold(
                 unfold_params.dimension,
                 unfold_params.size,
                 unfold_params.step,
-            );
+            )?;
             debug!("CrossUnfoldClc::do_run: 0. t.size={:?} self.unfold_params={:?} unfolded.size()={:?}", t.size(), unfold_params, unfolded.size());
 
             batch_0_sizes.push(unfolded.size()[1]); //number of blocks
-            unfolded
+            Ok(unfolded)
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, ThoosaError>>()?;
 
     if batch_0_tensors.is_empty() {
         return Err("batch 0 is empty".into());
     }
 
 
-    let batch_0_t = Tensor::concat(batch_0_tensors.as_slice(), 1);
+    let batch_0_t = Tensor::f_concat(batch_0_tensors.as_slice(), 1)?;
     Ok((batch_0_t, batch_0_sizes))
 }
 
@@ -334,18 +337,18 @@ mod tests {
             0.00, 0.01, 0.02,
             0.10, 0.11, 0.12,
             0.20, 0.21, 0.22,
-        ]).view((3,3)));
+        ]).view((3,3)))?;
         let tensor_01 = ThoTensor::new("1".into(), Tensor::from_slice(&[
             1.00, 1.01, 1.02, 1.03,
             1.10, 1.11, 1.12, 1.13,
             1.20, 1.21, 1.22, 1.23,
-        ]).view((3,4)));
+        ]).view((3,4)))?;
 
         let tensor_1 = ThoTensor::new("2".into(), Tensor::from_slice(&[
             2.00, 2.01,
             2.10, 2.11,
             2.20, 2.21,
-        ]).view((3,2)));
+        ]).view((3,2)))?;
 
         let tensors = [&tensor_00, &tensor_01, &tensor_1];
 

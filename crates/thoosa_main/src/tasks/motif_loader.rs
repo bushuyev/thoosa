@@ -45,9 +45,10 @@ pub struct MotifLoaderInput {
     motif_id:DataId
 }
 
+#[cfg(test)]
 impl From<u32> for MotifLoaderInput{
     fn from(value: u32) -> Self {
-        MotifLoaderInput::all_slices(DataId(value))
+        MotifLoaderInput::find_motif_slices_only(DataId(value))
     }
 }
 
@@ -62,12 +63,12 @@ impl MotifLoaderInput {
     pub fn find_motif_slices_only(motif_id: DataId) -> Self {
         Self {
             motif_id,
-            select_motifs_run_id: Some(vec![]) //all slices loaded
+            select_motifs_run_id: Some(vec![]) //only slices found during find_motifs loaded
         }
     }
 
     pub fn new(motif_id: DataId, select_motifs_run_id: Option<Vec<RunId>>) -> Self {
-        Self { select_motifs_run_id, motif_id }
+        Self { select_motifs_run_id, motif_id }// slices found during find_motifs + select_motifs_run_id
     }
 }
 impl Input for MotifLoaderInput {
@@ -309,7 +310,7 @@ where
 
     let tmp_cache: TmpCached<ThoTensor<ChannelsData2, SimpleId>> = TmpCached::new("motifs", cache_area).await;
 
-    let configurable_loader = config_to_stage(&loader, &find_motifs_run_config);
+    let configurable_loader = config_to_stage(&loader, &find_motifs_run_config)?;
 
     for (resource_id, slices) in resource_ids_slices {
         let out_key = {
@@ -318,12 +319,12 @@ where
         };
 
 
-        if ctx.read().acquired_permits() == 0 {
-            let result = GlobalCtx::global()
-                .acquire_many(device_idx, 1, out_key.clone())
-                .await?;
-            ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
-        }
+        // if ctx.read().acquired_permits() == 0 {
+        //     let result = GlobalCtx::global()
+        //         .acquire_many(device_idx, 1, out_key.clone())
+        //         .await?;
+        //     ctx.write().add_permit(result);//permits can be dropped only from OOM handler or when context is dropped
+        // }
 
         let resource = resources_map
             .get(&resource_id)
@@ -423,7 +424,7 @@ where
     let motif = ThoTensor::new(
         motif_id.clone(),
         Tensor::f_cat(tensors.as_slice(), 0)?,
-    );
+    )?;
 
     debug!("MotifLoader::run: motif of size {:?} is built for motif_id={motif_id} device={:?}", motif.size(), motif.t.device());
 
@@ -499,18 +500,18 @@ pub mod mock_motif_loader {
             H: IntoIterator<Item=(MotifLoaderInput, (MotifMeta, Tensor))>,
         {
             let data_map: Arc<HashMap<MotifLoaderInput, Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
-                (k.clone(), Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(k.motif_id.into(), v.1), v.0), 0)))
+                (k.clone(), Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(k.motif_id.into(), v.1).unwrap(), v.0), 0)))
             }).collect());
 
             self.mock.expect_run_cached().returning(move |input, ctx| {
                 block_in_place(|| {
                     Handle::current().block_on(async {
                         input.with_data_ref(0,
-                                            Arc::clone(&ctx), None, |v: &MotifLoaderInput| {
-                                                                        Ok(Arc::clone(data_map
-                                                                            .get(v)
-                                                                            .expect(&format!("no mock data for {input:? } in MockMotifLoader"))))
-                                                                    }).await
+                        Arc::clone(&ctx), None, |v: &MotifLoaderInput| {
+                            Ok(Arc::clone(data_map
+                                .get(v)
+                                .expect(&format!("no mock data for {input:? } in MockMotifLoader"))))
+                        }).await
                     })
                 })
             });

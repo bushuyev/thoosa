@@ -38,7 +38,7 @@ impl Dims for Slice {
 
 
 #[derive(Clone, Debug)]
-pub struct MotifProbability; //motif net applied to sliced data [slices, slice_width] - distances between motif and a slice
+pub struct MotifProbability; //motif net applied to sliced data [slices, slice_width] - probabilities of a slice belonging to a motif
 impl Dims for MotifProbability {
     type Metrics = AnyMetrics;
 }

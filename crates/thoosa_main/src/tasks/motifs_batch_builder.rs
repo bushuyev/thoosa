@@ -27,7 +27,7 @@ pub fn make_batch(in_tensor: &Tensor, batch_size: i64) -> TchResult<Tensor> {
 
 /// Main entry. Expects `x` of shape [num_records X seq_len], float dtype.
 pub fn make_batch_with(in_tensor: &Tensor, batch_size: i64, cfg: MixupJitterCfg) -> TchResult<Tensor> {
-    debug!("make_batch_with: in_tensor.size={:?}", in_tensor.size());
+    debug!("make_batch_with: batch_size={batch_size} in_tensor.size={:?}", in_tensor.size());
     let (num_records, seq_len) = in_tensor.size2()?; // ensures 2-D and returns (N, M)
     let device = in_tensor.device();
     let kind = in_tensor.kind();
@@ -35,7 +35,7 @@ pub fn make_batch_with(in_tensor: &Tensor, batch_size: i64, cfg: MixupJitterCfg)
 
     // Case 1: enough data — sample without replacement.
     if num_records > 2 * batch_size {
-        let idx = Tensor::randperm(num_records, (Kind::Int64, device)).narrow(0, 0, batch_size);
+        let idx = Tensor::f_randperm(num_records, (Kind::Int64, device))?.f_narrow(0, 0, batch_size)?;
         return Ok(in_tensor.index_select(0, &idx));
     }
 

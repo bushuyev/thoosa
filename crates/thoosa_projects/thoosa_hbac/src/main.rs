@@ -5,6 +5,7 @@ use std::time::Instant;
 use tch::Device::Cpu;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_main::cli::run_cli;
+use thoosa_shared::MyError;
 use thoosa_shims::context::ThoCudaContext;
 
 // #[tokio::main(flavor = "multi_thread", worker_threads = 32)]
@@ -59,6 +60,8 @@ use thoosa_shims::context::ThoCudaContext;
             }
 
             Err(e) => {
+
+
                 error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
             }
         }

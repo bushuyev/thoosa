@@ -1,6 +1,7 @@
 #![feature(backtrace_frames)]
 #![feature(async_fn_traits, fn_traits, unboxed_closures)]
 #![feature(tuple_trait)]
+#![feature(generic_const_exprs)]
 
 extern crate self as thoosa_shared;
 
@@ -47,6 +48,7 @@ pub mod run_configs;
 pub mod test_utils;
 pub mod traits;
 pub mod data_with_extra;
+pub mod perf_logging;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
@@ -166,7 +168,7 @@ impl ThoosaError {
     }
 
     pub fn new_with_error(msg: impl Into<String> + Display, what: MyError) -> Self {
-        error!("ThoosaError::new: msg={}", msg);
+        trace!("ThoosaError::new: msg={}", msg);
         let backtrace = Backtrace::capture();
 
         debug!("{}", backtrace.to_string());

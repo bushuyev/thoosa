@@ -9,6 +9,7 @@ use caching_runner::common::{ambassador_impl_PermitsCtx, DropIf, MockRunCtx, Per
 use caching_runner::common::cachable::Cached;
 use thoosa_shared::traits::Adjustable;
 use caching_runner::permits::{NumPermits, RunnerPerm};
+use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Named, SimpleId};
 use torch_runner::TorchPermsCtx;
@@ -22,7 +23,7 @@ pub struct RunCtx2 {
     device_idx: usize,
     cache_area: u64,
     name: &'static str,
-    perms: TorchPermsCtx,
+    pub(crate) perms: TorchPermsCtx,//TODO pub
 
     loaded_raw_tensors:Vec<SimpleId>,
     batched_motifs_id:Vec<StackedMotifsOutputId>
@@ -77,7 +78,7 @@ impl RunCtx for RunCtx2 {
                 )
             };
             debug!("purge_gpu_caches: 1 ctx_name={ctx_name} device_idx={device_idx} batched_motifs_ids={batched_motifs_ids:?} loaded_raw_tensors={loaded_raw_tensors:?}");
-            info!("dumping {} batched motifs", batched_motifs_ids.len());
+            debug!("dumping {} batched motifs", batched_motifs_ids.len());
 
             tokio::try_join!(
                     RawTensorLoader::<RunCtx2>::purge_gpu_cache_area(
@@ -103,7 +104,18 @@ impl RunCtx for RunCtx2 {
         self.cache_area
     }
 
+    fn branch(&mut self, new_name: &str) -> Arc<RwLock<Self>> {
 
+        let mut ctx2 = RunCtx2::new(self.device_idx, self.cache_area, new_name.to_string().leak());
+        ctx2.perms.permits = mem::take(&mut self.perms.permits);
+        Arc::new(parking_lot::RwLock::new(ctx2))
+    }
+}
+
+impl Drop for RunCtx2 {
+    fn drop(&mut self) {
+        debug!("Drop for RunCtx2::drop: name={:?} self.perms.permits.len={}", self.name, self.perms.permits.len());
+    }
 }
 
 
@@ -130,6 +142,6 @@ impl MotifsCtx for MockRunCtx {
     }
 
     fn add_loaded_raw_tensor_id(&mut self, id: SimpleId) {
-        todo!()
+
     }
 }

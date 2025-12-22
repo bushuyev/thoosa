@@ -1,4 +1,4 @@
-use crate::permits::NumPermits;
+use crate::permits::{NumPermits, MAX_PERMITS};
 use crate::permits::runner_queue::Arbiter;
 use crate::permits::{PermitSource, RunnerPerm};
 use crate::purge::FuturesRunnerMapPurger;
@@ -69,11 +69,16 @@ static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
 #[cfg_attr(test, automock)]
 impl GlobalCtx {
     fn new(device_count: usize) -> Self {
+        debug!("GlobalCtx::new: device_count={device_count}");
+        let semaphores = (0..device_count)
+            // .map(|_| Box::new(RunnerSemaphore::new(100)) as Box<dyn PermitSource>) //TODO config
+            .map(|device_idx| Box::new(Arbiter::new(MAX_PERMITS, device_idx)) as Box<dyn PermitSource>)
+            .collect();
+
+        debug!("GlobalCtx::new: semaphores={semaphores:?}");
+
         Self {
-            semaphores: (0..device_count)
-                // .map(|_| Box::new(RunnerSemaphore::new(100)) as Box<dyn PermitSource>) //TODO config
-                .map(|_| Box::new(Arbiter::new(100)) as Box<dyn PermitSource>)
-                .collect(),
+            semaphores,
 
             device_count,
 
@@ -93,6 +98,8 @@ impl GlobalCtx {
     }
 
     pub fn init_devices(count: usize) -> &'static GlobalCtx {
+        debug!("GlobalCtx::init_devices: device_count={count}");
+
         GLOBAL_CTX
             .set(GlobalCtx::new(count))
             .expect("`init_devices` must only be called once at program start");
@@ -136,10 +143,33 @@ impl GlobalCtx {
     pub async fn acquire_many(
         &self,
         ordinal: usize,
-        n: NumPermits,
-        out_id: std::sync::Arc<dyn CachableIdTr>,
+        num_permits: NumPermits,
+        requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoosaError> {
-        self.semaphores[ordinal].acquire(n, out_id).await
+        self.semaphores[ordinal].acquire(num_permits, requester_id).await
+    }
+
+    pub async fn acquire_one(
+        &self,
+        ordinal: usize,
+        requester_id: Arc<dyn CachableIdTr>,
+    ) -> Result<RunnerPerm, ThoosaError> {
+
+        let mut num_tries = 0;
+        loop {
+
+            if let Ok(permit) =self.semaphores[ordinal].acquire(1, Arc::clone(&requester_id)).await {
+
+                debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} got single permit on {num_tries} attempt");
+
+
+                return Ok(permit);
+            }
+            num_tries+=1;
+            if num_tries > 1000 {//TODO config
+                return Err(ThoosaError::new("Can't get single permit"));
+            }
+        }
     }
 
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation

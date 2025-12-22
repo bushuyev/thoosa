@@ -738,7 +738,7 @@ mod tests {
             debug!("MulTask::do_run: running ctx.name={:?} device_idx={} ",ctx.read().name(),ctx.read().device_idx());
 
             Ok(DMulTaskOutput {
-                id: self.out_id(Input::id(input)),
+                id: self.out_id(WithId::id(input)),
                 data: input
                     .data
                     .0
