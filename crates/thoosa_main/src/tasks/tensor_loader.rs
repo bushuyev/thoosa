@@ -251,7 +251,7 @@ mod tests {
         let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
                 Ok(ThoTensor::new(
-                    Input::id(key).clone(),
+                    key.applied_id().clone(),
                     Tensor::from_slice(&data_0).view((-1, 1)),
                 )?)
             },

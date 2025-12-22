@@ -130,47 +130,6 @@ pub trait RunConfig: Debug {
     fn type_name() -> &'static str;
 }
 
-#[async_trait]
-pub trait Runnable<In, Out, P>: Debug + Sync + Send
-where
-    In: Send + Sync,
-    Out: Send + Sync,
-{
-    type R: Runner + Sync + Send;
-
-    fn run(&self, _input: In, _params: P) -> Result<Out, ThoosaError> {
-        Err(ThoosaError::new("Not implemented yet"))
-    }
-
-    async fn async_run(
-        self: Arc<Self>,
-        input: Arc<In>,
-        runner: Arc<Self::R>,
-        ctx: Option<Arc<RwLock<<<Self as Runnable<In, Out, P>>::R as Runner>::Ctx>>>,
-    ) -> Arc<Out>;
-
-    fn device(&self) -> impl ToOrdinal;
-}
-
-#[async_trait]
-pub trait Cachable<In, Out, P>: Runnable<In, Out, P> + Debug + Sync + Send
-where
-    In: Input + Send + Sync,
-    Out: Output + Send + Sync,
-{
-    fn format_id(&self, input_id: &CachableId) -> CachableId {
-        format!("{}:{}_{}", input_id, self.name(), self.run_id()).into()
-    }
-
-    fn format_0(prev_id: &str) -> CachableId {
-        format!("{}", prev_id).into()
-    }
-
-    fn applied_id(&self, input_id: &CachableId) -> CachableId;
-    fn name(&self) -> String; //TODO &'static str
-    fn run_id(&self) -> String;
-}
-
 //TODO move from_properties_map__ into here + all run config meta data id, description, date, running time
 #[allow(dead_code)]
 pub struct RunConfigHolder<R: RunConfig> {

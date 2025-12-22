@@ -68,7 +68,7 @@ use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_common::{loader};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::run_configs::{RunConfig, Runnable};
+use thoosa_shared::run_configs::{RunConfig};
 
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -194,9 +194,7 @@ impl WithId for MotifsDistRunnableInput {
 }
 
 impl Input for MotifsDistRunnableInput {
-    fn id(&self) -> &CachableId {
-        todo!()
-    }
+
 }
 
 #[derive(Debug)]
@@ -227,69 +225,7 @@ impl WithId for MotifsDistRunnableOutput {
 
 #[async_trait]
 impl Output for MotifsDistRunnableOutput {
-    async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
-        Arc::new(MotifsDistRunnableOutput {
-            mask_dists_cpu: self.mask_dists_cpu.shallow_clone().into(),
-            dists_cpu: self.dists_cpu.as_ref().map(|t| t.shallow_clone().into()),
-        })
-    }
 }
-
-#[derive(Debug)]
-struct TrackDistInput {
-    motifs_dist_runnable_output: MotifsDistRunnableOutput,
-    chunk_0: Vec<TensorIdSliceIdx>,
-    chunk_1: Vec<TensorIdSliceIdx>,
-}
-
-impl TrackDistInput {
-    pub fn new(
-        motifs_dist_runnable_output: MotifsDistRunnableOutput,
-        chunk_0: Vec<TensorIdSliceIdx>,
-        chunk_1: Vec<TensorIdSliceIdx>,
-    ) -> Self {
-        Self {
-            motifs_dist_runnable_output,
-            chunk_0,
-            chunk_1,
-        }
-    }
-}
-
-impl WithId for TrackDistInput {
-    type ID = CachableId;
-
-    fn id(&self) -> &Self::ID {
-        todo!()
-    }
-}
-
-impl Input for TrackDistInput {
-    fn id(&self) -> &CachableId {
-        todo!()
-    }
-}
-
-#[derive(Debug)]
-struct TrackDistOutput;
-
-impl WithId for TrackDistOutput {
-    type ID = CachableId;
-
-    fn id(&self) -> &Self::ID {
-        todo!()
-    }
-}
-
-#[async_trait]
-impl Output for TrackDistOutput {
-    async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
-        todo!()
-    }
-}
-
-
-
 
 
 

@@ -33,8 +33,7 @@ use thoosa_common::ws::Workspace;
 use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::resource::{Resource, ResourceId};
-use thoosa_shared::run_configs::Runnable;
-use thoosa_shared::run_configs::{Cachable, RunId};
+use thoosa_shared::run_configs::{RunId};
 use thoosa_shared::*;
 
 #[derive(Debug, Args)]
