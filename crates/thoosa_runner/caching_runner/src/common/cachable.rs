@@ -45,7 +45,7 @@ where
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>
     where
         Self: Sized + OutId,
-        for<'a> <Self as Stage>::In<'a>: CopyToDevice + Send + Sync,
+        for<'a> <Self as Stage>::In<'a>: Send + Sync,
         <Self as Stage>::Out: Send + Sync,
         <<Self as Stage>::Out as WithId>::ID: 'static,
         <Self as Stage>::Out: 'static,
@@ -160,7 +160,7 @@ where
 
 impl <O> Input for DevicesWrap<O>
 where
-    O: WithId + Data + CopyToDevice + Send + Sync,
+    O: WithId + Data + Send + Sync,
 
 {
 
@@ -168,14 +168,14 @@ where
 
 impl <O> Output for DevicesWrap<O>
 where
-    O: WithId + Data + CopyToDevice + Send + Sync,
+    O: WithId + Data  + Send + Sync,
 {
 
 }
 
 impl <O> WithId for DevicesWrap<O>
 where
-    O: WithId + Data + CopyToDevice + Send + Sync,
+    O: WithId + Data  + Send + Sync,
 
 {
     type ID = O::ID;
@@ -188,7 +188,7 @@ where
 
 struct TracingWrapper<O, D>
 where
-    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+    O: Data + WithId + Send + Sync + CopyToDevice,
     D: Deref<Target = O>,
 {
     o: D,
@@ -197,7 +197,7 @@ where
 
 impl<O, D> Debug for TracingWrapper<O, D>
 where
-    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+    O: Data + WithId + Send + Sync + CopyToDevice,
     D: Deref<Target = O>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -206,7 +206,7 @@ where
 }
 impl<O, D> TracingWrapper<O, D>
 where
-    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+    O: Data + WithId + Send + Sync + CopyToDevice,
     D: Deref<Target = O>,
 {
     pub fn new(o: D, init_ctx: Option<&'static str>) -> Self {
@@ -220,7 +220,7 @@ where
 
 impl<O, D> Drop for TracingWrapper<O, D>
 where
-    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+    O: Data + WithId + Send + Sync + CopyToDevice,
     D: Deref<Target = O>,
 {
     fn drop(&mut self) {
@@ -232,7 +232,7 @@ where
 
 impl<O, D> Deref for TracingWrapper<O, D>
 where
-    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+    O: Data + WithId + Send + Sync + CopyToDevice,
     D: Deref<Target = O>,
 {
     type Target = O;
@@ -244,7 +244,7 @@ where
 
 unsafe impl<O, D> Send for TracingWrapper<O, D>
 where
-    O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+    O: Data + WithId + Send + Sync + CopyToDevice,
     D: Deref<Target = O>,
 {
 }
