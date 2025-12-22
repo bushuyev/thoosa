@@ -208,6 +208,7 @@ where
 
                 let configured_loader = config_to_stage(&loader, &run_config)?;
                 let run_config_clone = run_config.clone();
+                let step = cross_unfold_clc.unfold_params.step();
 
                 Ok(FindMotifsStages::new(
                     run_config,
@@ -243,6 +244,7 @@ where
                             }
                             .boxed()
                         },
+                        step as u32,
                     )),
                 )?)
             })

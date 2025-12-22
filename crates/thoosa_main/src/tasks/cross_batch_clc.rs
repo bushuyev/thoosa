@@ -89,7 +89,7 @@ where
 {
     batch_clc_fn: F,
     cross_batch_ctx: CUC,
-    unfold_params: UnfoldParams,
+    pub unfold_params: UnfoldParams,
     _ctx: PhantomData<C>,
 }
 
@@ -198,6 +198,7 @@ where
     where
         Self: Sized
     {
+        assert!(!input.resources_0.is_empty(), "CrossUnfoldClc::do_run: no input resources");
         let unfold_params = &self.unfold_params;
 
 
@@ -243,6 +244,8 @@ where
 
 
 pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SimpleId>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoosaError> {
+    assert!(!input.is_empty(), "unfold_and_cat: input is empty");
+
     let mut batch_0_sizes = vec![];
 
     let batch_0_tensors = input
@@ -251,24 +254,24 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SimpleId>], unfold_para
         .map(|t| {
 
 
-            let unfolded = t.t_ref().unfold(
+            let unfolded = t.t_ref().f_unfold(
                 unfold_params.dimension,
                 unfold_params.size,
                 unfold_params.step,
-            );
+            )?;
             debug!("CrossUnfoldClc::do_run: 0. t.size={:?} self.unfold_params={:?} unfolded.size()={:?}", t.size(), unfold_params, unfolded.size());
 
             batch_0_sizes.push(unfolded.size()[1]); //number of blocks
-            unfolded
+            Ok(unfolded)
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, ThoosaError>>()?;
 
     if batch_0_tensors.is_empty() {
         return Err("batch 0 is empty".into());
     }
 
 
-    let batch_0_t = Tensor::concat(batch_0_tensors.as_slice(), 1);
+    let batch_0_t = Tensor::f_concat(batch_0_tensors.as_slice(), 1)?;
     Ok((batch_0_t, batch_0_sizes))
 }
 
