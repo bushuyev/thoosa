@@ -25,7 +25,7 @@ pub trait Stage: Debug {
 pub trait AsyncStage:Stage + Debug + Send + Sync + 'static 
 where
         for <'a> Self::In<'a>: Data  + WithId + Send + Sync,
-        Self::Out: Data + CopyToDevice + WithId + Send + Sync
+        Self::Out: Data + WithId + Send + Sync
 {
 
     //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stages wins 100 GPU)

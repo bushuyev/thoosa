@@ -3393,7 +3393,7 @@ mod store_tests {
         debug!("motifs: {:?}", motifs);
 
         //7th channel
-        assert_eq!(motif_slices_444[0].motif_id, motifs[7][0].0);
+        assert_eq!(motif_slices_444[0].motif_id, motifs[7][0].0);//TODO fails randomly because of motif_id
         assert_eq!(motif_slices_1111[0].motif_id, motifs[7][1].0);
         //
         // //TODO
