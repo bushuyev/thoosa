@@ -825,7 +825,7 @@ where
     S:Debug + Clone + 'static,
     O: Select<S, Output=O> + Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
 {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, _permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
