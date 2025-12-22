@@ -554,7 +554,7 @@ where
             let find_motifs_run_config_range_or_value:FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue{
                 id: None,
                 step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-                window: RangeOrValue::Range { range: Range { start: 1000, end: 20001 }, step: Some((1000, 1)) },
+                window: RangeOrValue::Range { range: Range { start: 1000, end: 2001 }, step: Some((1000, 1)) },
                 min_tracker_step: None,
                 filter: None,
                 slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ mean: RangeOrValue::Value(0.02)}),
