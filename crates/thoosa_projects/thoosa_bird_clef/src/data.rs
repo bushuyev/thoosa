@@ -162,7 +162,7 @@ mod tests {
     use thoosa_motifs::chunks::ChunkOfSlicedTensors;
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
-    use thoosa_motifs::find::{SelectMotifsParams, find_motifs_by_euc_dist, plot_resource};
+    use thoosa_motifs::find::{SelectMotifsParams, plot_resource};
     use thoosa_shared::resource::{Resource, ResourceStore};
     use thoosa_shared::test_utils::{are_close, init_test_logging, set_panic_hook};
     use thoosa_shared::{ResourceType, ThoosaError, cdt_for_dir, recurse_files};

@@ -512,7 +512,7 @@ impl ResourceStore for SqlStore {
         let t = guard.transaction()?;
 
         let labeled_resources_sets = {
-            let mut stmt = t.prepare("SELECT l.label, rs.descr FROM resource_set_group rsg JOIN resource_set rs ON rs.group_id=rsg.id JOIN labels l ON l.id=rs.label_id WHERE rsg.descr=?")?;
+            let mut stmt = t.prepare("SELECT l.label, rs.descr FROM resource_set_group rsg JOIN resource_set rs ON rs.group_id=rsg.id JOIN labels l ON l.id=rs.label_id WHERE rsg.descr=? ORDER BY label")?;
 
             let vec = stmt
                 .query_map([group_descr], |row| {
@@ -532,9 +532,7 @@ impl ResourceStore for SqlStore {
 
         t.commit()?;
 
-        debug!(
-            "list_group_labeled_resources_sets: labeled_resources_sets={labeled_resources_sets:?}"
-        );
+        debug!("list_group_labeled_resources_sets: labeled_resources_sets={labeled_resources_sets:?}");
 
         Ok(labeled_resources_sets)
     }
@@ -1505,9 +1503,7 @@ impl Store for SqlStore {
 
                 let motif_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
-                debug!(
-                    "save_slices_groups_as_motifs_from_tmp_db: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices={slices:?} "
-                );
+                debug!("save_slices_groups_as_motifs_from_tmp_db: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices={slices:?} ");
 
                 //each match appears twice in slices but will result in single raw returned from _tmp.slice_matches, should be faster than getting slices into set on slice_matches.id (IdSlice.0)
                 let mut slices_chunks = slices.into_iter().array_chunks::<500>();
@@ -3397,7 +3393,7 @@ mod store_tests {
         debug!("motifs: {:?}", motifs);
 
         //7th channel
-        assert_eq!(motif_slices_444[0].motif_id, motifs[7][0].0);
+        assert_eq!(motif_slices_444[0].motif_id, motifs[7][0].0);//TODO fails randomly because of motif_id
         assert_eq!(motif_slices_1111[0].motif_id, motifs[7][1].0);
         //
         // //TODO

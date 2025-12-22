@@ -61,6 +61,7 @@ where
     chunk_size: usize,
     on_batch_done: Box<dyn Fn(R) -> BoxFuture<'static, R> + Sync + Send>,
     on_all_done: Box<dyn Fn(&Arc<RSV>) -> BoxFuture<'static, ()> + Sync + Send>,
+    step:u32,
     pd: PhantomData<(ResC, R, C)>,
 }
 
@@ -97,6 +98,7 @@ where
         chunk_size: usize,
         on_batch_done:OnBatchDone,
         on_all_done: OnAllDone,
+        step: u32,
     ) -> Self
     where
         ReceiverFactory: Fn(&[Arc<Resource>]) -> Arc<RSV> + Sync + Send + 'static,
@@ -112,6 +114,7 @@ where
             on_batch_done: Box::new(on_batch_done),
             on_all_done: Box::new(on_all_done),
             pd: Default::default(),
+            step
         }
     }
 }
@@ -240,11 +243,12 @@ where
                             .resources_config
                             .to_resources(&self.store)?
                             .into_iter()
+                            .filter(|r|r.length() > self.step)
                             .map(|r| Arc::new(r))
                             .collect::<Vec<_>>())
                     }).await?;
 
-        debug!("CrossLoader::run  max_batch={max_batch} resources={}",resources.len());
+        debug!("CrossLoader::run:  max_batch={max_batch} resources={resources:?}");
 
         let receiver = (self.receiver_factory)(resources.as_slice());
 
@@ -255,7 +259,7 @@ where
         let mut skip_0_i = 0;
 
         for (i_0, resource_0) in resources.iter().enumerate() {
-            info!("on i_0={i_0} resource_0={resource_0:?}");
+            info!("CrossLoader::run: on i_0={i_0} resource_0={resource_0:?}");
 
             let t_0 = Arc::clone(&self.loader)
                 .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_0.as_ref().clone())), Arc::clone(&ctx))
@@ -292,6 +296,7 @@ where
                     continue;
                 }
 
+                debug!("CrossLoader::run: t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}");
 
                 let mut cross_clc_output = DevicesWrap::with_data_array(//TODO replace with with_data!
                     [t_0_batch.clone(), t_1_batch].concat().as_slice(), //t_0_batch and t_1_batch are DataCacheWrappers
@@ -305,7 +310,7 @@ where
                             t_1_batch_resources.as_slice(),
                         );
 
-                        debug!("input={input:?}");
+                        debug!("CrossLoader::run: input={input:?}");
 
                         let mut out = Arc::clone(&self.batch_clc).do_run(&input, Arc::clone(&ctx))?;
 
@@ -666,10 +671,10 @@ mod tests {
                     .collect::<Vec<f32>>();
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
-                ThoTensor::new(
-                    Input::id(key).clone(),
+                Ok(ThoTensor::new(
+                    key.applied_id().clone(),
                     Tensor::from_slice(v.as_slice()).view((1, 10)),
-                )
+                )?)
             },
             ThoDevice::from(Device::Cpu),
         ));
@@ -713,7 +718,7 @@ mod tests {
                     ))
                 }
             },
-            20,
+            20, //TODO config
             |batch|{
                 async {batch}.boxed()
             },
@@ -723,6 +728,7 @@ mod tests {
                 }
                 .boxed()
             },
+            0,
         ));
 
         let cache_area = ctx.read().cache_area();
@@ -841,6 +847,7 @@ mod tests {
                 }
                 .boxed()
             },
+            0,
         ));
 
         let cache_area = ctx.read().cache_area();

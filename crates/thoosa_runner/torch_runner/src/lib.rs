@@ -6,7 +6,7 @@ pub mod data;
 pub mod metrics;
 #[cfg(test)]
 mod model_test;
-mod output_builders;
+pub mod output_builders;
 
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
@@ -14,6 +14,7 @@ use caching_runner::common::{DropIf, PermitsCtx};
 use caching_runner::permits::{MAX_PERMITS, NumPermits, RunnerPerm};
 // test-only imports live under cfg(test)
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_shared::ThoosaError;
 use log::debug;
 use std::fmt::Debug;
 use tch::{Kind, Tensor};
@@ -34,7 +35,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorView<'a, D, Id> {
             ..self
         }
     }
-    pub fn sum(self, k: Kind) -> ThoTensor<D, Id> {
+    pub fn sum(self, k: Kind) -> Result<ThoTensor<D, Id>, ThoosaError> {
         ThoTensor::new(self._owner.id().clone(), self.t.sum(k))
     }
 }
@@ -42,7 +43,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorView<'a, D, Id> {
 #[derive(Debug)]
 pub struct TorchPermsCtx {
     name: &'static str,
-    permits: Vec<RunnerPerm>,
+    pub permits: Vec<RunnerPerm>,//TODO pub
 }
 
 impl TorchPermsCtx {
@@ -326,7 +327,7 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
 
         debug!("Select for ThoTensor2<LoadedTensor, SimpleId>: ranges={ranges:?} sub_tensor={sub_tensor:?}");
 
-        Ok(ThoTensor::new(new_id, sub_tensor))
+        ThoTensor::new(new_id, sub_tensor)
     }
 }
 
@@ -383,7 +384,7 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
                     self.kind,
                     &ThoDevice::from(device_idx),
                 ),
-            );
+            )?;
 
             Ok(Arc::new(DevicesWrap::wrap(
                 tensor,
@@ -438,7 +439,7 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
                     Tensor::ones([dim], (kind, device))
                         .f_mul_scalar_(k)
                         .unwrap(),
-                ),
+                ).unwrap(),
                 fail_until,
                 use_matmul,
             }

@@ -1,6 +1,6 @@
 // removed unused feature gate to reduce warnings
 
-use crate::permits::{NumPermits, RunnerPerm};
+use crate::permits::{NumPermits, RunnerPerm, MAX_PERMITS};
 use ambassador::delegatable_trait;
 use futures_util::future::BoxFuture;
 use parking_lot::RwLock;
@@ -30,7 +30,7 @@ pub trait PermitsCtx: Named + Debug + Send + Sync {
     fn acquired_permits(&self) -> NumPermits;
 }
 
-pub trait RunCtx: PermitsCtx {
+pub trait RunCtx: PermitsCtx {//TODO remove PermitsCtx from RunCtx
     fn device_idx(&self) -> usize;
 
     fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
@@ -41,6 +41,10 @@ pub trait RunCtx: PermitsCtx {
     }
 
     fn cache_area(&self) -> u64;
+
+    fn branch(&mut self, new_name:&str)-> Arc<RwLock<Self>> {
+        todo!()
+    }
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -78,6 +82,7 @@ pub mod mock_run_ctx {
             fn device_idx(&self) -> usize;
             fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>;
             fn cache_area(&self) -> u64;
+            fn branch(&mut self, new_name:&str)-> Arc<RwLock<Self>>;
         }
 
     }
@@ -119,6 +124,36 @@ pub mod mock_run_ctx {
             self
         }
 
+        pub fn with_purge_gpu_caches(mut self) -> Self {
+            MockRunCtx::purge_gpu_caches_context().expect().with(always()).returning( |_| Box::pin(async { Ok(()) }));
+
+            self
+        }
+
+        pub fn with_branch(mut self, depth: u8) -> Self {
+            self.mock.expect_branch()
+                .with(always())
+                .returning(move |_| {
+                    let builder = build()
+                        .with_device_idx(1)
+                        .with_acquired_permits(100)
+                        .with_add_permits()
+                        .with_drop_permits(vec![IfNotMax])
+                        .with_cache_area(0);
+
+                    Arc::new(RwLock::new(
+                        if depth == 0 {
+                            builder.finish()
+                        } else {
+                            builder
+                            .with_branch(depth - 1)
+                            .finish()
+                        }
+                    ))
+                });
+
+            self
+        }
 
         pub fn finish(self) -> MockRunCtx {
             self.mock
@@ -138,6 +173,7 @@ pub mod mock_run_ctx {
             .with_add_permits()
             .with_drop_permits(vec![IfNotMax])
             .with_cache_area(0)
+            .with_branch(4)
             .finish()
     }
 }

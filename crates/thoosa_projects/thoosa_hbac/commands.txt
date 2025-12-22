@@ -22,13 +22,12 @@ cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logg
 cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="group:pure group 1000" --run-config-cnt="{motif_selector: {ByLabelVariance:{"_dummy":"0"}}}"
 
 
-cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  train-motifs-nets --select-motifs-run-ids=3  --run-config-cnt="{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'max_loss': '0.1', 'opt_max_evals':'3', 'opt_n_init': '3'}, 'num_layers': '3..4'}"
+cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  train-motifs-nets --select-motifs-run-ids=3  --run-config-cnt="{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'max_loss': '0.1', 'opt_max_evals':'3', 'opt_n_init': '3'}, 'num_layers': '3..4', 'step':'10'}"
 
 
 
 
-cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=DEBUG --ws-path=/home/bu/tmp/ws_test_hbac/  train-label-nets --select-motifs-run-ids=3 --train-resource-group="pure group 100" --valid-resource-group="group 1 labels/100/0-100"  --run-config-cnt="{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'max_loss': '0.1', 'opt_max_evals':'3', 'opt_n_init': '3'}, 'net': {FixedNumSlices:{'num_layers':'3', 'slices_len':'0'}}}"
-
+cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=DEBUG --ws-path=/home/bu/tmp/ws_test_hbac/  train-label-nets --select-motifs-run-id=2072 --train-resource-group="pure group 100" --valid-resource-group="group 1 labels/100/0-100"  --run-config-cnt="{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.0001', 'opt_max_evals':'10', 'opt_n_init': '3'}, 'net': {FixedNumSlices:{'num_layers':'3..5', 'slices_len':'0'}}}"
 
 cargo run --release   -- --term-logger-level=INFO --write-logger-level=DEBUG --ws-path=/home/bu/tmp/ws_test_hbac/  train-final-net \
  --train-labels-run-ids=245 --train-labels-run-ids=246 --train-labels-run-ids=247 --train-labels-run-ids=248 --train-labels-run-ids=249 --train-labels-run-ids=250 \
@@ -38,6 +37,7 @@ cargo run --release   -- --term-logger-level=INFO --write-logger-level=DEBUG --w
 cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=DEBUG  --ws-path=/home/bu/tmp/ws_test_hbac/  run-all --find-resources="group:pure group 100" --select-resources="group:pure group 200" --train-resource-group="pure group 100" --valid-resource-group="pure group 10" --run-config-cnt=""
 
 
+cargo nextest run --release --no-fail-fast --retries=0 --no-capture tasks::train_label_nets::tests::test_train_label_net_3x3 > /tmp/test.log 2>&1
 
 with debug:
 07:29:30 [INFO] run_find_motifs_on_set done, run_id=[11, 12, 13, 14, 15]
@@ -67,3 +67,7 @@ then change From<&str> for MotifsBy::from so that
 
 
 motif_id handling should not be affected. Update usage sites as needed.  Add simple test.
+
+
+refactor Arbiter (crates/thoosa_runner/caching_runner/src/permits/runner_queue.rs:16) to keep track of granted permits. Add another HashMap similar to fail_counts and put requester_id with granted permits count whenever try_acquire_many_owned succeeds.
+The values should be removed when RunnerPerm is dropped. This can be done by adding requester_id to RunnerPerm and  replacing RunnerPerm::notify:Option<Arc<Notify>> with something what can be used to send requester_id back to Arbiter from RunnerPerm::drop (one shot channel or wrapper struct keeping both Notify and requester_id)
