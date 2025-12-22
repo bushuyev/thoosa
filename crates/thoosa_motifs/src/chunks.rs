@@ -16,8 +16,6 @@ use thoosa_common::loader::SyncWrapper;
 use thoosa_common::utils::{SplitQueue, Splittable};
 use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::resource::ResourceId;
-use thoosa_shared::run_configs::Cachable;
-use thoosa_shared::run_configs::Runnable;
 
 #[derive(Debug)]
 pub struct ChunkOfSlicedTensors {

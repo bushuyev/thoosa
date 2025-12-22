@@ -386,9 +386,7 @@ impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
 }
 
 impl<DI: Dims, DO: Dims> Input for TrainStepInput<DI, DO> {
-    fn id(&self) -> &SimpleId {
-        &self.id
-    }
+
 }
 
 impl<DI: Dims, DO: Dims> WithId for TrainStepInput<DI, DO> {

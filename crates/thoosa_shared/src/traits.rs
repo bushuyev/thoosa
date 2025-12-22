@@ -126,7 +126,7 @@ impl dyn CachableIdTr {
 
 //triggers blanked impl<T: ... Named + 'static> CachableId for T
 #[automock]
-pub trait Named {
+pub trait Named {// like Type name
     fn name(&self) -> &'static str {
         "n/a"
     }

@@ -63,7 +63,7 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output, Runner, ToOrdinal};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
-use thoosa_shared::run_configs::{Cachable, RunConfig, Runnable};
+use thoosa_shared::run_configs::{RunConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
 
@@ -2608,8 +2608,7 @@ mod train_tests {
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::{CachableId, Input};
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::Runnable;
-    use thoosa_shared::run_configs::{Cachable, OptRunConfigs, RunId};
+    use thoosa_shared::run_configs::{OptRunConfigs, RunId};
     use thoosa_shared::test_utils::set_panic_hook;
     use thoosa_shared::val::Val;
     use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, pulse_in_rand, sin_v, slices_len, CopyToDevice, ThoosaError};
