@@ -522,7 +522,6 @@ mod distance_tests {
     };
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::colors_iter::DistinctColorIter;
-    use thoosa_shared::run_configs::Cachable;
     use thoosa_shared::{
         ThoosaError, comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp,
         sin_v,

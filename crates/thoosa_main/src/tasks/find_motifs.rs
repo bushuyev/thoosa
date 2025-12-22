@@ -533,7 +533,7 @@ mod tests {
         let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
                 let tensor = Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem())))?;
-                Ok(ThoTensor::new(Input::id(key).clone(), tensor)?)
+                Ok(ThoTensor::new(key.applied_id().clone(), tensor)?)
             },
             ThoDevice::from(Device::Cpu),
         ));

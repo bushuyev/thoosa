@@ -20,7 +20,7 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output, ApplicableRunCtx, Runner, ToOrdinal};
-use thoosa_shared::run_configs::{Cachable, RunConfig, RunId, Runnable};
+use thoosa_shared::run_configs::{ RunConfig, RunId};
 use thoosa_shared::traits::WithId;
 use thoosa_shared::val::Val;
 
@@ -92,9 +92,6 @@ impl WithId for FindMotifsApplicableOutput {
 
 #[async_trait]
 impl Output for FindMotifsApplicableOutput {
-    async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
-        todo!()
-    }
 }
 
 pub struct DummyRunner;

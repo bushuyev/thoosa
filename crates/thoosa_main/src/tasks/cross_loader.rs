@@ -672,7 +672,7 @@ mod tests {
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
                 Ok(ThoTensor::new(
-                    Input::id(key).clone(),
+                    key.applied_id().clone(),
                     Tensor::from_slice(v.as_slice()).view((1, 10)),
                 )?)
             },

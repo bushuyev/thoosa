@@ -60,7 +60,7 @@ use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 use thoosa_shared::applicables_runner::{Input, Runner, ToOrdinal};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
-use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId, Runnable};
+use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
 use thoosa_shared::{parse_resources, CopyToDevice, RangeOrValue};
 use thoosa_shared::data_with_extra::DataWithExtra;
@@ -268,34 +268,12 @@ where
     let tensors_path_2 = tensors_path.clone();
     let tensors_path_runner = ws.read().tensors_path().clone();
 
-    // let loader = Arc::new(RwLock::new(LoadRunner::new(
-    //     move |key: &Resource| {
-    //         let tensor = Tensor::load_multi_with_device(
-    //             FsWorkspace::resource_tensor_path(&tensors_path, key),
-    //             Cpu,
-    //         )
-    //         .map_err(|e| ThoosaError::new(e.to_string()))
-    //         .expect(format!("can't load {key:?}").as_str())
-    //         .pop()
-    //         .unwrap()
-    //         .1
-    //         .totype(Float);
-    //         if tensor.requires_grad() || tensor.retains_grad() {
-    //             warn!("tensor requires grad!");
-    //         }
-    //         debug!("key={key:?} tensor.size={:?}", tensor.size());
-    //         tensor.into()
-    //     },
-    //     loader_threads,
-    //     cli.futures_channel_bound,
-    //     2,
-    // )));
     GlobalCtx::init_devices(2);
 
     let loader_2 = Arc::new(RawTensorLoader::<RunCtx2>::new(
         move |key, _| {
             ThoTensor::new(
-                Input::id(key).clone(),
+                key.applied_id().clone(),
                 Tensor::load(tensors_path_2.join(format!(
                     "{}_{}.pt",
                     key.import_id(),
@@ -307,25 +285,6 @@ where
         },
         ThoDevice::from(Device::Cpu),
     ));
-
-    // let runner = Arc::new(ThoRunner::new(&[10, 2], move |key, device| {
-    //     debug!("loader_fn: thread={:?}", std::thread::current().name());
-    //     let tensor = Tensor::load_multi_with_device(
-    //         FsWorkspace::resource_tensor_path(&tensors_path_runner, key),
-    //         *device,
-    //     )
-    //     .map_err(|e| ThoosaError::new(e.to_string()))
-    //     .expect(format!("can't load {key:?}").as_str())
-    //     .pop()
-    //     .unwrap()
-    //     .1
-    //     .totype(Float);
-    //     if tensor.requires_grad() || tensor.retains_grad() {
-    //         warn!("tensor requires grad!");
-    //     }
-    //     debug!("key={key:?} tensor.size={:?}", tensor.size());
-    //     tensor.into()
-    // }));
 
     match &cli.command {
         Some(ImportResources(import_resources_params)) => {

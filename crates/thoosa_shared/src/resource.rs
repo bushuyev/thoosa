@@ -86,6 +86,10 @@ impl Resource {
     pub fn length(&self) -> u32 {
         self.length
     }
+
+    pub fn applied_id(&self) -> &CachableId {
+        &self.applied_id
+    }
 }
 
 
@@ -100,9 +104,6 @@ impl WithId for Resource {
 }
 
 impl Input for Resource {
-    fn id(&self) -> &CachableId {
-        &self.applied_id
-    }
 }
 
 impl From<(u32, u32, &str, u32)> for Resource {
