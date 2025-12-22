@@ -27,7 +27,7 @@ use thoosa_with_data::with_data;
 #[async_trait]
 pub trait Cached: AsyncStage
 where
-    for <'i> Self::In<'i>: Data + CopyToDevice + WithId + Send + Sync,
+    for <'i> Self::In<'i>: Data + WithId + Send + Sync,
     <Self as Stage>::Out: Data + CopyToDevice + WithId + Send + Sync + 'static
 {
     async fn cache() -> &'static DashMap<
@@ -45,7 +45,7 @@ where
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>
     where
         Self: Sized + OutId,
-        for<'a> <Self as Stage>::In<'a>: Send + Sync,
+        for<'a> <Self as Stage>::In<'a>: CopyToDevice + Send + Sync,
         <Self as Stage>::Out: Send + Sync,
         <<Self as Stage>::Out as WithId>::ID: 'static,
         <Self as Stage>::Out: 'static,
@@ -142,7 +142,7 @@ where
 #[derive(Debug)]
 pub struct DevicesWrap<O>//TODO rename to DeviceDataWrapper
 where
-    O: WithId + Data + CopyToDevice + Send + Sync,
+    O: WithId + Data + Send + Sync,
 {
     id: <O as WithId>::ID,
     //cpu_only
