@@ -273,7 +273,7 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     {
         let t_1_batch= self.batch.clone();
         let stacked_motifs = Arc::clone(&self.stacked_motifs);
-        with_data!(to_device_idx, [t_1_batch], stacked_motifs;
+        with_data!(Arc::clone(&permits_ctx), to_device_idx, [t_1_batch], stacked_motifs;
             |
              batch_v:&[&ThoTensor<ChannelsData2, SimpleId>],
              stacked_motifs:&StackedMotifsOutput
@@ -324,7 +324,7 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
         let t_1_batch= self.batch[range.clone()].to_vec();
         let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
 
-        with_data!(to_device_idx, [t_1_batch], stacked_motifs_output;
+        with_data!(Arc::clone(&permits_ctx), to_device_idx, [t_1_batch], stacked_motifs_output;
             |
              batch_v:&[&ThoTensor<ChannelsData2, SimpleId>],
              stacked_motifs_output:&StackedMotifsOutput
@@ -502,6 +502,7 @@ where
     let mut push_group = |start: usize, len: usize| {
         let s = start as i64;
         let l = len as i64;
+        debug!("fold_mask: s={s} l={l:?}");
         let chunk = full.narrow(dim as i64, s, l);
         let reduced = reduce(chunk);
         out.push(reduced);

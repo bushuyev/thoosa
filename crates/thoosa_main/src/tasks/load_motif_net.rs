@@ -34,7 +34,7 @@ pub struct LoadMotifNetInput {
 impl LoadMotifNetInput {
     pub fn new(motif_id: u32, channel:u32/*train_motif_nets_run_id: RunId*/) -> Self {
         Self {
-            id: format!("{}_{}", motif_id, channel).into(),
+            id: format!("motif_net_{}_{}", motif_id, channel).into(),
             motif_id,
             channel,
         }
@@ -138,7 +138,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        format!("Loaded_{}", input_id).into()
+        format!("LoadMotifNet_{}", input_id).into()
     }
 }
 

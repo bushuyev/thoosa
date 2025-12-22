@@ -204,7 +204,7 @@ mod tests {
             let size = ABMetrics::from(self.t_ref().size());
             let d0 = selector.range.start.dim_0..min(size.dim_0, selector.range.end.dim_0);
 
-            Ok(ThoTensor::new(self.id().clone(), self.t_ref().i((d0, ..))))
+            ThoTensor::new(self.id().clone(), self.t_ref().i((d0, ..)))
         }
     }
 
@@ -367,7 +367,7 @@ mod tests {
             let num_devices = GlobalCtx::global().device_count();
 
             Ok(Arc::new(DevicesWrap::wrap(
-                ThoTensor::new(id, x),
+                ThoTensor::new(id, x)?,
                 cache_area,
             )))
         }
@@ -754,7 +754,7 @@ mod tests {
                         Ok(correct.view([1, 1]))
                     }
                     )?
-                ))
+                )?)
         }
     }
 

@@ -80,10 +80,11 @@ polars = { version = "0", features = ["lazy", "parquet", "csv", "streaming", "po
 tokio = { version = "1", features = ["full", "test-util", "tracing"] }
 tokio-utils = "0"
 tracing = "0"
-tracing-subscriber = { version = "0", features = ["fmt", "env-filter"] }
+tracing-subscriber = { version = "0", features = ["fmt", "env-filter", "chrono"] }
 console-subscriber = "0"
 uuid = { version = "1.10", features = ["v4", "fast-rng"] }
 statrs = "0"
 proc-macro2 = {version = "1.0.103"}
+time="0"
 [profile.test]
 opt-level = 0

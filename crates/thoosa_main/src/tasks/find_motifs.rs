@@ -83,11 +83,11 @@ where
             DistsMask,
             C,
         >>
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ThoosaError> {
+        Ok(Self {
             run_config,
             cross_loader
-        }
+        })
     }
 }
 
@@ -132,7 +132,7 @@ where
         run_configs: Vec<FindMotifsRunConfig>,
         fixed_config: FixedFindMotifsConfig,
         device: ThoDevice, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
-    ) -> Self {
+    ) -> Result<Self, ThoosaError> {
         // let band_filter = Arc::new(FreqFilter::new());
         debug!("FindMotifsStage::new: fixed_config={fixed_config:?}");
 
@@ -206,10 +206,11 @@ where
                     UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
                 );
 
-                let configured_loader = config_to_stage(&loader, &run_config);
+                let configured_loader = config_to_stage(&loader, &run_config)?;
                 let run_config_clone = run_config.clone();
+                let step = cross_unfold_clc.unfold_params.step();
 
-                FindMotifsStages::new(
+                Ok(FindMotifsStages::new(
                     run_config,
                     Arc::new(CrossLoader::new(
                         configured_loader,
@@ -243,15 +244,16 @@ where
                             }
                             .boxed()
                         },
+                        step as u32,
                     )),
-                )
+                )?)
             })
-            .collect();
+            .collect::<Result<Vec<_>, ThoosaError>>()?;
 
-        Self {
+        Ok(Self {
             run_config_stages: cross_loaders,
             pd: Default::default(),
-        }
+        })
     }
 }
 
@@ -289,11 +291,13 @@ where
 
         debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
         for stage in self.run_config_stages.iter() {
-            let ctx_arc = Arc::clone(&ctx);
+            let ctx_arc = ctx.write().branch(format!("find_motifs_for_rc_{}", stage.run_config.id.unwrap_or(0)).leak());
             let input_arc = Arc::clone(&input);
             let cross_loader_arc = Arc::clone(&stage.cross_loader);
 
-            js.spawn(async move { cross_loader_arc.run(input_arc, ctx_arc).await });
+            js.spawn(async move {
+                cross_loader_arc.run(input_arc, ctx_arc).await
+            });
         }
 
         // let results =js.join_all().await;
@@ -327,7 +331,7 @@ where
 }
 
 
-pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig) -> Arc<LoaderStageChoice<L, C>>
+pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig) -> Result<Arc<LoaderStageChoice<L, C>>, ThoosaError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C>
@@ -340,14 +344,15 @@ where
         Some(filter_config) => {
             debug!("MotifLoader::run: find_motifs_run_id={:?} filter_config={filter_config:?}", find_motifs_run_config.id);
 
-            Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
+            Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::
+            new(
                 SimpleId::from("ab"),
                 Arc::clone(loader),
-                Arc::new(FreqFilter::<C>::new(filter_config)),
+                Arc::new(FreqFilter::<C>::new(filter_config)?),
             ))))
         },
     };
-    configurable_loader
+    Ok(configurable_loader)
 }
 
 
@@ -378,7 +383,7 @@ mod tests {
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::utils::{lin_t, plot_series, three_sigs_tensor, vec_f32_from};
     use thoosa_common::ws::FsWorkspace;
-    use thoosa_motifs::find::{plot_motif_slices, FixedFindMotifsConfig};
+    use thoosa_motifs::find::{FixedFindMotifsConfig};
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{DataId, SimpleId};
@@ -527,10 +532,8 @@ mod tests {
 
         let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
-                ThoTensor::new(
-                    Input::id(key).clone(),
-                    Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem()))).unwrap(),
-                )
+                let tensor = Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem())))?;
+                Ok(ThoTensor::new(key.applied_id().clone(), tensor)?)
             },
             ThoDevice::from(Device::Cpu),
         ));
@@ -567,14 +570,17 @@ mod tests {
             &store,
             true,
             |run_configs| {
-                Arc::new(FindMotifsStage::new(
-                    &ws,
-                    &store,
-                    Arc::clone(&loader),
-                    run_configs,
-                    FixedFindMotifsConfig::new(None, 2, false, None),
-                    ThoDevice::from(0),
-                ))
+                Arc::new(
+                    FindMotifsStage::new(
+                        &ws,
+                        &store,
+                        Arc::clone(&loader),
+                        run_configs,
+                        FixedFindMotifsConfig::new(None, 2, false, None),
+                        ThoDevice::from(0),
+                    )
+                    .expect("FindMotifsStage::new failed in test"),
+                )
             },
             || Arc::clone(&ctx),
         )

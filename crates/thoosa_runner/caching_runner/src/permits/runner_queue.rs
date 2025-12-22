@@ -1,9 +1,9 @@
-use crate::permits::{NumPermits, PermitSource, RunnerPerm};
+use crate::permits::{DropSignal, NumPermits, PermitSource, RunnerPerm};
 use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use log::trace;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use log::{error, info, trace, debug};
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{MyError, ThoosaError};
 use tokio::sync::{Notify, Semaphore, TryAcquireError, mpsc, oneshot};
@@ -20,25 +20,34 @@ pub struct Arbiter {
     capacity: NumPermits,
     worker: Option<JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
+    granted_counts_len: Arc<AtomicUsize>,//TODO remove?
+    device_idx: usize
 }
 
+#[derive(Debug)]
 struct Req {
     needed: NumPermits,
     reply: oneshot::Sender<Result<RunnerPerm, ThoosaError>>,
-    out_id: Arc<dyn CachableIdTr>,
+    requester_id: Arc<dyn CachableIdTr>,
 }
 
 impl Arbiter {
-    pub fn new(capacity: NumPermits) -> Self {
+    pub fn new(capacity: NumPermits, device_idx: usize) -> Self {
+        debug!("Arbiter::new: capacity={capacity} device_idx={device_idx}");
+
         let (tx, rx) = mpsc::channel::<Req>(1024);
         let sem = Arc::new(Semaphore::new(capacity as usize));
         let notify = Arc::new(Notify::new());
         let shutdown = Arc::new(AtomicBool::new(false));
+        let granted_counts_len = Arc::new(AtomicUsize::new(0));
+
         let worker = Self::spawn(
             Arc::clone(&sem),
             Arc::clone(&notify),
             Arc::clone(&shutdown),
+            Arc::clone(&granted_counts_len),
             rx,
+            device_idx,
         );
         Self {
             sem,
@@ -47,13 +56,15 @@ impl Arbiter {
             capacity,
             worker: Some(worker),
             shutdown,
+            granted_counts_len,
+            device_idx
         }
     }
 
     async fn send_acquire_rq(
         &self,
         mut needed: NumPermits,
-        out_id: Arc<dyn CachableIdTr>,
+        requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoosaError> {
         // Clamp to capacity to avoid unfulfillable requests.
         if needed as usize > self.capacity as usize {
@@ -64,20 +75,25 @@ impl Arbiter {
         let tx = self
             .tx
             .as_ref()
-            .ok_or_else(|| MyError::SomethingElse("arbiter closed".to_string()))?;
+            .ok_or_else(|| MyError::SomethingElse("acquire_rq 0".to_string()))?;
 
         tx.send(Req {
             needed,
             reply,
-            out_id,
+            requester_id: requester_id.clone(),
         })
         .await
-        .map_err(|_| MyError::SomethingElse("arbiter closed".to_string()))?;
+        .map_err(|e| MyError::SomethingElse(format!("send_acquire_rq: e={e:?}")))?;
 
-        recv.await.map_err(|_| MyError::SomethingElse("arbiter closed".to_string()))?
+        recv.await.map_err(|e| {
+            debug!("Arbiter::send_acquire_rq: e={e:?}, requester_id={requester_id:?}");
+            MyError::SomethingElse(format!("e={e:?}"))
+        })?
     }
 
     pub async fn shutdown(&mut self) {
+        debug!("Arbiter::shutdown: self.granted_counts_len={:?}", self.granted_counts_len);
+
         self.shutdown.store(true, Ordering::Release);
         self.notify.notify_waiters();
         if let Some(tx) = self.tx.take() {
@@ -92,19 +108,27 @@ impl Arbiter {
         sem: Arc<Semaphore>,
         notify: Arc<Notify>,
         shutdown: Arc<AtomicBool>,
+        granted_counts_len: Arc<AtomicUsize>,
         mut rx: mpsc::Receiver<Req>,
+        device_idx: usize,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
+            debug!("Arbiter::spawn: device_idx={device_idx}");
             let mut q: VecDeque<Req> = VecDeque::new();
 
-            // Track repeated OutOfPermits per out_id to trigger escalation.
+            // Track repeated OutOfPermits per requester_id to trigger escalation.
             let mut fail_counts: HashMap<Arc<dyn CachableIdTr>, u32> = HashMap::new();
-            // When set, only this out_id may receive permits; others get OutOfPermits immediately.
+            // Track permits granted per requester until dropped.
+            let mut granted_counts: HashMap<Arc<dyn CachableIdTr>, usize> = HashMap::new();
+            // When set, only this requester_id may receive permits; others get OutOfPermits immediately.
             let mut super_id: Option<Arc<dyn CachableIdTr>> = None;
             const SUPERTASK_FAIL_THRESHOLD: u32 = 3;
             let capacity: u32 = sem.available_permits() as u32;
+            let (drop_tx, mut drop_rx) = mpsc::unbounded_channel::<Arc<dyn CachableIdTr>>();
             loop {
                 if shutdown.load(Ordering::Acquire) {
+                    debug!("Arbiter::spawn: shutting down device_idx={device_idx}");
+
                     while let Some(Req { reply, .. }) = q.pop_front() {
                         let _ =
                             reply.send(Err(MyError::SomethingElse("arbiter closed".into()).into()));
@@ -113,84 +137,138 @@ impl Arbiter {
                 }
 
                 // Granting policy:
-                // - If a supertask context is set, reject others and only try to grant FULL capacity to it.
+                // - If a supertask context is set, reject others and only try to grant requested capacity to it.
                 // - Otherwise, strict HOL grant if fits; on sustained contention, return OutOfPermits
                 //   (increment fail count) to trigger drops/degradation. After threshold, promote to supertask.
 
-                if let Some(sc) = super_id.clone() {
-                    // First, reject all non-super requests to trigger drops.
-                    let mut i = 0;
+                match super_id.take() {
+                    Some(sc) => {
+                        debug!("Arbiter::spawn: device_idx={device_idx} sc={sc:?}");
 
-                    while i < q.len() {
-                        if !q[i].out_id.as_ref().eq(sc.as_ref()) {
-                            let Req { reply, .. } = q.remove(i).unwrap();
-                            let _ = reply.send(Err(MyError::OutOfPermits.into()));
-                        } else {
-                            i += 1;
-                        }
-                    }
-                    // Try to grant full capacity to the supertask request (if present).
-                    if let Some(pos) = q.iter().position(|r| r.out_id.as_ref().eq(sc.as_ref())) {
-                        match Arc::clone(&sem).try_acquire_many_owned(capacity) {
-                            Ok(inner) => {
-                                let Req { reply, out_id, .. } = q.remove(pos).unwrap();
-                                let _ = reply
-                                    .send(Ok(RunnerPerm::with_notify(inner, Arc::clone(&notify))));
-                                fail_counts.remove(&out_id);
-                                super_id = None;
-                            }
-                            Err(_) => {
-                                // Not enough permits yet → wait for notify
-                            }
-                        }
-                    }
-                }
+                        while let Some(rq) = q.pop_front() {
+                            if rq.requester_id.as_ref().eq(sc.as_ref()) {
+                                match Arc::clone(&sem).try_acquire_many_owned(rq.needed as u32) {
+                                    Ok(inner) => {
 
-                // Strict head-of-line: only grant from the front if it fits.
-                while super_id.is_none() {
-                    let Some(front) = q.front() else {
-                        break;
-                    };
-                    match Arc::clone(&sem).try_acquire_many_owned(front.needed as u32) {
-                        Ok(inner) => {
-                            let Req {
-                                needed: _,
-                                reply,
-                                out_id,
-                            } = q.pop_front().unwrap();
-                            let _ =
-                                reply.send(Ok(RunnerPerm::with_notify(inner, Arc::clone(&notify))));
-                            // Success → reset failure count for this context
-                            fail_counts.remove(&out_id);
-                            // loop to try the new head
-                        }
-                        Err(TryAcquireError::NoPermits) => {
-                            if q.len() >= 2 && front.needed > 1 {
-                                // Pop and fail the head to trigger drop/degradation.
-                                let Req { reply, out_id, .. } = q.pop_front().unwrap();
-                                let _ = reply.send(Err(MyError::OutOfPermits.into()));
-                                let c = fail_counts.entry(out_id.clone()).or_insert(0);
-                                *c += 1;
-                                if *c >= SUPERTASK_FAIL_THRESHOLD {
-                                    super_id = Some(out_id);
+                                        granted_counts.insert(rq.requester_id.clone(), inner.num_permits());
+                                        granted_counts_len.store(granted_counts.len(), Ordering::Release);
+                                        let perm = RunnerPerm::with_drop_signal(
+                                            inner,
+                                            DropSignal::new(
+                                                Arc::clone(&notify),
+                                                drop_tx.clone(),
+                                                Arc::clone(&rq.requester_id),
+                                            ),
+                                        );
+                                        debug!("Arbiter::spawn: sending super Ok reply to {:?}", rq.requester_id);
+                                        let _ = rq.reply.send(Ok(perm));
+                                        fail_counts.remove(&rq.requester_id);
+                                        super_id = None;
+                                    }
+                                    Err(e) => {
+                                        super_id = Some(Arc::clone(&sc));
+                                        debug!("Arbiter::spawn: e={e:?}");
+                                        info!("Not enough permits yet → wait for notify. device_idx={device_idx} super_id={super_id:?} q={q:?} granted_counts={granted_counts:?} capacity={capacity} sem.available_permits={}", sem.available_permits());
+                                        // Not enough permits yet → wait for notify
+                                    }
                                 }
                             } else {
-                                break;
+                                debug!("Arbiter::spawn: sending super OutOfPermits reply to {:?}", rq.requester_id);
+                                match rq.reply.send(Err(MyError::OutOfPermits.into())){
+                                    Ok(_) => {
+                                        trace!("");
+                                    }
+                                    Err(e) => {
+                                        error!("Arbiter::spawn: e={e:?} when sending response")
+                                    }
+                                };
                             }
                         }
-                        Err(_) => {
-                            let Req { reply, .. } = q.pop_front().unwrap();
-                            let _ = reply
-                                .send(
-                                    Err(MyError::SomethingElse("semaphore closed".into()).into()),
-                                );
-                        }
                     }
+                    None => {
+                        while super_id.is_none() {
+                            let Some(front) = q.front() else {
+                                break;
+                            };
+                            match Arc::clone(&sem).try_acquire_many_owned(front.needed as u32) {
+                                Ok(inner) => {
+                                    debug!("Arbiter::spawn: device_idx={device_idx} acquired {}", front.needed);
+
+                                    let Req {
+                                        needed: _,
+                                        reply,
+                                        requester_id,
+                                    } = q.pop_front().unwrap();
+
+                                    granted_counts.insert(requester_id.clone(), inner.num_permits());
+
+                                    granted_counts_len.store(granted_counts.len(), Ordering::Release);
+
+                                    debug!("Arbiter::spawn: sending Ok reply to {:?}", requester_id);
+                                    let _ = reply.send(Ok(RunnerPerm::with_drop_signal(
+                                        inner,
+                                        DropSignal::new(
+                                            Arc::clone(&notify),
+                                            drop_tx.clone(),
+                                            Arc::clone(&requester_id),
+                                        ),
+                                    )));
+                                    // Success → reset failure count for this context
+                                    fail_counts.remove(&requester_id);
+                                    // loop to try the new head
+                                }
+                                Err(TryAcquireError::NoPermits) => {
+                                    debug!("Arbiter::spawn: device_idx={device_idx} TryAcquireError::NoPermits: q.len={} front.needed={}", q.len(), front.needed);
+                                    if q.len() >= 2 && front.needed > 1 {
+                                        // Pop and fail the head to trigger drop/degradation.
+                                        let Req { reply, requester_id, .. } = q.pop_front().unwrap();
+                                        debug!("Arbiter::spawn: sending OutOfPermits reply to {:?}", requester_id);
+
+                                        let _ = reply.send(Err(MyError::OutOfPermits.into()));
+                                        let c = fail_counts.entry(requester_id.clone()).or_insert(0);
+                                        *c += 1;
+                                        if *c >= SUPERTASK_FAIL_THRESHOLD {
+                                            super_id = Some(requester_id);
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    debug!("Arbiter::spawn: device_idx={device_idx} got e={e:?}");
+
+                                    let Req { reply, .. } = q.pop_front().unwrap();
+                                    let _ = reply
+                                        .send(
+                                            Err(MyError::SomethingElse("semaphore closed".into()).into()),
+                                        );
+                                }
+                            }
+                        }
+
+                    }
+
                 }
+
 
                 tokio::select! {
                     Some(req) = rx.recv() => {
-                        q.push_back(req);
+                        'done: {
+                            debug!("Arbiter::spawn loop: req={req:?}");
+                            for mut rq in &mut q {
+                                if rq.requester_id.eq(&req.requester_id) {
+                                    debug!("Arbiter::spawn loop: rq.requester_id={:?} is in the loop ", rq.requester_id);
+                                    rq.needed = req.needed;
+                                    req.reply.send(Err(MyError::OutOfPermits.into())).expect("send back failed");
+                                    break 'done;
+                                }
+                            }
+                            q.push_back(req);
+                        }
+                    }
+                    Some(dropped) = drop_rx.recv() => {
+                        granted_counts.remove(&dropped);
+                        granted_counts_len.store(granted_counts.len(), Ordering::Release);
                     }
                     _ = notify.notified() => {
                         // someone dropped a permit → try to serve head again
@@ -202,24 +280,33 @@ impl Arbiter {
 
                 // If there is a supertask pending, try to serve it with full capacity now.
                 if let Some(sc) = super_id.clone() {
-                    if let Some(pos) = q.iter().position(|r| r.out_id.as_ref().eq(sc.as_ref())) {
+                    if let Some(pos) = q.iter().position(|r| r.requester_id.as_ref().eq(sc.as_ref())) {
 
                         match Arc::clone(&sem).try_acquire_many_owned(capacity) {
                             Ok(inner) => {
-                                let Req { reply, out_id, .. } = q.remove(pos).unwrap();
-                                let _ = reply
-                                    .send(Ok(RunnerPerm::with_notify(inner, Arc::clone(&notify))));
-                                fail_counts.remove(&out_id);
+                                let Req { reply, requester_id, .. } = q.remove(pos).unwrap();
+                                granted_counts.insert(requester_id.clone(), inner.num_permits());
+                                granted_counts_len.store(granted_counts.len(), Ordering::Release);
+                                let _ = reply.send(Ok(RunnerPerm::with_drop_signal(
+                                    inner,
+                                    DropSignal::new(
+                                        Arc::clone(&notify),
+                                        drop_tx.clone(),
+                                        Arc::clone(&requester_id),
+                                    ),
+                                )));
+                                fail_counts.remove(&requester_id);
                                 super_id = None;
                             }
                             Err(e) => {
                                 /* not enough yet → wait for next notify */
-                                trace!("Arbiter::spawn: e={e:?}");
+                                debug!("Arbiter::spawn: e={e:?}");
                             }
                         }
                     }
                 }
             }
+            debug!("Arbiter::spawn: after loop");
         })
     }
 }
@@ -254,9 +341,9 @@ impl PermitSource for Arbiter {
     async fn acquire(
         &self,
         n: NumPermits,
-        out_id: Arc<dyn CachableIdTr>,
+        requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoosaError> {
-        self.send_acquire_rq(n, out_id).await
+        self.send_acquire_rq(n, requester_id).await
     }
 }
 
@@ -302,7 +389,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_fifo_arbiter() -> Result<(), ()> {
-        let arb = Arc::new(Arbiter::new(100));
+        let arb = Arc::new(Arbiter::new(100, 0));
 
         let tasks = [
             SomeTask::new(0, 80, 20),
@@ -360,7 +447,7 @@ mod tests {
     async fn graceful_shutdown_closes_waiters() {
         use tokio::time::{Duration, sleep};
 
-        let arb = Arbiter::new(1);
+        let arb = Arbiter::new(1, 0);
         // Hold the only permit so next acquire waits
         let permit = arb
             .send_acquire_rq(1, Arc::new(SimpleId::from("a")) as Arc<dyn CachableIdTr>)
@@ -375,7 +462,7 @@ mod tests {
             .send(Req {
                 needed: 1,
                 reply,
-                out_id: Arc::new(SimpleId::from("b")) as Arc<dyn CachableIdTr>,
+                requester_id: Arc::new(SimpleId::from("b")) as Arc<dyn CachableIdTr>,
             })
             .await
             .unwrap();
@@ -398,8 +485,27 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn granted_counts_are_cleared_on_drop() {
+        use tokio::time::{Duration, sleep};
+
+        let arb = Arbiter::new(2, 0);
+        let requester_id = Arc::new(SimpleId::from("granted-tracking")) as Arc<dyn CachableIdTr>;
+
+        let permit = arb
+            .send_acquire_rq(1, Arc::clone(&requester_id))
+            .await
+            .unwrap();
+        assert_eq!(arb.granted_counts_len.load(Ordering::SeqCst), 1);
+
+        drop(permit);
+        sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(arb.granted_counts_len.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn send_after_close_returns_error() {
-        let mut arb = Arbiter::new(1);
+        let mut arb = Arbiter::new(1, 0);
         drop(arb.tx.take());
         let res = arb
             .send_acquire_rq(1, Arc::new(SimpleId::from("c")) as Arc<dyn CachableIdTr>)
