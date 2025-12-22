@@ -1503,9 +1503,7 @@ impl Store for SqlStore {
 
                 let motif_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
-                debug!(
-                    "save_slices_groups_as_motifs_from_tmp_db: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices={slices:?} "
-                );
+                debug!("save_slices_groups_as_motifs_from_tmp_db: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices={slices:?} ");
 
                 //each match appears twice in slices but will result in single raw returned from _tmp.slice_matches, should be faster than getting slices into set on slice_matches.id (IdSlice.0)
                 let mut slices_chunks = slices.into_iter().array_chunks::<500>();
