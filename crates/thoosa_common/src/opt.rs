@@ -497,51 +497,6 @@ mod opt_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_nll_bfgs() -> Result<(), ThoosaError> {
-        // X_train=[[-4.]
-        //     [-3.]
-        //     [-2.]
-        //     [-1.]
-        //     [ 0.]]
-
-        let x_train = Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1));
-
-        let y_train = Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.])
-            .view((-1, 1));
-
-        debug!("x_train={:?}", x_train.size());
-
-
-        let mut bfgs = crate::bfgs::BFGS::new(|theta: &mut Tensor| {
-            theta.zero_grad();
-            super::rbf_nll(&x_train, &y_train, &theta, 0.1_f64)
-                .expect("nll")
-                .to_device(Cpu)
-                .set_requires_grad(true)
-        });
-
-        // let theta = Tensor::from_slice(&[20., 20.]).totype(Float).set_requires_grad(true);
-        let theta = Tensor::from_slice(&[0.0, 0.74])
-            .totype(Float)
-            .set_requires_grad(true);
-
-        bfgs.opt(
-            theta.shallow_clone(),
-            Some(
-                crate::bfgs::BFGSParams::default()
-                    .with_lr(1.0)
-                    .with_max_iter(20)
-                    .with_with_wolf_line_search(true),
-            ),
-        );
-
-        // debug!("opt: {:?} {:?}", theta.double_value(&[0]), theta.double_value(&[1]));
-        debug!("opt: {:?}", theta.double_value(&[0]));
-
-        Ok(())
-    }
-
     //stack if first point is min
     #[test]
     fn test_opt_1d_with_ei() -> Result<(), ThoosaError> {
@@ -640,8 +595,6 @@ mod opt_tests {
     fn test_opt_1d() -> Result<(), ThoosaError> {
         let n = 100i64;
 
-        // let sig =  comp_sin_k_v(N, vec![6., 3., 2.], 0.5);
-        // let sig =  comp_sin(N).collect::<Vec<f32>>();
         let x = (0..n)
             .map(|i| -std::f32::consts::PI + (i as f32 / n as f32) * 2. * std::f32::consts::PI)
             .into_iter()
@@ -651,8 +604,6 @@ mod opt_tests {
         let y_train_full = Tensor::stack(
             &[
                 x_t.sin().multiply_scalar(10).view((-1, 1)).totype(Float),
-                // X.f_add_scalar(std::f64::consts::PI/4.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float),
-                // X.f_add_scalar(std::f64::consts::PI/2.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float)
             ],
             0,
         )
@@ -713,12 +664,8 @@ mod opt_tests {
 
         let l_sigma = l_sigma.state().get_best_param().expect("best_param");
 
-        debug!(
-            "l_sigma={:?} - {} / {} ",
-            l_sigma,
-            l_sigma.i(0).double_value(&[]),
-            l_sigma.i(1).double_value(&[])
-        );
+        debug!("l_sigma={:?} - {} / {} ",l_sigma,l_sigma.i(0).double_value(&[]),l_sigma.i(1).double_value(&[]));
+
         let nll_opt = rbf_nll(&x_moved_eval, &y_moved_eval, &l_sigma, 1e-8)?
             .double_value(&[]);
         assert!(
@@ -831,12 +778,10 @@ mod opt_tests {
         sig_chol
     }
 
-    // #[test]
+    #[test]
     fn test_opt_2d() {
         let n = 1000i64;
         let min_max = 100.; // std::f32::consts::PI;
-        // let sig =  comp_sin_k_v(N, vec![6., 3., 2.], 0.5);
-        // let sig =  comp_sin(N).collect::<Vec<f32>>();
         let x_01 = (0..n)
             .map(|i| {
                 (
@@ -846,7 +791,6 @@ mod opt_tests {
             })
             .collect::<Vec<(f32, f32)>>();
 
-        // let y = x_01.iter().map(|x_01| (x_01.0 *  x_01.1).cos()).collect::<Vec<f32>>();
         let y = x_01
             .iter()
             .map(|x_01| x_01.0.powi(2) + x_01.1.powi(2))
@@ -862,26 +806,17 @@ mod opt_tests {
                 .as_slice(),
         )
         .view((-1, 2));
-        print!("X={:?}", x.size());
-        // X.print();
 
         let y_train_full = Tensor::from_slice(y.as_slice()).view((1, -1));
-        print!("y_train_full={:?}", y_train_full.size());
-        // y_train_full.print();
 
         let train_indexes = (0..n).step_by(10).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
         let x_train = x.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
 
-        debug!(
-            "x_train.size()={:?}, y_train.size()={:?}",
-            x_train.size(),
-            y_train.size()
-        );
+        debug!("x_train.size()={:?}, y_train.size()={:?}",x_train.size(),y_train.size());
 
-        // let (mu_s, cov_s) = super::posterior(&X, &x_train, &y_train, 1., 1., 1e-8);
-        // debug!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
+
         let Ok((mu_s, cov_s)) = super::posterior(
             &x,
             &x_train,
@@ -892,13 +827,7 @@ mod opt_tests {
         ) else {
             panic!()
         };
-        debug!(
-            "2. mu_s.size()={:?}, cov_s.size()={:?}",
-            mu_s.size(),
-            cov_s.size()
-        );
-        // let cov_s = cov_s.round_decimals(2);
-        // cov_s.print();
+        debug!("2. mu_s.size()={:?}, cov_s.size()={:?}",mu_s.size(),cov_s.size());
 
         let norm = Normal::new(0., 1.).unwrap();
         let rng = rand::rng();
@@ -918,7 +847,7 @@ mod opt_tests {
         let sig_chol = (&mu_s + sig_t_with_cov).transpose(0, 1);
         debug!("sig_chol.size={:?}", sig_chol.size());
 
-        plot_series(
+/*        plot_series(
             vec![
                 (
                     format!("train 0"),
@@ -972,57 +901,8 @@ mod opt_tests {
             "EEG",
             (2000, 500),
             &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str(),
-        )
-        .unwrap();
+        ) .unwrap();
+*/
     }
 
-    // #[test]
-    #[allow(dead_code)]
-    fn test_opt() {
-        let _id_series: Vec<String> = vec!["1111".into(), "2222".into(), "3333".into()];
-        let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
-        debug!("store_path={}", store_path);
-
-        let pulse = pulse_v(50., 10., 100, 20.);
-        let n = 1000;
-
-        let sig_0 = join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(1000));
-        let sig_1 = join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));
-        let sig_2 = join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
-
-        let x = lin_t(n);
-
-        plot_series(
-            vec![
-                (
-                    format!("Sig0"),
-                    RED,
-                    vec_f32_from(&x)
-                        .into_iter()
-                        .zip(sig_0.clone())
-                        .collect::<Vec<(f32, f32)>>(),
-                ),
-                (
-                    format!("Sig1"),
-                    GREEN,
-                    vec_f32_from(&x)
-                        .into_iter()
-                        .zip(sig_1.clone())
-                        .collect::<Vec<(f32, f32)>>(),
-                ),
-                (
-                    format!("Sig2"),
-                    BLACK,
-                    vec_f32_from(&x)
-                        .into_iter()
-                        .zip(sig_2.clone())
-                        .collect::<Vec<(f32, f32)>>(),
-                ),
-            ],
-            "EEG",
-            (1000, 500),
-            &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str(),
-        )
-        .unwrap();
-    }
 }
