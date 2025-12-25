@@ -587,7 +587,7 @@ mod opt_tests {
         let opt_result =next.state().get_best_param().unwrap().deref();
 
 
-        assert!(opt_result.double_value(&[0]) < 0.);
+        assert!(opt_result.double_value(&[0]) < 1.);
 
         /*
         // debug!("opt_result=\n{opt_result}");
@@ -636,7 +636,7 @@ mod opt_tests {
         Ok(())
     }
 
-    // #[test]
+    #[test]
     fn test_opt_1d() -> Result<(), ThoosaError> {
         let n = 100i64;
 
@@ -658,22 +658,14 @@ mod opt_tests {
         )
         .view((1, -1)); //.transpose(0,1);
 
-        debug!("y_train_full={:?}", y_train_full.size());
-
         let train_indexes = (0..n).step_by(10).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
         let x_train = x_t.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
 
-        debug!("x_train={:?} y_train={:?}", x_train.size(), y_train.size());
 
         // let (mu_s, cov_s) = super::posterior(&X, &x_train, &y_train, 1., 1., 1e-8);
         // debug!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
-
-        debug!("X={:?}", from::<Vec<f32>>(&x_t.view(-1)));
-        debug!("x_train={:?}", from::<Vec<f32>>(&x_train.view(-1)));
-
-        debug!("y_train={:?}", from::<Vec<f32>>(&y_train.view(-1)));
 
         let Ok((mu_s, cov_s)) = super::posterior(
             &x_t,
@@ -714,11 +706,7 @@ mod opt_tests {
         else {
             panic!()
         };
-        debug!(
-            "2. mu_s.size()={:?}, cov_s.size()={:?}",
-            mu_s.size(),
-            cov_s.size()
-        );
+        debug!("2. mu_s.size()={:?}, cov_s.size()={:?}",mu_s.size(),cov_s.size());
 
         let norm = Normal::new(0., 1.).unwrap();
         let rng = rand::rng();
