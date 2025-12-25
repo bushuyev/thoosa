@@ -782,6 +782,7 @@ mod opt_tests {
     fn test_opt_2d() {
         let n = 1000i64;
         let min_max = 100.; // std::f32::consts::PI;
+        // Sample a 2D diagonal sweep so x0 increases while x1 decreases.
         let x_01 = (0..n)
             .map(|i| {
                 (
@@ -806,13 +807,19 @@ mod opt_tests {
                 .as_slice(),
         )
         .view((-1, 2));
+        assert_eq!(vec![n, 2], x.size());
 
         let y_train_full = Tensor::from_slice(y.as_slice()).view((1, -1));
+        assert_eq!(vec![1, n], y_train_full.size());
 
+        // Fit on a sparse subset and validate interpolation on training points.
         let train_indexes = (0..n).step_by(10).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
         let x_train = x.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
+        let train_len = train_indexes.len() as i64;
+        assert_eq!(vec![train_len, 2], x_train.size());
+        assert_eq!(vec![1, train_len], y_train.size());
 
         debug!("x_train.size()={:?}, y_train.size()={:?}",x_train.size(),y_train.size());
 
@@ -828,14 +835,29 @@ mod opt_tests {
             panic!()
         };
         debug!("2. mu_s.size()={:?}, cov_s.size()={:?}",mu_s.size(),cov_s.size());
+        assert_eq!(vec![n, 1], mu_s.size());
+        assert_eq!(vec![n, n], cov_s.size());
+
+        let mu_train = mu_s.i(train_indexes);
+        let y_train_t = y_train.transpose(0, 1);
+        let abs_err = (mu_train - &y_train_t).abs().max().double_value(&[]);
+        let max_y = y_train_t.abs().max().double_value(&[]);
+        let rel_err = abs_err / max_y.max(1.0);
+        assert!(
+            rel_err < 1e-4,
+            "posterior should interpolate training data, rel_err={rel_err} abs_err={abs_err}"
+        );
 
         let norm = Normal::new(0., 1.).unwrap();
         let rng = rand::rng();
+        // Draw a few samples to ensure covariance application preserves expected shapes.
         let sig_t = sig_3_norm(norm, rng, n).transpose(0, 1);
         debug!("sig_t.size={:?}", sig_t.size());
+        assert_eq!(vec![n, 3], sig_t.size());
 
         let chol_or_cov = super::cholesky_with_jitter(&cov_s).unwrap();
         debug!("2. chol_or_cov={:?}", chol_or_cov.size());
+        assert_eq!(vec![n, n], chol_or_cov.size());
 
         let sig_t_with_cov = chol_or_cov.matmul(&sig_t);
         debug!(
@@ -843,9 +865,11 @@ mod opt_tests {
             mu_s.size(),
             sig_t_with_cov.size()
         );
+        assert_eq!(vec![n, 3], sig_t_with_cov.size());
 
         let sig_chol = (&mu_s + sig_t_with_cov).transpose(0, 1);
         debug!("sig_chol.size={:?}", sig_chol.size());
+        assert_eq!(vec![3, n], sig_chol.size());
 
 /*        plot_series(
             vec![
