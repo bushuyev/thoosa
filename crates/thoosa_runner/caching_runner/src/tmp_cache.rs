@@ -13,7 +13,7 @@ use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Data, WithId};
 use thoosa_shared::CopyToDevice;
-use crate::common::cachable::DevicesWrap;
+use crate::common::cachable::{DevicesWrapCopyMode, DevicesWrap};
 use crate::global_ctx::GlobalCtx;
 use crate::purge::FuturesRunnerMapPurger;
 
@@ -23,14 +23,20 @@ use thoosa_shared::traits::SimpleId;
 
 ///To keep tensors in async functions in between async calls so that data can be dumped to CPU when competing task wins 100 Permits and requests others to be dumped.
 #[derive(Debug)]
-pub struct TmpCached<D:Data +CopyToDevice + WithId  + Output+ Debug + Send + Sync + 'static> {
+pub struct TmpCached<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static>
+where
+    <D as Data>::M: DevicesWrapCopyMode<D>,
+{
     name: &'static str,
     cache_area:u64,
     map: Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>
 
 }
 
-impl<D: Data + CopyToDevice +WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
+impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D>
+where
+    <D as Data>::M: DevicesWrapCopyMode<D>,
+{
     pub fn insert(&self, value: D) {
         let cache_area = self.cache_area;
         self.map.insert(
@@ -56,7 +62,8 @@ impl<D: Data + CopyToDevice +WithId + Output + Debug + Send + Sync + 'static> Tm
                     error!("can't take {key:?} from cache: count={count}");
                 }
                 Some(val) => {
-                    val.load_from_any_device(device).await?;
+                    //TODO check: load_from_any_device_ is called from take_data so load_from_any_device should not be needed here
+                    // val.load_from_any_device(device).await?;
 
                     res.push(
                         val.take_data(device).await.expect(&format!("can't take from cache for {key:?}"))
@@ -124,6 +131,7 @@ impl<D: Data + CopyToDevice +WithId + Output + Debug + Send + Sync + 'static> Tm
 impl <D> FuturesRunnerMapPurger for DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>
 where
     D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static,
+    <D as Data>::M: DevicesWrapCopyMode<D>,
 {
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize) -> Result<(), ThoosaError> {
         debug!("TmpCached::purge_gpu: ids_to_keep={ids_to_keep:?} device_idx={device_idx}");
@@ -166,7 +174,11 @@ where
     }
 }
 
-impl <D:Data + CopyToDevice + WithId+ Output+ Debug+ Send + Sync + 'static> Drop for TmpCached<D> {
+impl<D> Drop for TmpCached<D>
+where
+    D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static,
+    <D as Data>::M: DevicesWrapCopyMode<D>,
+{
     fn drop(&mut self) {
         tokio::task::block_in_place(move || {
             Handle::current().block_on(async move {
@@ -185,6 +197,7 @@ mod tests {
     use thoosa_dummy_data_derive::DummyData;
     use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::applicables_runner::Output;
+    use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
     use thoosa_shared::traits::{Data, SimpleId, WithId};
     use crate::global_ctx;
     // use crate::common::Data;
@@ -205,10 +218,10 @@ mod tests {
             }
         }
 
-        impl Output for Foo {}
+        impl Output for Foo {  }
 
         let foo = Foo(SimpleId::from("foo"));
-        let cloned = foo.copy_to_device(0).await?;
+        let cloned = foo.clone();
 
         assert_eq!(foo.0, cloned.0);
         Ok(())
@@ -226,13 +239,40 @@ mod tests {
 
         GlobalCtx::init_devices(2);
 
-        #[derive(Debug, Clone, DummyData)]
-        #[dummy_data(clone)]
+        #[derive(Debug, Clone)]
         struct TestData {
             id:SimpleId,
             device:usize
         }
 
+        impl CopyToDevice for TestData {
+            fn copy_to_device<'life0, 'async_trait>(&'life0 self, dst_device: usize) -> Pin<Box<dyn Future<Output=Result<Self, ThoosaError>> + Send + 'async_trait>>
+            where
+                Self: Sized,
+                'life0: 'async_trait,
+                Self: 'async_trait
+            {
+                Box::pin(async move {
+                    Ok(TestData {
+                        id: self.id.clone(),
+                        device: dst_device
+                    })
+                })
+            }
+        }
+
+        impl Data for TestData {
+            type Metrics = ();
+            type M = CpuOrGpu<Self>;
+
+            fn size(&self) -> Self::Metrics {
+                ()
+            }
+
+            fn device(&self) -> usize {
+                self.device
+            }
+        }
 
         impl WithId for TestData {
             type ID = SimpleId;
@@ -241,7 +281,7 @@ mod tests {
                 &self.id
             }
         }
-        impl Output for TestData {}
+        impl Output for TestData {  }
 
         impl TestData {
             pub fn new(id: SimpleId, device:usize) -> Self {

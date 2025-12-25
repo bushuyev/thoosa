@@ -17,7 +17,7 @@ use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, Select, SimpleId, WithId};
 use torch_sys::IntList;
 use log::{debug, trace};
-
+use thoosa_shared::copy_mode::CpuOrGpu;
 
 impl<D: Dims, Id: Named + Debug + Clone> Dimensional for ThoTensor<D, Id> {
     type Dimensions = D;
@@ -26,8 +26,7 @@ impl<D: Dims, Id: Named + Debug + Clone> Dimensional for ThoTensor<D, Id> {
 //TODO remove, it should be in DevicesWrap between async
 unsafe impl<D: Dims, Id: Named + Debug + Clone> Sync for ThoTensor<D, Id> {}
 
-impl<D: Dims> Input for ThoTensor<D, CachableId> {
-}
+impl<D: Dims> Input for ThoTensor<D, CachableId> {}
 
 impl<D: Dims> WithId for &ThoTensor<D, CachableId> {
     type ID = CachableId;
@@ -37,8 +36,8 @@ impl<D: Dims> WithId for &ThoTensor<D, CachableId> {
     }
 }
 
-impl<D: Dims> Input for &ThoTensor<D, CachableId> {
-}
+//TODO remove?
+impl<D: Dims> Input for &ThoTensor<D, CachableId> {}
 
 impl<D: Dims> AsRef<Tensor> for ThoTensor<D, CachableId> {
     fn as_ref(&self) -> &Tensor {
@@ -181,13 +180,16 @@ impl<D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
 
 
 
-impl <D:Dims, Id:Named  + Debug + Clone + Send> Adjustable for ThoTensor<D, Id> {}
+impl <D:Dims, Id:Named  + Debug + Clone + Send + Sync> Adjustable for ThoTensor<D, Id> {}
 
-impl<D: Dims, Id: Named + Debug + Clone> Data for ThoTensor<D, Id> {
+impl<D, Id> Data for ThoTensor<D, Id>
+where
+    D: Dims,
+    Id: Named + Debug + Clone + Send + Sync
+{
     type Metrics = D::Metrics;
+    type M = CpuOrGpu<ThoTensor<D, Id>>;
 
-
-    //TODO rename to metrics
     fn size(&self) -> Self::Metrics {
         self.t
             .size()
@@ -195,7 +197,6 @@ impl<D: Dims, Id: Named + Debug + Clone> Data for ThoTensor<D, Id> {
             .map_err(|e| ThoosaError::new("".to_string()))
             .unwrap() //TODO
     }
-
 
     fn device(&self) -> usize {
         ThoDevice::from(self.t.device()).ordinal()
@@ -375,13 +376,13 @@ where
 #[async_trait]
 impl<D: Dims, Id> CopyToDevice for ThoTensor<D, Id>
 where
-    Id: Named + Debug + Clone, //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
+    Id: Named + Debug + Clone + Send + Sync , //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
 {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
         debug!("CopyToDevice for ThoTensor: self.id={:?} self.t.size={:?} self.t.device={:?} dst_device={dst_device}", self.id, self.t.size(), self.t.device());
         //should not copy device to itself
         assert!(!ThoDevice::from(dst_device).eq(&ThoDevice::from(self.t.device())));
-
+        let id = self.id.clone();
         let copy =
             if tensor_mem_size(self.t.kind(), &self.t.size()) < CopyCtx::instance().buf_size() {
                 self.t.f_to_device(ThoDevice::from(dst_device).deref().clone())?
@@ -396,16 +397,17 @@ where
                     ).await?
             };
 
-        trace!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
+        // trace!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
 
-        Ok(ThoTensor::new(self.id.clone(), copy)?)
+
+        Ok(ThoTensor::new(id, copy)?)
     }
 }
 
-impl<D: Dims, Id> Output for ThoTensor<D, Id> where
-    Id: Named + Debug + Clone + std::fmt::Debug + Send + Sync + Eq + std::hash::Hash + 'static
-{
-}
+impl<D: Dims, Id> Output for ThoTensor<D, Id>
+where
+    Id: Named + Debug + Clone + Debug + Send + Sync + Eq + std::hash::Hash + 'static
+{}
 
 
 pub struct ThoTensorMut2<'a, D: Dims, Id: Named + Debug + Clone> {

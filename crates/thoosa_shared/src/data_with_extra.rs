@@ -1,19 +1,29 @@
 use std::fmt::Debug;
+use std::sync::Arc;
 use async_trait::async_trait;
 use thoosa_shared::traits::Adjustable;
 use crate::applicables_runner::{Input, Output};
 use crate::{CopyToDevice, ThoosaError};
+use crate::copy_mode::CpuOrGpu;
 use crate::traits::{Data, DataId, Select, WithId};
 
 #[derive(Debug)]
-pub struct DataWithExtra<D:Data+CopyToDevice+WithId, E:Clone+Debug> {
+pub struct DataWithExtra<D, E>
+where
+    D:Data+CopyToDevice+WithId,
+    E:Debug + Send + Sync,
+{
     data: D,
-    extra: E,
+    extra: Arc<E>,
 }
 
-impl<D:Data+CopyToDevice+WithId, E:Clone+Debug> DataWithExtra<D, E> {
+impl<D, E> DataWithExtra<D, E>
+where
+    D: Data + CopyToDevice + WithId,
+    E:Debug + Send + Sync,
+{
     pub fn new(data: D, extra: E) -> Self {
-        Self { data, extra }
+        Self { data, extra:Arc::new(extra) }
     }
 
     pub fn data(&self) -> &D {
@@ -26,17 +36,26 @@ impl<D:Data+CopyToDevice+WithId, E:Clone+Debug> DataWithExtra<D, E> {
 }
 
 #[async_trait]
-impl <D:Data+CopyToDevice+WithId + Sync, E:Clone+Debug+Sync> CopyToDevice for DataWithExtra<D, E> {
+impl <D:, E> CopyToDevice for DataWithExtra<D, E>
+where
+    D: Data + CopyToDevice + WithId + Sync,
+    E: Debug + Send + Sync,
+{
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError>{
         Ok(DataWithExtra {
             data: self.data.copy_to_device(dst_device).await?,
-            extra: self.extra.clone(),
+            extra: Arc::clone(&self.extra),
         })
     }
 }
 
-impl <D:Data+CopyToDevice+WithId+Sync, E:Clone+Debug+Sync> Data for DataWithExtra<D, E> {
+impl <D, E> Data for DataWithExtra<D, E>
+where
+    D: Data + CopyToDevice + WithId + Sync,
+    E:Debug + Send + Sync,
+{
     type Metrics = D::Metrics;
+    type M = CpuOrGpu<Self>;
 
     fn size(&self) -> Self::Metrics {
         self.data.size()
@@ -48,20 +67,36 @@ impl <D:Data+CopyToDevice+WithId+Sync, E:Clone+Debug+Sync> Data for DataWithExtr
 }
 
 
-impl <D:Data+CopyToDevice+WithId, E:Clone+Debug> Input for DataWithExtra<D, E> {}
-impl <D:Data+CopyToDevice+WithId, E:Clone+Debug> WithId for DataWithExtra<D, E> {
+impl <D, E> Input for DataWithExtra<D, E>
+where
+    D: Data + CopyToDevice + WithId + Sync,
+    E:Debug + Send + Sync,
+{
+
+}
+impl <D, E> WithId for DataWithExtra<D, E>
+where
+    D: Data + CopyToDevice + WithId,
+    E:Debug + Send + Sync,
+{
     type ID = D::ID;
 
     fn id(&self) -> &Self::ID {
         self.data.id()
     }
 }
-impl <D:Data+CopyToDevice+WithId, E:Clone+Debug> Output for DataWithExtra<D, E> {}
-
-
-impl <Selector, D:Data+CopyToDevice+WithId+Sync, E:Clone+Debug+Sync> Select<Selector> for DataWithExtra<D, E>
+impl <D, E> Output for DataWithExtra<D, E>
 where
-    D:Select<Selector, Output=D>
+    D: Data + CopyToDevice + WithId + Sync,
+    E:Debug + Send + Sync,
+{
+}
+
+
+impl <Selector, D, E> Select<Selector> for DataWithExtra<D, E>
+where
+    D: Data + CopyToDevice + WithId + Select<Selector, Output=D> + Sync,
+    E:Debug + Send + Sync,
 {
     type Output = Self;
 
@@ -73,5 +108,18 @@ where
     }
 }
 
+impl <D, E> Adjustable for DataWithExtra<D, E>
+where
+    D: Data + CopyToDevice + WithId + Send + Sync,
+    E:Debug + Send + Sync,
+{}
 
-impl <D:Data+CopyToDevice+WithId+Send+Sync, E:Clone+Debug+Send+Sync> Adjustable for DataWithExtra<D, E> {}
+#[cfg(test)]
+pub mod tests {
+
+    #[test]
+    fn test_0(){
+
+    }
+
+}

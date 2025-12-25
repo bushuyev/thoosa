@@ -14,7 +14,7 @@ use tch::kind::FLOAT_CUDA;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{IndexOp, Reduction, Tensor};
 use tch::Kind::Float;
-use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::global_ctx::GlobalCtx;
@@ -29,6 +29,7 @@ use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_run_config_args::OptRunConfigSource;
 use thoosa_shared::applicables_runner::Input;
+use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
@@ -158,12 +159,9 @@ where
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
-        let (select_motifs_run_ids, opt_config) = input.with_data_ref(
-            0,
-            Arc::clone(&ctx), None, |input| {
-                Ok((input.select_motifs_run_id.clone(), input.opt_config.clone()))
-            },
-        ).await?;
+        let (select_motifs_run_ids, opt_config) = with_data!(Arc::clone(&ctx), 0, input; |input: &TrainMotifNetInput| {
+            Ok::<(Vec<RunId>, Arc<OptConfig>), ThoosaError>((input.select_motifs_run_id.clone(), input.opt_config.clone()))
+        })?;
 
         let channels = self.ws.read().channels();
 
@@ -196,18 +194,18 @@ where
                 let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>> =
                     motif_loader
                         .run(
-                            Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::all_slices(
+                            Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(
                                 motif_id_rate.0.into(),
-                            ))),
+                            ), 0)),
                             Arc::clone(&ctx),
                         )
                         .await?;
                 let random_slices = random_slices_loader
                     .run(
-                        Arc::new(DevicesWrap::wrap_cpu(SlicesLoaderInput::new(
+                        Arc::new(DevicesWrap::wrap(SlicesLoaderInput::new(
                             motif_id_rate.0.into(),
                             motif.size().dim_0() as u32,
-                        ))),
+                        ), 0)),
                         Arc::clone(&ctx),
                     )
                     .await?;
@@ -260,7 +258,7 @@ where
                     "motifs".to_string()
                 ));
 
-                let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap_cpu(TrainNetInput::new("".into()))), Arc::clone(&ctx)).await?).unwrap().take_data(0).await?;
+                let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new("".into()), 0)), Arc::clone(&ctx)).await?).unwrap().take_data(0).await?;
 
                 store.read().get_motif_meta(motif_id_rate.0).map(|(channel, find_motifs_run_id)|{
                     TrainMotifsNetResult::new(
@@ -290,7 +288,7 @@ where
         .await;
 
 
-        Ok(Arc::new(DevicesWrap::wrap_cpu(TrainMotifsNetsResult::new(0, results))))
+        Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(0, results), 0)))
     }
 
 }
@@ -328,6 +326,7 @@ impl WithId for DataWithLabels {
 
 impl Data for DataWithLabels {
     type Metrics = <Batch<Slice> as Dims>::Metrics;
+    type M = CpuOrGpu<Self>;
 
     fn size(&self) -> Self::Metrics {
         self.slices.size().try_into().unwrap()//TODO unwrap
@@ -601,7 +600,7 @@ mod tests {
             run_configs
         ));
 
-        let input = Arc::new(DevicesWrap::wrap_cpu(TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(100, 3)))));
+        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(100, 3))), 0));
 
         let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
         let r = train_motif_net.run(input, Arc::clone(&run_ctx)).await?;

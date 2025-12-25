@@ -21,7 +21,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::global_ctx::GlobalCtx;
@@ -285,10 +285,11 @@ where
                 let ctx = Arc::clone(&ctx_for_loader);
 
                 async move {
-                    let stacked_motifs_input = Arc::new(DevicesWrap::wrap_cpu(
+                    let stacked_motifs_input = Arc::new(DevicesWrap::wrap(
                         StackedMotifsInput::new(
                             Arc::clone(&find_motifs_run_config),
-                        )
+                        ),
+                        0
                     ));
 
                     match stacked_motifs_loader.run_cached(stacked_motifs_input, Arc::clone(&ctx)).await {
@@ -340,14 +341,13 @@ where
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
-        let resources = input.with_data_ref(0, Arc::clone(&ctx), None,
-    |input: &ResourcesConfigInput<Simple>|{//TODO replace with with_data!(device_idx,
-                Ok(input
-                    .resources_config()
-                    .to_resources(&self.store)?
-                    .into_iter()
-                    .collect::<Vec<_>>())
-            }).await?;
+        let resources: Vec<Resource> = with_data!(Arc::clone(&ctx), 0, input; |input: &ResourcesConfigInput<Simple>|{//TODO use device_idx instead of 0
+            Ok::<Vec<Resource>, ThoosaError>(input
+                .resources_config()
+                .to_resources(&self.store)?
+                .into_iter()
+                .collect::<Vec<_>>())
+        })?;
 
         debug!("SelectMotifsStage::run: resources={resources:?}");
         if resources.is_empty() {
@@ -381,7 +381,7 @@ where
                 debug!("SelectMotifsStage::run: on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
 
                 let t_0 = Arc::clone(&self.loader)
-                    .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_0.clone())), Arc::clone(&ctx))
+                    .run_cached(Arc::new(DevicesWrap::wrap(resource_0.clone(), 0)), Arc::clone(&ctx))
                     .await?;
 
                 t_1_batch_dim_0_size += t_0.size().dim_1();
@@ -564,7 +564,7 @@ where
                             MotifSelector::ByLabelVariance(_) => {
                                 ML::cache().await.remove(&ML::out_id(&clc_dist.motif_loader, &motif_id));
 
-                                let dist = clc_dist.run(Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::all_slices(DataId(*motif_id)))), Arc::clone(&ctx)).await
+                                let dist = clc_dist.run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(DataId(*motif_id)), 0)), Arc::clone(&ctx)).await
                                     .map_err(|e|ThoosaError::new(format!("Got error while running clc_dist for {motif_id}")))?;
 
                                 with_data!(ctx, 0/*it's always cpu*/, dist; |dist:&AverageDistanceValue|{
@@ -617,7 +617,7 @@ where
 
         debug!("SelectMotifsStage::run: good_motif_ids={run_config_good_motif_ids:?}");
 
-        Ok(Arc::new(DevicesWrap::wrap_cpu(SelectMotifsSavableResult::new2(run_config_good_motif_ids))))
+        Ok(Arc::new(DevicesWrap::wrap(SelectMotifsSavableResult::new2(run_config_good_motif_ids), 0)))
     }
 }
 
@@ -746,7 +746,7 @@ pub mod tests {
         ));
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))))), Arc::new(RwLock::new(mock_run_ctx::default(1))),
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(mock_run_ctx::default(1))),
         ).await?;
 
         Ok(())
@@ -824,7 +824,7 @@ pub mod tests {
         ));
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))))), Arc::new(RwLock::new(mock_run_ctx::default(0))),
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(mock_run_ctx::default(0))),
         ).await?;
 
         Ok(())
@@ -905,7 +905,7 @@ pub mod tests {
 
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))))), Arc::new(RwLock::new(mock_run_ctx::default(0))),
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(mock_run_ctx::default(0))),
         ).await?;
 
         Ok(())
@@ -1040,7 +1040,7 @@ pub mod tests {
 
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))))), Arc::new(RwLock::new(mock_run_ctx::default(1))),
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(mock_run_ctx::default(1))),
         ).await?;
 
         Ok(())
@@ -1376,7 +1376,7 @@ pub mod tests {
             .finish();
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap_cpu(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))))), Arc::new(RwLock::new(ctx)),
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(ctx)),
         ).await?;
 
         Ok(())

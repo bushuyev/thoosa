@@ -18,20 +18,22 @@ use thoosa_common::dims::Dims;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{CopyToDevice, TensorIdSliceIdx, ThoosaError};
+use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
 use thoosa_shared::traits::{CachableIdTr, Data, DataId, Select, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
+use thoosa_with_data::with_data;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, MotifSlices};
-use crate::tasks::load_motif_and_clc_dist::{MotifSlicesSelector};
+use crate::tasks::load_motif_and_clc_dist::MotifSlicesSelector;
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::{RawTensorLoader};
+use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
 use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use caching_runner::permits::MAX_PERMITS;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::traits::Adjustable;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId};
@@ -39,11 +41,22 @@ use crate::tasks::find_motifs::{config_to_stage, FilteredLoaderStage, LoaderStag
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 
-#[derive(Debug, Clone, DummyData, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
 pub struct MotifLoaderInput {
     select_motifs_run_id: Option<Vec<RunId>>,
     motif_id:DataId
 }
+
+/*
+#[automatically_derived]
+impl ::thoosa_shared::traits::Data for MotifLoaderInput
+where
+    Self: ::core::clone::Clone,
+{
+    type Metrics = ();
+    fn size(&self) -> Self::Metrics { () }
+    fn device(&self) -> usize { 0 }
+}*/
 
 #[cfg(test)]
 impl From<u32> for MotifLoaderInput{
@@ -158,9 +171,9 @@ where
             (guard.device_idx(), guard.cache_area())
         };
 
-        let intput = input.clone_from_cpu().await?;
-
-        let motif_id = intput.motif_id;
+        let motif_id = with_data!(Arc::clone(&ctx), 0, input; |input: &MotifLoaderInput| {
+            Ok::<DataId, ThoosaError>(input.motif_id.clone())
+        })?;
 
         let motif_id_value = motif_id.clone().0;
         let (channel, find_motifs_run_id, slices, resources_map) =
@@ -254,7 +267,9 @@ where
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area())
         };
-        let SlicesLoaderInput { motif_id, limit } = input.clone_from_cpu().await?;
+        let (motif_id, limit) = with_data!(Arc::clone(&ctx), 0, input; |input: &SlicesLoaderInput| {
+            Ok::<(DataId, u32), ThoosaError>((input.motif_id.clone(), input.limit))
+        })?;
 
         let (channel, find_motifs_run_id) = self.store.read().get_motif_meta(*motif_id)?;
 
@@ -330,7 +345,7 @@ where
             .get(&resource_id)
             .cloned()
             .expect(&format!("no resource with id={resource_id}"));
-        let resource_cache = Arc::new(DevicesWrap::wrap_cpu(resource));
+        let resource_cache = Arc::new(DevicesWrap::wrap(resource, cache_area));
 
         let raw_tensor = Arc::clone(&configurable_loader)
             .run_cached(resource_cache, Arc::clone(&ctx))
@@ -442,23 +457,18 @@ pub mod mock_motif_loader {
     use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use caching_runner::common::{MockRunCtx, OutId, RunCtx};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use thoosa_shared::{CopyToDevice, ThoosaError};
-    use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::{DataId, Named, SimpleId};
+    use thoosa_shared::ThoosaError;
+    use thoosa_shared::traits::{DataId, Named};
     use thoosa_shared::traits::WithId;
     use thoosa_common::tho_tensor::ThoTensor;
     use dashmap::DashMap;
     use parking_lot::RwLock;
-    use tch::kind::FLOAT_CPU;
     use tch::Tensor;
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
-    use caching_runner::global_ctx::GlobalCtx;
     use thoosa_shared::data_with_extra::DataWithExtra;
-    use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
-    use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-    use crate::tasks::tensor_loader::mock_tensor_loader::MockTensorLoaderBuilder;
-
+    use crate::tasks::cross_dims::MotifSlices;
+    use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
     mock! {
         #[derive(Debug)]
         pub MotifLoader {}
@@ -554,7 +564,7 @@ mod tests {
     use thoosa_store::MockStoreBuilder;
     use crate::tasks::motif_loader::{MotifLoader, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::{mock_tensor_loader};
+    use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::cross_dims::MotifSlices;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_motifs::distance::average_euclidean_distance;
@@ -601,7 +611,7 @@ mod tests {
 
         let num_devices = GlobalCtx::global().device_count();
         let cache_area = ctx.read().cache_area();
-        let input_id = Arc::new(DevicesWrap::wrap_cpu(10u32.into()));
+        let input_id = Arc::new(DevicesWrap::wrap(10u32.into(), 0));
 
         let motif = motif_loader
             .run_cached(Arc::clone(&input_id), Arc::clone(&ctx))
@@ -667,7 +677,7 @@ mod tests {
 
         let num_devices = GlobalCtx::global().device_count();
         let cache_area = ctx.read().cache_area();
-        let input = Arc::new(DevicesWrap::wrap_cpu(SlicesLoaderInput{ motif_id: DataId::from(&motif_id), limit: 10 }));
+        let input = Arc::new(DevicesWrap::wrap(SlicesLoaderInput{ motif_id: DataId::from(&motif_id), limit: 10 }, 0));
 
         let slices = random_slices_loader
             .run(Arc::clone(&input), Arc::clone(&ctx))

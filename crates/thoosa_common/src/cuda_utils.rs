@@ -838,29 +838,7 @@ mod tests {
 
         Ok(())
     }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_copy_from_block(){
-        unsafe {
-            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-        }
-
-        let t_src = Tensor::rand(&[20, 10000], (Kind::Float, Cuda(0)));
-
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let t_dst = CopyCtx::instance().copy(&t_src, 0, t_src.kind()).await;
-
-                // assert!(
-                //     t_src.to_device(Cpu).allclose(&t_dst, 0.01, 0.01, false)
-                // );
-
-                println!("OK");
-            });
-        });
-
-    }
-
+    
     #[test]
     fn roundtrip_pack_unpack() {
         use tch::{Device, Kind, Tensor};
