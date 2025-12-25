@@ -23,7 +23,7 @@ use thoosa_common::batches::AsyncDataBatch;
 use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
-use thoosa_common::train_nets::{opt_train_2, run_train_motif_net, run_train_motif_net_2, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsResult, TrainMotifsNetResult, motif_node, motif_node_2};
+use thoosa_common::train_nets::{opt_train_2, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsResult, TrainMotifsNetResult, motif_node, motif_node_2};
 use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, vec_f32_from, DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -428,24 +428,8 @@ impl<C> AsyncDataBatch<Slice, MotifProbability> for MotifsBatch<C>
 where
     C: RunCtx,
 {
-    async fn train_batch(&self) -> Result<(ThoBatch<Slice>, Tensor), ThoosaError> {
-        debug!("MotifsBatch::train_batch: self.device_idx={}", self.device_idx);
-
-        let motifs = Arc::clone(&self.train_motifs);
-
-        self.make_batch(motifs).await
-    }
-
-    async fn valid_batch(&self) -> Result<(ThoBatch<Slice>, Tensor), ThoosaError> {
-        debug!("MotifsBatch::valid_batch: self.device_idx={}", self.device_idx);
-
-        let motifs = Arc::clone(&self.valid_motifs);
-
-        self.make_batch(motifs).await
-    }
-
     async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, ThoBatch<MotifProbability>), ThoosaError>> {
-        futures_util::stream::once( self.train_batch())//TODO this corresponds to number of resources in label training , replace with configurable val?
+        futures_util::stream::once( self.make_batch(Arc::clone(&self.train_motifs)))//TODO this corresponds to number of resources in label training , replace with configurable val?
         .map(|fut_res|{
             fut_res.map(|v|{
                 (v.0, v.1.into())
@@ -455,7 +439,7 @@ where
     }
 
     async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, ThoBatch<MotifProbability>), ThoosaError>> {
-        futures_util::stream::once( self.valid_batch())
+        futures_util::stream::once( self.make_batch(Arc::clone(&self.valid_motifs)))
             .map(|fut_res|{
                 fut_res.map(|v|{
                     (v.0, v.1.into())

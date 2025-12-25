@@ -687,7 +687,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_0(){
+    async fn test_train_net(){
         let net_fn = |rc:&DummyRunConfig, vs:&VarStore|{
             Ok((
                 dummy_label_net::<Batch<DummyX>, Batch<DummyY>>(10, 1., Cpu, "test")?,
@@ -711,9 +711,14 @@ mod tests {
         let cycles = |rc:&DummyRunConfig|{
             10
         };
+        let mock_test_batch = Arc::new(mock_async_data_batch::build().finish());
+
 
         let train_net:TrainNet<MockRunCtx, _, _, _, _, _, _, _, (), _, _, _> = TrainNet::new(
-            |rc:&DummyRunConfig| ready(Ok(mock_async_data_batch::build().finish())).boxed(),
+            move |rc:&DummyRunConfig|  {
+
+                ready(Ok(Arc::clone(&mock_test_batch))).boxed()
+            },
             net_fn,
             opt_config,
             run_config,
