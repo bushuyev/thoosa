@@ -358,7 +358,7 @@ mod tests {
         Ok(())
     }
 
-    // #[test]// TODO fails with SIGSEGV
+    #[test]
     fn test_min_rbf() -> Result<(), ThoosaError> {
         let res = run_lbfgs(
             TensorProblem::new(|theta| {
@@ -389,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn test_test() -> Result<(), ThoosaError> {
+    fn test_linesearch() -> Result<(), ThoosaError> {
         struct MyProblem {}
 
         impl CostFunction for MyProblem {
