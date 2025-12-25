@@ -39,6 +39,13 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, SimpleId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{panic_to_err, ThoosaError};
 
+fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
+    match device {
+        Device::Cuda(_) => Some(cuda_mem()),
+        _ => None,
+    }
+}
+
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct TrainNetInput{
@@ -236,9 +243,15 @@ where
             let mut last_valid_loss = [0f32; 3];
 
             for idx in 1..cycles {
-                debug!("TrainNet::run_inner, train:  0. cuda_mem={:?}", cuda_mem());
+                debug!(
+                    "TrainNet::run_inner, train:  0. cuda_mem={:?}",
+                    maybe_cuda_mem(&device)
+                );
                 let mut batches = batch.train_batch_stream().await;
-                debug!("TrainNet::run_inner, train:  1. cuda_mem={:?} ", cuda_mem());
+                debug!(
+                    "TrainNet::run_inner, train:  1. cuda_mem={:?} ",
+                    maybe_cuda_mem(&device)
+                );
                 while let Some(Ok((x_t_0, expected_y))) = batches.next().await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, expected_y));
 
@@ -264,9 +277,15 @@ where
 
                 if idx % 10 == 0 || idx == cycles - 1 {
 
-                    debug!("TrainNet::run_inner, valid:  0. cuda_mem={:?}", cuda_mem());
+                    debug!(
+                        "TrainNet::run_inner, valid:  0. cuda_mem={:?}",
+                        maybe_cuda_mem(&device)
+                    );
                     let mut batches = batch.valid_batch_stream().await;
-                    debug!("TrainNet::run_inner, valid:  1. cuda_mem={:?}", cuda_mem());
+                    debug!(
+                        "TrainNet::run_inner, valid:  1. cuda_mem={:?}",
+                        maybe_cuda_mem(&device)
+                    );
                     while let Some(Ok((x_t_0,y_t))) = batches.next().await {
                         tch::no_grad(||{
 
@@ -573,14 +592,20 @@ where
         let expected_y = input.expected_y();
 
         debug!("TrainStep::do_run: device={:?} x_t_0.size={:?} expected_y.size={:?}", self.device, x_t_0.size(), expected_y.size());
-        debug!("TrainStep::do_run: 0. cuda_mem={:?}", cuda_mem());
+        debug!(
+            "TrainStep::do_run: 0. cuda_mem={:?}",
+            maybe_cuda_mem(&self.device)
+        );
 
         let x_t = (self.x_f)(x_t_0);
 
         debug!("TrainStep::do_run: device={:?}  x_t.size={:?}", self.device, x_t.size());
 
         let predicted_y = self.forward(&x_t, true)?;
-        debug!("TrainStep::do_run: 1. cuda_mem={:?}", cuda_mem());
+        debug!(
+            "TrainStep::do_run: 1. cuda_mem={:?}",
+            maybe_cuda_mem(&self.device)
+        );
         trace!("TrainStep::do_run: x_t=\n{x_t}");
         x_t.drop();
 
@@ -589,13 +614,19 @@ where
         {
             let mut opt = self.opt.lock();
 
-            debug!("TrainStep::do_run: 2. cuda_mem={:?}", cuda_mem());
+            debug!(
+                "TrainStep::do_run: 2. cuda_mem={:?}",
+                maybe_cuda_mem(&self.device)
+            );
             debug!("TrainStep::do_run: loss={loss}");
             trace!("TrainStep::do_run: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
 
             predicted_y.drop();
             drop(expected_y);
-            debug!("TrainStep::do_run: 2.1 cuda_mem={:?}", cuda_mem());
+            debug!(
+                "TrainStep::do_run: 2.1 cuda_mem={:?}",
+                maybe_cuda_mem(&self.device)
+            );
             let t1 = Instant::now();
 
             panic_to_err!({
@@ -604,7 +635,11 @@ where
             })?;
 
 
-            debug!("trTrainStep::do_runain: 3. cuda_mem={:?}  optimizer_size={}",cuda_mem(),optimizer_mem_size(&opt));
+            debug!(
+                "trTrainStep::do_runain: 3. cuda_mem={:?}  optimizer_size={}",
+                maybe_cuda_mem(&self.device),
+                optimizer_mem_size(&opt)
+            );
             debug!("TrainStep::do_run: device={:?}  backward_step done in {}",self.device,t1.elapsed().as_millis());
         }
 
@@ -638,26 +673,30 @@ where
 #[cfg(test)]
 mod tests {
     use std::future::ready;
-    use crate::tasks::cross_dims::ChannelsData2;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use caching_runner::common::cachable::DevicesWrap;
+    use caching_runner::common::mock_run_ctx;
+    use caching_runner::common::runnable::AsyncStage;
     use futures_util::StreamExt;
-    use tch::nn::{AdamW, OptimizerConfig, VarStore};
-    use tch::Device::Cpu;
+    use futures::stream::{self, BoxStream};
+    use parking_lot::RwLock;
+    use tch::nn::{AdamW, LinearConfig, OptimizerConfig, VarStore};
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
+    use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::common::MockRunCtx;
     use thoosa_common::batches::mock_async_data_batch;
-    use thoosa_common::batches::mock_async_data_batch::MockTestBatch;
-    use thoosa_common::dims::{Batch, Dims, MotifProbability, ThoBatch};
-    use thoosa_common::train_nets::{dummy_label_net, OptConfig};
+    use thoosa_common::dims::{Batch, Dims, ThoBatch};
+    use thoosa_common::my_tch::{my_linear, ThoModule};
+    use thoosa_common::train_nets::OptConfig;
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
-    use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::{RangeOrValue, ThoosaError};
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::traits::MonoMetrics;
-    use crate::tasks::train_net::TrainNet;
+    use crate::tasks::train_net::{TrainNet, TrainNetInput};
     use futures::FutureExt;
 
     #[derive(Clone, Debug)]
@@ -668,6 +707,30 @@ mod tests {
     #[derive(Clone, Debug)]
     struct DummyY;
     impl Dims for DummyY { type Metrics = MonoMetrics<1, 2>; }
+
+    static X_F_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static LOSS_FN_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    fn mock_x_f(t: ThoBatch<DummyX>) -> ThoBatch<DummyX> {
+        X_F_CALLS.fetch_add(1, Ordering::SeqCst);
+        t
+    }
+
+    fn mock_loss_fn(pred: &Tensor, target: &Tensor) -> Result<Tensor, ThoosaError> {
+        LOSS_FN_CALLS.fetch_add(1, Ordering::SeqCst);
+        Ok(pred.f_sub(target)?.pow_tensor_scalar(2.).mean(tch::Kind::Float))
+    }
+
+    fn make_batch() -> (ThoBatch<DummyX>, ThoBatch<DummyY>) {
+        let x = Tensor::zeros([1, 1, 1], FLOAT_CPU);
+        let y = Tensor::zeros([1, 1, 1], FLOAT_CPU);
+        (x.into(), y.into())
+    }
+
+    fn make_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, ThoBatch<DummyY>), ThoosaError>> {
+        let (x, y) = make_batch();
+        stream::iter(vec![Ok((x, y))]).boxed()
+    }
 
     #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
     #[run_config_opt]
@@ -687,49 +750,100 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_train_net(){
-        let net_fn = |rc:&DummyRunConfig, vs:&VarStore|{
-            Ok((
-                dummy_label_net::<Batch<DummyX>, Batch<DummyY>>(10, 1., Cpu, "test")?,
-                ()//Net params, dummy
-            ))
+    async fn test_train_net() -> Result<(), ThoosaError> {
+        X_F_CALLS.store(0, Ordering::SeqCst);
+        LOSS_FN_CALLS.store(0, Ordering::SeqCst);
+
+        // Avoid double-init panics if other tests already set the global context.
+        if std::panic::catch_unwind(|| GlobalCtx::global()).is_err() {
+            GlobalCtx::init_devices(2);
+        }
+
+        let net_fn = |_rc: &DummyRunConfig, vs: &VarStore| {
+            let net: Box<dyn ThoModule<Batch<DummyX>, Batch<DummyY>>> =
+                Box::new(my_linear::<_, Batch<DummyX>, Batch<DummyY>>(
+                    vs.root() / "linear",
+                    1,
+                    1,
+                    LinearConfig::default(),
+                    "test_train_net".to_string(),
+                )?);
+            Ok((net, ())) // Net params, dummy
         };
         let opt_config = Arc::new(OptConfig::new(10, 3));
-        let run_config = Arc::new(DummyRunConfigRangeOrValue {
-            id: Some(1),
-            num_layers: RangeOrValue::Value(3),
-        }.opt_run_configs());
-        let loss_fn = |pred:&Tensor, target:&Tensor| {
-            Ok::<_, ThoosaError>(Tensor::zeros([1], FLOAT_CPU))
+        let run_config = Arc::new(
+            DummyRunConfigRangeOrValue {
+                id: Some(1),
+                num_layers: RangeOrValue::Range { range: 1..3, step: None },
+            }
+            .opt_run_configs(),
+        );
+        let optimizer = |_rc: &DummyRunConfig, vs: &VarStore| {
+            AdamW::default()
+                .amsgrad(true)
+                .build(&vs, 0.001)
+                .map_err(ThoosaError::from)
         };
-        let optimizer = |rc:&DummyRunConfig, vs: &VarStore|{
-            AdamW::default().amsgrad(true).build(&vs, 0.001).map_err(|e|ThoosaError::from(e))
-        };
-        let x_f = |t:ThoBatch<DummyX>| {
-            t
-        };
-        let cycles = |rc:&DummyRunConfig|{
-            10
-        };
-        let mock_test_batch = Arc::new(mock_async_data_batch::build().finish());
+        let cycles_count = 10u32;
+        let cycles = move |_rc: &DummyRunConfig| cycles_count;
 
-
-        let train_net:TrainNet<MockRunCtx, _, _, _, _, _, _, _, (), _, _, _> = TrainNet::new(
-            move |rc:&DummyRunConfig|  {
-
-                ready(Ok(Arc::clone(&mock_test_batch))).boxed()
-            },
-            net_fn,
-            opt_config,
-            run_config,
-            loss_fn,
-            optimizer,
-            x_f,
-            cycles,
-            "n/a".to_string()
+        let train_stream_calls = Arc::new(AtomicUsize::new(0));
+        let valid_stream_calls = Arc::new(AtomicUsize::new(0));
+        let mock_test_batch = Arc::new(
+            mock_async_data_batch::build::<DummyX, DummyY>()
+                .with_train_stream_calls(Arc::clone(&train_stream_calls), make_stream)
+                .with_valid_stream_calls(Arc::clone(&valid_stream_calls), make_stream)
+                .finish(),
         );
 
-        //TODO OOM
+        let train_net: Arc<TrainNet<MockRunCtx, _, _, _, _, _, _, _, (), _, _, _>> = Arc::new(
+            TrainNet::new(
+                move |_rc: &DummyRunConfig| ready(Ok(Arc::clone(&mock_test_batch))).boxed(),
+                net_fn,
+                Arc::clone(&opt_config),
+                Arc::clone(&run_config),
+                mock_loss_fn,
+                optimizer,
+                mock_x_f,
+                cycles,
+                "n/a".to_string(),
+            ),
+        );
+
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
+        let output = train_net
+            .run(
+                Arc::new(DevicesWrap::wrap(TrainNetInput::new("test".into()), 0)),
+                Arc::clone(&ctx),
+            )
+            .await?;
+        let _ = Arc::into_inner(output)
+            .expect("train_net output still shared")
+            .take_data(0)
+            .await?;
+
+        // Train stream runs once per epoch; valid stream runs every 10th and the final epoch.
+        let grid_runs = run_config.grid_to_vals().len();
+        let train_iters = cycles_count - 1;
+        let valid_iters = (train_iters + 9) / 10;
+        let expected_train_streams =
+            grid_runs * opt_config.opt_max_evals as usize * train_iters as usize;
+        let expected_valid_streams =
+            grid_runs * opt_config.opt_max_evals as usize * valid_iters as usize;
+        let expected_batch_calls = expected_train_streams + expected_valid_streams;
+
+        assert_eq!(
+            expected_train_streams,
+            train_stream_calls.load(Ordering::SeqCst)
+        );
+        assert_eq!(
+            expected_valid_streams,
+            valid_stream_calls.load(Ordering::SeqCst)
+        );
+        assert_eq!(expected_batch_calls, X_F_CALLS.load(Ordering::SeqCst));
+        assert_eq!(expected_batch_calls, LOSS_FN_CALLS.load(Ordering::SeqCst));
+
+        Ok(())
     }
 
 }
