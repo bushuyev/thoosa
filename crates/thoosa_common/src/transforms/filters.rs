@@ -168,15 +168,11 @@ mod tests {
 
         //apply filter
         let output = input.conv1d(&kernel, None::<Tensor>, 1, 0, 1, 2);
-        debug!("t.size={:?}, input.size={:?}, kernel.size={:?} output.size={:?}", t.size(), input.size(), kernel.size(), output.size());
 
         let output_freqs = clc_frequencies(&output.i((0, 0, ..)), samples, sample_rate, 5);
 
-        debug!("input_freqs={input_freqs:?}");
-        debug!("output_freqs={output_freqs:?}");
 
         assert_eq!([(300.0, 0.5), (10.0, 0.5)], input_freqs.as_slice());
-        //output_freqs -[(10.0, 0.4967866837978363), (300.0, 0.26481497287750244)
         assert!(are_close(
             &[0.5, 0.2648],
             &[output_freqs[0].1, output_freqs[1].1],
@@ -184,20 +180,21 @@ mod tests {
         ));
 
 
-
-        plot_series(
-            vec![
-                (format!("input"), plotters::prelude::GREEN,   vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
-                (format!("output"), plotters::prelude::RED,     vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&output.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//no matches
-            ], "band pass", (2000, 1000), &format!("/tmp/plots/filter_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
-        )?;
         /*
-               plot_series(
-                   vec![
-                       (format!("0ch"), plotters::prelude::GREEN,   vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input_signal_0_fft)).collect::<Vec<(f32, f32)>>()),//sig_0_v match
-                       (format!("1ch"), plotters::prelude::RED,     vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input_signal_1_fft)).collect::<Vec<(f32, f32)>>()),//no matches
-                   ], "distance", (2000, 1000), &format!("/tmp/plots/filter_fft_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
-               )?;*/
+            plot_series(
+                vec![
+                    (format!("input"), plotters::prelude::GREEN,   vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
+                    (format!("output"), plotters::prelude::RED,     vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&output.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//no matches
+                ], "band pass", (2000, 1000), &format!("/tmp/plots/filter_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+            )?;
+
+           plot_series(
+               vec![
+                   (format!("0ch"), plotters::prelude::GREEN,   vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input_signal_0_fft)).collect::<Vec<(f32, f32)>>()),//sig_0_v match
+                   (format!("1ch"), plotters::prelude::RED,     vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input_signal_1_fft)).collect::<Vec<(f32, f32)>>()),//no matches
+               ], "distance", (2000, 1000), &format!("/tmp/plots/filter_fft_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+           )?;
+       */
 
         Ok(())
     }
@@ -218,23 +215,17 @@ mod tests {
         let input_signal = input_signal_0 + input_signal_1;
         let input_freqs = clc_frequencies(&input_signal, samples, sample_rate, 2);
         let input = input_signal.view((1, 1, -1)); // batch x channel for conv1d
-        debug!("0. input={input:?}");
         let input = input.repeat([10, 3, 1]); // [out_channels, in_channels/groups, kernel_size]
-        debug!("1. input={input:?}");
 
         let kernel = band_pass_filter(low_hz, high_hz, kernel_size, sample_rate, 1e-6);
-        debug!("1. kernel={kernel:?}");
-        // let kernel = kernel.repeat([3,1,1]);
+
         let kernel = kernel.view([1, 1, -1]).expand([3, 1, -1], true);
-        debug!("1. kernel={kernel:?}");
 
         //apply filter
         let output = input.conv1d(&kernel, None::<Tensor>, 1, 0, 1, 3);
 
         let output_freqs = clc_frequencies(&output.i((0, 0, ..)), samples, sample_rate, 5);
 
-        debug!("input_freqs={input_freqs:?}");
-        debug!("output_freqs={output_freqs:?}");
 
         assert_eq!([(300.0, 0.5), (10.0, 0.5)], input_freqs.as_slice());
         //output_freqs -[(10.0, 0.4967866837978363), (300.0, 0.26481497287750244)

@@ -1,12 +1,12 @@
 use log::debug;
 use tch::Tensor;
 use tch::kind::FLOAT_CPU;
-
+#[cfg(test)]
 use crate::gaussian::{Gaussian, GaussianProcessFit};
 use crate::utils::vec_f32_from;
 
 //http://arxiv.org/abs/1012.2599, (4)
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn expected_improvement<'a, F>(
     x: &Tensor,
     y_best: &Tensor,

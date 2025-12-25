@@ -3,7 +3,7 @@ use crate::cli::Commands::{
     SelectMotifs, TrainFinalNet, TrainMotifsNets,
 };
 use crate::data;
-use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
+use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::RawTensorLoader;
@@ -894,11 +894,7 @@ where
         .fold(
             || (HashMap::new(), vec![]),
             |mut a, (resource_key, probs)| {
-                trace!(
-                    "import_resources: resource_key={resource_key} ok={} err={}",
-                    a.0.len(),
-                    a.1.len()
-                );
+                trace!("import_resources: resource_key={resource_key} ok={} err={}",a.0.len(),a.1.len());
 
                 match resource_to_tensor(resource_key.clone())
                     .and_then(|t| ws_guard.import_tensor(t, import_id, resource_key.as_str()))
@@ -1106,22 +1102,6 @@ async fn plot_motif(
         }).await?;
     Ok(())
 }
-
-
-
-
-
-
-#[allow(dead_code)]
-fn resource_path(base_path: &str, resource_pattern: &str, resource_key: &str) -> String {
-    //TODO change to impl AsRef<Path> + in ParquetLoader
-    Path::new(base_path)
-        .join(resource_pattern.replace("{}", resource_key))
-        .into_os_string()
-        .into_string()
-        .unwrap()
-}
-
 
 pub fn run_opt_step<RC, RCRV, CC, R, ST>(
     input_run_ids: Option<Vec<RunId>>,
@@ -1363,10 +1343,9 @@ where
 #[cfg(test)]
 mod cli_tests {
     use crate::cli::{
-        import_resources, resource_path, run_all_grid_step, run_opt_step,
+        import_resources, run_all_grid_step, run_opt_step,
         run_plot_motif_slices, Cli,
     };
-    use crate::data::ParquetLoader;
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Trace, Warn};
@@ -1428,15 +1407,6 @@ mod cli_tests {
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
     }
-
-    #[test]
-    fn test_resource_path() {
-        assert_eq!(
-            resource_path("/xxx/yyy", "zzz/{}.parquet", "aaa"),
-            "/xxx/yyy/zzz/aaa.parquet".to_string()
-        )
-    }
-
 
     fn init_test_store(
         mut store: &Arc<RwLock<Box<dyn Store>>>,
