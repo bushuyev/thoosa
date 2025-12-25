@@ -663,7 +663,7 @@ mod opt_tests {
         let x_train = x_t.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
 
-
+        // Fit GP on sparse samples and validate interpolation on the full grid.
         // let (mu_s, cov_s) = super::posterior(&X, &x_train, &y_train, 1., 1., 1e-8);
         // debug!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
 
@@ -682,8 +682,28 @@ mod opt_tests {
             mu_s.size(),
             cov_s.size()
         );
+        assert_eq!(vec![n, 1], mu_s.size());
+        assert_eq!(vec![n, n], cov_s.size());
+
+        let mu_train = mu_s.i(train_indexes);
+        let y_train_t = y_train.transpose(0, 1);
+        let interp_err = (mu_train - y_train_t).abs().max().double_value(&[]);
+        assert!(
+            interp_err < 1e-3,
+            "posterior should interpolate training data, err={interp_err}"
+        );
         let x_moved = x_train.view((-1, 1));
         let y_moved = y_train.view((-1, 1));
+        let x_moved_eval = x_moved.shallow_clone();
+        let y_moved_eval = y_moved.shallow_clone();
+        let nll_start = rbf_nll(
+            &x_moved_eval,
+            &y_moved_eval,
+            &Tensor::from_slice(&[1., 1.]).to_device(Cpu),
+            1e-8,
+        )?
+        .double_value(&[]);
+        // Optimize kernel hyperparameters by minimizing the negative log likelihood.
         let l_sigma = run_lbfgs(
             TensorProblem::new(move |theta| rbf_nll(&x_moved, &y_moved, theta, 1e-8).expect("nll")),
             Tensor::from_slice(&[1., 1.]).to_device(Cpu),
@@ -699,6 +719,12 @@ mod opt_tests {
             l_sigma.i(0).double_value(&[]),
             l_sigma.i(1).double_value(&[])
         );
+        let nll_opt = rbf_nll(&x_moved_eval, &y_moved_eval, &l_sigma, 1e-8)?
+            .double_value(&[]);
+        assert!(
+            nll_opt <= nll_start + 1e-6,
+            "expected NLL to improve, start={nll_start} opt={nll_opt}"
+        );
 
         // let Ok((mu_s_opt, cov_s_opt)) = super::posterior_ch(&X, &x_train, &y_train, 1.6409202082368064, 8.504394038804222, 1e-8) else {
         let Ok((mu_s_opt, cov_s_opt)) =
@@ -707,14 +733,20 @@ mod opt_tests {
             panic!()
         };
         debug!("2. mu_s.size()={:?}, cov_s.size()={:?}",mu_s.size(),cov_s.size());
+        assert_eq!(vec![n, 1], mu_s_opt.size());
+        assert_eq!(vec![n, n], cov_s_opt.size());
 
         let norm = Normal::new(0., 1.).unwrap();
         let rng = rand::rng();
+        // Draw a few posterior samples to validate shape propagation.
         let sig_t = sig_3_norm(norm, rng, n).transpose(0, 1);
         debug!("sig_t.size={:?}", sig_t.size());
+        assert_eq!(vec![n, 3], sig_t.size());
 
         let sig_chol = apply_post(&mu_s, &cov_s, &sig_t);
         let sig_chol_opt = apply_post(&mu_s_opt, &cov_s_opt, &sig_t);
+        assert_eq!(vec![3, n], sig_chol.size());
+        assert_eq!(vec![3, n], sig_chol_opt.size());
 
 /*        plot_series_with_points(
             vec![
