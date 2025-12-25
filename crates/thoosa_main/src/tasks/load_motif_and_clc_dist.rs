@@ -5,12 +5,12 @@ use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use cached_derive::Cached;
-use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
-use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use caching_runner::common::{OutId, RunCtx};
-use caching_runner::global_ctx::GlobalCtx;
-use caching_runner::oom_handler::{Adjuster, Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use thoosa_shared::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
+use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_shared::runner::common::{OutId, RunCtx};
+use thoosa_shared::runner::global_ctx::GlobalCtx;
+use thoosa_shared::runner::oom_handler::{Adjuster, Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use log::debug;
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
@@ -268,11 +268,11 @@ impl OutputBuilder for DistOutputBuilder {
 #[cfg(test)]
 mod tests {
     use super::LoadMotifAndClcDistanceStage;
-    use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use crate::tasks::average_euclidean_distance::{mock_average_stage, AverageDistanceValue};
     use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
-    use caching_runner::common::{mock_run_ctx, RunCtx};
-    use caching_runner::global_ctx::GlobalCtx;
+    use thoosa_shared::runner::common::{mock_run_ctx, RunCtx};
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
     use parking_lot::{Mutex, RwLock};
     use std::sync::Arc;
     use tch::Tensor;

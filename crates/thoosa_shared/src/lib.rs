@@ -50,6 +50,7 @@ pub mod traits;
 pub mod data_with_extra;
 pub mod perf_logging;
 pub mod copy_mode;
+pub mod runner;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
@@ -1924,4 +1925,13 @@ pub fn test_shuffle_and_chunk_with_rng(){
              [9, 7, 4].to_vec().into_boxed_slice()],
         chunks
     )
+}
+
+#[inline]
+pub fn os_thread_id() -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        // Works even if glibc doesn’t export gettid: call the syscall directly.
+        unsafe { libc::syscall(libc::SYS_gettid) as u64 }
+    }
 }

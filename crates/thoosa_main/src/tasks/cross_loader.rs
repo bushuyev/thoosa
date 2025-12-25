@@ -5,9 +5,9 @@ use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
-use caching_runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
-use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use caching_runner::common::{OutId, RunCtx};
+use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
+use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_shared::runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
 use log::{debug, info};
 use parking_lot::RwLock;
@@ -347,8 +347,8 @@ where
 
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_clc {
-    use caching_runner::common::runnable::{Stage, SyncStage};
-    use caching_runner::common::RunCtx;
+    use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
+    use thoosa_shared::runner::common::RunCtx;
     use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
     use parking_lot::RwLock;
     use std::fmt::Debug;
@@ -467,8 +467,8 @@ pub(crate) mod mock_cross_loader_clc {
 
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_receiver {
-    use caching_runner::common::runnable::{Stage, SyncStage};
-    use caching_runner::common::RunCtx;
+    use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
+    use thoosa_shared::runner::common::RunCtx;
     use mockall::mock;
     use parking_lot::RwLock;
     use std::fmt::Debug;
@@ -565,8 +565,8 @@ mod tests {
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use crate::tasks::slices_iter::SlicesIter;
-    use caching_runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
-    use caching_runner::global_ctx::GlobalCtx;
+    use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
     use futures_util::FutureExt;
     use log::debug;
     use parking_lot::RwLock;
