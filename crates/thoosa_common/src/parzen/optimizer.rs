@@ -4,7 +4,6 @@ use std::collections::{BinaryHeap, HashMap};
 use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
 // use rand_distr::{Uniform, Distribution};
-use crate::argmin::ArgmTensor;
 use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
 use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
@@ -651,13 +650,13 @@ fn stack_params<T: Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
 
 #[cfg(test)]
 mod tpe_optimizer_tests {
-    use crate::argmin::ArgmTensor;
     use crate::parzen::optimizer::Val::Int;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer, Val, stack_params};
     use log::debug;
     use tch::{IndexOp, Tensor};
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::NamedVal;
+    use crate::tho_tensor::ThoTensor;
 
     #[ctor::ctor]
     fn init() {
@@ -802,13 +801,13 @@ mod tpe_optimizer_tests {
         move |params| {
             debug!("params={params:?}");
 
-            let t: Tensor = ArgmTensor(Tensor::from_slice(
+            let t: Tensor = ThoTensor::new((), Tensor::from_slice(
                 params
                     .into_iter()
                     .map(|v| <&NamedVal<String> as TryInto<f64>>::try_into(v).unwrap())
                     .collect::<Vec<f64>>()
                     .as_slice(),
-            ))
+            )).unwrap()
             .into();
             let loss = t
                 .subtract_scalar(d_x)

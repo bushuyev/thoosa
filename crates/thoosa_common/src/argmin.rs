@@ -12,145 +12,142 @@ use log::debug;
 use tch::Tensor;
 
 use thoosa_shared::ThoosaError;
+use crate::dims::AnyDims;
+use crate::tho_tensor::ThoTensor;
 
-#[derive(Debug)]
-pub struct ArgmTensor(pub Tensor); //TODO rename, move into own file
 
-impl ArgmTensor {
+impl Clone for ThoTensor {
+    fn clone(&self) -> Self {
+        ThoTensor::new(self.id().clone(), self.t_ref().shallow_clone()).expect("can't clone")
+    }
+}
+
+impl ThoTensor {
     pub fn force_requires_grad(&self) {
         unsafe {
             let const_ptr = self as *const Self;
             let mut_ptr = const_ptr as *mut Self;
-            (*mut_ptr).0 = self.0.shallow_clone().set_requires_grad(true);
+            (*mut_ptr).t = self.t.shallow_clone().set_requires_grad(true);
         }
     }
+
 }
 
-impl Clone for ArgmTensor {
-    fn clone(&self) -> Self {
-        // debug!("clone: self device={:?} requires_grad={:?} grad={:?}", self.device(), self.requires_grad(), self.grad());
-        // let tensor = crate::utils::clone(&self.0); // self.shallow_clone();
-        let tensor = self.shallow_clone();
 
-        // debug!("clone: tensor device={:?} requires_grad={:?} grad={:?}", tensor.device(), tensor.requires_grad(), tensor.grad());
-        ArgmTensor(tensor)
-    }
-}
-
-impl Into<Tensor> for ArgmTensor {
+impl Into<Tensor> for ThoTensor {
     fn into(self) -> Tensor {
-        self.0
+        self.t
     }
 }
 
-impl Deref for ArgmTensor {
+impl Deref for ThoTensor {
     type Target = Tensor;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.t
     }
 }
 
-impl DerefMut for ArgmTensor {
+impl DerefMut for ThoTensor {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.t
     }
 }
 
-impl ArgminSub<ArgmTensor, ArgmTensor> for ArgmTensor {
-    fn sub(&self, other: &ArgmTensor) -> ArgmTensor {
-        (&self.0 - &other.0).into()
+impl ArgminSub<ThoTensor, ThoTensor> for ThoTensor {
+    fn sub(&self, other: &ThoTensor) -> ThoTensor {
+        (&self.t - &other.t).into()
     }
 }
 
-impl ArgminSub<f64, ArgmTensor> for ArgmTensor {
-    fn sub(&self, other: &f64) -> ArgmTensor {
-        (self.0.subtract_scalar(*other)).into()
+impl ArgminSub<f64, ThoTensor> for ThoTensor {
+    fn sub(&self, other: &f64) -> ThoTensor {
+        (self.t.subtract_scalar(*other)).into()
     }
 }
 
-impl ArgminAdd<ArgmTensor, ArgmTensor> for ArgmTensor {
-    fn add(&self, other: &ArgmTensor) -> ArgmTensor {
-        (&self.0 + &other.0).into()
+impl ArgminAdd<ThoTensor, ThoTensor> for ThoTensor {
+    fn add(&self, other: &ThoTensor) -> ThoTensor {
+        (&self.t + &other.t).into()
     }
 }
 
-impl ArgminAdd<f64, ArgmTensor> for ArgmTensor {
-    fn add(&self, other: &f64) -> ArgmTensor {
-        (self.0.f_add_scalar(*other)).unwrap().into()
+impl ArgminAdd<f64, ThoTensor> for ThoTensor {
+    fn add(&self, other: &f64) -> ThoTensor {
+        (self.t.f_add_scalar(*other)).unwrap().into()
     }
 }
 
-impl ArgminDot<ArgmTensor, f64> for ArgmTensor {
-    fn dot(&self, other: &ArgmTensor) -> f64 {
-        debug!("ArgminDot::dot: size={:?} self.0={}", self.0.size(), self.0);
+impl ArgminDot<ThoTensor, f64> for ThoTensor {
+    fn dot(&self, other: &ThoTensor) -> f64 {
+        debug!("ArgminDot::dot: size={:?} self.t={}", self.t.size(), self.t);
         debug!(
-            "ArgminDot::dot: size={:?} other.0={}",
-            other.0.size(),
-            other.0
+            "ArgminDot::dot: size={:?} other.t={}",
+            other.t.size(),
+            other.t
         );
-        let v = self.0.dot(&other.0).double_value(&[]);
+        let v = self.t.dot(&other.t).double_value(&[]);
         debug!("ArgminDot::dot: v={}", v);
         v
     }
 }
 
-impl ArgminMul<f64, ArgmTensor> for ArgmTensor {
-    fn mul(&self, other: &f64) -> ArgmTensor {
-        self.0.multiply_scalar(*other).into()
+impl ArgminMul<f64, ThoTensor> for ThoTensor {
+    fn mul(&self, other: &f64) -> ThoTensor {
+        self.t.multiply_scalar(*other).into()
     }
 }
 
-impl ArgminMul<ArgmTensor, ArgmTensor> for ArgmTensor {
-    fn mul(&self, other: &ArgmTensor) -> ArgmTensor {
-        self.0.multiply(other).into()
+impl ArgminMul<ThoTensor, ThoTensor> for ThoTensor {
+    fn mul(&self, other: &ThoTensor) -> ThoTensor {
+        self.t.multiply(other).into()
     }
 }
 
-impl ArgminL1Norm<f64> for ArgmTensor {
+impl ArgminL1Norm<f64> for ThoTensor {
     fn l1_norm(&self) -> f64 {
-        self.0.linalg_norm(0, 0, true, None).double_value(&[])
+        self.t.linalg_norm(0, 0, true, None).double_value(&[])
     }
 }
 
-impl ArgminSignum for ArgmTensor {
+impl ArgminSignum for ThoTensor {
     fn signum(self) -> Self {
-        self.0.sign().into()
+        self.t.sign().into()
     }
 }
 
-impl ArgminZeroLike for ArgmTensor {
+impl ArgminZeroLike for ThoTensor {
     fn zero_like(&self) -> Self {
-        Tensor::zeros(self.0.size(), (self.0.kind(), self.0.device())).into()
+        Tensor::zeros(self.t.size(), (self.t.kind(), self.t.device())).into()
     }
 }
 
 //TODO test
-impl ArgminMinMax for ArgmTensor {
+impl ArgminMinMax for ThoTensor {
     fn min(x: &Self, y: &Self) -> Self {
-        Tensor::stack(&[&x.0, &y.0], 0).amin(1, false).into()
+        Tensor::stack(&[&x.t, &y.t], 0).amin(1, false).into()
     }
     fn max(x: &Self, y: &Self) -> Self {
-        Tensor::stack(&[&x.0, &y.0], 0).amax(1, false).into()
+        Tensor::stack(&[&x.t, &y.t], 0).amax(1, false).into()
     }
 }
 
-impl ArgminL2Norm<f64> for ArgmTensor {
+impl ArgminL2Norm<f64> for ThoTensor {
     fn l2_norm(&self) -> f64 {
-        self.0.linalg_norm(2, 0, true, None).double_value(&[])
+        self.t.linalg_norm(2, 0, true, None).double_value(&[])
     }
 }
 
-impl From<Tensor> for ArgmTensor {
+impl From<Tensor> for ThoTensor {
     fn from(value: Tensor) -> Self {
         // debug!("new: {:?} device={:?} requires_grad={}", crate::utils::from::<Vec<f32>>(&value), value.device(), value.requires_grad());
-        ArgmTensor(value)
+        ThoTensor::new((), value).unwrap()
     }
 }
 
-impl ArgminMul<ArgmTensor, ArgmTensor> for f64 {
-    fn mul(&self, other: &ArgmTensor) -> ArgmTensor {
-        other.0.multiply_scalar(*self).into()
+impl ArgminMul<ThoTensor, ThoTensor> for f64 {
+    fn mul(&self, other: &ThoTensor) -> ThoTensor {
+        other.t.multiply_scalar(*self).into()
     }
 }
 
@@ -158,14 +155,14 @@ impl ArgminMul<ArgmTensor, ArgmTensor> for f64 {
 
 pub(crate) struct TensorProblem<F>
 where
-    F: Fn(&ArgmTensor) -> Tensor,
+    F: Fn(&ThoTensor) -> Tensor,
 {
     loss_fn: F,
 }
 
 impl<F> TensorProblem<F>
 where
-    F: Fn(&ArgmTensor) -> Tensor,
+    F: Fn(&ThoTensor) -> Tensor,
 {
     #[allow(dead_code)]
     pub fn new(loss_fn: F) -> Self {
@@ -175,12 +172,12 @@ where
 
 impl<F> CostFunction for TensorProblem<F>
 where
-    F: Fn(&ArgmTensor) -> Tensor,
+    F: Fn(&ThoTensor) -> Tensor,
 {
-    type Param = ArgmTensor;
+    type Param = ThoTensor;
     type Output = f64;
 
-    fn cost(&self, theta: &ArgmTensor) -> Result<Self::Output, Error> {
+    fn cost(&self, theta: &ThoTensor) -> Result<Self::Output, Error> {
         // debug!("cost: theta={:?} device={:?} requires_grad={:?}", theta, theta.device(), theta.requires_grad());
 
         Ok(tch::with_grad(|| {
@@ -204,12 +201,12 @@ where
 
 impl<F> Gradient for TensorProblem<F>
 where
-    F: Fn(&ArgmTensor) -> Tensor,
+    F: Fn(&ThoTensor) -> Tensor,
 {
-    type Param = ArgmTensor;
-    type Gradient = ArgmTensor;
+    type Param = ThoTensor;
+    type Gradient = ThoTensor;
 
-    fn gradient(&self, p: &ArgmTensor) -> Result<Self::Gradient, Error> {
+    fn gradient(&self, p: &ThoTensor) -> Result<Self::Gradient, Error> {
         debug!(
             "gradient: p={:?} device={:?} requires_grad={:?}",
             p,
@@ -230,13 +227,13 @@ pub fn run_lbfgs<F>(
 ) -> Result<
     OptimizationResult<
         TensorProblem<F>,
-        LBFGS<MoreThuenteLineSearch<ArgmTensor, ArgmTensor, f64>, ArgmTensor, ArgmTensor, f64>,
-        IterState<ArgmTensor, ArgmTensor, (), (), (), f64>,
+        LBFGS<MoreThuenteLineSearch<ThoTensor, ThoTensor, f64>, ThoTensor, ThoTensor, f64>,
+        IterState<ThoTensor, ThoTensor, (), (), (), f64>,
     >,
     ThoosaError,
 >
 where
-    F: Fn(&ArgmTensor) -> Tensor,
+    F: Fn(&ThoTensor) -> Tensor,
 {
     let solver = LBFGS::new(
         MoreThuenteLineSearch::new(), //.with_c(1e-4, 0.9)?, //.with_bounds(1., 10.)?,
@@ -270,15 +267,16 @@ mod tests {
 
     use thoosa_shared::ThoosaError;
 
-    use crate::argmin::{ArgmTensor, TensorProblem, run_lbfgs};
+    use crate::argmin::{ThoTensor, TensorProblem, run_lbfgs};
+    use crate::dims::AnyDims;
     use crate::opt::rbf_nll;
 
-    // #[test] fails with SIGSEGV in release
+    #[test]
     fn test_min_x2() -> Result<(), ThoosaError> {
         struct MyProblem {}
 
         impl CostFunction for MyProblem {
-            type Param = ArgmTensor;
+            type Param = ThoTensor;
             type Output = f64;
 
             fn cost(&self, p: &Self::Param) -> Result<Self::Output, Error> {
@@ -305,8 +303,8 @@ mod tests {
         }
 
         impl Gradient for MyProblem {
-            type Param = ArgmTensor;
-            type Gradient = ArgmTensor;
+            type Param = ThoTensor;
+            type Gradient = ThoTensor;
 
             fn gradient(&self, p: &Self::Param) -> Result<Self::Gradient, Error> {
                 debug!(
@@ -434,16 +432,21 @@ mod tests {
             .configure(|state| state.param(vec![-100., 0.]).max_iters(10).target_cost(0.0))
             .run()?;
 
-        debug!("res={:?}", res.state().get_best_param().unwrap());
+        let best_param =res.state().get_best_param().unwrap();
+
+        assert_eq!(
+            [10.0, 0.0],
+            best_param.as_slice()
+        );
 
         Ok(())
     }
 
     #[test]
-    fn test_grad() {
-        let p_1 = ArgmTensor(Tensor::from_slice(&[10.]).set_requires_grad(true));
+    fn test_grad() -> Result<(), ThoosaError>{
+        let p_1 = ThoTensor::new((), Tensor::from_slice(&[10.]).set_requires_grad(true))?;
 
-        let t2 = ArgmTensor(p_1.pow_tensor_scalar(2));
+        let t2 = ThoTensor::new((), p_1.pow_tensor_scalar(2))?;
 
         t2.backward();
 
@@ -464,5 +467,7 @@ mod tests {
         t2.backward();
 
         debug!("3. grad t1={:?} t1.grad={:?}", p_2, p_2.grad());
+
+        Ok(())
     }
 }

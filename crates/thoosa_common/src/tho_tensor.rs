@@ -140,7 +140,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
     }
 }
 
-pub struct ThoTensor<D: Dims, Id: Named + Debug + Clone> {
+pub struct ThoTensor<D: Dims = AnyDims, Id: Named + Debug + Clone = ()> {
     id: Id,//TODO remove
     pub t: Tensor,
 

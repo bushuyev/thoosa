@@ -26,7 +26,7 @@ pub fn derive_dummy_data(input: TokenStream) -> TokenStream {
 
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    let copy_body = match mode {
+    let _copy_body = match mode {
         DummyDataMode::Clone => quote! { Ok(self.clone()) },
         DummyDataMode::NoClone => quote! { unimplemented!() },
     };
