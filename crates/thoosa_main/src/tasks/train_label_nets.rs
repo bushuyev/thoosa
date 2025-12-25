@@ -35,6 +35,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::{shuffle_and_chunk_with_rng, CopyToDevice, ThoosaError};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
+use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
@@ -162,6 +163,7 @@ impl CopyToDevice for TrainLabelNetsInput {
 
 impl Data for TrainLabelNetsInput {
     type Metrics = ();
+    type M = CpuOnly<Self>;
 
     fn size(&self) -> Self::Metrics {
         ()
@@ -323,7 +325,7 @@ where
                                            let (x, y) = with_data!(ctx, ctx.read().device_idx(), [x_1_wrapped], [x_0_wrapped]; |x_1:&[&ThoTensor<MotifProbability, SimpleId>], x_0:&[&ThoTensor<MotifProbability, SimpleId>]|{
                                                debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
 
-                                               let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.size()[1]).max().expect("no max_input");
+                                               let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.t_ref().size()[1]).max().expect("no max_input");
 
                                                debug!("ResourcesBatch::train_batch_iter: max_input={max_input}");
 
@@ -389,7 +391,7 @@ where
                         "label".to_string()
                     ));
 
-                    let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap_cpu(TrainNetInput::new("".into()))), Arc::clone(&train_label_ctx)).await?).unwrap().take_data(0).await?;
+                    let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new("".into()), cache_area)), Arc::clone(&train_label_ctx)).await?).unwrap().take_data(0).await?;
 
                     debug!("train_label_net: label={label_} result={result:?}");
                     Ok(
@@ -411,7 +413,7 @@ where
                 .into_iter()
                 .collect::<Result<Vec<_>, ThoosaError>>()?;
 
-            Ok(Arc::new(DevicesWrap::wrap_cpu(TrainLabelNetsOutput::new("".into(), results))))
+            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new("".into(), results), cache_area)))
         }
     }
 }
@@ -662,8 +664,8 @@ where
                             async move {
 
                                 try_join!(
-                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_1[index].clone())), ctx_x1),
-                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_cpu(x_0[index].clone())), ctx_x0)
+                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_1[index].clone(), 0)), ctx_x1),
+                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_0[index].clone(), 0)), ctx_x0)
                                 )
 
                             }

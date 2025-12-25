@@ -35,10 +35,11 @@ use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
+use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
@@ -111,7 +112,7 @@ where
 
                 debug!("ApplyMotifNets::run: channel={channel} channels_motifs={motif_id}");
 
-                load_motif_net.run_cached(Arc::new(DevicesWrap::wrap_cpu(LoadMotifNetInput::new(motif_id, channel as u32))), stage_ctx).await
+                load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(motif_id, channel as u32), 0)), stage_ctx).await
             }
         })
         .buffered(10)//TODO config order is important to keep output tensor same
@@ -289,6 +290,7 @@ struct ApplyMotifNetInput<'a> {
 
 impl Data for ApplyMotifNetInput<'_> {
     type Metrics = MonoMetrics<0, 3>;
+    type M = CpuOnly<Self>;
 
     fn size(&self) -> Self::Metrics {
         MonoMetrics::<0, 3>::try_from(self.batch.size()).unwrap_or_default()
@@ -558,7 +560,7 @@ pub(crate) mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
-    use thoosa_shared::{CopyToDevice, MotifKind, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::perf_logging::PERF;
     use thoosa_shared::traits::Named;
     use thoosa_shared::traits::SimpleId;

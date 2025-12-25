@@ -22,6 +22,7 @@ use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
+use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::run_configs::RunId;
@@ -108,6 +109,7 @@ impl CopyToDevice for StackedMotifsOutput {
 
 impl Data for StackedMotifsOutput {
     type Metrics = MonoMetrics<1,3>;
+    type M = CpuOrGpu<Self>;
 
     fn size(&self) -> Self::Metrics {
         self.motifs.size()
@@ -204,9 +206,12 @@ where
         let done_cnt = Arc::new(AtomicU32::new(0));
         let mut motif_avg_dists = Arc::new(parking_lot::RwLock::new(HashMap::new()));
 
-        let input = input.clone_from_cpu().await?;
+        let find_motifs_run_config = with_data!(Arc::clone(&ctx), 0, input; |input: &StackedMotifsInput|{
+            Ok::<Arc<FindMotifsRunConfig>, ThoosaError>(Arc::clone(&input.find_motifs_run_config))
+        })?;
 
-        let motif_ids = self.store.read().list_motifs(input.find_motifs_run_config.id.expect("no id in find_motifs_run_config"))?;
+        let find_motifs_run_config_id = find_motifs_run_config.id;
+        let motif_ids = self.store.read().list_motifs(find_motifs_run_config_id.expect("no id in find_motifs_run_config"))?;
 
         let loaded_motifs = futures::stream::iter(motif_ids)
             .map( |motif_id| {
@@ -219,11 +224,10 @@ where
                 let ctx_for_clc = Arc::clone(&ctx);
                 let motif_avg_dists = Arc::clone(&motif_avg_dists);
 
-                let find_motifs_run_config_id = input.find_motifs_run_config.id;
                 // let select_motifs_run_config_id = input.select_motifs_run_config.id;
 
                 async move {
-                    let motif_id_wrap = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::find_motif_slices_only((motif_id as u32).into())));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
+                    let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id as u32).into()), cache_area));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
                     let motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx).await?;
 
 
@@ -265,8 +269,8 @@ where
                 |mut acc, item| {
 
                     assert_eq!(
-                        input.find_motifs_run_config.window, item.extra().window,
-                        "window is not same: find_motifs_run_config.window={} item.extra().window={}item.extra().window, motif_id={:?}", input.find_motifs_run_config.window, item.extra().window, item.data().id()
+                        find_motifs_run_config.window, item.extra().window,
+                        "window is not same: find_motifs_run_config.window={} item.extra().window={}item.extra().window, motif_id={:?}", find_motifs_run_config.window, item.extra().window, item.data().id()
                     );
 
                     if item.size().dim_0() < 1000 {//TODO config + sample random 1000
@@ -280,7 +284,7 @@ where
                 .iter()
                 .map(|v|
                     v.iter()
-                    .map(|t|t.size()[0] as usize)//num motif slices known for each motif
+                    .map(|t|t.size().dim_0() as usize)//num motif slices known for each motif
                     .sum::<usize>())
                 .max().unwrap_or(0);
 
@@ -296,7 +300,7 @@ where
 
                 let channel_motifs_tensors = channel_motifs.iter().map(|motif|  {
                     debug!("SelectMotifsStage::run: motif={motif:?} id={}", motif.id());
-                    for _ in 0..motif.size()[0] {
+                    for _ in 0..motif.size().dim_0() {
                         channels_motif_ids[c as usize].push(motif.id().clone());
                     }
 
@@ -309,7 +313,7 @@ where
 
                 let (motifs_t, moitf_avg_dists_t) = if channel_motifs_tensors.is_empty() {
                     (
-                        Tensor::zeros(&[max_motif_slices as i64, input.find_motifs_run_config.window  as i64], (Float, ThoDevice::from(device_idx).into())),
+                        Tensor::zeros(&[max_motif_slices as i64, find_motifs_run_config.window  as i64], (Float, ThoDevice::from(device_idx).into())),
                         Tensor::zeros(&[max_motif_slices as i64], (Float, ThoDevice::from(device_idx).into()))
                     )
 
@@ -321,7 +325,7 @@ where
                         read_guard.get(&motif.id()).map(|avg_dist|{
                              debug!("SelectMotifsStage::run: motif.id={} dist={avg_dist}", motif.id());
 
-                             Some(Tensor::from_slice(vec![*avg_dist; motif.size()[0] as usize].as_slice()))
+                            Some(Tensor::from_slice(vec![*avg_dist; motif.size().dim_0() as usize].as_slice()))
                         })
 
                     })
@@ -332,9 +336,9 @@ where
                     let motif_avg_dists_t = Tensor::cat(&channel_avg_dists_tensors, 0).to_device(ThoDevice::from(device_idx).into());
 
                     if channel_t.size()[0] < max_motif_slices as i64 {
-                        debug!("SelectMotifsStage::run: c={c}, channel_t.size={:?} padding to {:?}", channel_t.size(), [max_motif_slices as i64, input.find_motifs_run_config.window  as i64]);
+                        debug!("SelectMotifsStage::run: c={c}, channel_t.size={:?} padding to {:?}", channel_t.size(), [max_motif_slices as i64, find_motifs_run_config.window  as i64]);
                         (
-                            pad_to(&channel_t, &[max_motif_slices as i64, input.find_motifs_run_config.window  as i64]).expect("pad to failed"),
+                            pad_to(&channel_t, &[max_motif_slices as i64, find_motifs_run_config.window  as i64]).expect("pad to failed"),
                             pad_to(&motif_avg_dists_t, &[max_motif_slices as i64]).expect("pad to failed")
                         )
 
@@ -360,7 +364,7 @@ where
             trace!("SelectMotifsStage::run: channels_motif_avg_dists_t=\n{channels_motif_avg_dists_t}");
             trace!("SelectMotifsStage::run: channels_motifs_t=\n{channels_motifs_t}");
 
-            let find_motifs_run_id = input.find_motifs_run_config.id.expect("no id in find_motifs_run_config");
+            let find_motifs_run_id = find_motifs_run_config.id.expect("no id in find_motifs_run_config");
             // let select_motifs_run_id = input.select_motifs_run_config.id.expect("no id in select_motifs_run_config");
             //select_motifs_run_id  -
             let select_motifs_run_id = vec![];//can be used to return select_motifs_run_i ran earlier on find_motifs_run_id
@@ -379,7 +383,7 @@ where
                 StackedMotifsOutputId::new(find_motifs_run_id, select_motifs_run_id),
                 DataWithExtra::new(
                     motifs,
-                    (channels_motif_ids, Arc::clone(&input.find_motifs_run_config), vec![])
+                    (channels_motif_ids, Arc::clone(&find_motifs_run_config), vec![])
                 ),
                 motif_avg_dists,
             ), cache_area)))

@@ -7,6 +7,7 @@ edition.workspace = true
 thoosa_shared = { path = "../../thoosa_shared" }
 thoosa_common = { path = "../../thoosa_common" }
 caching_runner = { path = "../caching_runner" }
+thoosa_with_data = {path  = "../../thoosa_macros/thoosa_with_data"}
 cached_derive.workspace = true
 
 tokio.workspace = true

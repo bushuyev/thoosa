@@ -32,17 +32,11 @@ pub fn derive_dummy_data(input: TokenStream) -> TokenStream {
     };
 
     let expanded = quote! {
-        #[automatically_derived]
-        #[async_trait::async_trait]
-        impl #impl_generics ::thoosa_shared::CopyToDevice for #ident #ty_generics #where_clause {
-            async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, thoosa_shared::ThoosaError> {
-                #copy_body
-            }
-        }
 
         #[automatically_derived]
         impl #impl_generics ::thoosa_shared::traits::Data for #ident #ty_generics #where_clause {
             type Metrics = ();
+            type M = thoosa_shared::copy_mode::CpuOnly<Self>;
 
             fn size(&self) -> Self::Metrics {
                 ()

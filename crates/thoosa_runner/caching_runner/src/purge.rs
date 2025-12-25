@@ -1,4 +1,4 @@
-use crate::common::cachable::DevicesWrap;
+use crate::common::cachable::{DevicesWrapCopyMode, DevicesWrap};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::StreamExt;
@@ -23,7 +23,6 @@ pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
         ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
         device_idx: usize,
     ) -> Result<(), ThoosaError>;
-    // async fn purge(&self, device_idx: usize);
 
     async fn purge_cpu(&self, i: u64);
 }
@@ -34,6 +33,7 @@ impl<K, O> FuturesRunnerMapPurger
 where
     K: CachableIdTr + Clone + Send + Sync + 'static + Eq + Hash,
     O: Data + CopyToDevice + Output + Send + Sync + 'static,
+    <O as Data>::M: DevicesWrapCopyMode<O>,
 {
     async fn purge_cpu(&self, purge_since: u64) {
         self.retain(|k, v| {
@@ -105,6 +105,7 @@ mod tests {
     use std::time::Duration;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::traits::{DummyCachableId, WithId};
+    use thoosa_shared::copy_mode::CpuOrGpu;
 
     #[derive(Debug, Clone)]
     struct DummyOutput {
@@ -139,6 +140,7 @@ mod tests {
 
     impl Data for DummyOutput {
         type Metrics = [usize; 1];
+        type M = CpuOrGpu<Self>;
 
         fn size(&self) -> Self::Metrics {
             [1]
@@ -156,7 +158,7 @@ mod tests {
         }
     }
 
-    impl Output for DummyOutput {}
+    impl Output for DummyOutput {  }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tasks_are_throttled_and_complete() -> Result<(), ThoosaError> {

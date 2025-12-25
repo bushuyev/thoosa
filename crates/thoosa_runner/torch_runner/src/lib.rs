@@ -117,13 +117,14 @@ mod tests {
     use parking_lot::RwLock;
     use std::collections::{HashMap, HashSet};
     use std::mem;
+    use std::ops::Mul;
     use std::sync::Arc;
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
     use tch::{Device, IndexOp, Kind, Scalar, Tensor};
     use thoosa_common::applicables::ThoDevice;
     use thoosa_common::cuda_utils::cuda_mem;
-    use thoosa_common::dims::Dims;
+    use thoosa_common::dims::{AnyDims, Dims};
     use thoosa_common::utils::lin_for_size;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
@@ -131,6 +132,8 @@ mod tests {
     use thoosa_shared::{MyError, ThoosaError};
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::{EnvFilter, fmt};
+    use caching_runner::tmp_cache::TmpCached;
+    use thoosa_shared::copy_mode::CpuOnly;
 
     #[ctor::ctor]
     fn init() {
@@ -234,7 +237,7 @@ mod tests {
     pub struct LoaderInput {
         id: LoaderInputId,
     }
-    impl Input for LoaderInput {}
+    impl Input for LoaderInput {  }
 
     impl WithId for LoaderInput {
         type ID = LoaderInputId;
@@ -262,6 +265,7 @@ mod tests {
     #[async_trait]
     impl Data for LoaderInput {
         type Metrics = ();
+        type M = CpuOnly<Self>;
 
         fn size(&self) -> Self::Metrics {
             ()
@@ -826,12 +830,12 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
 
         loaded_tensor_0_0
             .with_data_ref(load_to_device,
-                           Arc::clone(&ctx_device_0), None, |tensor_data_0_1: &ThoTensor<LoadedTensor, SimpleId>| {
-                                           // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
+               Arc::clone(&ctx_device_0), None, move|tensor_data_0_1: &ThoTensor<LoadedTensor, SimpleId>| {
+                   // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
-                                           assert_eq!(&tensor_data_0_0, tensor_data_0_1.t_ref());
-                                           Ok(())
-                                       })
+                   assert_eq!(&tensor_data_0_0, tensor_data_0_1.t_ref());
+                   Ok(())
+               })
             .await?;
         // let tensor_data_0_0 = loaded_tensor_0_0.load_from_any_device(load_to_device, None).await?;
 
@@ -1416,4 +1420,47 @@ impl Select<LoadedRange> for ThoTensor<LoadedTensor, SimpleId> {
             // .event_format(InlineSpanNames) - doesn't really add more info. with #[instrument] put on methods span names apper in the log
             .init();
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_with_thotensor() -> Result<(), ThoosaError> {
+
+
+        GlobalCtx::init_devices(2);
+        let tmp_cache: TmpCached<ThoTensor<AnyDims, SimpleId>> = TmpCached::new("test", 0).await;
+
+
+        tokio::spawn(async move {
+            let tensor_0 = Tensor::from_slice(&[0., 1., 2.]);
+            let tensor = Tensor::from_slice(&[0., 1., 2.]);
+            debug!("device={:?}", tensor.device());
+
+            tmp_cache.insert(ThoTensor::<AnyDims, SimpleId>::new(SimpleId("test"), tensor)?);
+            let wrap = tmp_cache.get(&SimpleId("test")).unwrap();
+
+            let v = &wrap.load_from_any_device_(1).await?;
+
+            //ThoTensor is sync so &ThoTensor is Send =
+            async {
+                GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await?;
+                //can't drop self.id=SimpleId("test"), locked
+                Ok::<_, ThoosaError>(())
+            }.await?;
+
+            //copies from cpu
+            // let v = &wrap.load_from_any_device_(1).await?;
+            debug!("tensor={tensor_0:?}, v={v:?}");
+
+            Ok::<(),ThoosaError>(())
+
+
+        }).await??;
+
+
+
+        Ok(())
+    }
+
+
 }
+
+

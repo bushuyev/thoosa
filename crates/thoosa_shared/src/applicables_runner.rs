@@ -1,5 +1,5 @@
 use crate::rayon_future::RayonFuture;
-use crate::traits::{Named, SimpleId, WithId};
+use crate::traits::{Data, Named, SimpleId, WithId};
 use async_trait::async_trait;
 use dashmap::{DashMap, DashSet, Entry};
 use futures::future::{BoxFuture, Shared};
@@ -18,14 +18,16 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::thread;
 use std::time::Instant;
+use crate::copy_mode::{CopyMode, CpuOnly};
 
 pub type CachableId = SimpleId;
 
-pub trait Input: Debug {
+pub trait Input: Data + Debug {
+
 }
 
-#[async_trait]
-pub trait Output: WithId + Debug {
+pub trait Output: Data + WithId + Debug {
+
 }
 
 impl <O> WithId for Arc<O>  where O:WithId + Debug {
@@ -35,7 +37,8 @@ impl <O> WithId for Arc<O>  where O:WithId + Debug {
         self.as_ref().id()
     }
 }
-impl <O> Output for Arc<O> where O:Output + Debug {}
+impl <O> Output for Arc<O> where O:Output + Debug {
+}
 
 impl Named for (){
 
@@ -48,9 +51,7 @@ impl WithId for () {
     }
 }
 
-impl Output for () {
-
-}
+impl Output for () {}
 
 impl WithId for CachableId {
     type ID = CachableId;
@@ -60,8 +61,20 @@ impl WithId for CachableId {
     }
 }
 
-impl Input for CachableId {
+impl Data for CachableId {
+    type Metrics = usize;
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        self.0.len()
+    }
+
+    fn device(&self) -> usize {
+        0
+    }
 }
+
+impl Input for CachableId {}
 
 pub trait ToOrdinal: Debug + Sync + Send {
     fn ordinal(&self) -> usize;

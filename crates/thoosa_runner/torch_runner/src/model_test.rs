@@ -40,6 +40,8 @@ mod tests {
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{CachableIdTr, Metrics, Named, SimpleId, WithId};
     use thoosa_shared::{MyError, ThoosaError};
+    use thoosa_shared::copy_mode::CpuOnly;
+    use thoosa_with_data::with_data;
 
     #[ctor::ctor]
     fn init() {
@@ -137,7 +139,7 @@ mod tests {
     struct FileInput {
         id: FileInputId,
     }
-    impl Input for FileInput {}
+    impl Input for FileInput {  }
     impl WithId for FileInput {
         type ID = FileInputId;
         fn id(&self) -> &Self::ID {
@@ -160,6 +162,7 @@ mod tests {
     #[async_trait]
     impl Data for FileInput {
         type Metrics = ();
+        type M = CpuOnly<Self>;
 
         fn size(&self) -> Self::Metrics {
             ()
@@ -534,8 +537,9 @@ mod tests {
 
             // Materialize all features to the target device and build a single stacked batch
             // let feat_refs: Vec<&DataCacheWrapper<ThoTensor2<ABData, SimpleId>>> = feats.iter().map(|a| &**a).collect();
-            let output = DevicesWrap::with_data_array(&feats, device_idx, None, |data| {
-                // data: &[&ThoTensor<ABData>] aligned with label_vec
+
+            let output = with_data!(Arc::clone(&ctx),device_idx,[feats];|data:&[&ThoTensor<ABData, SimpleId>]|{
+
                 let ax_id = SimpleId::from(format!("ax_{}", input.id()));
                 let first = data
                     .first()
@@ -570,8 +574,9 @@ mod tests {
                     },
                     &data[1..],
                 )
-            })
-            .await?;
+            })?;
+
+
 
             Ok(Arc::new(DevicesWrap::wrap(
                 output,
@@ -799,7 +804,7 @@ mod tests {
             Self { files, id }
         }
     }
-    impl Input for FileListInput {}
+    impl Input for FileListInput {  }
     impl WithId for FileListInput {
         type ID = SimpleId;
         fn id(&self) -> &Self::ID {
@@ -820,6 +825,7 @@ mod tests {
     #[async_trait]
     impl Data for FileListInput {
         type Metrics = ();
+        type M = CpuOnly<Self>;
 
         fn size(&self) -> Self::Metrics {
             ()

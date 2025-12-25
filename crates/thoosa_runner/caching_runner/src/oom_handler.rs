@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use crate::common::{PermitsCtx, RunCtx};
-use crate::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
+use crate::common::cachable::{DevicesWrapCopyMode, DevicesWrap, WithDataRef, WithSelectDataRef};
 use crate::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::common::{DropIf, OutId};
 #[double]
@@ -321,8 +321,10 @@ where
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default + 'static,
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Data + CopyToDevice + Send + Sync + 'static,
+    for<'i> <<R as Stage>::In<'i> as Data>::M: DevicesWrapCopyMode<R::In<'i>>,
     <R as Stage>::In<'static>: Select<S, Output = <R as Stage>::In<'static>>,
     R::Out: Data + CopyToDevice + WithId + Send + Sync + 'static,
+    <R::Out as Data>::M: DevicesWrapCopyMode<R::Out>,
 {
     adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
     #[allow(dead_code)]
@@ -339,8 +341,10 @@ where
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default + 'static,
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Data + CopyToDevice + Send + Sync + 'static,
+    for<'i> <<R as Stage>::In<'i> as Data>::M: DevicesWrapCopyMode<R::In<'i>>,
     <R as Stage>::In<'static>: Select<S, Output = <R as Stage>::In<'static>>,
     R::Out: Data + CopyToDevice + WithId + Send + Sync + 'static,
+    <R::Out as Data>::M: DevicesWrapCopyMode<R::Out>,
 {
     pub fn new(
         adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
@@ -624,6 +628,7 @@ pub(crate) mod test_types {
     // use crate::common::Data;
     use crate::test_utils::DummyTensor;
     use thoosa_shared::applicables_runner::{Input, Output};
+    use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::traits::WithId;
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -658,13 +663,14 @@ pub(crate) mod test_types {
         }
     }
 
-    impl Input for TestInput {}
+    impl Input for TestInput {  }
 
     impl Adjustable for TestInput {}
 
     #[async_trait]
     impl Data for TestInput {
         type Metrics = [usize; 1];
+        type M = CpuOrGpu<Self>;
 
         fn size(&self) -> Self::Metrics {
             [self.data.0.len()]
@@ -730,6 +736,7 @@ pub(crate) mod test_types {
     #[async_trait]
     impl Data for TestOutput {
         type Metrics = [usize; 1];
+        type M = CpuOrGpu<Self>;
 
         fn size(&self) -> Self::Metrics {
             [1]
@@ -764,7 +771,7 @@ pub(crate) mod test_types {
         }
     }
 
-    impl Output for TestOutput {}
+    impl Output for TestOutput {  }
 }
 
 #[cfg(test)]

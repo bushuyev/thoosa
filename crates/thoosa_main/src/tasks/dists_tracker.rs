@@ -17,7 +17,7 @@ use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::{IndexOp, Kind, Tensor};
 use tokio::runtime::Handle;
 use futures::{stream, StreamExt};
-use tch::Device::Cpu;
+use tch::Device::{Cpu, Cuda};
 use tch::Kind::{Bool, Float, Uint8};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
@@ -25,6 +25,7 @@ use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_shared::CopyToDevice;
+use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::Data;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::find::{FixedFindMotifsConfig, SimpleMotifTracker};
@@ -36,7 +37,7 @@ use thoosa_store::fs_store::FileMotifTrackerStore;
 use thoosa_store::{SqlMotifTrackerStore, Store};
 use thoosa_common::tho_tensor::ThoTensor;
 
-//Don't implement Data & CopyToDevice for DistsMask - it's to be copied only once from cuda to cpu. Never cached.
+// Data impl is minimal; DistsMask is still meant for one-way GPU->CPU copies.
 #[derive(Debug)]
 pub struct DistsMask {
     mask: Tensor,
@@ -56,6 +57,23 @@ impl WithId for DistsMask {
 
     fn id(&self) -> &Self::ID {
         todo!()
+    }
+}
+
+impl Data for DistsMask {
+    type Metrics = ();
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
+        match self.mask.device() {
+            Cpu => 0,
+            Cuda(idx) => idx as usize,
+            _ => 0,
+        }
     }
 }
 

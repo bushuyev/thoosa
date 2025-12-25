@@ -1,6 +1,5 @@
 use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::run_ctx_2::{MotifsCtx, RunCtx2};
-use async_trait::async_trait;
+use crate::tasks::run_ctx_2::MotifsCtx;
 use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
@@ -10,16 +9,15 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use tch::Device;
-use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use caching_runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::dims::Dims;
-use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
 use thoosa_common::tho_tensor::ThoTensor;
-use crate::tasks::transforms::freq_filter::FreqFilter;
+use thoosa_with_data::with_data;
 // use crate::tasks::stages_seq::StagesSeq;
 
 type LoadFn =
@@ -73,16 +71,13 @@ where
         let num_devices = GlobalCtx::global().device_count();
         let target_device = self.device.ordinal();
 
-        input
-            .with_data_ref(0,
-                           Arc::clone(&ctx), None, |resource: &Resource| {
-                                           let tensor = (self.loader_fn)(resource, &self.device)?;
-                                           Ok(Arc::new(DevicesWrap::wrap(
-                                               tensor,
-                                               cache_area,
-                                           )))
-                                       })
-            .await
+        with_data!(Arc::clone(&ctx), 0, input; |resource: &Resource| {
+            let tensor = (self.loader_fn)(resource, &self.device)?;
+            Ok::<Arc<DevicesWrap<Self::Out>>, ThoosaError>(Arc::new(DevicesWrap::wrap(
+                tensor,
+                cache_area,
+            )))
+        })
     }
 
     fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
@@ -131,7 +126,7 @@ pub(crate) mod mock_tensor_loader {
     use caching_runner::common::cachable::{Cached, DevicesWrap};
     use caching_runner::common::{MockRunCtx, OutId};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use thoosa_shared::{CopyToDevice, ThoosaError};
+    use thoosa_shared::ThoosaError;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{Named, SimpleId};
     use thoosa_shared::traits::WithId;
@@ -139,12 +134,7 @@ pub(crate) mod mock_tensor_loader {
     use crate::tasks::cross_dims::ChannelsData2;
     use dashmap::DashMap;
     use parking_lot::RwLock;
-    use tch::kind::FLOAT_CPU;
     use tch::Tensor;
-    use tokio::runtime::Handle;
-    use tokio::task::block_in_place;
-    use caching_runner::global_ctx::GlobalCtx;
-
     mock! {
         #[derive(Debug)]
         pub TensorLoader {}
@@ -235,7 +225,6 @@ mod tests {
     use crate::tasks::cross_dims::ChannelsData2;
     use thoosa_common::applicables::ThoDevice;
     use thoosa_shared::ThoosaError;
-    use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::SimpleId;
     use thoosa_common::tho_tensor::ThoTensor;

@@ -5,6 +5,7 @@ use crate::common::*;
 use async_trait::async_trait;
 use log::debug;
 use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 #[cfg(test)]
 use thoosa_shared::traits::{Data, DummyCachableId, MockData, MockWithId, Select, WithId};
 
@@ -115,7 +116,7 @@ impl Select<std::ops::Range<[usize; 1]>> for MockDataWithId {
 #[cfg(test)]
 impl Data for MockDataWithId {
     type Metrics = [usize; 1];
-
+    type M = CpuOrGpu<Self>;
 
     fn size(&self) -> Self::Metrics {
         self.data.size()

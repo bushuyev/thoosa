@@ -1,11 +1,11 @@
 use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
 #[cfg(test)]
 use crate::tasks::cross_batch_clc::CrossUnfoldClc;
-use crate::tasks::cross_dims::{ChannelsData2};
+use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::{RawTensorLoader};
+use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
-use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use caching_runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
@@ -27,6 +27,8 @@ use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_shared::copy_mode::CpuOnly;
+use thoosa_with_data::with_data;
 
 // #[derive(Debug, cached_derive::Cached)]
 // #[cache_name = "LoadedTensorId"]
@@ -220,7 +222,10 @@ impl<ResC, L, CLC, RSV, R, C> AsyncStage for CrossLoader<ResC, L, CLC, RSV, R, C
 where
     C:RunCtx+'static,
     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
+    ResourcesConfigInput<ResC>: Data<M=CpuOnly<ResourcesConfigInput<ResC>>> + WithId + Send + Sync,
+    CpuOnly<ResourcesConfigInput<ResC>>: DevicesWrapCopyMode<ResourcesConfigInput<ResC>>,
     Self::Out: Data + WithId + Send + Sync,
+    <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
@@ -237,16 +242,15 @@ where
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
         let device_idx = ctx.read().device_idx();
 
-        let resources = input.with_data_ref(0,
-            Arc::clone(&ctx), None, |input: &ResourcesConfigInput<ResC>|{
-                        Ok(input
-                            .resources_config
-                            .to_resources(&self.store)?
-                            .into_iter()
-                            .filter(|r|r.length() > self.step)
-                            .map(|r| Arc::new(r))
-                            .collect::<Vec<_>>())
-                    }).await?;
+        let resources = input.with_data_ref(0, Arc::clone(&ctx), None, |input: &ResourcesConfigInput<ResC>|{
+                Ok(input
+                    .resources_config
+                    .to_resources(&self.store)?
+                    .into_iter()
+                    .filter(|r|r.length() > self.step)
+                    .map(|r| Arc::new(r))
+                    .collect::<Vec<_>>())
+            }).await?;
 
         debug!("CrossLoader::run:  max_batch={max_batch} resources={resources:?}");
 
@@ -262,7 +266,7 @@ where
             info!("CrossLoader::run: on i_0={i_0} resource_0={resource_0:?}");
 
             let t_0 = Arc::clone(&self.loader)
-                .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_0.as_ref().clone())), Arc::clone(&ctx))
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone(), 0)), Arc::clone(&ctx))
                 .await?;
 
             t_0_batch_len += t_0.size().dim_1();
@@ -284,7 +288,7 @@ where
             {
 
                 let t_1 = Arc::clone(&self.loader)
-                    .run_cached(Arc::new(DevicesWrap::wrap_cpu(resource_1.as_ref().clone())), Arc::clone(&ctx))
+                    .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone(), 0)), Arc::clone(&ctx))
                     .await?;
 
                 t_1_batch_len += t_1.size().dim_1();
@@ -297,14 +301,10 @@ where
                 }
 
                 debug!("CrossLoader::run: t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}");
+                let batches_concated = [t_0_batch.clone(), t_1_batch].concat();
+                let mut cross_clc_output = with_data!(Arc::clone(&ctx), device_idx, [batches_concated]; |data|{
 
-                let mut cross_clc_output = DevicesWrap::with_data_array(//TODO replace with with_data!
-                    [t_0_batch.clone(), t_1_batch].concat().as_slice(), //t_0_batch and t_1_batch are DataCacheWrappers
-                    device_idx,
-                    None,
-                    |data| {
-
-                        let input = CrossInput::new(
+                     let input = CrossInput::new(
                             data,
                             t_0_batch_resources.as_slice(),
                             t_1_batch_resources.as_slice(),
@@ -314,11 +314,8 @@ where
 
                         let mut out = Arc::clone(&self.batch_clc).do_run(&input, Arc::clone(&ctx))?;
 
-                        Ok(out)
-
-                    },
-                )
-                .await?;
+                        Ok::<_, ThoosaError>(out)
+                })?;
 
                 let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await;
 
@@ -343,14 +340,13 @@ where
 
         (self.on_all_done)(&receiver).await;
 
-        Ok(Arc::new(DevicesWrap::wrap_cpu(CrossResult::new(self.out_id(WithId::id(input.as_ref()))))))
+        Ok(Arc::new(DevicesWrap::wrap(CrossResult::new(self.out_id(WithId::id(input.as_ref()))), 0)))
     }
 }
 
 
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_clc {
-    use super::RunCtx2;
     use caching_runner::common::runnable::{Stage, SyncStage};
     use caching_runner::common::RunCtx;
     use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
@@ -471,7 +467,6 @@ pub(crate) mod mock_cross_loader_clc {
 
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_receiver {
-    use super::RunCtx2;
     use caching_runner::common::runnable::{Stage, SyncStage};
     use caching_runner::common::RunCtx;
     use mockall::mock;
@@ -561,7 +556,7 @@ pub(crate) mod mock_cross_loader_receiver {
 mod tests {
     use super::mock_cross_loader_clc;
     use super::mock_cross_loader_receiver;
-    use crate::tasks::tensor_loader::{mock_tensor_loader};
+    use crate::tasks::tensor_loader::mock_tensor_loader;
     use super::*;
     use crate::cli::Commands::FindMotifs;
     use crate::tasks::cross_batch_clc::{CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
@@ -608,7 +603,7 @@ mod tests {
         batch_1_ids: Vec<u32>,
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, DummyData)]
     struct TestBatchOutput {
         id: SimpleId,
         call_index: usize,

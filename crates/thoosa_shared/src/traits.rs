@@ -14,6 +14,7 @@ use uuid::Uuid;
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use thoosa_dummy_data_derive::DummyData;
+use crate::copy_mode::{CopyMode, CpuOnly};
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
@@ -512,9 +513,11 @@ impl From<usize> for MonoMetrics<0, 1> {
 
 #[async_trait]
 #[delegatable_trait]
-#[automock(type D=MockCopyToDevice; type Metrics=[usize;1]; type Sub=Self; type SubSelect=Range<<Self as Data>::Metrics>;)]
+#[automock(type D=MockCopyToDevice; type Metrics=[usize;1]; type M=CpuOnly<Self>; type Sub=Self; type SubSelect=Range<<Self as Data>::Metrics>;)]
 pub trait Data: Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default;
+
+    type M:CopyMode;
 
     fn size(&self) -> Self::Metrics;
 
@@ -523,6 +526,67 @@ pub trait Data: Debug {
     fn device(&self) -> usize;
 
     fn mem_size(&self) -> u64 {
+        // let x:CpuOnly<Self> = CpuOnly::new();
+        0
+    }
+}
+
+impl WithId for MockData {
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+
+impl <D:Data + ?Sized> Data for &D {
+    type Metrics = D::Metrics;
+    type M = D::M;
+
+    fn size(&self) -> Self::Metrics {
+        <D as Data>::size(*self)
+    }
+
+    fn track_used_in(&self, token: &'static str) {
+        <D as Data>::track_used_in(*self, token)
+    }
+
+    fn device(&self) -> usize {
+        <D as Data>::device(*self)
+    }
+
+    fn mem_size(&self) -> u64 {
+        <D as Data>::mem_size(*self)
+    }
+
+
+}
+
+impl <D> Data for Arc<D>
+where
+    D:Data
+{
+    type Metrics = D::Metrics;
+    type M = D::M;
+
+    fn size(&self) -> Self::Metrics {
+        self.as_ref().size()
+    }
+
+    fn device(&self) -> usize {
+        self.as_ref().device()
+    }
+}
+
+impl Data for (){
+    type Metrics = ();
+    type M = CpuOnly<()>;
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
         0
     }
 }

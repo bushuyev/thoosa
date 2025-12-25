@@ -9,9 +9,7 @@ use std::sync::Arc;
 use tch::kind::FLOAT_CPU;
 use tch::{Device, IndexOp, Kind, TchError, Tensor};
 use thoosa_common::dims::{TCD, TCDF};
-use thoosa_common::find_motifs_run_config::{
-    FindMotifsApplicableOutput, FindMotifsRunConfig,
-};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig};
 use thoosa_common::loader::SyncWrapper;
 use thoosa_common::utils::{SplitQueue, Splittable};
 use thoosa_shared::TensorIdSliceIdx;
