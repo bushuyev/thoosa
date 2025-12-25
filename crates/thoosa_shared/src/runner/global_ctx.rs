@@ -228,7 +228,7 @@ impl GlobalCtx {
 #[cfg(test)]
 pub mod mock_global_ctx {
     use mockall::predicate::always;
-    use thoosa_shared::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
+    use crate::runner::global_ctx::{ MockGlobalCtx};
 
     pub struct MockGlobalCtxBuilder {
         mock: MockGlobalCtx,
@@ -276,7 +276,7 @@ pub mod mock_global_ctx {
     }
 
     pub fn build_default() -> MockGlobalCtx {
-        mock_global_ctx::build()
+        build()
             .with_age(0)
             .with_dump_all_to_cpu()
             .with_reset_all_on_cpu()

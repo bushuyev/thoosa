@@ -524,6 +524,8 @@ name = "cached_derive"
 version = "0.1.0"
 dependencies = [
  "log",
+ "mockall",
+ "mockall_double",
  "proc-macro2",
  "quote",
  "simplelog",
@@ -4736,6 +4738,7 @@ dependencies = [
  "libloading",
  "log",
  "mockall",
+ "mockall_double",
  "parking_lot",
  "plotters",
  "polars",

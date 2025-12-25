@@ -80,9 +80,8 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
 
                 #register_static_ident
                     .get_or_init(|| async move {
-                        #[mockall_double::double]
-                        use thoosa_shared::runner::global_ctx::GlobalCtx;
-                        GlobalCtx::global()
+
+                        thoosa_shared::runner::global_ctx::GlobalCtx::global()
                             .register_cache((
                                 cache_name,
                                 map as &'static dyn thoosa_shared::runner::purge::FuturesRunnerMapPurger,
