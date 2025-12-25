@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tch::nn::{Optimizer, VarStore};
 use tch::Device;
-use thoosa_common::applicables::ThoDevice;
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::batches::AsyncDataBatch;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};

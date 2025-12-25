@@ -578,7 +578,7 @@ mod tests {
     use std::time::Duration;
     use futures_util::sink::With;
     use tch::{Device, Tensor};
-    use thoosa_common::applicables::ThoDevice;
+    use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::ws::FsWorkspace;
     use thoosa_motifs::distance::MaskMaker::Tril;

@@ -10,7 +10,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use tch::Device;
 use caching_runner::common::cachable::{Cached, DevicesWrap};
-use thoosa_common::applicables::ThoDevice;
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::Dims;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
@@ -223,7 +223,7 @@ mod tests {
     use std::sync::Arc;
     use tch::{Device, Tensor};
     use crate::tasks::cross_dims::ChannelsData2;
-    use thoosa_common::applicables::ThoDevice;
+    use thoosa_common::tho_device::ThoDevice;
     use thoosa_shared::ThoosaError;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::SimpleId;

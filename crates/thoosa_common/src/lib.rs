@@ -6,7 +6,7 @@ use tch::Device;
 pub mod utils;
 
 mod acquisitions;
-pub mod applicables;
+pub mod tho_device;
 mod argmin;
 pub mod batches;
 mod bfgs;

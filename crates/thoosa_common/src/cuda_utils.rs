@@ -12,7 +12,7 @@ use tokio::task::JoinSet;
 use tokio_utils::Pool;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::memcpy::CuResult;
-use thoosa_shims::stream::ThoCudaStream;
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use crate::utils::os_thread_id;
 
 pub struct PinnedHostBuffer {
@@ -976,4 +976,19 @@ mod tests {
 
     }
 
+}
+
+pub fn with_cuda_stream<F, R>(tho_device_idx:usize, mut f:F) -> (R, Option<ThoCudaStream>)
+where
+    F:FnMut() -> R
+{
+
+    if tho_device_idx > 0 {
+        let motifs_stream = ThoCudaStream::new((tho_device_idx - 1) as i32); //TODO
+        let _guard = ThoStreamGuard::set(&motifs_stream);
+
+        (f(), Some(motifs_stream))
+    } else {
+        (f(), None)
+    }
 }

@@ -7,7 +7,7 @@ use cached_derive::Cached;
 use caching_runner::common::cachable::DevicesWrap;
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage};
-use thoosa_common::applicables::ThoDevice;
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice};
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
 use thoosa_common::ws::Workspace;

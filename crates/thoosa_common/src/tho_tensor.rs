@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use crate::applicables::ThoDevice;
+use crate::tho_device::ThoDevice;
 use crate::copy_ctx::CopyCtx;
 use crate::cuda_utils::tensor_mem_size;
 use crate::dims::{AnyDims, Dimensional, Dims};
@@ -141,7 +141,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
 }
 
 pub struct ThoTensor<D: Dims = AnyDims, Id: Named + Debug + Clone = ()> {
-    id: Id,//TODO remove
+    id: Id,
     pub t: Tensor,
 
     #[allow(dead_code)]

@@ -53,7 +53,7 @@ use serde::Deserialize;
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::{Bool, Float};
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
-use thoosa_common::applicables::{ThoDevice};
+use thoosa_common::tho_device::{ThoDevice};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::dims::{Dims, TCD, TCSD};
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig, SlicesFilter};

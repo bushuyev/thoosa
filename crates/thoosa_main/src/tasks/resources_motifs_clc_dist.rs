@@ -14,7 +14,7 @@ use tch::{IndexOp, Tensor};
 use caching_runner::common::runnable::{Stage, SyncStage};
 use caching_runner::common::{OutId, PermitsCtx, RunCtx};
 use caching_runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
-use thoosa_common::applicables::with_cuda_stream;
+use thoosa_common::cuda_utils::with_cuda_stream;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
 use thoosa_shared::applicables_runner::{Input, Output};

@@ -1,11 +1,7 @@
 use std::fmt::Debug;
 use std::ops::Deref;
 use tch::Device;
-use thoosa_shared::applicables_runner::{
-    CachableId, ToOrdinal,
-};
-use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-
+use thoosa_shared::applicables_runner::ToOrdinal;
 #[derive(Debug, Copy, Clone)]
 pub struct ThoDevice(Device);
 
@@ -38,21 +34,6 @@ impl From<usize> for ThoDevice {
     }
 }
 
-pub fn with_cuda_stream<F, R>(tho_device_idx:usize, mut f:F) -> (R, Option<ThoCudaStream>)
-where
-    F:FnMut() -> R
-{
-
-    if tho_device_idx > 0 {
-        let motifs_stream = ThoCudaStream::new((tho_device_idx - 1) as i32); //TODO
-        let _guard = ThoStreamGuard::set(&motifs_stream);
-
-        (f(), Some(motifs_stream))
-    } else {
-        (f(), None)
-    }
-}
-
 
 impl ThoDevice {
     pub fn ordinal(&self) -> usize {
@@ -62,26 +43,6 @@ impl ThoDevice {
             _ => {
                 unimplemented!()
             }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ThoRunCtx {
-    cache_area: u64,
-
-    loaded: Vec<CachableId>,
-    find_motifs: Vec<CachableId>,
-    motif_nets: Vec<CachableId>,
-}
-
-impl ThoRunCtx {
-    pub fn new(cache_area: u64) -> Self {
-        Self {
-            cache_area,
-            loaded: Vec::new(),
-            find_motifs: Vec::new(),
-            motif_nets: Vec::new(),
         }
     }
 }

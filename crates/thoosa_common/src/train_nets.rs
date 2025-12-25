@@ -48,7 +48,7 @@ use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
 
-use crate::applicables::{ThoDevice, ThoRunCtx};
+use crate::tho_device::{ThoDevice};
 use crate::batches::AsyncDataBatch;
 use crate::dims::{
     AnyDims, AnyMetrics, AnySub, Batch, ChannelsData, ChannelsMotifsData,
