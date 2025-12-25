@@ -71,3 +71,7 @@ motif_id handling should not be affected. Update usage sites as needed.  Add sim
 
 refactor Arbiter (crates/thoosa_runner/caching_runner/src/permits/runner_queue.rs:16) to keep track of granted permits. Add another HashMap similar to fail_counts and put requester_id with granted permits count whenever try_acquire_many_owned succeeds.
 The values should be removed when RunnerPerm is dropped. This can be done by adding requester_id to RunnerPerm and  replacing RunnerPerm::notify:Option<Arc<Notify>> with something what can be used to send requester_id back to Arbiter from RunnerPerm::drop (one shot channel or wrapper struct keeping both Notify and requester_id)
+
+fix tests_no_global_ctx_mock::test_cache_areas (crates/thoosa_shared/src/runner/test/mod.rs:1231) - it fails because mockall_double installs mocked GlobalCtx, perhaps because
+DummyLoader and   DummyRunCtx are defined in the tests module (mod.rs:329) . See if it's possible to move them into separate module where  GlobalCtx is not substitued and use it in tests_no_global_ctx_mock.
+But inside tests mod GlobalCtx should still be mocked. Make sure tests in both modules compile and run.

@@ -227,7 +227,8 @@ impl GlobalCtx {
 
 #[cfg(test)]
 pub mod mock_global_ctx {
-    use thoosa_shared::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
+    use mockall::predicate::always;
+    use crate::runner::global_ctx::{ MockGlobalCtx};
 
     pub struct MockGlobalCtxBuilder {
         mock: MockGlobalCtx,
@@ -240,6 +241,7 @@ pub mod mock_global_ctx {
         }
 
         pub fn with_age(mut self, out: u64) -> Self {
+            self.mock.expect_do_age();
             self.mock.expect_cache_age().return_const(out);
 
             self
@@ -247,6 +249,11 @@ pub mod mock_global_ctx {
 
         pub fn with_device_count(mut self, out: usize) -> Self {
             self.mock.expect_device_count().return_const(out);
+
+            self
+        }
+        pub fn with_register_cache(mut self) -> Self {
+            self.mock.expect_register_cache();
 
             self
         }
@@ -269,11 +276,12 @@ pub mod mock_global_ctx {
     }
 
     pub fn build_default() -> MockGlobalCtx {
-        mock_global_ctx::build()
+        build()
             .with_age(0)
             .with_dump_all_to_cpu()
             .with_reset_all_on_cpu()
             .with_device_count(2)
+            .with_register_cache()
             .finish()
     }
 

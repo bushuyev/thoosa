@@ -344,6 +344,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock};
+    use mockall_double::double;
     use tokio::sync::{OwnedSemaphorePermit, Semaphore};
     use cached_derive::Cached;
     use thoosa_shared::CopyToDevice;
@@ -355,10 +356,12 @@ mod tests {
     use crate::runner::common::{OutId, RunCtx, ambassador_impl_PermitsCtx, PermitsCtx, DropIf};
     use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx, MockGlobalCtx};
+    use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
     use crate::runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
     use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
     use crate::traits::Adjustable;
+    #[double]
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
 
     #[ctor::ctor]
     fn init() {
@@ -373,7 +376,7 @@ mod tests {
 
     #[derive(Debug, Delegate)]
     #[delegate(PermitsCtx, target = "perms_ctx")]
-    struct DummyRunCtx {
+    pub(crate) struct DummyRunCtx {
         device_idx: usize,
         loaded_tensors_cached: Vec<SimpleId>,
         multed_tensors_cached: Vec<DMulTaskOutputId>,
@@ -494,7 +497,7 @@ mod tests {
 
     #[derive(Debug, cached_derive::Cached)]
     #[cache_name = "LoadedTensorId"]
-    struct DummyLoader {
+    pub(crate) struct DummyLoader {
         run_count: AtomicUsize,
         len: usize,
     }
@@ -511,7 +514,7 @@ mod tests {
 
     }
 
-    struct DLoadedTensor {
+    pub(crate) struct DLoadedTensor {
         id: SimpleId,
         data: DummyTensor,
     }
@@ -575,7 +578,7 @@ mod tests {
     impl Input for DLoadedTensor {}
 
     impl DummyLoader {
-        fn new(len: usize) -> DummyLoader {
+        pub(crate) fn new(len: usize) -> DummyLoader {
             DummyLoader {
                 run_count: Default::default(),
                 len,
@@ -584,7 +587,7 @@ mod tests {
     }
 
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-    pub(super) struct DLoaderInputId(&'static str);
+    pub(crate) struct DLoaderInputId(&'static str);
 
     impl Named for DLoaderInputId {
         fn name(&self) -> &'static str {
@@ -593,7 +596,7 @@ mod tests {
     }
 
     #[derive(Debug, Clone)]
-    pub(super) struct DLoaderInput {
+    pub(crate) struct DLoaderInput {
         id: DLoaderInputId,
     }
     impl Input for DLoaderInput {  }
@@ -940,7 +943,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_dummy() -> Result<(), ThoosaError> {
-        let ctx = GlobalCtx::init_devices(2);
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(mock_global_ctx::build_default()))
@@ -1213,65 +1215,78 @@ mod tests {
             Ok(())
         }
 
-        #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-        async fn test_cache_areas() -> Result<(), ThoosaError> {
-            let global_ctx = GlobalCtx::init_devices(2);
+}
 
-            let loader = Arc::new(DummyLoader::new(10));
-            let resource_1_arc = DLoaderInput::from("resource_1");
-            let loader_cache = <DummyLoader as Cached>::cache().await;
+#[cfg(test)]
+mod tests_no_global_ctx_mock{
+    use std::sync::Arc;
+    use log::debug;
+    use crate::runner::common::cachable::{Cached, DevicesWrap};
+    use crate::runner::common::RunCtx;
+    use crate::runner::global_ctx::GlobalCtx;
+    use crate::runner::test::tests::{DLoaderInput, DummyLoader, DummyRunCtx};
+    use crate::ThoosaError;
 
-            let device_idx = 1;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    async fn test_cache_areas() -> Result<(), ThoosaError> {
+        let global_ctx = GlobalCtx::init_devices(2);
 
-            let cache_area_0 = global_ctx.next_cache_area()?;
-            debug!("cache_area_0={:064b}", cache_area_0);
+        let loader = Arc::new(DummyLoader::new(10));
+        let resource_1_arc = DLoaderInput::from("resource_1");
+        let loader_cache = <DummyLoader as Cached>::cache().await;
 
-            let ctx_0 = Arc::new(parking_lot::RwLock::new(DummyRunCtx::new(
-                device_idx,
-                cache_area_0,
-                "ctx_0",
-            )));
-            let resource_0_for_ctx_0 = Arc::clone(&loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_0)), ctx_0.clone())
-                .await?;
+        let device_idx = 1;
 
-            let cache_area_1 = global_ctx.next_cache_area()?;
-            debug!("cache_area_1={:064b}", cache_area_1);
+        let cache_area_0 = global_ctx.next_cache_area()?;
+        debug!("cache_area_0={:064b}", cache_area_0);
 
-            let ctx_1 = Arc::new(parking_lot::RwLock::new(DummyRunCtx::new(
-                device_idx,
-                cache_area_1,
-                "ctx_1",
-            )));
-            let resource_0_for_ctx_1 = Arc::clone(&loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_1)), ctx_1.clone())
-                .await?;
+        let ctx_0 = Arc::new(parking_lot::RwLock::new(DummyRunCtx::new(
+            device_idx,
+            cache_area_0,
+            "ctx_0",
+        )));
+        let resource_0_for_ctx_0 = Arc::clone(&loader)
+            .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_0)), ctx_0.clone())
+            .await?;
 
-            debug!(
+        let cache_area_1 = global_ctx.next_cache_area()?;
+        debug!("cache_area_1={:064b}", cache_area_1);
+
+        let ctx_1 = Arc::new(parking_lot::RwLock::new(DummyRunCtx::new(
+            device_idx,
+            cache_area_1,
+            "ctx_1",
+        )));
+        let resource_0_for_ctx_1 = Arc::clone(&loader)
+            .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_1)), ctx_1.clone())
+            .await?;
+
+        debug!(
                 "cache_areas 0+1={:064b}",
                 resource_0_for_ctx_1.cache_areas()
             );
 
-            assert!(Arc::ptr_eq(&resource_0_for_ctx_0, &resource_0_for_ctx_1));
-            assert_ne!(resource_0_for_ctx_1.cache_areas(), 0);
+        assert!(Arc::ptr_eq(&resource_0_for_ctx_0, &resource_0_for_ctx_1));
+        assert_ne!(resource_0_for_ctx_1.cache_areas(), 0);
 
-            DummyRunCtx::purge_gpu_caches(ctx_0.clone()).await?;
-            debug!(
+        DummyRunCtx::purge_gpu_caches(ctx_0.clone()).await?;
+        debug!(
                 "cache_areas   1={:064b}",
                 resource_0_for_ctx_1.cache_areas()
             );
-            assert_ne!(resource_0_for_ctx_1.cache_areas(), 0);
+        assert_ne!(resource_0_for_ctx_1.cache_areas(), 0);
 
-            DummyRunCtx::purge_gpu_caches(ctx_1.clone()).await?;
-            debug!("cache_areas   ={:064b}", resource_0_for_ctx_1.cache_areas());
-            assert_eq!(resource_0_for_ctx_1.cache_areas(), 0);
+        DummyRunCtx::purge_gpu_caches(ctx_1.clone()).await?;
+        debug!("cache_areas   ={:064b}", resource_0_for_ctx_1.cache_areas());
+        assert_eq!(resource_0_for_ctx_1.cache_areas(), 0);
 
-            assert_eq!(loader_cache.len(), 1);
+        assert_eq!(loader_cache.len(), 1);
 
-            global_ctx.purge_cpu(0).await;
-            debug!("loader_cache={loader_cache:?} len={}", loader_cache.len());
-            assert_eq!(loader_cache.len(), 0);
+        global_ctx.purge_cpu(0).await;
+        debug!("loader_cache={loader_cache:?} len={}", loader_cache.len());
+        assert_eq!(loader_cache.len(), 0);
 
-            Ok(())
-        }
+        Ok(())
+    }
+
 }
