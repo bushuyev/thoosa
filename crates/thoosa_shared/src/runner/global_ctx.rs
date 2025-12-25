@@ -258,6 +258,12 @@ pub mod mock_global_ctx {
             self
         }
 
+        pub fn with_remove_cache(mut self) -> Self {
+            self.mock.expect_remove_cache();
+
+            self
+        }
+
         pub fn with_dump_all_to_cpu(mut self) -> Self {
             let _ = self.mock.expect_dump_all_to_cpu();
 
@@ -282,6 +288,7 @@ pub mod mock_global_ctx {
             .with_reset_all_on_cpu()
             .with_device_count(2)
             .with_register_cache()
+            .with_remove_cache()
             .finish()
     }
 
