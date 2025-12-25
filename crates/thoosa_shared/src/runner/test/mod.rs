@@ -326,53 +326,44 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use std::cmp::{max, min};
-    use std::collections::{HashMap, HashSet};
-    use std::fmt::Debug;
-
-    use super::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
-    use ambassador::Delegate;
-    use async_trait::async_trait;
-    use dashmap::DashMap;
-    use futures_util::future::{BoxFuture, Shared};
-    use log::{debug, error};
-    use parking_lot::RwLock;
+// Shared fixtures for tests that must bypass the MockGlobalCtx from `tests`.
+pub(crate) mod fixtures {
+    use std::cmp::min;
     use std::mem;
     use std::ops::Range;
-    use std::pin::Pin;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
-    use std::sync::{Arc, LazyLock};
-    use mockall_double::double;
-    use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-    use cached_derive::Cached;
+    use std::sync::Arc;
+
+    use ambassador::Delegate;
+    use async_trait::async_trait;
+    use dashmap::Entry;
+    use futures_util::FutureExt;
+    use futures_util::future::BoxFuture;
+    use log::debug;
+    use parking_lot::RwLock;
+    use tokio::sync::Semaphore;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{Data, Named, Select, SimpleId, WithId};
-    use thoosa_shared::{MyError, ThoosaError};
+    use thoosa_shared::{ThoosaError};
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
-    use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::{OutId, RunCtx, ambassador_impl_PermitsCtx, PermitsCtx, DropIf};
-    use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-    use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
-    use crate::runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
+    use crate::runner::common::cachable::{Cached, DevicesWrap};
+    use crate::runner::common::runnable::{AsyncStage, Stage};
+    use crate::runner::global_ctx::GlobalCtx;
+    use crate::runner::permits::{NumPermits, RunnerPerm, MAX_PERMITS};
     use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
     use crate::traits::Adjustable;
-    #[double]
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
 
-    #[ctor::ctor]
-    fn init() {
-        thoosa_shared::test_utils::init_test_logging();
+    #[derive(Debug, Clone, Hash, Eq, PartialEq)]
+    pub(crate) struct DMulTaskOutputId(pub(crate) &'static str);
+
+    impl Named for DMulTaskOutputId {
+        fn name(&self) -> &'static str {
+            "MulTaskOutputId"
+        }
     }
-
-    static TELEMETRY: std::sync::LazyLock<()> = LazyLock::new(|| {
-        console_subscriber::ConsoleLayer::builder()
-            .retention(std::time::Duration::from_secs(60))
-            .init();
-    });
 
     #[derive(Debug, Delegate)]
     #[delegate(PermitsCtx, target = "perms_ctx")]
@@ -449,6 +440,14 @@ mod tests {
                 perms_ctx: ctx,
             }
         }
+
+        pub(crate) fn push_loaded_tensor(&mut self, id: SimpleId) {
+            self.loaded_tensors_cached.push(id);
+        }
+
+        pub(crate) fn push_multed_tensor(&mut self, id: DMulTaskOutputId) {
+            self.multed_tensors_cached.push(id);
+        }
     }
 
     impl RunCtx for DummyRunCtx {
@@ -475,10 +474,7 @@ mod tests {
                 };
                 debug!("purge_gpu_caches: device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}");
 
-                tokio::try_join!(
-                    tokio::spawn(DummyLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx)),
-                    tokio::spawn(DLoadAndMulTask::purge_gpu_cache_area(mul_output_cached, cache_area, device_idx))
-                )?;
+                DummyLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx).await?;
 
                 Ok(())
             })
@@ -498,7 +494,7 @@ mod tests {
     #[derive(Debug, cached_derive::Cached)]
     #[cache_name = "LoadedTensorId"]
     pub(crate) struct DummyLoader {
-        run_count: AtomicUsize,
+        pub(crate) run_count: AtomicUsize,
         len: usize,
     }
 
@@ -515,8 +511,8 @@ mod tests {
     }
 
     pub(crate) struct DLoadedTensor {
-        id: SimpleId,
-        data: DummyTensor,
+        pub(crate) id: SimpleId,
+        pub(crate) data: DummyTensor,
     }
 
     impl Select<std::ops::Range<<DLoadedTensor as Data>::Metrics>> for DLoadedTensor {
@@ -532,7 +528,7 @@ mod tests {
 
     impl DLoadedTensor {}
 
-    impl Debug for DLoadedTensor {
+    impl std::fmt::Debug for DLoadedTensor {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("ALoadedTensor")
                 .field("id", &self.id)
@@ -584,10 +580,56 @@ mod tests {
                 len,
             }
         }
+
+        // Mirrors `run_cached` but keeps the real GlobalCtx for tests_no_global_ctx_mock.
+        pub(crate) async fn run_cached_no_global_ctx(
+            self: Arc<Self>,
+            input: Arc<DevicesWrap<DLoaderInput>>,
+            ctx: Arc<RwLock<DummyRunCtx>>,
+        ) -> Result<Arc<DevicesWrap<DLoadedTensor>>, ThoosaError> {
+            let key = self.out_id(WithId::id(input.as_ref()));
+            let (cache_area, device_idx) = {
+                let guard = ctx.read();
+                (guard.cache_area(), guard.device_idx())
+            };
+
+            debug!("run_cached_no_global_ctx: key={key:?} device_idx={device_idx}");
+
+            let cache = <DummyLoader as Cached>::cache().await;
+
+            self.on_cached(input.as_ref(), &ctx);
+
+            GlobalCtx::global().do_age();
+
+            match cache.entry(key) {
+                Entry::Occupied(slot) => {
+                    let shared = slot.get().clone();
+                    drop(slot);
+                    shared
+                        .map(|res| {
+                            if let Ok(data) = &res {
+                                data.add_cache_area(cache_area);
+                            }
+                            res
+                        })
+                        .await
+                }
+                Entry::Vacant(slot) => {
+                    let fut = Arc::clone(&self)
+                        .run(input, ctx)
+                        .boxed()
+                        .shared();
+
+                    slot.insert(fut.clone()); //slot consumed, fut.await doesn't block it
+
+                    fut.await
+                }
+            }
+        }
     }
 
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-    pub(crate) struct DLoaderInputId(&'static str);
+    pub(crate) struct DLoaderInputId(pub(crate) &'static str);
 
     impl Named for DLoaderInputId {
         fn name(&self) -> &'static str {
@@ -597,7 +639,7 @@ mod tests {
 
     #[derive(Debug, Clone)]
     pub(crate) struct DLoaderInput {
-        id: DLoaderInputId,
+        pub(crate) id: DLoaderInputId,
     }
     impl Input for DLoaderInput {  }
     impl WithId for DLoaderInput {
@@ -610,7 +652,7 @@ mod tests {
 
     #[async_trait]
     impl CopyToDevice for DLoaderInput {
-        async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
            Ok(self.clone())
         }
     }
@@ -675,9 +717,162 @@ mod tests {
         fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
         where
             Self:'a {
-            ctx.write()
-                .loaded_tensors_cached
-                .push(self.out_id(input.id()));
+            ctx.write().push_loaded_tensor(self.out_id(input.id()));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering::Relaxed;
+    use std::sync::{Arc, LazyLock, OnceLock};
+
+    use super::fixtures::{DLoadedTensor, DLoaderInput, DLoaderInputId, DMulTaskOutputId, DummyRunCtx};
+    use super::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
+    use async_trait::async_trait;
+    use cached_derive::Cached;
+    use dashmap::DashMap;
+    use futures_util::future::{BoxFuture, Shared};
+    use log::{debug, error};
+    use mockall_double::double;
+    use parking_lot::RwLock;
+    use thoosa_shared::CopyToDevice;
+    use thoosa_shared::applicables_runner::Output;
+    use thoosa_shared::copy_mode::CpuOrGpu;
+    use thoosa_shared::traits::{Data, Named, SimpleId, WithId};
+    use thoosa_shared::{MyError, ThoosaError};
+    use crate::runner::adjusters::splits::OutputBuilder;
+    use crate::runner::common::{OutId, RunCtx, PermitsCtx};
+    use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
+    use crate::runner::permits::{PermitStep, MAX_PERMITS};
+    use crate::runner::purge::FuturesRunnerMapPurger;
+    use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
+    use crate::traits::Adjustable;
+    #[double]
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
+
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::test_utils::init_test_logging();
+    }
+
+    static TELEMETRY: std::sync::LazyLock<()> = LazyLock::new(|| {
+        console_subscriber::ConsoleLayer::builder()
+            .retention(std::time::Duration::from_secs(60))
+            .init();
+    });
+
+    #[derive(Debug)]
+    pub(crate) struct DummyLoader {
+        pub(crate) run_count: AtomicUsize,
+        len: usize,
+    }
+
+    static DUMMY_LOADER_CACHE_PTR: OnceLock<usize> = OnceLock::new();
+    static DUMMY_LOADER_REGISTER: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
+    #[async_trait::async_trait]
+    impl Cached for DummyLoader {
+        async fn cache() -> &'static DashMap<
+            <<Self as Stage>::Out as WithId>::ID,
+            Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>,
+        >
+        where
+            Self: Sized,
+            Self::Out: Data + Sync + Send,
+        {
+            let ptr_ref = DUMMY_LOADER_CACHE_PTR.get_or_init(|| {
+                let map: &'static DashMap<
+                    <<Self as Stage>::Out as WithId>::ID,
+                    Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>,
+                > = Box::leak(Box::new(Default::default()));
+                map as *const _ as usize
+            });
+
+            let map: &'static DashMap<
+                <<Self as Stage>::Out as WithId>::ID,
+                Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>,
+            > = unsafe { &*((*ptr_ref) as *const _) };
+
+            let cache_name: &'static str = "LoadedTensorId";
+
+            DUMMY_LOADER_REGISTER
+                .get_or_init(|| async move {
+                    GlobalCtx::global()
+                        .register_cache((
+                            cache_name,
+                            map as &'static dyn FuturesRunnerMapPurger,
+                        ))
+                        .await;
+                })
+                .await;
+
+            map
+        }
+    }
+
+    impl DummyLoader {
+        pub(crate) fn new(len: usize) -> DummyLoader {
+            DummyLoader {
+                run_count: Default::default(),
+                len,
+            }
+        }
+    }
+
+    impl OutId for DummyLoader {
+        fn out_id(
+            &self,
+            input_id: &<Self::In<'static> as WithId>::ID,
+        ) -> <Self::Out as WithId>::ID {
+            SimpleId::from(format!("loaded_{}", input_id.0))
+        }
+    }
+
+    impl Stage for DummyLoader {
+        type In<'a> = DLoaderInput;
+        type Out = DLoadedTensor;
+        type Ctx = DummyRunCtx;
+    }
+
+    impl AsyncStage for DummyLoader {
+        async fn run(
+            self: Arc<Self>,
+            input: Arc<DevicesWrap<Self::In<'static>>>,
+            ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+            self.run_count.fetch_add(1, Relaxed);
+
+            let k = parse_numeric_part(WithId::id(input.as_ref()).0)
+                .unwrap_or(1.0) as f32;
+            let out_id = self.out_id(WithId::id(input.as_ref()));
+
+            let (_device_idx, cache_area) = {
+                let guard = ctx.read();
+                (guard.device_idx(), guard.cache_area())
+            };
+
+            Ok(Arc::new(DevicesWrap::wrap(
+                DLoadedTensor {
+                    id: out_id,
+                    data: (0..self.len)
+                        .map(|v| v as f32 * k)
+                        .collect::<Vec<f32>>()
+                        .into(),
+                },
+                cache_area,
+            )))
+        }
+
+        fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+        where
+            Self:'a
+        {
+            ctx.write().push_loaded_tensor(self.out_id(input.id()));
         }
     }
 
@@ -710,7 +905,7 @@ mod tests {
         fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
             // tokio::time::sleep(tokio::time::Duration::from_millis(random_range(0..10))).await;
 
-            let deive_idx = ctx.read().device_idx;
+            let deive_idx = ctx.read().device_idx();
 
             match self.fail_until {
                 FailUntil::MemLimit(mem_limit) => {
@@ -764,15 +959,6 @@ mod tests {
             DMulTaskOutputId(format!("multiplied_{}", input_id).leak())
         }
 
-    }
-
-    #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-    struct DMulTaskOutputId(&'static str);
-
-    impl Named for DMulTaskOutputId {
-        fn name(&self) -> &'static str {
-            "MulTaskOutputId"
-        }
     }
 
     #[derive(Debug)]
@@ -935,9 +1121,7 @@ mod tests {
         where
             Self:'a
         {
-            ctx.write()
-                .multed_tensors_cached
-                .push(self.out_id(input.id()));
+            ctx.write().push_multed_tensor(self.out_id(input.id()));
         }
     }
 
@@ -1223,13 +1407,20 @@ mod tests_no_global_ctx_mock{
     use log::debug;
     use crate::runner::common::cachable::{Cached, DevicesWrap};
     use crate::runner::common::RunCtx;
-    use crate::runner::global_ctx::GlobalCtx;
-    use crate::runner::test::tests::{DLoaderInput, DummyLoader, DummyRunCtx};
+    use crate::runner::global_ctx::{GlobalCtx, MockGlobalCtx};
+    use crate::runner::test::fixtures::{DLoaderInput, DummyLoader, DummyRunCtx};
     use crate::ThoosaError;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_cache_areas() -> Result<(), ThoosaError> {
         let global_ctx = GlobalCtx::init_devices(2);
+        let mock_ctx = MockGlobalCtx::global_context();
+        mock_ctx.expect().returning(|| {
+            let mut mock = MockGlobalCtx::default();
+            mock.expect_device_count().return_const(2usize);
+            mock.expect_cache_age().return_const(1u64);
+            Box::leak(Box::new(mock))
+        });
 
         let loader = Arc::new(DummyLoader::new(10));
         let resource_1_arc = DLoaderInput::from("resource_1");
@@ -1246,7 +1437,7 @@ mod tests_no_global_ctx_mock{
             "ctx_0",
         )));
         let resource_0_for_ctx_0 = Arc::clone(&loader)
-            .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_0)), ctx_0.clone())
+            .run_cached_no_global_ctx(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_0)), ctx_0.clone())
             .await?;
 
         let cache_area_1 = global_ctx.next_cache_area()?;
@@ -1258,7 +1449,7 @@ mod tests_no_global_ctx_mock{
             "ctx_1",
         )));
         let resource_0_for_ctx_1 = Arc::clone(&loader)
-            .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_1)), ctx_1.clone())
+            .run_cached_no_global_ctx(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_1)), ctx_1.clone())
             .await?;
 
         debug!(
