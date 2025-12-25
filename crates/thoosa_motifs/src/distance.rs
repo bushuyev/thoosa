@@ -488,7 +488,6 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
 
 #[cfg(test)]
 mod distance_tests {
-    use crate::chunks::ChunkOfSlicedTensors;
     use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeRunningMean, LocalMin, Tril};
     use crate::distance::{
         MaskMaker, average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, local_min_mask,
