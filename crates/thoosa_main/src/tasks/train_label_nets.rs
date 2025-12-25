@@ -24,7 +24,7 @@ use crate::tasks::cross_dims::ChannelsData2;
 use caching_runner::common::{OutId, PermitsCtx, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::batches::{AsyncDataBatch, ThoBatchIter};
+use thoosa_common::batches::{AsyncDataBatch};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
