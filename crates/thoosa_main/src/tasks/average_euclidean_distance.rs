@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::average_euclidean_distance;
-use thoosa_shared::{panic_to_err, ThoosaError};
+use thoosa_shared::{panic_to_err, CopyToDevice, ThoosaError};
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::Adjustable;
@@ -85,6 +85,13 @@ impl WithId for AverageDistanceValue {
     }
 }
 impl Output for AverageDistanceValue {}
+
+#[async_trait]
+impl CopyToDevice for AverageDistanceValue {
+    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+        Ok(self.clone())
+    }
+}
 
 impl<C> OutId for AverageEuclideanDistanceStage<C>
 where

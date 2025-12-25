@@ -62,6 +62,7 @@ use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output, Runner, ToOrdinal};
+use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{RunConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
@@ -891,7 +892,7 @@ where
 impl <DI, DO> Output for ThoModuleWithStore<DI, DO>
 where
     DI: Dims + Send + 'static + ?Sized,
-    DO: Dims + Send, {
+    DO: Dims + Send + 'static, {
 
 }
 
@@ -1008,6 +1009,7 @@ where
     DI: Dims + Send + 'static,
     DO: Dims + Send + 'static{
     type Metrics = ();
+    type M = CpuOrGpu<ThoModuleWithStore<DI, DO>>;
 
     fn size(&self) -> Self::Metrics {
         ()
@@ -1887,7 +1889,8 @@ impl WithId for TrainMotifsNetsResult {
 }
 
 #[async_trait]
-impl Output for TrainMotifsNetsResult {}
+impl Output for TrainMotifsNetsResult {
+}
 
 
 impl SavableResult for TrainMotifsNetResult {

@@ -1,4 +1,5 @@
 use crate::tasks::cross_dims::ChannelsData2;
+use async_trait::async_trait;
 use crate::tasks::run_ctx_2::MotifsCtx;
 use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
@@ -29,12 +30,13 @@ use thoosa_common::train_nets::{opt_train_2, FixedNumSlicesNetArgs, FixedNumSlic
 use thoosa_common::utils::{optimizer_mem_size, TrainListener};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::CopyToDevice;
+use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, SimpleId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::CopyToDevice;
 use thoosa_shared::{panic_to_err, ThoosaError};
 
 #[derive(Debug, DummyData)]
@@ -356,7 +358,7 @@ where
                 &self.descr,
             ).await?;
 
-            Ok(Arc::new(DevicesWrap::wrap_cpu(TrainNetOutput::new("".into(), var_store, node_params, run_config, loss))))
+            Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new("".into(), var_store, node_params, run_config, loss), 0)))
         }
     }
 }
@@ -405,6 +407,7 @@ impl<DI: Dims, DO: Dims> Debug for TrainStepInput<DI, DO> {
 
 impl<DI: Dims, DO: Dims> Data for TrainStepInput<DI, DO> {
     type Metrics = <ThoBatch<DI> as Data>::Metrics;
+    type M = CpuOrGpu<Self>;
 
     fn size(&self) -> Self::Metrics {
         <ThoBatch<DI> as Data>::size(&self.x)
@@ -419,12 +422,26 @@ impl<DI: Dims, DO: Dims> Data for TrainStepInput<DI, DO> {
     }
 }
 
+#[async_trait]
+impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError>
+    where
+        Self: Sized,
+    {
+        Ok(TrainStepInput {
+            id: self.id.clone(),
+            x: self.x.copy_to_device(dst_device).await?,
+            expected_y: self.expected_y.copy_to_device(dst_device).await?,
+        })
+    }
+}
+
 impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
     type O<'o> = TrainStepInput<DI, DO>;
 
     async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError> + Send,
         P: PermitsCtx,
     {
         let _ = permits_ctx;
@@ -454,7 +471,24 @@ impl<DI: Dims, DO: Dims> WithSelectDataRef<()> for TrainStepInput<DI, DO> {
         for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
         P: PermitsCtx,
     {
-        self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run).await
+        let _ = permits_ctx;
+        let _ = trace_ctx;
+
+        let x = if self.x.device() == to_device_idx {
+            self.x()
+        } else {
+            self.x.copy_to_device(to_device_idx).await?
+        };
+
+        let expected_y = if self.expected_y.device() == to_device_idx {
+            self.expected_y()
+        } else {
+            self.expected_y.copy_to_device(to_device_idx).await?
+        };
+
+        let input = TrainStepInput::new(x, expected_y);
+
+        do_run(&input)
     }
 }
 

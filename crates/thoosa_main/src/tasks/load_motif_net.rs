@@ -13,6 +13,7 @@ use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::Input;
+use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::ThoosaError;
@@ -121,7 +122,7 @@ where
             (guard.device_idx(), guard.cache_area())
         };
 
-        let input = input.clone_from_cpu().await?;
+        let input = input.load_from_any_device_(0).await?;//TODO clone_from_cpu
         let mut motif_nets = self.ws.read().load_motif_nets(input.channel, input.motif_id, &ThoDevice::from(device_idx).into())?;
 
         debug!("LoadMotifNet::run: motif_nets={motif_nets:?}");
@@ -150,9 +151,8 @@ mod tests {
     use caching_runner::common::cachable::{Cached, DevicesWrap};
     use caching_runner::common::{mock_run_ctx, MockRunCtx};
     use caching_runner::global_ctx::GlobalCtx;
-    use thoosa_common::dims::{AnyMetrics, Dims};
     use thoosa_common::utils;
-    use thoosa_common::ws::{mock_ws_simp, WsMockBuilder};
+    use thoosa_common::ws::WsMockBuilder;
     use thoosa_shared::ThoosaError;
     use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput};
 
@@ -175,7 +175,7 @@ mod tests {
 
         let load_motif_net = Arc::new(LoadMotifNet::<MockRunCtx>::new(&ws));
 
-        load_motif_net.run_cached(Arc::new(DevicesWrap::wrap_cpu(LoadMotifNetInput::new(0, 0))), Arc::new(RwLock::new(mock_run_ctx::default(1)))).await?;
+        load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(0, 0), 0)), Arc::new(RwLock::new(mock_run_ctx::default(1)))).await?;
 
         Ok(())
     }

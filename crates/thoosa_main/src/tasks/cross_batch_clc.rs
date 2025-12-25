@@ -18,7 +18,8 @@ use thoosa_common::utils::tensor_mem_size;
 use thoosa_motifs::distance::{clc_dist_d2, clc_dist_d2_and_mask};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
-use thoosa_shared::traits::{SimpleId, WithId};
+use thoosa_shared::copy_mode::CpuOnly;
+use thoosa_shared::traits::{Data, SimpleId, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
 use thoosa_common::tho_tensor::ThoTensor;
 
@@ -52,6 +53,19 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
 }
 
 impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Input for CrossInput<'a, R> {}
+
+impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Data for CrossInput<'a, R> {
+    type Metrics = ();
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
+        0
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct UnfoldParams { //TODO use in FindMotifsRunConfig
@@ -167,6 +181,18 @@ impl<R: Debug> WithId for CrossUnfoldClcOutput<R> {
         &self.id
     }
 }
+impl<R: Debug> Data for CrossUnfoldClcOutput<R> {
+    type Metrics = ();
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
+        0
+    }
+}
 impl<R: Debug> Input for CrossUnfoldClcOutput<R> {}
 
 impl<R: Debug> Output for CrossUnfoldClcOutput<R> {}
@@ -250,7 +276,7 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SimpleId>], unfold_para
 
     let batch_0_tensors = input
         .iter()
-        .filter(|t| t.size()[1] >= unfold_params.size) //TODO use metrics's size
+        .filter(|t| t.size().dim_1() >= unfold_params.size) //TODO use metrics's size
         .map(|t| {
 
 

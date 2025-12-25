@@ -20,8 +20,9 @@ use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
+use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Select, SimpleId, WithId};
-use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::ThoosaError;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
 use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
@@ -239,6 +240,7 @@ impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapper {
 //stacked_motifs_output can't be adjusted since moitfs' ranges do not match in different channels
 impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
     type Metrics = i64;
+    type M = CpuOnly<Self>;
 
     fn size(&self) -> Self::Metrics {
         self.batch.len() as i64
@@ -369,6 +371,7 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
 
 impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
     type Metrics = i64;
+    type M = CpuOnly<Self>;
 
     fn size(&self) -> Self::Metrics {
         self.batch.len() as i64
@@ -445,6 +448,19 @@ impl ClcResourcesMotifsDistOutput {
                 .await,
             resources_iter: self.resources_iter,
         }
+    }
+}
+
+impl Data for ClcResourcesMotifsDistOutput {
+    type Metrics = ();
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
+        0
     }
 }
 

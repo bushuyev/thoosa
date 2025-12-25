@@ -25,9 +25,9 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Select, SimpleId, WithId};
-use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::ThoosaError;
 use thoosa_common::tho_tensor::ThoTensor;
-
+use thoosa_shared::copy_mode::CpuOrGpu;
 
 #[derive(Cached)]
 pub struct LoadMotifAndClcDistanceStage<ML, CLC, C>
@@ -204,7 +204,7 @@ where
             )
             .await?;
 
-        Ok(Arc::new(DevicesWrap::wrap_cpu(dist)))
+        Ok(Arc::new(DevicesWrap::wrap(dist, 0)))
     }
 }
 
@@ -267,20 +267,17 @@ impl OutputBuilder for DistOutputBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{LoadMotifAndClcDistanceStage, RunCtx2};
+    use super::LoadMotifAndClcDistanceStage;
     use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use crate::tasks::average_euclidean_distance::{mock_average_stage, AverageDistanceValue};
-    use crate::tasks::motif_loader::{MotifMeta, mock_motif_loader, MotifLoaderInput};
-    use caching_runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
+    use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
+    use caching_runner::common::{mock_run_ctx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
     use parking_lot::{Mutex, RwLock};
     use std::sync::Arc;
     use tch::Tensor;
     use thoosa_shared::ThoosaError;
-    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::traits::{DataId, SimpleId, WithId};
-    use thoosa_common::tho_tensor::ThoTensor;
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_and_clc_average_euclidean_distance() -> Result<(), ThoosaError> {
         GlobalCtx::init_devices(2);
@@ -307,7 +304,7 @@ mod tests {
         let cache_area = ctx.read().cache_area();
         let num_devices = GlobalCtx::global().device_count();
         let input_id_value = DataId::from(&42u32);
-        let input_id = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::all_slices(input_id_value.clone())));
+        let input_id = Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(input_id_value.clone()), 0));
         let result = stage.run_cached(Arc::clone(&input_id), Arc::clone(&ctx)).await?;
 
         let result_value: AverageDistanceValue = result.with_data_ref(0, Arc::clone(&ctx), None, |val: &AverageDistanceValue| Ok(val.clone())).await?;

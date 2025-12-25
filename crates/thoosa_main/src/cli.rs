@@ -3,7 +3,7 @@ use crate::cli::Commands::{
     SelectMotifs, TrainFinalNet, TrainMotifsNets,
 };
 use crate::data;
-use crate::data::{ParquetLoader, clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
+use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::RawTensorLoader;
@@ -14,14 +14,14 @@ use clap::{Args, Parser, Subcommand};
 use futures::executor::block_on;
 use futures_util::future::{join_all, try_join_all};
 use futures_util::{StreamExt, TryStreamExt};
-use log::{Level, LevelFilter, debug, error, info, trace, warn};
+use log::{debug, error, info, trace, warn, Level, LevelFilter};
 use parking_lot::{RawRwLock, RwLock};
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
 use std::cmp::max;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::fs::{File, OpenOptions, read_dir};
+use std::fs::{read_dir, File, OpenOptions};
 use std::io::Write;
 use std::ops::{Deref, Range};
 use std::path::{Path, PathBuf};
@@ -39,17 +39,15 @@ use tch::nn::VarStore;
 use tch::{Device, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::applicables::{ThoDevice, ThoRunCtx};
-use thoosa_common::batches::{
-    AsyncBatchTransform
-};
-use thoosa_common::dims::{Batch, ChannelsData, TCD, ThoBatch};
+use thoosa_common::batches::AsyncBatchTransform;
+use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
 use thoosa_common::find_motifs_run_config::{ByLabelVarianceConfig, ByLabelVarianceConfigRangeOrValue, DistanceRunningMeanK, DistanceRunningMeanKRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{CommonTrainingRunConfig, FinalNetParams, InferArgs, LabelNetParams, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsResult,  load_final_model, opt_train, opt_train_2, run_train_motif_net, train_final_net, TrainMotifsNetResult, CommonTrainingRunConfigRangeOrValue, LabelNetTypeArgsRangeOrValue, FixedNumSlicesNetArgsRangeOrValue};
-use thoosa_common::utils::{DummyListener, TrainListener, cuda_mem, from, list_devices, lin_t, plot_series, reset_print_options};
+use thoosa_common::train_nets::{load_final_model, opt_train, opt_train_2, run_train_motif_net, train_final_net, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FixedNumSlicesNetArgsRangeOrValue, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
+use thoosa_common::utils::{cuda_mem, from, lin_t, list_devices, plot_series, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{FindMotifsArgs, FixedFindMotifsConfig, SelectMotifsArgs};
@@ -62,27 +60,28 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
-use thoosa_shared::{parse_resources, CopyToDevice, RangeOrValue};
+use thoosa_shared::{parse_resources, RangeOrValue};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{ResourceType, ThoosaError, cdt, cdt_for_dir};
+use thoosa_shared::{cdt, cdt_for_dir, ResourceType, ThoosaError};
 use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Runtime;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
-use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use caching_runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use caching_runner::common::RunCtx;
 use caching_runner::common::runnable::AsyncStage;
 use caching_runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
+use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::perf_logging::{format_perf_map, PERF};
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
 use crate::tasks::train_label_nets::{new_train_label_nets_with_ml, TrainLabelNets, TrainLabelNetsInput};
-use crate::tasks::train_motif_nets::{TrainMotifNets, TrainMotifNetInput};
+use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -315,11 +314,12 @@ where
 
             debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}");
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
+            let input_wrapper = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
                     SimpleId::from("resources"),
                     find_motifs_args.resource_config(),
-                )
+                ),
+                0
             ));
 
             let run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
@@ -354,11 +354,12 @@ where
 
             let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue = serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
+            let input_wrapper = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
                     SimpleId::from("resources"),
                     select_motifs_args.resource_config(),
-                )
+                ),
+                0
             ));
             //TODO move it into SelectMotifsStage
             let motif_loader = Arc::new(MotifLoader::new(
@@ -398,8 +399,9 @@ where
 
             let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = serde_json5::from_str(&train_motif_nets_args.run_config_cnt).expect("TrainMotifsNets2");
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
-                TrainMotifNetInput::new(train_motif_nets_args.select_motifs_run_ids.clone(), Arc::new(train_motif_nets_args.fixed_config.clone()))
+            let input_wrapper = Arc::new(DevicesWrap::wrap(
+                TrainMotifNetInput::new(train_motif_nets_args.select_motifs_run_ids.clone(), Arc::new(train_motif_nets_args.fixed_config.clone())),
+                0
             ));
 
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
@@ -428,11 +430,12 @@ where
 
             let train_motif_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = serde_json5::from_str(&train_label_nets_args.run_config_cnt).expect("TrainLabelNets");
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
+            let input_wrapper = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
                     SimpleId::from(train_label_nets_args.train_resource_group.to_string()),//TODO the group is needed to load resouces not belonging to label being trained
                     train_label_nets_args.resource_config(),
-                )
+                ),
+                0
             ));
 
             let opt_config = Arc::new(train_label_nets_args.fixed_config.clone());
@@ -488,25 +491,28 @@ where
         Some(RunAll(run_all_params)) => {
             debug!("RunAll: run_all_params={:?}", run_all_params);
 
-            let find_motifs_input = Arc::new(DevicesWrap::wrap_cpu(
+            let find_motifs_input = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
                     SimpleId::from("resources"),
                     run_all_params.find_resource_config()?
-                ).check(&store)?
+                ).check(&store)?,
+                0
             ));
 
-            let select_motifs_input = Arc::new(DevicesWrap::wrap_cpu(
+            let select_motifs_input = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
                     SimpleId::from("resources"),
                     run_all_params.select_resource_config()?,
-                ).check(&store)?
+                ).check(&store)?,
+                0
             ));
 
-            let train_labels_input = Arc::new(DevicesWrap::wrap_cpu(
+            let train_labels_input = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
                     SimpleId::from(run_all_params.train_resource_group.to_string()),//TODO the group is needed to load resouces not belonging to label being trained
                     run_all_params.train_resource_config()
-                ).check(&store)?
+                ).check(&store)?,
+                0
             ));
 
 
@@ -589,8 +595,9 @@ where
                 step: RangeOrValue::Value(10),
             };
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
-                TrainMotifNetInput::new(select_motifs_run_ids.clone(), Arc::new(OptConfig::new(100, 10)))
+            let input_wrapper = Arc::new(DevicesWrap::wrap(
+                TrainMotifNetInput::new(select_motifs_run_ids.clone(), Arc::new(OptConfig::new(100, 10))),
+                0
             ));
 
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
@@ -1061,7 +1068,7 @@ async fn plot_motif(
     let cache_area = ctx.read().cache_area();
     let num_devices = GlobalCtx::global().device_count();
     let select_motif_run_ids_sfx = select_motif_run_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
-    let motif_id_arc = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::new(DataId(motif_id as u32), select_motif_run_ids)));
+    let motif_id_arc = Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(DataId(motif_id as u32), select_motif_run_ids), 0));
 
     let motif = Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_arc),
@@ -1274,8 +1281,10 @@ where
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
         + thoosa_properties_map::ToHashmap,
     RCRV: GridRunConfigSource,
-    for<'c> <ST as Stage>::In<'c>: Data + WithId + CopyToDevice + Send + Sync,
-    <ST as Stage>::Out: Data + WithId + CopyToDevice + Send + Sync + SavableResult,
+    for<'c> <ST as Stage>::In<'c>: Data + WithId + Send + Sync,
+    for<'c> <<ST as Stage>::In<'c> as Data>::M: DevicesWrapCopyMode<<ST as Stage>::In<'c>>,
+    <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult,
+    <<ST as Stage>::Out as Data>::M: DevicesWrapCopyMode<<ST as Stage>::Out>,
     CtxF: FnOnce() -> Arc<RwLock<<ST as Stage>::Ctx>>,
 {
     let grid_run_configs = rcrv.grid_run_configs();
@@ -1327,8 +1336,10 @@ where
     + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
     + thoosa_properties_map::ToHashmap,
     RCRV: OptRunConfigSource,
-    for<'c> <ST as Stage>::In<'c>: Data + WithId + CopyToDevice + Send + Sync,
-    <ST as Stage>::Out: Data + WithId + CopyToDevice + Send + Sync + SavableResult,
+    for<'c> <ST as Stage>::In<'c>: Data + WithId + Send + Sync,
+    for<'c> <<ST as Stage>::In<'c> as Data>::M: DevicesWrapCopyMode<<ST as Stage>::In<'c>>,
+    <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult,
+    <<ST as Stage>::Out as Data>::M: DevicesWrapCopyMode<<ST as Stage>::Out>,
     CtxF: FnOnce() -> Arc<RwLock<<ST as Stage>::Ctx>>,
 {
     let opt_run_configs = rcrv.opt_run_configs();
@@ -1352,17 +1363,17 @@ where
 #[cfg(test)]
 mod cli_tests {
     use crate::cli::{
-        Cli, import_resources, resource_path, run_all_grid_step,
-        run_opt_step, run_plot_motif_slices,
+        import_resources, resource_path, run_all_grid_step, run_opt_step,
+        run_plot_motif_slices, Cli,
     };
     use crate::data::ParquetLoader;
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Trace, Warn};
-    use log::{LevelFilter, debug, error, info, set_max_level, trace};
+    use log::{debug, error, info, set_max_level, trace, LevelFilter};
     use parking_lot::lock_api::MutexGuard;
     use parking_lot::{Mutex, RawMutex, RawRwLock, RwLock};
-    use plotters::prelude::{BLACK, IntoLinspace};
+    use plotters::prelude::{IntoLinspace, BLACK};
     use rand::Rng;
     use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
     use rayon::prelude::IntoParallelIterator;
@@ -1375,21 +1386,21 @@ mod cli_tests {
     use std::vec::IntoIter;
     use std::{fs, ptr};
     use tch::Device::{Cpu, Cuda};
-    use tch::display::{PrinterOptions, set_print_options};
+    use tch::display::{set_print_options, PrinterOptions};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-    use tch::{Device, IndexOp, Tensor, nn};
+    use tch::{nn, Device, IndexOp, Tensor};
     use thoosa_common::find_motifs_run_config::{
         FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue,
     };
-    use thoosa_common::input_probs::{InputProbs, compare_input_probs};
+    use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Simple};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{
-        CommonTrainingRunConfig, InferArgs, MotifNetParams, OptConfig, TrainFinalNetRunConfig,
-        TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields,
-        TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig,
-        TrainMotifsNetsRunConfigRangeOrValue, motif_node,
+        motif_node, CommonTrainingRunConfig, InferArgs, MotifNetParams, OptConfig,
+        TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig,
+        TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue,
+        TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue,
     };
     use thoosa_common::utils::{
         from, lin_t, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1,
@@ -1408,8 +1419,8 @@ mod cli_tests {
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::test_utils::set_panic_hook;
     use thoosa_shared::{
-        ResourceType, TensorIdSliceIdx, ThoosaError, cdt, cdt_for_dir, random_saw, recurse_files,
-        saw, saw_with_steps, sig_one_imp, sig_three_imp, sig_two_imp,
+        cdt, cdt_for_dir, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp,
+        sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoosaError,
     };
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
 

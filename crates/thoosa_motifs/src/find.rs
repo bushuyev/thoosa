@@ -193,9 +193,6 @@ impl WithId for MotifsDistRunnableInput {
     }
 }
 
-impl Input for MotifsDistRunnableInput {
-
-}
 
 #[derive(Debug)]
 pub struct MotifsDistRunnableOutput {
@@ -223,9 +220,6 @@ impl WithId for MotifsDistRunnableOutput {
     }
 }
 
-#[async_trait]
-impl Output for MotifsDistRunnableOutput {
-}
 
 
 

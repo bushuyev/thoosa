@@ -5248,6 +5248,7 @@ dependencies = [
  "tch",
  "thoosa_common",
  "thoosa_shared",
+ "thoosa_with_data",
  "tokio",
  "tokio-utils",
  "torch-sys",

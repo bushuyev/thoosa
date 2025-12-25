@@ -7,7 +7,7 @@ use crate::global_ctx::GlobalCtx;
 use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
 use futures_util::FutureExt;
-use futures_util::future::{BoxFuture, Shared, try_join_all};
+use futures_util::future::{try_join_all, BoxFuture, Shared};
 use log::{debug, info, trace};
 use mockall_double::double;
 use parking_lot::RwLock;
@@ -16,17 +16,20 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use thoosa_shared::CopyToDevice;
+use std::sync::atomic::Ordering::Relaxed;
+use thoosa_shared::{CopyToDevice};
 use thoosa_shared::MyError;
 use tokio::sync::{Notify, RwLockReadGuard};
 use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
 use thoosa_shared::traits::{Data, Select, SimpleId};
 
 #[async_trait]
 pub trait Cached: AsyncStage
 where
     for <'i> Self::In<'i>: Data + WithId + Send + Sync,
-    <Self as Stage>::Out: Data + CopyToDevice + WithId + Send + Sync + 'static
+    <Self as Stage>::Out: Data + WithId + Send + Sync + 'static,
+    <<Self as Stage>::Out as Data>::M: DevicesWrapCopyMode<<Self as Stage>::Out>
 {
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
@@ -136,9 +139,473 @@ where
 
 }
 
-//when hidden behind a trait, impls for plain Ids and Data cause https://github.com/rust-lang/rust/issues/100013 so opting to enum
+
+pub trait DevicesWrapCopyMode<O>: CopyMode + Debug + Send + Sync
+where
+    O: Data + WithId + Send + Sync,
+{
+    fn wrap<'f>(o:O, cache_area: u64) -> DevicesWrap<O> where Self:Sized;
+
+    async fn load_from_any_device_(
+        wrap:&DevicesWrap<O>,
+        to_device_idx: usize,
+    ) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError>
+    where
+        Self:Sized;
+
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoosaError>>
+    where
+        Self:Sized,
+        F: FnOnce(&O) -> Result<R, ThoosaError> + Send + 'a,
+        P:PermitsCtx + 'a;
+
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+        Self:Sized,
+        O: Select<S, Output=O>,
+        for <'f> F: FnOnce(&O) -> Result<R, ThoosaError>,
+        S:Debug + Clone + 'static,
+        P:PermitsCtx;
+
+    async fn with_selected_data<S, R>(
+        wrap:&DevicesWrap<O>,
+        to_device_idx: usize,
+        selector: S,
+        do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>,
+    ) -> Result<R, ThoosaError>
+    where
+        O: Select<S>,
+        <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+        S:Clone,
+        Self:Sized;
+
+    fn dump_to_cpu(wrap:&DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoosaError>> + std::marker::Send
+        where Self:Sized;
+
+
+    fn size(wrap: &DevicesWrap<O>) -> &<O as Data>::Metrics
+        where Self:Sized;
+    fn is_on_cpu_since(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool
+        where Self:Sized;
+    async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoosaError>
+        where Self:Sized;
+
+    async fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> bool
+        where Self:Sized;
+}
+
+
+impl<O> DevicesWrapCopyMode<O> for CpuOnly<O>
+where
+    O:Data<M=Self> + WithId + Send + Sync
+{
+ 
+    fn wrap(o:O, cache_area: u64) -> DevicesWrap<O> where Self:Sized {
+        let size = o.size();
+        let mem_size = o.mem_size();
+        assert_eq!(o.device(), 0);
+
+        DevicesWrap {
+            id: o.id().clone(),
+            cached_data: Box::new([tokio::sync::RwLock::new(Some(o))]),
+            inflights: Box::new([]),
+            cache_area: AtomicU64::new(cache_area),
+            size,
+            on_cpu_since: Default::default(),
+            mem_size,
+            pd: PhantomData,
+        }
+    }
+
+    async fn load_from_any_device_(wrap: &DevicesWrap<O>, _to_device_idx: usize) -> Result<impl Deref<Target=O> + Debug + Send, ThoosaError>
+    where
+        Self: Sized
+    {
+        let read_guard = wrap.cached_data[0].read().await;
+
+        if read_guard.is_some() {
+            Ok(tokio::sync::RwLockReadGuard::map(
+                read_guard,
+                |val: &Option<O>| val.as_ref().expect("no value behind guard"),
+            ))
+        } else {
+
+            Err(MyError::NotFound.into())
+        }
+    }
+
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoosaError>>
+    where
+            for<'f> F: FnOnce(&O) -> Result<R, ThoosaError> + Send + 'a,
+            P: PermitsCtx + 'a
+    {
+        Box::pin(async move {
+            match wrap.load_from_any_device_(to_device_idx).await {
+                Ok(v) => {
+                    let data = v.deref();
+                    do_run(data)
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+        O: Select<S, Output=O>,
+        for<'f> F: FnOnce(&O) -> Result<R, ThoosaError>,
+        S:Debug + Clone + 'static,
+        P: PermitsCtx
+    {
+        match wrap.load_from_any_device_(to_device_idx).await {
+            Ok(v) => {
+                let data = v.deref();
+                do_run(&data.subview(selector)?)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn with_selected_data<S, R>(wrap: &DevicesWrap<O>, to_device_idx: usize, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>) -> Result<R, ThoosaError>
+    where
+        O: Select<S>,
+        <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+        S:Clone,
+        Self: Sized
+    {
+        match wrap.load_from_any_device_(to_device_idx).await {
+            Ok(v) => {
+                let data = v.deref();
+                do_run(data.subview(selector)?)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+
+    fn dump_to_cpu(wrap: &DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoosaError>> + std::marker::Send
+    where
+        Self: Sized
+    {
+        async {
+            Ok(())
+        }
+    }
+
+
+    fn size(wrap: &DevicesWrap<O>) -> &<O as Data>::Metrics
+    where
+        Self: Sized
+    {
+        &wrap.size //TODO move to DevicesWrap?
+    }
+
+    fn is_on_cpu_since(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool
+    where
+        Self: Sized
+    {
+        true
+    }
+
+    async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoosaError>
+    where
+        Self: Sized
+    {
+        Ok(wrap.cached_data[0].write().await.take().expect(&format!("no cpu data {:?}", wrap.id)))
+    }
+
+    async fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> bool {
+        true
+    }
+}
+
+
+// impl<O, S> SelectMode<S> for CpuOrGpu<O>
+// where
+//     O:Data + CopyToDevice+ WithId + Send + Sync + Select<S>,
+//     S:Clone
+// {
+// }
+
+
+impl<O> DevicesWrapCopyMode<O> for CpuOrGpu<O>
+where
+    O:Data<M=Self> + CopyToDevice + WithId + Send + Sync
+{
+
+    fn wrap(o:O, cache_area: u64) -> DevicesWrap<O> where Self:Sized {
+        let id = o.id().clone();
+        let size = o.size();
+        let device_ordinal = o.device();
+        let mem_size = o.mem_size();
+
+        let num_devices: usize = GlobalCtx::global().device_count();
+        let mut o_op = Some(o);
+
+        let device_futures: Box<[tokio::sync::RwLock<Option<O>>]> = (0..num_devices)
+            .map(|device| {
+                if device == device_ordinal {
+                    tokio::sync::RwLock::new(o_op.take())
+                } else {
+                    tokio::sync::RwLock::new(None)
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        let inflights = (0..num_devices)
+            .map(|_device| tokio::sync::Mutex::new(None))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+
+        DevicesWrap {
+            id,
+            cached_data: device_futures,
+            inflights,
+            cache_area: AtomicU64::new(cache_area),
+            size,
+            on_cpu_since: Default::default(),
+            mem_size,
+            pd: PhantomData,
+        }
+    }
+
+    async fn load_from_any_device_(wrap: &DevicesWrap<O>, to_device_idx: usize) -> Result<impl Deref<Target=O> + Debug + Send, ThoosaError>
+    where
+        Self: Sized
+    {
+        //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
+        //TODO add GlobalCtx::purge_lock just in case?
+        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx}",wrap.id);
+        trace!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",wrap.id, wrap.cached_data);
+        assert!(wrap.cached_data.len() > to_device_idx, "Device index {to_device_idx}(cache len is {}) too big {:?}",wrap.cached_data.len(), wrap.id);
+
+        if to_device_idx != 0 {
+            *wrap.on_cpu_since.write() = None;
+        }
+
+        let read_guard = wrap.cached_data[to_device_idx].read().await;
+
+        if read_guard.is_some() {
+            Ok(tokio::sync::RwLockReadGuard::map(
+                read_guard,
+                |val: &Option<O>| val.as_ref().expect("no value behind guard"),
+            ))
+        } else {
+            drop(read_guard);
+
+            for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
+                let source_read_guard = op.read().await;
+
+                if source_device_idx != to_device_idx && source_read_guard.is_some() {
+                    drop(source_read_guard);
+                    return wrap.copy_and_get(source_device_idx, to_device_idx).await;
+                }
+            }
+            Err(MyError::NotFound.into())
+        }
+    }
+
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoosaError>>
+    where
+        F: FnOnce(&O) -> Result<R, ThoosaError> + Send + 'a,
+        P: PermitsCtx + 'a
+    {
+        Box::pin(async move {
+            let _permit = if permits_ctx.read().acquired_permits() == 0 {
+                Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
+            } else {
+                None
+            };
+
+
+            match wrap.load_from_any_device_(to_device_idx).await {
+                Ok(v) => {
+                    let data = v.deref();
+                    DevicesWrap::do_run_trace_ref(trace_ctx, do_run, data)
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    where
+        O: Select<S, Output=O>,
+        for<'f> F: FnOnce(&O) -> Result<R, ThoosaError>,
+        S:Debug + Clone + 'static,
+        P: PermitsCtx
+    {
+        let read_guard: RwLockReadGuard<'_, Option<O>> = wrap.cached_data[to_device_idx].read().await;
+
+        if read_guard.is_some() {
+            let base: &O = read_guard
+                .as_ref()
+                .expect("no value behind guard");
+
+            let _permit =  if permits_ctx.read().acquired_permits() == 0 {
+                Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
+            } else {
+                None
+            };
+            let data: O = base.subview(selector.clone())?;
+
+            return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, do_run, data);
+        }
+
+        drop(read_guard);
+
+        for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
+            if source_device_idx == to_device_idx {
+                continue;
+            }
+
+            let source_read_guard: RwLockReadGuard<'_, Option<O>> = op.read().await;
+
+            if let Some(src) = source_read_guard.as_ref() {
+                let sub_t: O = src.subview(selector.clone())?;
+
+                debug!("DataCacheWrapper::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
+                let _permit =  if permits_ctx.read().acquired_permits() == 0 {
+                    Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
+                } else {
+                    None
+                };
+                let data = sub_t.copy_to_device(to_device_idx).await?;
+
+                return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, do_run, data);
+            }
+        }
+
+        Err(MyError::NotFound.into())
+    }
+
+    async fn with_selected_data<S, R>(wrap: &DevicesWrap<O>, to_device_idx: usize, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>) -> Result<R, ThoosaError>
+    where
+        O: Select<S>,
+        <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+        S:Clone,
+        Self: Sized
+    {
+        let read_guard: RwLockReadGuard<'_, Option<O>> = wrap.cached_data[to_device_idx].read().await;
+
+        if read_guard.is_some() {
+            let data = read_guard
+                .as_ref()
+                .expect("no value behind guard")
+                .subview(selector.clone())?;
+
+            return do_run(data);
+        }
+
+        drop(read_guard);
+
+        for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
+            if source_device_idx == to_device_idx {
+                continue;
+            }
+
+            let source_read_guard: RwLockReadGuard<'_, Option<O>> = op.read().await;
+
+            if let Some(src) = source_read_guard.as_ref() {
+                let sub_t = src.subview(selector.clone())?;
+                debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
+                let data = sub_t.copy_to_device(to_device_idx).await?;
+
+                return do_run(data);
+            }
+        }
+
+        Err(MyError::NotFound.into())
+    }
+
+
+
+    fn dump_to_cpu(wrap: &DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoosaError>> + std::marker::Send
+    where
+        Self: Sized
+    {
+        async move {
+            assert_ne!(device_idx, 0);
+
+            debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx}",wrap.id);
+
+            if let Some(Ok(mut lock)) = wrap.cached_data.get(device_idx).map(|v| v.try_write()) {
+                if wrap.cached_data[0].read().await.is_none() {
+                    let data = lock.take();
+
+                    wrap.ensure_copied(device_idx, 0, data.as_ref(), false).await?;
+
+                    debug!("DataCacheWrapper::dump_to_cpu: 1. id={:?} copied to cpu done",wrap.id);
+                }
+                drop(lock.take());
+            } else {
+                //if it's locked then it should be one of the parent futures being built, waiting on it will deadlock
+                //TODO log warning?
+                debug!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}",wrap.id, wrap.cached_data)
+            }
+
+            let is_all_on_cpu = wrap.is_all_on_cpu().await;
+            if is_all_on_cpu {
+                //may rewrite previous Some, but shouldn't be a problem
+                *wrap.on_cpu_since.write() = Some(GlobalCtx::global().cache_age());
+            }
+
+            debug!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}",wrap.id);
+
+            Ok(())
+        }
+    }
+
+    fn size(wrap: &DevicesWrap<O>) -> &<O as Data>::Metrics
+    where
+        Self: Sized
+    {
+        &wrap.size
+    }
+
+    fn is_on_cpu_since(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool {
+        let r = wrap
+            .on_cpu_since
+            .read()
+            .map(|v| threshold_age < v)
+            .unwrap_or(false);
+
+        debug!("DataCacheWrapper::is_on_cpu_since: self.id={:?} self.on_cpu_since={:?} r={r} cache_age={threshold_age}",wrap.id, wrap.on_cpu_since);
+
+        r
+    }
+
+    async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoosaError>
+    where
+        Self: Sized
+    {
+        let _ = wrap.load_from_any_device_(to_device_idx).await?;
+
+        let mut v = wrap.cached_data.into_vec();
+        let lock = v.swap_remove(to_device_idx);
+        let opt: Option<O> = lock.into_inner();
+        Ok(opt.expect(&format!("no data in {to_device_idx} for {:?}", wrap.id)))
+    }
+
+    async fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> bool {
+        debug!("DataCacheWrapper::is_all_on_cpu: self.id={:?}", wrap.id);
+
+        for (device_idx, data) in wrap.cached_data.iter().skip(1).enumerate() {
+            if data.read().await.is_some() {
+                debug!("DataCacheWrapper::is_all_on_cpu: device_idx={device_idx}");
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+//https://github.com/rust-lang/rust/issues/100013
 #[derive(Debug)]
-pub struct DevicesWrap<O>//TODO rename to DeviceDataWrapper
+pub struct DevicesWrap<O>
 where
     O: WithId + Data + Send + Sync,
 {
@@ -155,25 +622,9 @@ where
     pd: PhantomData<O>,
 }
 
-
-impl <O> Input for DevicesWrap<O>
-where
-    O: WithId + Data + Send + Sync,
-
-{
-
-}
-
-impl <O> Output for DevicesWrap<O>
-where
-    O: WithId + Data  + Send + Sync,
-{
-
-}
-
 impl <O> WithId for DevicesWrap<O>
 where
-    O: WithId + Data  + Send + Sync,
+    O: WithId + Data + Send + Sync,
 
 {
     type ID = O::ID;
@@ -247,157 +698,33 @@ where
 {
 }
 
-
-impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O> {
+impl<O> DevicesWrap<O>
+where
+    O: Data + WithId + Send + Sync,
+    O::M: DevicesWrapCopyMode<O>,
+{
     pub fn wrap(o: O, cache_area: u64) -> Self {
-        let id = o.id().clone();
-        let size = o.size();
-        let device_ordinal = o.device();
-        let mem_size = o.mem_size();
-
-        let num_devices: usize = GlobalCtx::global().device_count();
-        let mut o_op = Some(o);
-
-        let device_futures: Box<[tokio::sync::RwLock<Option<O>>]> = (0..num_devices)
-            .map(|device| {
-                if device == device_ordinal {
-                    tokio::sync::RwLock::new(o_op.take())
-                } else {
-                    tokio::sync::RwLock::new(None)
-                }
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-
-        let inflights = (0..num_devices)
-            .map(|_device| tokio::sync::Mutex::new(None))
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-
-
-        Self {
-            id,
-            cached_data: device_futures,
-            inflights,
-            cache_area: AtomicU64::new(cache_area),
-            size,
-            on_cpu_since: Default::default(),
-            mem_size,
-            pd: PhantomData,
-        }
+        O::M::wrap(o, cache_area)
     }
 
-    pub fn wrap_cpu(o: O) -> Self {//TODO replace with union
-        let mem_size = o.mem_size();
-        Self {
-            id: o.id().clone(),
-            cached_data: Box::new([tokio::sync::RwLock::new(Some(o))]),
-            inflights: Box::new([]),
-            cache_area: AtomicU64::new(0),
-            size: Default::default(),
-            on_cpu_since: Default::default(),
-            mem_size,
-            pd: PhantomData,
-        }
+    pub fn add_cache_area(&self, ca: u64) -> u64 {
+        self.cache_area.fetch_or(ca, Ordering::SeqCst) | ca
     }
 
-    pub async fn with_another<A, B, WA, WB, R>
-    (
-     aw: &'static WA,
-     bw: &'static WB,
-     to_device_idx: usize,
-     _trace_ctx: Option<&'static str>,
-     do_run: impl FnOnce(&A, &B) -> Result<R, ThoosaError>,
-    ) -> Result<R, ThoosaError>
-    where
-        A:Data + CopyToDevice + WithId + Send + Sync + CopyToDevice + 'static,
-        B:Data + CopyToDevice + WithId + Send + Sync + CopyToDevice + 'static,
-        WA:AsRef<DevicesWrap<A>> + Debug + 'static,
-        WB:AsRef<DevicesWrap<B>> + Debug + 'static,
-    {
-        let (me, other) = tokio::try_join!(
-            tokio::spawn(aw.as_ref().load_from_any_device_(to_device_idx)),
-            tokio::spawn(bw.as_ref().load_from_any_device_(to_device_idx))
-        )?;
-        let me = me?;
-        let other = other?;
-
-        do_run(&me, &other)
+    pub fn remove_cache_area(&self, ca: u64) -> u64 {
+        self.cache_area.fetch_and(!ca, Ordering::AcqRel) & !ca
     }
 
-    pub async fn with_data_array<W: AsRef<DevicesWrap<O>> + Debug, R>(
-        other: &[W],
-        to_device_idx: usize,
-        _trace_ctx: Option<&'static str>,
-        do_run: impl FnOnce(&[&O]) -> Result<R, ThoosaError>,
-    ) -> Result<R, ThoosaError> {
-
-        let results = tokio::try_join!(try_join_all(
-            other
-                .into_iter()
-                .map(|w| w.as_ref().load_from_any_device_(to_device_idx)),
-        ))?;
-
-
-        if results.0.is_empty() {
-            return Err(MyError::SomethingElse(format!("no data in all devices for {other:?} ")).into());
-        }
-
-        let refs: Vec<&O> = results.0.iter().map(|o| &**o).collect();
-        do_run(&refs)
+    pub fn cache_areas(&self) -> u64 {
+        self.cache_area.load(Ordering::Acquire)
     }
 
-    //TODO use streams + bounds
-    pub async fn with_two_arrays<B, WA, WB, R>
-    (
-        aw: &[WA],
-        bw: &[WB],
-        to_device_idx: usize,
-        _trace_ctx: Option<&'static str>,
-        do_run: impl FnOnce(&[&O], &[&B]) -> Result<R, ThoosaError>,
-    ) -> Result<R, ThoosaError>
-    where
-        // A: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice + 'static,
-        B: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice + 'static,
-        WA: AsRef<DevicesWrap<O>> + Debug + 'static,
-        WB: AsRef<DevicesWrap<B>> + Debug + 'static,
-    {
-        let (me, other) = tokio::try_join!(
-            try_join_all(aw
-                .into_iter()
-                .map(|w| w.as_ref().load_from_any_device_(to_device_idx))
-            ),
-            try_join_all(bw
-                .into_iter()
-                .map(|w| w.as_ref().load_from_any_device_(to_device_idx)),
-        ))?;
-
-        let refs_a:Vec<&O> = me.iter().map(|o| &**o).collect();
-        let refs_b:Vec<&B> = other.iter().map(|o| &**o).collect();
-        do_run(&refs_a, &refs_b)
+    pub fn size(&self) -> &O::Metrics {
+        O::M::size(self)
     }
 
-
-    pub fn id(&self) -> &<O as WithId>::ID {
-        &self.id
-    }
-
-    pub async fn take_data(
-        self,
-        to_device_idx: usize,
-    ) -> Result<O, ThoosaError> {
-
-        let _ = self.load_from_any_device_(to_device_idx).await?;
-
-        let mut v = self.cached_data.into_vec();
-        let lock = v.swap_remove(to_device_idx);
-        let opt: Option<O> = lock.into_inner();
-        Ok(opt.expect(&format!("no data in {to_device_idx} for {:?}", self.id)))
-    }
-
-    pub async fn clone_from_cpu(&self) -> Result<O, ThoosaError>
-    where O: Clone {
-        Ok(self.cached_data[0].read().await.clone().expect("no data in cpu"))
+    pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoosaError> {
+        O::M::dump_to_cpu(self, device_idx).await
     }
 
     pub async fn with_selected_data<S, R>(
@@ -411,37 +738,54 @@ impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
         S: Clone,
     {
-        let read_guard: RwLockReadGuard<'_, Option<O>> = self.cached_data[to_device_idx].read().await;
-
-        if read_guard.is_some() {
-            let data = read_guard
-                .as_ref()
-                .expect("no value behind guard")
-                .subview(selector.clone())?;
-
-            return do_run(data);
-        }
-
-        drop(read_guard);
-
-        for (source_device_idx, op) in self.cached_data.iter().enumerate() {
-            if source_device_idx == to_device_idx {
-                continue;
-            }
-
-            let source_read_guard: RwLockReadGuard<'_, Option<O>> = op.read().await;
-
-            if let Some(src) = source_read_guard.as_ref() {
-                let sub_t = src.subview(selector.clone())?;
-                debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
-                let data = sub_t.copy_to_device(to_device_idx).await?;
-
-                return do_run(data);
-            }
-        }
-
-        Err(MyError::NotFound.into())
+        O::M::with_selected_data(self, to_device_idx, selector, do_run).await
     }
+
+    pub fn is_on_cpu_since(&self, threshold_age: u64) -> bool {
+        O::M::is_on_cpu_since(self, threshold_age)
+    }
+
+    pub async fn take_data(
+        self,
+        to_device_idx: usize,
+    ) -> Result<O, ThoosaError> {
+        O::M::take_data(self, to_device_idx).await
+    }
+
+    pub async fn load_from_any_device_(
+        &self,
+        to_device_idx: usize,
+    ) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError> {
+        O::M::load_from_any_device_(self, to_device_idx).await
+    }
+
+    pub async fn is_all_on_cpu(&self) -> bool {
+        O::M::is_all_on_cpu(self).await
+    }
+}
+
+
+impl<O> DevicesWrap<O>
+where
+    O: Data<M=CpuOnly<O>> + WithId + Send + Sync
+{
+}
+
+impl<O> DevicesWrap<O>
+where
+    O: Data<M=CpuOrGpu<O>> + CopyToDevice + WithId + Send + Sync
+{
+
+    pub fn id(&self) -> &<O as WithId>::ID {
+        &self.id
+    }
+
+
+    pub async fn clone_from_cpu(&self) -> Result<O, ThoosaError>
+    where O: Clone {
+        Ok(self.cached_data[0].read().await.clone().expect("no data in cpu"))
+    }
+
 
 
     fn do_run_trace_ref<R>(
@@ -469,122 +813,6 @@ impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O
         } else {
             do_run(&TracingWrapper::new(&data, trace_ctx))
         }
-    }
-
-    pub /*remove pub*/async fn load_from_any_device_(
-        &self,
-        to_device_idx: usize,
-    ) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError> {
-        //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
-        //TODO add GlobalCtx::purge_lock just in case?
-        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx}",self.id);
-        trace!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",self.id, self.cached_data);
-        assert!(self.cached_data.len() > to_device_idx, "Device index {to_device_idx}(cache len is {}) too big {:?}",self.cached_data.len(), self.id);
-
-        if to_device_idx != 0 {
-            *self.on_cpu_since.write() = None;
-        }
-
-        let read_guard = self.cached_data[to_device_idx].read().await;
-
-        if read_guard.is_some() {
-            Ok(tokio::sync::RwLockReadGuard::map(
-                read_guard,
-                |val: &Option<O>| val.as_ref().expect("no value behind guard"),
-            ))
-        } else {
-            drop(read_guard);
-
-            for (source_device_idx, op) in self.cached_data.iter().enumerate() {
-                let source_read_guard = op.read().await;
-
-                if source_device_idx != to_device_idx && source_read_guard.is_some() {
-                    drop(source_read_guard);
-                    return self.copy_and_get(source_device_idx, to_device_idx).await;
-                }
-            }
-            Err(MyError::NotFound.into())
-        }
-    }
-
-    pub async fn load_from_any_device(
-        &self,
-        to_device_idx: usize,
-    ) -> Result<(), ThoosaError> {
-        //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
-        //TODO add GlobalCtx::purge_lock just in case?
-        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx}",self.id);
-        trace!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx}  self.cached_data={:?}",self.id, self.cached_data);
-
-        if to_device_idx != 0 {
-            *self.on_cpu_since.write() = None;
-        }
-
-        let read_guard = self.cached_data[to_device_idx].read().await;
-
-        if read_guard.is_some() {
-            Ok(())
-        } else {
-            drop(read_guard);
-
-            for (source_device_idx, op) in self.cached_data.iter().enumerate() {
-                let source_read_guard = op.read().await;
-
-                if source_device_idx != to_device_idx && source_read_guard.is_some() {
-                    drop(source_read_guard);
-                    self.ensure_copied(source_device_idx, to_device_idx, None, false).await?;
-                    return Ok(());
-                }
-            }
-            Err(MyError::NotFound.into())
-        }
-    }
-
-    pub async fn get_copied(&self, from_device_idx: usize) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError> {
-        let read_guard = self.cached_data[from_device_idx].read().await;
-
-        if read_guard.is_some() {
-            Ok(tokio::sync::RwLockReadGuard::map(
-                read_guard,
-                |val: &Option<O>| val.as_ref().expect("no value behind guard"),
-            ))
-        } else {
-            info!("MyError::NotReady: {:?} from_device_idx={from_device_idx}", self.id);
-            Err(MyError::NotReady.into())
-        }
-    }
-
-
-    pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoosaError> {
-        assert_ne!(device_idx, 0);
-
-        debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx}",self.id);
-
-        if let Some(Ok(mut lock)) = self.cached_data.get(device_idx).map(|v|v.try_write()) {
-            if self.cached_data[0].read().await.is_none() {
-                let data = lock.take();
-
-                self.ensure_copied(device_idx, 0, data.as_ref(), false).await?;
-
-                debug!("DataCacheWrapper::dump_to_cpu: 1. id={:?} copied to cpu done",self.id);
-            }
-            drop(lock.take());
-
-        } else {
-            //if it's locked then it should be one of the parent futures being built, waiting on it will deadlock
-            //TODO log warning?
-            debug!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}",self.id, self.cached_data)
-        }
-
-        let is_all_on_cpu = self.is_all_on_cpu().await;
-        if is_all_on_cpu {
-            //may rewrite previous Some, but shouldn't be a problem
-            *self.on_cpu_since.write() = Some(GlobalCtx::global().cache_age());
-        }
-
-        debug!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}",self.id);
-
-        Ok(())
     }
 
     //to avoid write lock on dst device while copy is in progress use inflights
@@ -683,50 +911,6 @@ impl<O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> DevicesWrap<O
             .map(|v| v.expect("no value returned"))
     }
 
-    pub fn add_cache_area(&self, ca: u64) -> u64 {
-        self.cache_area.fetch_or(ca, Ordering::SeqCst) | ca
-    }
-
-    pub fn remove_cache_area(&self, ca: u64) -> u64 {
-        self.cache_area.fetch_and(!ca, Ordering::AcqRel) & !ca
-    }
-
-    pub fn cache_areas(&self) -> u64 {
-        self.cache_area.load(Ordering::Acquire)
-    }
-
-    pub fn size(&self) -> &O::Metrics {
-        &self.size
-    }
-
-    pub async fn is_all_on_cpu(&self) -> bool {
-        debug!("DataCacheWrapper::is_all_on_cpu: self.id={:?}", self.id);
-
-        for (device_idx, data) in self.cached_data.iter().skip(1).enumerate() {
-            if data.read().await.is_some() {
-                debug!("DataCacheWrapper::is_all_on_cpu: device_idx={device_idx}");
-                return false;
-            }
-        }
-
-        true
-    }
-
-    pub fn is_on_cpu_since(&self, threshold_age: u64) -> bool {
-        let r = self
-            .on_cpu_since
-            .read()
-            .map(|v| threshold_age < v)
-            .unwrap_or(false);
-
-        debug!(
-            "DataCacheWrapper::is_on_cpu_since: self.id={:?} self.on_cpu_since={:?} r={r} cache_age={threshold_age}",
-            self.id, self.on_cpu_since
-        );
-
-        r
-    }
-
     #[cfg(test)]
     pub fn cached_data(&self) -> &Box<[tokio::sync::RwLock<Option<O>>]> {
         &self.cached_data
@@ -745,7 +929,7 @@ pub trait WithDataRef: WithId + Debug {
         do_run: F,
     ) -> Result<R, ThoosaError>
     where
-       for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+       for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError> + Send,
         P:PermitsCtx;
 
 
@@ -780,29 +964,19 @@ where
      P:PermitsCtx;
 }
 
-
-impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef for DevicesWrap<O> {
+impl <O> WithDataRef for DevicesWrap<O>
+where
+    O: Data + WithId + Send + Sync,
+    O::M: DevicesWrapCopyMode<O>,
+{
     type O<'o> = O;
 
     async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
-        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
-        P:PermitsCtx
+            for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError> + Send,
+            P:PermitsCtx
     {
-        let _permit =  if permits_ctx.read().acquired_permits() == 0 {
-            Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(self.id().clone())).await?)
-        } else {
-            None
-        };
-
-
-        match self.load_from_any_device_(to_device_idx).await {
-            Ok(v) => {
-                let data: &Self::O<'_> = v.deref();
-                Self::do_run_trace_ref(trace_ctx, do_run, data)
-            }
-            Err(e) => Err(e),
-        }
+        O::M::with_data_ref(self, to_device_idx, permits_ctx, trace_ctx, do_run).await
     }
 
     fn mem_size(&self) -> u64 {
@@ -810,20 +984,21 @@ impl <O: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice> WithDataRef 
     }
 
     fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics {
-        self.size().clone()
+        self.size.clone()
     }
 
     fn cache_area(&self) -> u64 {
-        self.cache_areas()
+        self.cache_area.load(Relaxed)
     }
-}
 
+}
 
 
 impl<O, S> WithSelectDataRef<S> for DevicesWrap<O>
 where
     S:Debug + Clone + 'static,
-    O: Select<S, Output=O> + Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+    O: Select<S, Output=O> + Data + WithId + Send + Sync + CopyToDevice,
+    O::M: DevicesWrapCopyMode<O>,
 {
     async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
@@ -831,69 +1006,21 @@ where
         for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
         P:PermitsCtx
     {
-        let read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> = self.cached_data[to_device_idx].read().await;
-
-        if read_guard.is_some() {
-            let base: &Self::O<'_> = read_guard
-                .as_ref()
-                .expect("no value behind guard");
-
-            let _permit =  if permits_ctx.read().acquired_permits() == 0 {
-                Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(self.id().clone())).await?)
-            } else {
-                None
-            };
-            let data: Self::O<'_> = base.subview(selector.clone())?;
-
-            return Self::do_run_trace_owned(trace_ctx, do_run, data);
-        }
-
-        drop(read_guard);
-
-        for (source_device_idx, op) in self.cached_data.iter().enumerate() {
-            if source_device_idx == to_device_idx {
-                continue;
-            }
-
-            let source_read_guard: RwLockReadGuard<'_, Option<Self::O<'_>>> = op.read().await;
-
-            if let Some(src) = source_read_guard.as_ref() {
-                let sub_t: Self::O<'_> = src.subview(selector.clone())?;
-
-                debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
-                let _permit =  if permits_ctx.read().acquired_permits() == 0 {
-                    Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(self.id().clone())).await?)
-                } else {
-                    None
-                };
-                let data = sub_t.copy_to_device(to_device_idx).await?;
-
-                return Self::do_run_trace_owned(trace_ctx, do_run, data);
-            }
-        }
-
-        Err(MyError::NotFound.into())
+        O::M::with_selected_data_ref(self, to_device_idx, permits_ctx, selector, trace_ctx, do_run).await
     }
 
 }
 
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use crate::common::{mock_run_ctx, DropIf, MockRunCtx, OutId, ThoosaError};
-    use crate::global_ctx::{MockGlobalCtx, mock_global_ctx};
+    use crate::common::{mock_run_ctx, ThoosaError};
+    use crate::global_ctx::{mock_global_ctx, MockGlobalCtx};
     use crate::*;
-    use log::debug;
-    use mockall::mock;
     use parking_lot::RwLock;
-    use thoosa_shared::MyError;
-    use thoosa_shared::traits::{Adjustable, WithId};
     use thoosa_with_data::with_data;
     use crate::common::cachable::{DevicesWrap, WithDataRef};
-    use crate::common::mock_run_ctx::MockRunCtxBuilder;
-    use crate::common::runnable::{Stage, SyncStage};
-    use crate::oom_handler::{mock_input_context, Adjusters, Contexts, MockRunCtxContext, MockRunnableContext, OOMHandler};
-    use crate::oom_handler::test_types::{TestInput, TestOutput};
     use crate::test_utils::MockDataWithId;
     extern crate self as caching_runner;
     pub use caching_runner::*;
@@ -1044,86 +1171,6 @@ mod tests {
         })?;
         Ok(())
     }
-
-
-
-
-    // #[tokio::test]
-    // async fn test_with_data_and_oom()-> Result<(), ThoosaError> {
-    //
-    //     let ctx = MockGlobalCtx::global_context();
-    //     ctx.expect().returning(|| {
-    //         Box::leak(Box::new(
-    //             mock_global_ctx::build_default(),
-    //         )) as &'static global_ctx::MockGlobalCtx
-    //     });
-    //
-    //
-    //     let (task, task_calls) = crate::oom_handler::mock_runnable::build([
-    //         Err(ThoosaError::from(MyError::OutOfMemory)),
-    //         Ok(TestOutput::new(10.)),
-    //     ]);
-    //     let (input_adj, input_calls) = crate::oom_handler::mock_input_adjuster::build([[0]..[1]]);
-    //     let oom_handler = OOMHandler::new(vec![Adjusters::Input(Box::new(input_adj))], None);
-    //     let ctx_mock = crate::common::mock_run_ctx::build()
-    //         .with_device_idx(1)
-    //         .with_acquired_permits(1)
-    //         .with_drop_permits(vec![DropIf::IfNotMax])
-    //         .finish();
-    //
-    //     let test_input = TestInput::new(1);
-    //     let input = Arc::new(DevicesWrap::wrap(test_input.clone(), 0));
-    //
-    //     let out = ;
-    //     // let mocked_stat = Moc
-    //
-    //     let __with_data_device = 1;
-    //     async move {
-    //         let __device_idx = __with_data_device;
-    //         let __with_data_var_0 = ::std::sync::Arc::clone(&input);
-    //         let __with_data_handle_0 = ::tokio::spawn({
-    //             let __wrap = ::std::sync::Arc::clone(&__with_data_var_0);
-    //             let __device_idx = __device_idx;
-    //             async move {
-    //                 __wrap.load_from_any_device(__device_idx).await?;
-    //                 Ok::<(), ::thoosa_shared::ThoosaError>(())
-    //             }
-    //         });
-    //         let __with_data_handle_res_0 = __with_data_handle_0.await?;
-    //         __with_data_handle_res_0?;
-    //         let __with_data_guard_0 = __with_data_var_0.get_copied(__device_idx).await?;
-    //         let __with_data_ref_0 = &*__with_data_guard_0;
-    //
-    //
-    //         // (|a: &TestInput| {
-    //         //     assert_eq!(&test_input.data.0, &a.data.0);
-    //         //     Ok::<(), ThoosaError>(())
-    //         // })(__with_data_ref_0)
-    //
-    //         oom_handler
-    //             .run(
-    //                 &Arc::new(task),
-    //                 Arc::clone(&input),
-    //                 Arc::new(RwLock::new(ctx_mock)),
-    //                 Contexts::new(
-    //                     mock_input_context::build()
-    //                         .with_partial_output(TestOutput::new(10.))
-    //                         .with_all_done(&[true])
-    //                         .with_build_final_output(TestOutput::new(10.))
-    //                         .finish(),
-    //                     MockRunnableContext::new(),
-    //                     MockRunCtxContext::new(),
-    //                 ),
-    //             )
-    //             .await?
-    //
-    //
-    //
-    //     }.await;
-    //
-    //
-    //     Ok(())
-    // }
 
     #[tokio::test]
     async fn test_with_data_single_val() -> Result<(), ThoosaError> {

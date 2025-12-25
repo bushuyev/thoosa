@@ -20,7 +20,8 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output, ApplicableRunCtx, Runner, ToOrdinal};
-use thoosa_shared::run_configs::{ RunConfig, RunId};
+use thoosa_shared::copy_mode::CpuOrGpu;
+use thoosa_shared::run_configs::{RunConfig, RunId};
 use thoosa_shared::traits::WithId;
 use thoosa_shared::val::Val;
 
@@ -74,25 +75,6 @@ pub enum FindMotifsRunConfigOptions {
     FilterUnfold,
 }
 
-#[derive(Debug)]
-pub struct FindMotifsApplicableOutput {
-    pub t: Tensor,
-    pub sizes: Vec<i64>,
-}
-unsafe impl Send for FindMotifsApplicableOutput {}
-unsafe impl Sync for FindMotifsApplicableOutput {}
-
-impl WithId for FindMotifsApplicableOutput {
-    type ID = CachableId;
-
-    fn id(&self) -> &Self::ID {
-        todo!()
-    }
-}
-
-#[async_trait]
-impl Output for FindMotifsApplicableOutput {
-}
 
 pub struct DummyRunner;
 #[derive(Debug)]

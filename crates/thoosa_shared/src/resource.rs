@@ -9,6 +9,7 @@ use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_shared::copy_mode::CpuOnly;
 
 #[automock]
 pub trait ResourceStore {
@@ -104,6 +105,7 @@ impl WithId for Resource {
 }
 
 impl Input for Resource {
+    
 }
 
 impl From<(u32, u32, &str, u32)> for Resource {

@@ -326,7 +326,7 @@ where
             self.run_config_stages[best].run_config.clone(),
         ));
 
-        Ok(Arc::new(DevicesWrap::wrap_cpu(result)))
+        Ok(Arc::new(DevicesWrap::wrap(result, 0)))
     }
 }
 
@@ -542,7 +542,7 @@ mod tests {
         ctx.write().add_permit(global_ctx.acquire_many(0, 1, Arc::new(SimpleId("test"))).await?);
 
         let cache_area = ctx.read().cache_area();
-        let resources_input = Arc::new(DevicesWrap::wrap_cpu(
+        let resources_input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(
                 SimpleId::from("resources"),
                 Simple::new(ResourceType::List(
@@ -551,7 +551,8 @@ mod tests {
                         .map(|v| v.to_string())
                         .collect(),
                 )),
-            )
+            ),
+            0
         ));
 
         let run_ids = run_grid::<_, _, _, _, _>(
@@ -602,7 +603,7 @@ mod tests {
             let cache_area_loop = ctx.read().cache_area();
             let num_devices_loop = GlobalCtx::global().device_count();
             let motif_id_value = DataId::from(&(motif_id_raw as u32));
-            let motif_id = Arc::new(DevicesWrap::wrap_cpu(MotifLoaderInput::all_slices(motif_id_value.clone())));
+            let motif_id = Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(motif_id_value.clone()), 0));
 
             let motif = Arc::clone(&motif_loader_impl).run(
                 Arc::clone(&motif_id),
@@ -633,11 +634,12 @@ mod tests {
             }"#
             ).expect("SelectMotifs2");
 
-        let input_wrapper = Arc::new(DevicesWrap::wrap_cpu(
+        let input_wrapper = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(
                 SimpleId::from("resources"),
                 Labeled::new("test".to_string()),
-            )
+            ),
+            0
         ));
 
         // let run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(

@@ -11,7 +11,7 @@ use caching_runner::oom_handler::{
 };
 use caching_runner::permits::{NumPermits, PermitStep, MAX_PERMITS};
 
-use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use caching_runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
 use caching_runner::common::runnable::{Stage, SyncStage};
 use log::debug;
 use parking_lot::RwLock;
@@ -253,7 +253,9 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 where
     R: Cached + OutId + Send + Sync + 'static,
     for<'a> <R as Stage>::In<'a>: Data + CopyToDevice + WithId+ Send + Sync,
+    for<'a> <<R as Stage>::In<'a> as Data>::M: DevicesWrapCopyMode<R::In<'a>>,
     R::Out: Data + CopyToDevice + Send + Sync,
+    <R::Out as Data>::M: DevicesWrapCopyMode<R::Out>,
     StageInStatic<R>: From<&'static str>,
     F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF: Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
@@ -291,18 +293,18 @@ where
 
                 multed
                     .with_data_ref(device_idx,
-                                   Arc::clone(&ctx_device), None, |guard: &<R as Stage>::Out| {
-                                                           // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
+                       Arc::clone(&ctx_device), None, |guard: &<R as Stage>::Out| {
+                           // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
 
-                                                           check_arc(res, &guard);
+                           check_arc(res, &guard);
 
-                                                           debug!("run_mul_task_invocations: task {idx}: device_idx={device_idx} thread id={:?} done",std::thread::current().id());
-                                                           debug!("run_mul_task_invocations: task {idx}: multed=\n{:?}", guard);
+                           debug!("run_mul_task_invocations: task {idx}: device_idx={device_idx} thread id={:?} done",std::thread::current().id());
+                           debug!("run_mul_task_invocations: task {idx}: multed=\n{:?}", guard);
 
-                                                           res_cnt_arc.fetch_add(1, Relaxed);
+                           res_cnt_arc.fetch_add(1, Relaxed);
 
-                                                           Ok(())
-                                                       })
+                           Ok(())
+                       })
                     .await?;
 
                 debug!("run_mul_task_invocations: task {idx}: all done");
@@ -360,6 +362,7 @@ mod tests {
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{Data, Named, Select, SimpleId, WithId};
     use thoosa_shared::{MyError, ThoosaError};
+    use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 
     #[ctor::ctor]
     fn init() {
@@ -542,6 +545,7 @@ mod tests {
     #[async_trait]
     impl Data for DLoadedTensor {
         type Metrics = i64;
+        type M = CpuOrGpu<Self>;
 
         fn size(&self) -> Self::Metrics {
             self.data.0.len() as i64
@@ -570,7 +574,7 @@ mod tests {
             &self.id
         }
     }
-    impl Output for DLoadedTensor {}
+    impl Output for DLoadedTensor { }
 
     impl Input for DLoadedTensor {}
 
@@ -596,7 +600,7 @@ mod tests {
     pub(super) struct DLoaderInput {
         id: DLoaderInputId,
     }
-    impl Input for DLoaderInput {}
+    impl Input for DLoaderInput {  }
     impl WithId for DLoaderInput {
         type ID = DLoaderInputId;
 
@@ -615,6 +619,7 @@ mod tests {
     #[async_trait]
     impl Data for DLoaderInput {
         type Metrics = ();
+        type M = CpuOnly<Self>;
 
         fn size(&self) -> Self::Metrics {
             ()
@@ -780,6 +785,7 @@ mod tests {
     #[async_trait]
     impl Data for DMulTaskOutput {
         type Metrics = [usize; 1];
+        type M = CpuOrGpu<Self>;
 
 
         fn size(&self) -> Self::Metrics {
