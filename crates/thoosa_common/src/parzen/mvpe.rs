@@ -1,6 +1,6 @@
-use log::debug;
 use crate::parzen::npe;
 use crate::parzen::optimizer::Distribution;
+use log::{debug, trace};
 use tch::Tensor;
 use thoosa_shared::val::Val;
 
@@ -26,7 +26,7 @@ impl MultiVariateParzenEstimator {
             self.parzen_estimators
                 .iter()
                 .map(|pe| pe.sample(n_samples))
-                .collect() //TODO collect/collect
+                .collect()
         } else {
             todo!()
         }
@@ -42,10 +42,9 @@ impl MultiVariateParzenEstimator {
                 .as_slice(),
             0,
         );
-        // debug!("log_pdf: tensor.size={:?}", tensor.size());
+        trace!("MultiVariateParzenEstimator::log_pdf: tensor.size={:?}", tensor.size());
         npe::compute_config_loglikelihoods(
-            &tensor, //.view((self.parzen_estimators.len() as i64, -1, configs.len() as i64)),
-            // Some(self.parzen_estimators[0].weights.as_ref())
+            &tensor,
             Some(self.parzen_estimators[0].weights()),
         )
     }
@@ -70,7 +69,6 @@ mod multi_variate_parzen_estimator_tests {
         let mvpe = MultiVariateParzenEstimator::new(vec![
             NumericalParzenEstimator::new(
                 None,
-                // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
                 BandwidthFactor::default(),
@@ -80,7 +78,6 @@ mod multi_variate_parzen_estimator_tests {
             .clc_distr(Tensor::from_slice(&samples), None),
             NumericalParzenEstimator::new(
                 None,
-                // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
                 BandwidthFactor::default(),
@@ -90,7 +87,6 @@ mod multi_variate_parzen_estimator_tests {
             .clc_distr(Tensor::from_slice(&samples), None),
             NumericalParzenEstimator::new(
                 None,
-                // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
                 BandwidthFactor::default(),
@@ -106,7 +102,6 @@ mod multi_variate_parzen_estimator_tests {
             vec![Val::Real(0.2)], //x2
         ]);
 
-        // debug!("v={v}");
         assert_eq!(-8017, (v.double_value(&[]) * 10000.0) as isize);
     }
 }

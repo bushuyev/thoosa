@@ -14,7 +14,6 @@ use thoosa_shared::opt_rng::opt_rnd;
 use thoosa_shared::val::{NamedVal, Val};
 use thoosa_shared::{RangeOrValue, ThoosaError};
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct RunResult {
     loss: f32,
@@ -54,7 +53,7 @@ mod run_result_tests {
     use crate::parzen::optimizer::RunResult;
 
     #[test]
-    fn test_0() {
+    fn test_run_result_in_binaryheap() {
         let mut observations = BinaryHeap::new();
 
         observations.push(Reverse(RunResult::new(10., vec![])));
@@ -68,14 +67,12 @@ mod run_result_tests {
             observations_vec.push(e);
         }
 
-        // debug!("observations_vec={observations_vec:?}");
         assert_eq!(1., observations_vec[0].0.loss);
         assert_eq!(2., observations_vec[1].0.loss);
         assert_eq!(10., observations_vec[2].0.loss);
         assert_eq!(20., observations_vec[3].0.loss);
     }
 }
-#[allow(dead_code)]
 pub trait ParzenEstimator: Send {
     fn clc_distr(&self, samples: Tensor, weights: Option<Tensor>) -> Box<dyn Distribution>;
     fn clc_distr_from_vec(
@@ -109,7 +106,6 @@ impl TreeStructuredParzenEstimator {
                 Hyperparameter::UniformFloat { name, lower, upper } => {
                     Box::new(NumericalParzenEstimator::new(
                         Some(name.to_string()),
-                        // Tensor::zeros(1, FLOAT_CPU),
                         *lower,
                         *upper,
                         BandwidthFactor::default(),
@@ -120,7 +116,6 @@ impl TreeStructuredParzenEstimator {
                 Hyperparameter::UniformInt { name, lower, upper } => {
                     Box::new(NumericalParzenEstimator::new(
                         Some(name.to_string()),
-                        // Tensor::zeros(1, FLOAT_CPU),
                         *lower as f64, //TODO
                         *upper as f64,
                         BandwidthFactor::default(),

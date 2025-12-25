@@ -512,13 +512,6 @@ mod opt_tests {
 
         debug!("x_train={:?}", x_train.size());
 
-        // let theta = Tensor::ones([2], FLOAT_CPU);
-
-        // Y_train=[[ 0.7568025 ]
-        //     [-0.14112001]
-        //     [-0.90929743]
-        //     [-0.84147098]
-        //     [ 0.        ]]
 
         let mut bfgs = crate::bfgs::BFGS::new(|theta: &mut Tensor| {
             theta.zero_grad();
@@ -526,15 +519,6 @@ mod opt_tests {
                 .expect("nll")
                 .to_device(Cpu)
                 .set_requires_grad(true)
-            // let k = kernel(&x_train, &x_train, 1.0, 0.0) + Tensor::zeros(&x_train.size(), FLOAT_CPU).fill_diagonal_(0.1, false);
-
-            // let v =
-            //     theta.i(0).f_add_scalar(-11.).unwrap().pow_tensor_scalar(2) +
-            //     theta.i(1).f_add_scalar(-22.).unwrap().pow_tensor_scalar(2);
-            // debug!("func: v=");
-            // v.print();
-            // v
-            // k.sum(Float).view((-1)) //+ theta.sum(Float).view((-1))
         });
 
         // let theta = Tensor::from_slice(&[20., 20.]).totype(Float).set_requires_grad(true);
@@ -559,17 +543,16 @@ mod opt_tests {
     }
 
     //stack if first point is min
-    // #[test]
+    #[test]
     fn test_opt_1d_with_ei() -> Result<(), ThoosaError> {
         let n = 100i64;
 
         let (y_train_full, x_t, x) = sin3_pow2(n, -2., 2., Some(0.02));
 
-        let train_indexes = vec![0, 50, 70, 90]; //(0..n).step_by(20).collect::<Vec<i64>>();//vec![0, n-1]; //
-        let train_indexes = train_indexes.as_slice();
+        let train_indexes = vec![0, 50, 70, 90];
 
-        let x_train = x_t.i(train_indexes);
-        let y_train = y_train_full.i((.., train_indexes));
+        let x_train = x_t.i(train_indexes.as_slice());
+        let y_train = y_train_full.i((.., train_indexes.as_slice()));
 
         let gp = GaussianProcess::new(
             move |t1, t2| {
@@ -601,14 +584,17 @@ mod opt_tests {
             10,
         )?;
 
-        debug!("next={}", next.state().get_best_param().unwrap().deref());
-        debug!("x_t={}", x_t);
-        // assert_eq!(
-        //     Tensor::from_slice(&[0.1]).round_decimals(1),
-        //     next.state().get_best_param().unwrap().deref().round_decimals(1)
-        // );
+        let opt_result =next.state().get_best_param().unwrap().deref();
+
+
+        assert!(opt_result.double_value(&[0]) < 0.);
+
+        /*
+        // debug!("opt_result=\n{opt_result}");
+        // debug!("x_t={}", x_t);
 
         let pred_y = gpf.predict(&x_t)?;
+
 
         plot_series_with_points(
             vec![
@@ -645,6 +631,8 @@ mod opt_tests {
                 .zip(from::<Vec<f32>>(&y_train.view(-1)).into_iter())
                 .collect::<Vec<(f32, f32)>>(),
         )?;
+
+         */
         Ok(())
     }
 
@@ -740,7 +728,7 @@ mod opt_tests {
         let sig_chol = apply_post(&mu_s, &cov_s, &sig_t);
         let sig_chol_opt = apply_post(&mu_s_opt, &cov_s_opt, &sig_t);
 
-        plot_series_with_points(
+/*        plot_series_with_points(
             vec![
                 (
                     format!("train"),
@@ -801,8 +789,8 @@ mod opt_tests {
                 .into_iter()
                 .zip(from::<Vec<f32>>(&y_train.view(-1)).into_iter())
                 .collect::<Vec<(f32, f32)>>(),
-        )
-        .unwrap();
+        ).unwrap();
+*/
 
         Ok(())
     }

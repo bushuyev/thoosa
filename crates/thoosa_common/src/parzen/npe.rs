@@ -123,8 +123,8 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Test")
-            // .field("lb", &<N as Into<f64>>::into(self.lb))
-            // .field("ub", &<N as Into<f64>>::into(self.ub))
+            .field("lb", &<N as Into<f64>>::into(self.lb))
+            .field("ub", &<N as Into<f64>>::into(self.ub))
             .field("prior", &self.prior)
             .finish()
     }
@@ -154,7 +154,6 @@ where
                     .as_slice(),
             )),
         )
-        // todo!()
     }
 }
 
@@ -189,7 +188,8 @@ where
     }
 
     fn clc_distr(&self, samples: Tensor) -> NumericalGaussian {
-        trace!("clc_distr: samples={samples} kind={:?} ", samples.kind());
+        trace!("NumericalParzenEstimator::clc_distr: samples={samples} kind={:?} ", samples.kind());
+        let device = samples.device();
         let samples = if self.prior {
             //prior adds midpoint to 'stabilize the density estimation process' (gpt)
             Tensor::cat(
@@ -215,17 +215,18 @@ where
             .view(1)
             .repeat(size);
 
-        trace!("clipped_bandwidth={}", clipped_bandwidth);
+        trace!("NumericalParzenEstimator::clc_distr: clipped_bandwidth={}", clipped_bandwidth);
         if self.prior {
             clipped_bandwidth
                 .i(size - 1)
                 .copy_(&Tensor::from(<f64>::into(domain_range.into())));
         }
-        trace!("means={} clipped_bandwidth={}", means, clipped_bandwidth);
+
+        trace!("NumericalParzenEstimator::clc_distr: means={} clipped_bandwidth={}", means, clipped_bandwidth);
         let (norm_consts, logpdf_consts) =
             Self::calculate_norm_consts(&self.lb, &self.ub, &means, &clipped_bandwidth);
 
-        let weights = uniform_weight(size); //TODO
+        let weights = uniform_weight(size, device);
 
         NumericalGaussian::new(
             means,
@@ -250,7 +251,6 @@ where
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct NumericalGaussian {
     means: Tensor,
     stds: Tensor,
@@ -280,7 +280,7 @@ impl NumericalGaussian {
                 .unwrap()
                 .zip(stds.iter::<f64>().unwrap())
                 .map(|(mean, std)| {
-                    // debug!("NumericalGaussian::new: mean={mean:} std={std}");
+                    debug!("NumericalGaussian::new: mean={mean:} std={std}");
                     (mean, std)
                 })
                 .collect::<Vec<_>>(),
@@ -296,7 +296,6 @@ impl NumericalGaussian {
         }
     }
 
-    #[allow(dead_code)]
     pub fn pdf(&self, x: &Tensor) -> Tensor {
         let norm_consts = &self.norm_consts / (SQR2PI * &self.stds);
         let mahalanobis = ((x.view((-1, 1)).repeat([1, self.means.size()[0]])
@@ -309,7 +308,7 @@ impl NumericalGaussian {
             .sum_dim_intlist(1, false, None)
     }
 
-    fn _basis_loglikelihood(&self, x: &Tensor) -> Tensor {
+    fn basis_loglikelihood(&self, x: &Tensor) -> Tensor {
         let mahalanobis =
             ((x - self.means.view((-1, 1))) / self.stds.view((-1, 1))).pow_tensor_scalar(2);
 
@@ -317,7 +316,7 @@ impl NumericalGaussian {
     }
 
     fn _sample(&self, n_samples: usize) -> Vec<f64> {
-        trace!("self.means={:?} self.stds={:?}", self.means, self.stds);
+        trace!("NumericalGaussian::new: self.means={:?} self.stds={:?}", self.means, self.stds);
 
         (0..n_samples)
             .map(|_i| {
@@ -355,7 +354,9 @@ impl Distribution for NumericalGaussian {
     }
 
     fn basis_loglikelihood(&self, x: &mut dyn Iterator<Item = &Val>) -> Tensor {
-        self._basis_loglikelihood(&Tensor::from_slice(
+        NumericalGaussian::basis_loglikelihood(
+            self,
+            &Tensor::from_slice(
             x.map(|v| v.try_into().unwrap())
                 .collect::<Vec<f64>>()
                 .as_slice(),
@@ -372,13 +373,9 @@ pub fn compute_config_loglikelihoods(
     basis_loglikelihoods: &Tensor,
     weights: Option<&Tensor>,
 ) -> Tensor {
-    // debug!("basis_loglikelihoods={basis_loglikelihoods} size={:?}", basis_loglikelihoods.size());
-    // debug!("weights={weights:?}");
 
     let config_basis_loglikelihoods = basis_loglikelihoods.sum_dim_intlist(0, false, Kind::Float); //.view((-1, 1));//TODO kind
 
-    // debug!("config_basis_loglikelihoods={config_basis_loglikelihoods}");
-    // debug!("config_basis_loglikelihoods.size={:?} weights.size()={:?}", config_basis_loglikelihoods.size(), weights.expect("weights").size());
 
     let config_basis_loglikelihoods = if let Some(weights) = weights {
         config_basis_loglikelihoods + weights.view((-1, 1)).log()
@@ -391,7 +388,6 @@ pub fn compute_config_loglikelihoods(
 
 #[cfg(test)]
 mod tests {
-    use log::debug;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use tch::Tensor;
@@ -410,7 +406,6 @@ mod tests {
 
         let npe = NumericalParzenEstimator::new(
             None,
-            // Tensor::from_slice(&[-1.0, 0.0, 1.0]),
             -3.0f64,
             3.0f64,
             BandwidthFactor::default(),
@@ -418,32 +413,25 @@ mod tests {
             None,
         );
 
-        // debug!("npe.weights={}", npe.weights);
-
-        // assert_eq!(
-        //     Tensor::from_slice(&[0.2500, 0.2500, 0.2500, 0.2500]).round_decimals(4),
-        //     npe.weights.round_decimals(4)
-        // );
-
         let gaussian = npe.clc_distr(Tensor::from_slice(&[-1.0, 0.0, 1.0]));
-        debug!("x={:?}", gaussian.means);
+
         assert_eq!(
             Tensor::from_slice(&[-1., 0., 1., 0.]).round_decimals(4),
             gaussian.means.round_decimals(4)
         );
 
-        debug!("x={:?}", gaussian.stds);
+
         assert_eq!(
             Tensor::from_slice(&[0.29946714, 0.29946714, 0.29946714, 6.]).round_decimals(4),
             gaussian.stds.round_decimals(4)
         );
 
-        debug!("x={:?}", gaussian.norm_consts);
+
         assert_eq!(
             Tensor::from_slice(&[1., 1., 1., 2.61147797]).round_decimals(4),
             gaussian.norm_consts.round_decimals(4)
         );
-        debug!("x={:?}", gaussian.logpdf_consts);
+
         assert_eq!(
             Tensor::from_slice(&[0.28681207, 0.28681207, 0.28681207, -1.75078167])
                 .round_decimals(4),
@@ -451,7 +439,7 @@ mod tests {
         );
 
         let pdf = gaussian.pdf(&Tensor::linspace(-3.0, 3.0, 100, FLOAT_CPU));
-        debug!("pdf={pdf}");
+
 
         assert_eq!(
             Tensor::from_slice(&[
@@ -476,8 +464,8 @@ mod tests {
         );
 
         let basis_loglikelihood =
-            gaussian._basis_loglikelihood(&Tensor::linspace(0., 10., 10, FLOAT_CPU));
-        debug!("basis_loglikelihood={basis_loglikelihood}");
+            gaussian.basis_loglikelihood(&Tensor::linspace(0., 10., 10, FLOAT_CPU));
+
         assert_eq!(
             Tensor::from_slice(&[
                 -5.28853193e+00,
@@ -526,9 +514,8 @@ mod tests {
             basis_loglikelihood.round_decimals(3)
         );
 
-        let samples = gaussian._sample(11);
-
-        debug!("samples={samples:?}");
+        // let samples = gaussian._sample(11);
+        // debug!("samples={samples:?}");
     }
 
     #[test]

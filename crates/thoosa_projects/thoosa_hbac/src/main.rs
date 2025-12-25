@@ -8,21 +8,21 @@ use thoosa_main::cli::run_cli;
 use thoosa_shared::MyError;
 use thoosa_shims::context::ThoCudaContext;
 
-// #[tokio::main(flavor = "multi_thread", worker_threads = 32)]
+
  fn main() {
     kick_register_cuda_hooks();
-    //
+
     let t1 = Instant::now();
-    //
-    // /*
-    // sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
-    // 2227|seizure
-    // 1181|lpd
-    // 806|gpdh
-    // 384|lrda
-    // 1154|grda
-    // 4208|other
-    // */
+
+    /*
+    sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
+    2227|seizure
+    1181|lpd
+    806|gpdh
+    384|lrda
+    1154|grda
+    4208|other
+    */
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
             //runs cuCtxSetCurrent
@@ -60,8 +60,6 @@ use thoosa_shims::context::ThoCudaContext;
             }
 
             Err(e) => {
-
-
                 error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
             }
         }
