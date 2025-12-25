@@ -60,6 +60,7 @@ tracing.workspace = true
 rand_chacha = "0.3.1"
 approx = "0.5.1"
 mockall.workspace = true
+mockall_double.workspace = true
 chrono.workspace = true
 [build-dependencies]
 chrono.workspace = true
