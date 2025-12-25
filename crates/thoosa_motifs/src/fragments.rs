@@ -35,56 +35,7 @@ use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::run_configs::{RunId};
 use thoosa_shared::*;
 
-#[derive(Debug, Args)]
-pub struct MotifsToFragmentsParams {
-    #[arg(long, default_value = "../../data_local/motifs")]
-    motifs_dir: String,
 
-    #[arg(long, default_value = "../../data_local/fragments")]
-    fragments_dir: String,
-
-    #[arg(long, default_value_t = 1000)]
-    window: i64,
-}
-
-impl MotifsToFragmentsParams {
-    pub fn motifs_dir(&self) -> &str {
-        &self.motifs_dir
-    }
-
-    pub fn fragments_dir(&self) -> &str {
-        &self.fragments_dir
-    }
-
-    pub fn window(&self) -> i64 {
-        self.window
-    }
-}
-
-#[derive(Debug)]
-pub struct MotifsTensors {
-    pub channels_motifs_slices: Tensor,
-    pub channels_motifs_avg_dists: Tensor,
-    pub channels_motifs_mask: Tensor,
-    pub channels_motifs_ids: Tensor,
-}
-//should be read-only
-unsafe impl Sync for MotifsTensors {}
-
-impl MotifsTensors {
-    pub fn new(
-        channels_motifs_slices: Tensor,
-        channels_motifs_avg_dists: Tensor,
-        channels_motifs_ids: Tensor,
-    ) -> Self {
-        Self {
-            channels_motifs_slices,
-            channels_motifs_mask: channels_motifs_avg_dists.ge(0.), //avg dists padded with f32::MIN
-            channels_motifs_avg_dists,
-            channels_motifs_ids,
-        }
-    }
-}
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum MotifsBy {
@@ -268,14 +219,5 @@ mod motifs_tests {
 
         let good = MotifsBy::from_str("good_motifs_run_id:99").unwrap();
         assert_eq!(good, MotifsBy::GoodMotifs(99));
-    }
-
-    #[test]
-    fn test_0() {
-        let t = Tensor::from_slice(&[2., 4., 1., 1., 3., 2., 3., 2., 3.])
-            .view((3, 3))
-            .mean_dim(0, true, Float);
-
-        println!("t={t}");
     }
 }

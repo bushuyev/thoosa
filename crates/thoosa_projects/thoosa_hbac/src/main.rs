@@ -86,8 +86,6 @@ mod tests {
     use tch::Kind::Float;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{IndexOp, Kind, Tensor};
-    use thoosa_motifs::chunks::ChunkOfSlicedTensors;
-    use thoosa_motifs::distance::{clc_dist_d2_and_mask, dist_d2};
     use thoosa_shared::ThoosaError;
 
     use thoosa_common::loader::SyncWrapper;

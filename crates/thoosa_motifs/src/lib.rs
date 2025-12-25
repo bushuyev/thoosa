@@ -12,11 +12,7 @@
 )]
 extern crate core;
 
-pub mod chunks;
 pub mod distance;
 pub mod find;
 pub mod fragments;
-mod tasks;
-mod tensor_iter;
 pub mod generators;
-mod motif_nodes;
