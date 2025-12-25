@@ -56,6 +56,8 @@ pub mod mock_async_data_batch {
     use async_trait::async_trait;
     use futures::stream::{BoxStream, StreamExt};
     use mockall::mock;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use thoosa_shared::ThoosaError;
 
     mock!{
@@ -78,6 +80,40 @@ pub mod mock_async_data_batch {
     }
 
     impl<DX: Dims, DY: Dims> MockAsyncDataBatchBuilder<DX, DY> {
+        pub fn with_train_stream_calls<F>(mut self, calls: Arc<AtomicUsize>, stream_fn: F) -> Self
+        where
+            F: Fn() -> BoxStream<'static, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoosaError>>
+                + Send
+                + Sync
+                + 'static,
+        {
+            let stream_fn = Arc::new(stream_fn);
+            self.mock.expect_train_batch_stream().returning(move || {
+                let calls = Arc::clone(&calls);
+                let stream_fn = Arc::clone(&stream_fn);
+                calls.fetch_add(1, Ordering::SeqCst);
+                (stream_fn)()
+            });
+            self
+        }
+
+        pub fn with_valid_stream_calls<F>(mut self, calls: Arc<AtomicUsize>, stream_fn: F) -> Self
+        where
+            F: Fn() -> BoxStream<'static, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoosaError>>
+                + Send
+                + Sync
+                + 'static,
+        {
+            let stream_fn = Arc::new(stream_fn);
+            self.mock.expect_valid_batch_stream().returning(move || {
+                let calls = Arc::clone(&calls);
+                let stream_fn = Arc::clone(&stream_fn);
+                calls.fetch_add(1, Ordering::SeqCst);
+                (stream_fn)()
+            });
+            self
+        }
+
         pub fn finish(self) -> MockTestBatch<DX, DY>{
             self.mock
         }
@@ -89,4 +125,3 @@ pub mod mock_async_data_batch {
         }
     }
 }
-
