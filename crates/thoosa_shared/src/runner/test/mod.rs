@@ -1233,7 +1233,7 @@ mod tests_no_global_ctx_mock{
 
         let loader = Arc::new(DummyLoader::new(10));
         let resource_1_arc = DLoaderInput::from("resource_1");
-        // let loader_cache = <DummyLoader as Cached>::cache().await;
+        let loader_cache = <DummyLoader as Cached>::cache().await;
 
         let device_idx = 1;
 
@@ -1280,11 +1280,11 @@ mod tests_no_global_ctx_mock{
         debug!("cache_areas   ={:064b}", resource_0_for_ctx_1.cache_areas());
         assert_eq!(resource_0_for_ctx_1.cache_areas(), 0);
 
-        // assert_eq!(loader_cache.len(), 1);
+        assert_eq!(loader_cache.len(), 1);
 
         global_ctx.purge_cpu(0).await;
-        // debug!("loader_cache={loader_cache:?} len={}", loader_cache.len());
-        // assert_eq!(loader_cache.len(), 0);
+        debug!("loader_cache={loader_cache:?} len={}", loader_cache.len());
+        assert_eq!(loader_cache.len(), 0);
 
         Ok(())
     }
