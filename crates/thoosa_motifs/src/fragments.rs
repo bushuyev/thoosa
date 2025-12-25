@@ -22,7 +22,6 @@ use tch::Device::Cpu;
 use tch::IndexOp;
 use tch::Kind::Float;
 use tch::Tensor;
-use thoosa_common::applicables::{ThoRunCtx};
 use thoosa_common::find_motifs_run_config::{
     FindMotifsRunConfig, FindMotifsRunConfigOptions,
 };

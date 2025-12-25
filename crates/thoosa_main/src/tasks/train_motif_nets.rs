@@ -18,7 +18,7 @@ use caching_runner::common::cachable::{Cached, DevicesWrap};
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::global_ctx::GlobalCtx;
-use thoosa_common::applicables::ThoDevice;
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::batches::AsyncDataBatch;
 use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
