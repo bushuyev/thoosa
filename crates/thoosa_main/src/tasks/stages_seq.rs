@@ -1,5 +1,5 @@
-use caching_runner::common::runnable::{AsyncStage, Stage};
-use caching_runner::common::{OutId, RunCtx};
+use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_shared::runner::common::{OutId, RunCtx};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use futures_util::future::{BoxFuture, Shared};
 use parking_lot::RwLock;
 use log::debug;
 use cached_derive::Cached;
-use caching_runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode};
+use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode};
 use thoosa_shared::applicables_runner::*;
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{Data, SimpleId, WithId};

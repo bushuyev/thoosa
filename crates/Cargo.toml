@@ -16,12 +16,7 @@ members = [
     "thoosa_macros/thoosa_properties_map_derive",
     "thoosa_macros/thoosa_with_data",
     "thoosa_macros/macros_tests",
-
-    "thoosa_runner/cached_derive",
-    "thoosa_runner/caching_runner",
-    "thoosa_runner/caching_runner_test",
-    "thoosa_runner/torch_runner",
-
+    "thoosa_macros/cached_derive",
     "thoosa_projects/thoosa_hbac",
     "thoosa_projects/thoosa_bird_clef",
     "thoosa_macros/macros_tests",
@@ -33,7 +28,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-cached_derive = { path = "thoosa_runner/cached_derive" }
+cached_derive = { path = "thoosa_macros/cached_derive" }
 thoosa_dummy_data_derive = { path = "thoosa_macros/thoosa_dummy_data_derive" }
 
 rayon = "1"
@@ -81,10 +76,12 @@ tokio = { version = "1", features = ["full", "test-util", "tracing"] }
 tokio-utils = "0"
 tracing = "0"
 tracing-subscriber = { version = "0", features = ["fmt", "env-filter", "chrono"] }
+tracing-appender = "0"
 console-subscriber = "0"
 uuid = { version = "1.10", features = ["v4", "fast-rng"] }
 statrs = "0"
 proc-macro2 = {version = "1.0.103"}
 time="0"
+libc = "0.2.175"
 [profile.test]
 opt-level = 0

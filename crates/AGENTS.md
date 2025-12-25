@@ -155,7 +155,7 @@ This repository can be vendored into a larger Rust workspace as a set of subcrat
   ```rust
   use std::sync::Arc;
   use parking_lot::RwLock;
-  use caching_runner::common::{Runnable, OutId, WithId, SimpleId, Data, CopyToDevice, MyError};
+  use thoosa_shared::runner::common::{Runnable, OutId, WithId, SimpleId, Data, CopyToDevice, MyError};
   use cached_derive::Cached;
 
   #[derive(Debug, Clone, Cached)]
@@ -173,7 +173,7 @@ This repository can be vendored into a larger Rust workspace as a set of subcrat
   }
 
   // Startup
-  let _ = caching_runner::global_ctx::GlobalCtx::init_devices(2);
+  let _ = thoosa_shared::runner::global_ctx::GlobalCtx::init_devices(2);
   // Later
   let out = Arc::new(MyTask).run_cached(Arc::new(my_input), Arc::new(RwLock::new(my_ctx))).await?;
   out.with_data(1, None, |o| { /* use o on device 1 */ Ok(()) }).await?;

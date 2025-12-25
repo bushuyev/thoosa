@@ -12,8 +12,6 @@ thoosa_motifs = {path = "../thoosa_motifs" }
 thoosa_store = {path = "../thoosa_store" }
 thoosa_shared = {path = "../thoosa_shared" }
 thoosa_shims = {path = "../thoosa_shims" }
-caching_runner = {path = "../thoosa_runner/caching_runner"}
-torch_runner = {path = "../thoosa_runner/torch_runner"}
 tokio.workspace = true
 ambassador.workspace = true
 
@@ -45,7 +43,7 @@ futures-util = "0.3.30"
 dashmap.workspace = true
 
 lazy_static = "1.5.0"
-cached_derive = {path = "../thoosa_runner/cached_derive"}
+cached_derive = {path = "../thoosa_macros/cached_derive" }
 thoosa_run_config_args = {path = "../thoosa_macros/thoosa_run_config_args" }
 thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args_derive" }
 
