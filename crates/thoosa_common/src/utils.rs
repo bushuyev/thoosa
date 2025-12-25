@@ -2170,16 +2170,6 @@ pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> Result<(Tensor, T
 }
 
 
-
-#[inline]
-pub fn os_thread_id() -> u64 {
-    #[cfg(target_os = "linux")]
-    {
-        // Works even if glibc doesn’t export gettid: call the syscall directly.
-        unsafe { libc::syscall(libc::SYS_gettid) as u64 }
-    }
-}
-
 ///sums and multiplies inputs by k
 pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
     num_features: u32,

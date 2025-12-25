@@ -1,15 +1,15 @@
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::MotifsCtx;
-use caching_runner::common::runnable::{AsyncStage, Stage};
-use caching_runner::common::{OutId, RunCtx};
-use caching_runner::global_ctx::GlobalCtx;
+use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_shared::runner::common::{OutId, RunCtx};
+use thoosa_shared::runner::global_ctx::GlobalCtx;
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use tch::Device;
-use caching_runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::Dims;
 use thoosa_shared::ThoosaError;
@@ -123,9 +123,9 @@ pub(crate) mod mock_tensor_loader {
     use futures_util::future::{BoxFuture, Shared};
     use mockall::mock;
     use std::sync::Arc;
-    use caching_runner::common::cachable::{Cached, DevicesWrap};
-    use caching_runner::common::{MockRunCtx, OutId};
-    use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
+    use thoosa_shared::runner::common::{MockRunCtx, OutId};
+    use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use thoosa_shared::ThoosaError;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{Named, SimpleId};
@@ -217,8 +217,8 @@ pub(crate) mod mock_tensor_loader {
 mod tests {
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
-    use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-    use caching_runner::global_ctx::GlobalCtx;
+    use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
     use rand::Rng;
     use std::sync::Arc;
     use tch::{Device, Tensor};

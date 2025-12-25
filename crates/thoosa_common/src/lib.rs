@@ -1,4 +1,6 @@
 #![feature(async_fn_traits, fn_traits, unboxed_closures,  async_iterator)]
+#![feature(macro_metavar_expr_concat)]
+#![allow(async_fn_in_trait)]
 extern crate core;
 
 pub mod utils;
@@ -24,3 +26,4 @@ pub mod tho_tensor;
 pub mod train_nets;
 pub mod transforms;
 pub mod ws;
+pub mod torch_runner;

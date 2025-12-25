@@ -1,14 +1,14 @@
 use crate::tasks::cross_dims::ChannelsData2;
 use async_trait::async_trait;
 use crate::tasks::run_ctx_2::MotifsCtx;
-use caching_runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
-use caching_runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
-use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use caching_runner::common::{OutId, PermitsCtx, RunCtx};
-use caching_runner::global_ctx::GlobalCtx;
-use caching_runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-use caching_runner::permits::{PermitStep, MAX_PERMITS};
+use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
+use thoosa_shared::runner::global_ctx::GlobalCtx;
+use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 use futures_util::{future::BoxFuture, StreamExt};
 use log::{debug, info, trace};
 use parking_lot::{Mutex, RwLock};
@@ -675,17 +675,17 @@ mod tests {
     use std::future::ready;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use caching_runner::common::cachable::DevicesWrap;
-    use caching_runner::common::mock_run_ctx;
-    use caching_runner::common::runnable::AsyncStage;
+    use thoosa_shared::runner::common::cachable::DevicesWrap;
+    use thoosa_shared::runner::common::mock_run_ctx;
+    use thoosa_shared::runner::common::runnable::AsyncStage;
     use futures_util::StreamExt;
     use futures::stream::{self, BoxStream};
     use parking_lot::RwLock;
     use tch::nn::{AdamW, LinearConfig, OptimizerConfig, VarStore};
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
-    use caching_runner::global_ctx::GlobalCtx;
-    use caching_runner::common::MockRunCtx;
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use thoosa_shared::runner::common::MockRunCtx;
     use thoosa_common::batches::mock_async_data_batch;
     use thoosa_common::dims::{Batch, Dims, ThoBatch};
     use thoosa_common::my_tch::{my_linear, ThoModule};
@@ -766,6 +766,7 @@ mod tests {
                     1,
                     1,
                     LinearConfig::default(),
+                    #[cfg(debug_assertions)]
                     "test_train_net".to_string(),
                 )?);
             Ok((net, ())) // Net params, dummy

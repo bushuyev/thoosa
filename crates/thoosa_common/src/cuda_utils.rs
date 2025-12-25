@@ -13,7 +13,7 @@ use tokio_utils::Pool;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::memcpy::CuResult;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use crate::utils::os_thread_id;
+use thoosa_shared::os_thread_id;
 
 pub struct PinnedHostBuffer {
     ptr: *mut u8,
