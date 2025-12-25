@@ -37,9 +37,10 @@ impl CategoricalParzenEstimator {
     fn _clc_distr(&self, samples: Tensor, weights: Option<Tensor>) -> CategoricalGaussian {
         let weights = weights.unwrap_or(uniform_weight(
             samples.size()[0] + if self.prior { 1 } else { 0 },
+            samples.device()
         ));
-        debug!("samples={samples}");
-        trace!("weights={weights} self.uniform={}", self.uniform);
+        debug!("CategoricalParzenEstimator::_clc_distr: samples={samples}");
+        trace!("CategoricalParzenEstimator::_clc_distr: weights={weights} self.uniform={}", self.uniform);
 
         let mut probs = if self.prior {
             Tensor::full(
@@ -50,22 +51,21 @@ impl CategoricalParzenEstimator {
         } else {
             Tensor::zeros(self.n_choices as i64, FLOAT_CPU)
         }
-        .view(-1); //from::<Vec<f64>>(&);
+        .view(-1);
 
         let weights = if self.prior {
             weights.i(0..weights.size()[0] - 1)
         } else {
             weights
         };
-        trace!("weights={weights}");
+        trace!("CategoricalParzenEstimator::_clc_distr: weights={weights}");
 
-        debug!("probs={probs} dim={:?}", probs.dim());
+        debug!("CategoricalParzenEstimator::_clc_distr: probs={probs} dim={:?}", probs.dim());
 
         let masks = Tensor::arange(self.n_choices as i64, INT64_CPU)
             .view((-1, 1))
             .eq_tensor(&samples);
 
-        // debug!("masks={masks}");
 
         let slicer = Tensor::arange(self.n_choices as i64, INT64_CPU); //0..self.n_choices; //
 
@@ -76,16 +76,10 @@ impl CategoricalParzenEstimator {
             let c_t = Tensor::from_slice(&[c as i64]);
             let mask_not_c = slicer.ne_tensor(&c_t);
             let mask_is_c = slicer.eq_tensor(&c_t);
-            // debug!("mask_not_c={mask_not_c} mask_is_c={mask_is_c}");
-            // debug!("mask_not_c={} mask_is_c={}", mask_not_c.nonzero().view(-1).dim(), mask_is_c.nonzero().view(-1).dim());
             // Use the masks to index and update the probs tensor
             probs = probs + mask_not_c.to_kind(Float) * &weight.multiply_scalar(self.bottom as f64);
             probs = probs + mask_is_c.to_kind(Float) * &weight.multiply_scalar(self.top as f64);
-            // debug!("probs={probs}");
-
-            // debug!("c={c} mask={mask} weight={weight}");
         }
-        // debug!("probs={probs}");
 
         let likelihood_choices = Tensor::full(
             [self.n_choices as i64, self.n_choices as i64],
@@ -94,8 +88,7 @@ impl CategoricalParzenEstimator {
         )
         .fill_diagonal_(self.top as f64, false);
 
-        debug!("likelihood_choices={likelihood_choices}");
-        // debug!("likelihood_choices samples={}", likelihood_choices.index(&[Some(samples)]));
+        debug!("CategoricalParzenEstimator::_clc_distr: likelihood_choices={likelihood_choices}");
 
         let blls = if self.prior {
             Tensor::vstack(&[
@@ -204,7 +197,7 @@ mod categorical_parzen_estimator_tests {
     }
 
     #[test]
-    fn test_0() {
+    fn test_basis_loglikelihood() {
         let cpe = CategoricalParzenEstimator::new(None, 3, true);
 
         let distr = cpe._clc_distr(

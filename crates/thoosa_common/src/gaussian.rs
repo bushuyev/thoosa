@@ -1,6 +1,6 @@
 use std::f64::consts::PI;
 use std::fmt;
-
+use ctor::ctor;
 use log::debug;
 use rand::Rng;
 // Removed dependency on rand distributions here; use tch::Tensor::randn instead
@@ -46,6 +46,7 @@ impl Gaussian {
     }
 }
 
+#[cfg(test)]
 #[derive(Copy, Clone)]
 pub struct GaussianProcess<F>
 where
@@ -55,6 +56,7 @@ where
     sigma_y: f64,
 }
 
+#[cfg(test)]
 impl<F> fmt::Debug for GaussianProcess<F>
 where
     F: Fn(&Tensor, &Tensor) -> Tensor,
@@ -67,6 +69,7 @@ where
     }
 }
 
+#[cfg(test)]
 pub struct GaussianProcessFit<'g, F>
 where
     F: Fn(&Tensor, &Tensor) -> Tensor,
@@ -77,6 +80,7 @@ where
     chol_t: Tensor,
 }
 
+#[cfg(test)]
 impl<'g, F> fmt::Debug for GaussianProcessFit<'g, F>
 where
     F: Fn(&Tensor, &Tensor) -> Tensor,
@@ -91,6 +95,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<'g, F> GaussianProcessFit<'g, F>
 where
     F: Fn(&Tensor, &Tensor) -> Tensor,
@@ -135,18 +140,18 @@ where
         (mu_s, std)
     }
 }
-
+#[cfg(test)]
 impl<F> GaussianProcess<F>
 where
     F: Fn(&Tensor, &Tensor) -> Tensor,
 {
-    #[allow(dead_code)]
+
     pub fn new(kernel: F, sigma_y: f64) -> Self {
         Self { kernel, sigma_y }
     }
 
     //Gaussian_Processes_for_ML.pdf
-    #[allow(dead_code)]
+
     pub fn fit(
         &self,
         x_train: &Tensor,

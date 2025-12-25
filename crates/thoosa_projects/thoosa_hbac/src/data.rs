@@ -826,7 +826,6 @@ mod tests {
     use tch::Device::Cpu;
     use tch::Kind::Float;
     use tch::{Device, IndexOp, TchError, Tensor};
-    use thoosa_common::ResourceLoader;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::utils::{
@@ -836,7 +835,6 @@ mod tests {
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{Cli, import_resources};
-    use thoosa_main::data::ParquetLoader;
     use thoosa_motifs::chunks::ChunkOfSlicedTensors;
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;

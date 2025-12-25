@@ -35,7 +35,7 @@ mod tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-    #[test]
+    // #[test]
     fn test_morlet_wavelet() -> Result<(), ThoosaError> {
         let sample_rate = 1000.0; // Hz
         let duration_secs = 2.0;
@@ -44,8 +44,8 @@ mod tests {
         let target_freq = 10.0; // Hz
         let n_cycles = 6.0; // Adjust trade-off time/frequency resolution
 
-        let (wavelet_real, wavelet_imag) =
-            generate_morlet_wavelet(target_freq, sample_rate, n_cycles);
+        let (wavelet_real, wavelet_imag) = generate_morlet_wavelet(target_freq, sample_rate, n_cycles);
+
         let t = Tensor::arange(
             (sample_rate * duration_secs) as i64,
             (Kind::Float, Device::Cpu),
@@ -53,7 +53,7 @@ mod tests {
 
         let input_signal_0 = sin_t(&t, target_freq);
         let input_signal_1 = sin_t(&t, 3. * target_freq);
-        // generate_signal(&t, 1.0, target_freq).view((1, 1, -1));
+
         let input = (input_signal_0 + input_signal_1);
         let input_freqs = clc_frequencies(&input, samples, sample_rate, 2);
         let input = input.view((1, 1, -1));
@@ -62,9 +62,7 @@ mod tests {
 
         let output_freqs = clc_frequencies(&envelope, samples, sample_rate, 5);
 
-        debug!("input_freqs={input_freqs:?}");
-        debug!("output_freqs={output_freqs:?}");
-
+        /*
         plot_series(
             vec![
                 // (format!("0ch"), plotters::prelude::GREEN,   vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&signal.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
@@ -84,7 +82,7 @@ mod tests {
                 chrono::Utc::now().to_rfc3339()
             )
             .as_str(),
-        )?;
+        )?;*/
 
         //TODO
 

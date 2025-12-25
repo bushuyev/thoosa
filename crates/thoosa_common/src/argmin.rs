@@ -221,7 +221,7 @@ where
         Ok(grad.into())
     }
 }
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn run_lbfgs<F>(
     cost: TensorProblem<F>,
     init: Tensor,
