@@ -1,15 +1,11 @@
 #![feature(async_fn_traits, fn_traits, unboxed_closures,  async_iterator)]
 extern crate core;
 
-use tch::Device;
-
 pub mod utils;
-
 mod acquisitions;
 pub mod tho_device;
 mod argmin;
 pub mod batches;
-mod bfgs;
 pub mod bool_iter;
 pub mod builder;
 pub mod copy_ctx;

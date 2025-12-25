@@ -12,25 +12,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_shared::ThoosaError;
 
-
-pub struct ThoBatchIter<'a, DX:Dims, DY:Dims> {
-    pd:PhantomData<&'a (DX, DY)>,
-    next_fn:Box<dyn Fn()-> Box<dyn Stream<Item=(ThoBatch<DX>, ThoBatch<DY>)>>>
-}
-
-impl <'a, DX:Dims, DY:Dims> ThoBatchIter<'a, DX, DY> {
-    pub fn new(next_fn:Box<dyn Fn()-> Box<dyn Stream<Item=(ThoBatch<DX>, ThoBatch<DY>)>>>) -> Self {
-        Self {
-            pd:PhantomData,
-            next_fn
-        }
-    }
-
-    fn train_batches(&self) -> Box<dyn Stream<Item=(ThoBatch<DX>, ThoBatch<DY>)>> {
-        (self.next_fn)()
-    }
-}
-
 #[async_trait]
 pub trait AsyncDataBatch<DX: Dims, DY: Dims>: Debug + Send + Sync {
 
@@ -54,7 +35,7 @@ pub mod mock_async_data_batch {
     use crate::batches::AsyncDataBatch;
     use crate::dims::{Dims, ThoBatch};
     use async_trait::async_trait;
-    use futures::stream::{BoxStream, StreamExt};
+    use futures::stream::{BoxStream};
     use mockall::mock;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
