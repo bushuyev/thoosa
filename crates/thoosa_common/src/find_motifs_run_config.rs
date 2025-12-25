@@ -1,4 +1,4 @@
-use crate::applicables::{ThoDevice};
+use crate::tho_device::{ThoDevice};
 use crate::dims::{ChannelsData, ChannelsDataFiltered, ChannelsSlicesData, Dims, TCD, TCDF, TCSD};
 use crate::loader::SyncWrapper;
 use crate::tho_tensor::ThoTensor;

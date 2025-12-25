@@ -38,7 +38,7 @@ use tch::Kind::Float;
 use tch::nn::VarStore;
 use tch::{Device, Tensor};
 use tch::kind::FLOAT_CPU;
-use thoosa_common::applicables::{ThoDevice, ThoRunCtx};
+use thoosa_common::tho_device::{ThoDevice};
 use thoosa_common::batches::AsyncBatchTransform;
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
 use thoosa_common::find_motifs_run_config::{ByLabelVarianceConfig, ByLabelVarianceConfigRangeOrValue, DistanceRunningMeanK, DistanceRunningMeanKRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};

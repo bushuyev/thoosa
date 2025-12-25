@@ -25,7 +25,7 @@ use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::oom_handler::{Adjusters, AsyncOOMHandler, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use caching_runner::permits::{PermitStep, MAX_PERMITS};
-use thoosa_common::applicables::ThoDevice;
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::builder::SeqBuilder;
 use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
 use thoosa_common::my_tch::ThoModule;

@@ -34,7 +34,7 @@ mod tests {
     use rand::seq::SliceRandom;
     use rand::{rngs::StdRng, SeedableRng};
     use std::sync::OnceLock;
-    use thoosa_common::applicables::ThoDevice;
+    use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::dims::Dims;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Input;
