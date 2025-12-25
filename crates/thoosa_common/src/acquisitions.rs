@@ -84,7 +84,7 @@ mod tests {
     use crate::opt::kernel_rbf;
     use crate::utils::{from, plot_series_with_points, sin3_pow2, vec_f32_from};
 
-    // #[test]
+    #[test]
     fn test_expected_improvement() -> Result<(), ThoosaError> {
         let n = 100i64;
 
@@ -114,13 +114,8 @@ mod tests {
                 .view(1),
             f64::NEG_INFINITY,
             10,
-        )
-        .unwrap();
+        )?;
 
-        debug!(
-            ">>>>>>>>>>>>>>>next={}",
-            next.state().get_best_param().unwrap().deref()
-        );
 
         let x_vec = vec_f32_from(&x_t);
         let ei_for_all_x = x_vec
@@ -131,6 +126,7 @@ mod tests {
             })
             .collect::<Vec<f32>>();
 
+        /*
         let pred_y = gpf.predict(&x_t).unwrap();
 
         plot_series_with_points(
@@ -182,6 +178,8 @@ mod tests {
                 .zip(vec_f32_from(&y_train))
                 .collect::<Vec<(f32, f32)>>(),
         )?;
+
+         */
 
         Ok(())
     }
