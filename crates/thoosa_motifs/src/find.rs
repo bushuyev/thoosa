@@ -75,7 +75,6 @@ use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
-use thoosa_shared::rayon_future::{RayonFuture, ScopeFutureExt};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Data, WithId};

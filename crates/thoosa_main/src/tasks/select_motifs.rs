@@ -792,8 +792,6 @@ pub mod tests {
                 .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(select_motifs_run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
                 .build()));
 
-        // debug!("test_single_label_one_motif: resource_a_t={resource_a_t:?} resource_a_intervals={resource_a_intervals:?}");
-        // debug!("test_single_label_one_motif: resource_b_t={resource_b_t:?} resource_b_intervals={resource_b_intervals:?}");
 
         let loader = Arc::new(
             mock_tensor_loader::build()
