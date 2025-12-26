@@ -1,4 +1,4 @@
-use crate::rayon_future::RayonFuture;
+use crate::copy_mode::{CpuOnly};
 use crate::traits::{Data, Named, SimpleId, WithId};
 use async_trait::async_trait;
 use dashmap::{DashMap, DashSet, Entry};
@@ -18,7 +18,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::thread;
 use std::time::Instant;
-use crate::copy_mode::{CopyMode, CpuOnly};
 
 pub type CachableId = SimpleId;
 
