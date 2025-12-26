@@ -70,11 +70,3 @@ impl Iterator for DistinctColorIter {
 fn distinct_colors() -> impl Iterator<Item = RGBColor> {
     DistinctColorIter::new()
 }
-
-#[allow(dead_code)]
-fn main() {
-    // Example usage:
-    for c in distinct_colors().take(10) {
-        println!("Color: {:?}", c);
-    }
-}

@@ -26,7 +26,8 @@ impl<D: Dims, Id: Named + Debug + Clone> Dimensional for ThoTensor<D, Id> {
 //TODO remove, it should be in DevicesWrap between async
 unsafe impl<D: Dims, Id: Named + Debug + Clone> Sync for ThoTensor<D, Id> {}
 
-impl<D: Dims> Input for ThoTensor<D, CachableId> {}
+impl<I:Named + Debug + Clone + Send + Sync, D: Dims> Input for ThoTensor<D, I> {}
+impl<I:Named + Debug + Clone + Send + Sync, D: Dims> Input for &ThoTensor<D, I> {}
 
 impl<D: Dims> WithId for &ThoTensor<D, CachableId> {
     type ID = CachableId;
@@ -37,7 +38,7 @@ impl<D: Dims> WithId for &ThoTensor<D, CachableId> {
 }
 
 //TODO remove?
-impl<D: Dims> Input for &ThoTensor<D, CachableId> {}
+
 
 impl<D: Dims> AsRef<Tensor> for ThoTensor<D, CachableId> {
     fn as_ref(&self) -> &Tensor {

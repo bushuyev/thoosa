@@ -1,5 +1,5 @@
 use crate::dims::{Dims, ThoBatch};
-use crate::utils::{DataBatch, Splittable, SplittableDataBatch};
+use crate::utils::DataBatch;
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt};
 use futures::Stream;
@@ -8,7 +8,6 @@ use rand::seq::{IndexedRandom, SliceRandom};
 use rand::Rng;
 use std::async_iter::AsyncIterator;
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_shared::ThoosaError;
 
@@ -35,10 +34,10 @@ pub mod mock_async_data_batch {
     use crate::batches::AsyncDataBatch;
     use crate::dims::{Dims, ThoBatch};
     use async_trait::async_trait;
-    use futures::stream::{BoxStream};
+    use futures::stream::BoxStream;
     use mockall::mock;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use thoosa_shared::ThoosaError;
 
     mock!{

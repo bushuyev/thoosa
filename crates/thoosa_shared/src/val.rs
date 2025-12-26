@@ -9,7 +9,8 @@ pub enum Val {
     Real(f64),
     Int(i64),
     UInt(u32),
-    Str(String),
+    Str(&'static str),
+    String(String),
     Bool(bool),
 }
 
@@ -19,9 +20,14 @@ impl Val {
             Val::Real(v) => (v * 10_f64.powi(p as i32)) as i64,
             Val::Int(v) => *v,
             Val::UInt(v) => *v as i64,
-            Val::Str(v) => v
-                .parse()
-                .expect(format!("Could not parse {v} string").as_str()),
+            Val::Str(v) => {
+                v.parse()
+                .expect(format!("Could not parse {v} string").as_str())
+            },
+            Val::String(v) => {
+                v.parse()
+                .expect(format!("Could not parse {v} string").as_str())
+            }
             Val::Bool(v) => {
                 if *v {
                     1
@@ -29,6 +35,7 @@ impl Val {
                     0
                 }
             }
+
         }
     }
 }
@@ -222,6 +229,7 @@ fn val_to_f64_and_kind(v: &Val) -> (f64, IterationKind) {
         Val::Real(r) => (*r, IterationKind::Real),
         Val::Bool(b) => (if *b { 1.0 } else { 0.0 }, IterationKind::Bool),
         Val::Str(_) => (0.0, IterationKind::Unsupported),
+        Val::String(_) => (0.0, IterationKind::Unsupported),
     }
 }
 
@@ -454,7 +462,7 @@ impl TryFrom<&Val> for String {
 
     fn try_from(value: &Val) -> Result<String, ThoosaError> {
         match value {
-            Val::Str(v) => Ok(v.clone()), // Return a string slice with the correct lifetime
+            Val::Str(v) => Ok(v.to_string()), // Return a string slice with the correct lifetime
             v => v
                 .try_into()
                 .map_err(|e| ThoosaError::new(format!("e={e:?}"))),
@@ -534,15 +542,15 @@ impl From<f64> for Val {
     }
 }
 
-impl From<&str> for Val {
-    fn from(v: &str) -> Self {
-        Val::Str(v.to_string())
+impl From<&'static str> for Val {
+    fn from(v: &'static str) -> Self {
+        Val::Str(v)
     }
 }
 
 impl From<String> for Val {
     fn from(v: String) -> Self {
-        Val::Str(v)
+        Val::String(v)
     }
 }
 
