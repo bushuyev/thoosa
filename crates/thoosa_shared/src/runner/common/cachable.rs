@@ -340,6 +340,8 @@ where
         let device_ordinal = o.device();
         let mem_size = o.mem_size();
 
+        debug!("DevicesWrapCopyMode<O> for CpuOrGpu<O>::wrap: id={id:?} device_ordinal={device_ordinal}");
+
         let num_devices: usize = GlobalCtx::global().device_count();
         let mut o_op = Some(o);
 
@@ -378,8 +380,8 @@ where
     {
         //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
         //TODO add GlobalCtx::purge_lock just in case?
-        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx}",wrap.id);
-        trace!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}",wrap.id, wrap.cached_data);
+        debug!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_device_idx}",wrap.id);
+        trace!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_device_idx} self.cached_data={:?}",wrap.id, wrap.cached_data);
         assert!(wrap.cached_data.len() > to_device_idx, "Device index {to_device_idx}(cache len is {}) too big {:?}",wrap.cached_data.len(), wrap.id);
 
         if to_device_idx != 0 {
@@ -535,10 +537,11 @@ where
             if let Some(Ok(mut lock)) = wrap.cached_data.get(device_idx).map(|v| v.try_write()) {
                 if wrap.cached_data[0].read().await.is_none() {
                     let data = lock.take();
+                    debug!("DataCacheWrapper::dump_to_cpu: 1.0. id={:?} copied to cpu done cached_data[0].device={:?}", wrap.id, wrap.cached_data[0].read().await.as_ref().map(|v|v.device()));
 
                     wrap.ensure_copied(device_idx, 0, data.as_ref(), false).await?;
 
-                    debug!("DataCacheWrapper::dump_to_cpu: 1. id={:?} copied to cpu done",wrap.id);
+                    debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done cached_data[0].device={:?}", wrap.id, wrap.cached_data[0].read().await.as_ref().map(|v|v.device()));
                 }
                 drop(lock.take());
             } else {
@@ -824,10 +827,14 @@ where
         src: Option<&O>,
         do_return: bool,
     ) -> Result<Option<RwLockReadGuard<'_, O>>, ThoosaError> {
+        debug!("DevicesWrap::ensure_copied: self.id={:?} src_idx={src_idx} dst_idx={dst_idx} do_return={do_return} src={src:?}", self.id);
+
         loop {
             let dst_read = self.cached_data[dst_idx].read().await;
             // ---- Fast path
             if dst_read.is_some() {
+                debug!("DevicesWrap::ensure_copied: self.id={:?} fast path", self.id);
+
                 if do_return {
                     return Ok(Some(RwLockReadGuard::map(dst_read, |v| {
                         v.as_ref().unwrap()
@@ -874,6 +881,8 @@ where
             // Read source value without holding dst locks
             let produced = match src {
                 None => {
+                    debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from cached_data", self.id);
+
                     self.cached_data[src_idx]
                         .read()
                         .await
@@ -882,11 +891,17 @@ where
                         .copy_to_device(dst_idx)
                         .await?
                 }
-                Some(v) => v.copy_to_device(dst_idx).await?,
+                Some(v) => {
+                    debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from src", self.id);
+
+                    v.copy_to_device(dst_idx).await?
+                },
             };
 
             // Install into dst (short critical section)
             {
+                debug!("DevicesWrap::ensure_copied: self.id={:?} install copied to dst_idx={dst_idx} produced.device={:?}", self.id, produced.device());
+
                 let mut w = self.cached_data[dst_idx].write().await;
                 if w.is_none() {
                     *w = Some(produced);

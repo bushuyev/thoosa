@@ -2181,7 +2181,7 @@ impl Store for SqlStore {
                                         Val::Int(v)
                                     }
                                 }))
-                                .or(str_value.map(|v| Val::String(v)))
+                                .or(str_value.map(|v| v.into()))
                                 .or(bool_value.map(|v| v.into()))
                                 .expect(format!("no value for {}", name).as_str()),
                         );
@@ -2573,9 +2573,6 @@ impl SqlStore {
                 t.execute("INSERT INTO run_config_values (run_id, label_id, name, int_value, unsigned) VALUES (?, ?, ?, ?, 1)", params![run_id, label_id, param_name, v])?;
             }
             Val::Str(v) => {
-                t.execute("INSERT INTO run_config_values (run_id, label_id, name, str_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
-            }
-            Val::String(v) => {
                 t.execute("INSERT INTO run_config_values (run_id, label_id, name, str_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
             }
             Val::Bool(v) => {
@@ -3286,7 +3283,7 @@ mod store_tests {
             HashMap::from([
                 ("prop1".into(), Val::Int(1)),
                 ("prop2".into(), Val::Real(2.0)),
-                ("prop3".into(), Val::Str("333")),
+                ("prop3".into(), Val::Str("333".to_string())),
             ]),
         )?;
 
@@ -3371,7 +3368,7 @@ mod store_tests {
             HashMap::from([
                 ("prop1".into(), Val::Int(1)),
                 ("prop2".into(), Val::Real(2.0)),
-                ("prop3".into(), Val::Str("333")),
+                ("prop3".into(), Val::Str("333".to_string())),
             ]),
         )?;
 
@@ -3678,7 +3675,7 @@ mod store_tests {
             HashMap::from([
                 ("prop1".into(), Val::Int(1)),
                 ("prop2".into(), Val::Real(2.0)),
-                ("prop3".into(), Val::Str("333")),
+                ("prop3".into(), Val::Str("333".to_string())),
                 ("prop4".into(), Val::Bool(false)),
                 ("prop5".into(), Val::Bool(true)),
             ]),
@@ -3692,7 +3689,7 @@ mod store_tests {
             HashMap::from([
                 ("next_prop1".into(), Val::Int(1)),
                 ("next_prop2".into(), Val::Real(2.0)),
-                ("next_prop3".into(), Val::Str("zzz")),
+                ("next_prop3".into(), Val::Str("zzz".to_string())),
             ]),
         )?;
 
@@ -3702,7 +3699,7 @@ mod store_tests {
         assert_eq!(loaded_params.get("prop2").expect("prop2"), &Val::Real(2.0));
         assert_eq!(
             loaded_params.get("prop3").expect("prop3"),
-            &Val::Str("333")
+            &Val::Str("333".to_string())
         );
         assert_eq!(
             loaded_params.get("prop4").expect("prop4"),
@@ -3724,7 +3721,7 @@ mod store_tests {
         );
         assert_eq!(
             netx_loaded_params.get("next_prop3").expect("next_prop3"),
-            &Val::Str("zzz")
+            &Val::Str("zzz".to_string())
         );
 
         Ok(())
