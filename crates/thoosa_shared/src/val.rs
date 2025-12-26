@@ -9,8 +9,7 @@ pub enum Val {
     Real(f64),
     Int(i64),
     UInt(u32),
-    Str(&'static str),
-    String(String),
+    Str(String),
     Bool(bool),
 }
 
@@ -20,14 +19,9 @@ impl Val {
             Val::Real(v) => (v * 10_f64.powi(p as i32)) as i64,
             Val::Int(v) => *v,
             Val::UInt(v) => *v as i64,
-            Val::Str(v) => {
-                v.parse()
-                .expect(format!("Could not parse {v} string").as_str())
-            },
-            Val::String(v) => {
-                v.parse()
-                .expect(format!("Could not parse {v} string").as_str())
-            }
+            Val::Str(v) => v
+                .parse()
+                .expect(format!("Could not parse {v} string").as_str()),
             Val::Bool(v) => {
                 if *v {
                     1
@@ -229,7 +223,6 @@ fn val_to_f64_and_kind(v: &Val) -> (f64, IterationKind) {
         Val::Real(r) => (*r, IterationKind::Real),
         Val::Bool(b) => (if *b { 1.0 } else { 0.0 }, IterationKind::Bool),
         Val::Str(_) => (0.0, IterationKind::Unsupported),
-        Val::String(_) => (0.0, IterationKind::Unsupported),
     }
 }
 
@@ -542,15 +535,15 @@ impl From<f64> for Val {
     }
 }
 
-impl From<&'static str> for Val {
-    fn from(v: &'static str) -> Self {
-        Val::Str(v)
+impl From<&str> for Val {
+    fn from(v: &str) -> Self {
+        Val::Str(v.to_string())
     }
 }
 
 impl From<String> for Val {
     fn from(v: String) -> Self {
-        Val::String(v)
+        Val::Str(v)
     }
 }
 

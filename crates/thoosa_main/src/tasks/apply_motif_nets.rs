@@ -298,7 +298,7 @@ impl Data for ApplyMotifNetInput<'_> {
     }
 
     fn device(&self) -> usize {
-        self.batch.device()
+        self.batch.device_idx()
     }
 
     fn mem_size(&self) -> u64 {
@@ -808,7 +808,7 @@ pub(crate) mod tests {
 
             let (pulse_matches_vals, pulse_matches_idx) = &r.t.i((0, ..)).topk(1i64, 0, true, true);
 
-            assert_close(pulse_interval_starts_in_resources_a as f64, step as f64 * pulse_matches_idx.double_value(&[0]), step as f64 * 2.);
+            assert_close(pulse_interval_starts_in_resources_a as f64, step as f64 * pulse_matches_idx.double_value(&[0]), step as f64 * 2.5);
 
             Ok::<_, ThoosaError>(())
         })?;

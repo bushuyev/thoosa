@@ -43,7 +43,7 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
     }
 
     fn run_layers(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
-        debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}",t.as_ref().size(),t.device(),self.layers[0]);
+        debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}",t.as_ref().size(),t.device_idx(),self.layers[0]);
 
         let output_t = self.layers[0].tho_forward(&t.as_ref().into(), train)?;
 
@@ -52,7 +52,7 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
             .skip(1)
             .enumerate()
             .try_fold(output_t, |output_t, (i, layer)| {
-                debug!("MySequential::run_layers={i} output_t.size={:?} output_t.device={:?} layer={:?}",output_t.size(),output_t.device(),layer);
+                debug!("MySequential::run_layers={i} output_t.size={:?} output_t.device={:?} layer={:?}",output_t.size(),output_t.device_idx(),layer);
 
                 layer.tho_forward(&output_t, train)
             })?
@@ -454,7 +454,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLin
         #[cfg(debug_assertions)]
         {
             debug!("Module for MyLinear::forward: descr={}", self.descr);
-            debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()),t.device());
+            debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()),t.device_idx());
             debug!("Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}",self.ws.size(),self.bs.as_ref().map(|bs| bs.size()),t.size());
         }
         match t.as_ref().f_linear(&self.ws, self.bs.as_ref()) {

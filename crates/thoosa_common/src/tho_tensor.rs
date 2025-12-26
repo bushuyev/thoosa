@@ -17,6 +17,7 @@ use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, Select, SimpleId, WithId};
 use torch_sys::IntList;
 use log::{debug, trace};
+use tch::Device::Cpu;
 use thoosa_shared::copy_mode::CpuOrGpu;
 
 impl<D: Dims, Id: Named + Debug + Clone> Dimensional for ThoTensor<D, Id> {
@@ -358,8 +359,12 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         self.t.double_value(idx)
     }
 
-    pub fn device(&self) -> usize {
+    pub fn device_idx(&self) -> usize {
         ThoDevice::from(self.t.device()).ordinal()
+    }
+
+    pub fn tho_device(&self) -> ThoDevice {
+        ThoDevice::from(self.t.device())
     }
 }
 
@@ -383,24 +388,39 @@ where
         debug!("CopyToDevice for ThoTensor: self.id={:?} self.t.size={:?} self.t.device={:?} dst_device={dst_device}", self.id, self.t.size(), self.t.device());
 
         //should not copy device to itself
-        assert!(!ThoDevice::from(dst_device).eq(&ThoDevice::from(self.t.device())));
+        let dst_device = ThoDevice::from(dst_device);
+
+        assert!(!dst_device.eq(&ThoDevice::from(self.t.device())));
         let id = self.id.clone();
 
-        let copy = if tensor_mem_size(self.t.kind(), &self.t.size()) < CopyCtx::instance(dst_device).buf_size() {
-            self.t.f_to_device(ThoDevice::from(dst_device).deref().clone())?
+        let ctx_device = if dst_device.is_cuda() {
+            dst_device
+        }  else {
+            self.tho_device()
+        };
+
+        let copy_ctx = CopyCtx::instance(ctx_device);
+        let copy = if tensor_mem_size(self.t.kind(), &self.t.size()) < copy_ctx.buf_size() {
+            let device = dst_device.deref().clone();
+            debug!("CopyToDevice for ThoTensor: self.id={:?} copy f_to_device, device={device:?}", self.id);
+
+            self.t.f_to_device(device)?
         } else {
+            debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?}", self.id, dst_device.ordinal());
+
             assert!(self.t.is_contiguous());
 
-            CopyCtx::instance(dst_device)
+            copy_ctx
                 .copy_from_ptr(
                     self.t.data_ptr() as usize,
                     &self.t.size(),
-                    dst_device,
+                    dst_device.ordinal(),
                     self.t.kind(),
                 ).await?
         };
 
-        trace!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
+        debug!("CopyToDevice for ThoTensor: self.id={:?} self.t.size={:?} self.t.device={:?} dst_device={dst_device:?} copy.device={:?}",self.id,  self.t.size(), self.t.device(), copy.device());
+        trace!("CopyToDevice for ThoTensor: self.id={:?} self.t=\n{} copy=\n{copy}", self.id, self.t);
 
         Ok(ThoTensor::new(id, copy)?)
     }
