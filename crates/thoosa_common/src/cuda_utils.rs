@@ -488,6 +488,7 @@ mod tests {
     use tokio::time::Instant;
     use tokio_utils::Pool;
     use thoosa_shared::applicables_runner::Output;
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::traits::SimpleId;
     use thoosa_shims::{context::ThoCudaContext, stream::ThoCudaStream};
     use crate::dims::AnyDims;
@@ -870,7 +871,7 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-
+        GlobalCtx::init_devices(2);
 
         // try CPU; switch to Device::Cuda(0) if you want to test on GPU
         let dev = ThoDevice::from(Device::Cpu);
@@ -879,7 +880,7 @@ mod tests {
         let channels = 20;
         let mask = Tensor::randint( 2, [channels * n], (Kind::Bool, Cuda(0))).view((channels, n));
         let size = mask.size();
-        let packed = CopyCtx::instance(dev).copy(&pack_bits_bool(&mask), 0, Uint8).await?;
+        let packed = CopyCtx::instance(Cuda(0)).copy(&pack_bits_bool(&mask), 0, Uint8).await?;
 
         let mask_size = mask.numel()*mask.kind().elt_size_in_bytes();
         let packed_size = packed.numel()*packed.kind().elt_size_in_bytes();
@@ -898,83 +899,6 @@ mod tests {
         // assert!(mask.allclose(&unpack_bits_u8(&packed, None), 0.01, 0.01, false), "roundtrip mismatch");
 
         Ok(())
-    }
-
-
-    #[tokio::test]
-    async fn test_0() {
-        unsafe {
-            std::env::set_var("CUDA_API_PER_THREAD_DEFAULT_STREAM", "1");
-            let stream = thoosa_shims::stream::tho_get_current_stream(0);
-
-            debug!("0. stream: {stream:?}");//prints stream: 0x0
-
-            std::thread::spawn(move || {
-
-                let stream = thoosa_shims::stream::tho_get_current_stream(0);
-
-                debug!("0. thr stream: {stream:?}");//still stream: 0x0
-
-            }).join().unwrap();
-
-
-            let st_0 = ThoCudaStream::from_ptr(thoosa_shims::stream::tho_get_stream_from_pool(0, false));
-            thoosa_shims::stream::tho_set_current_stream(st_0.ptr());
-
-            let stream = thoosa_shims::stream::tho_get_current_stream(0);
-            debug!("1. stream: {stream:?}");//prints stream: 0x78d0846bb340
-
-            let a = Tensor::rand(&[10, 100], FLOAT_CUDA);
-            let b = Tensor::rand(&[100, 10], FLOAT_CUDA);
-            let c = a.mm(&b);
-
-
-            //this can be an async fn instead
-            std::thread::spawn(move || {
-
-                let stream = thoosa_shims::stream::tho_get_current_stream(0);
-                debug!("1. thr stream: {stream:?}");//again stream: 0x0 which is main problem cause resetting stream through all async invocations is a hurdle
-
-                //setting it back
-                thoosa_shims::stream::tho_set_current_stream(st_0.ptr());
-
-                let stream = thoosa_shims::stream::tho_get_current_stream(0);
-                debug!("2. thr stream: {stream:?}");//prints stream: 0x78d0846bb340
-
-                //and after few async calls we've got to run on another stream (like for copying)
-                let another_stream = ThoCudaStream::from_ptr(thoosa_shims::stream::tho_get_stream_from_pool(0, false));
-
-                let whatever = c.relu(); // where I must be sure that mm (which is a bunch of tensor operations on huge tensors in the real app so can take time) is done
-
-                debug!("3. whatever: {whatever:?}");
-
-
-            }).join().unwrap();
-        }
-
-
-
-    }
-
-
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_1() -> Result<(), ThoosaError>{
-        use thoosa_shared::CopyToDevice;
-
-        futures::stream::iter(0..3)
-            .map(|i|{
-                async {
-                    let tt:ThoTensor<AnyDims, SimpleId> = ThoTensor::new("zzz".into(), Tensor::rand(&[1006642, 1000], FLOAT_CPU)).unwrap();
-                    drop(tt.copy_to_device(1).await.unwrap());
-                    ()
-                }
-            })
-            .buffer_unordered(16)
-            .collect::<Vec<_>>().await;
-
-        Ok(())
-
     }
 
 }

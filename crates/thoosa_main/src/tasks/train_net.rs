@@ -433,7 +433,7 @@ impl<DI: Dims, DO: Dims> Data for TrainStepInput<DI, DO> {
     }
 
     fn device(&self) -> usize {
-        self.x.device()
+        self.x.device_idx()
     }
 
     fn mem_size(&self) -> u64 {
@@ -466,13 +466,13 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
         let _ = permits_ctx;
         let _ = trace_ctx;
 
-        let x = if self.x.device() == to_device_idx {
+        let x = if self.x.device_idx() == to_device_idx {
             self.x()
         } else {
             self.x.copy_to_device(to_device_idx).await?
         };
 
-        let expected_y = if self.expected_y.device() == to_device_idx {
+        let expected_y = if self.expected_y.device_idx() == to_device_idx {
             self.expected_y()
         } else {
             self.expected_y.copy_to_device(to_device_idx).await?
@@ -493,13 +493,13 @@ impl<DI: Dims, DO: Dims> WithSelectDataRef<()> for TrainStepInput<DI, DO> {
         let _ = permits_ctx;
         let _ = trace_ctx;
 
-        let x = if self.x.device() == to_device_idx {
+        let x = if self.x.device_idx() == to_device_idx {
             self.x()
         } else {
             self.x.copy_to_device(to_device_idx).await?
         };
 
-        let expected_y = if self.expected_y.device() == to_device_idx {
+        let expected_y = if self.expected_y.device_idx() == to_device_idx {
             self.expected_y()
         } else {
             self.expected_y.copy_to_device(to_device_idx).await?

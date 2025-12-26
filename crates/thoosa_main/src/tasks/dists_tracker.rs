@@ -115,9 +115,9 @@ impl DistsMask {
             Ok(Self {
 
                 mask: if self.sizes.is_some() {//was packed
-                    CopyCtx::instance(ThoDevice::from(Cpu)).move_t(self.mask, 0, Uint8).await?
+                    CopyCtx::instance(ThoDevice::from(self.mask.device())).move_t(self.mask, 0, Uint8).await?
                 } else {
-                    CopyCtx::instance(ThoDevice::from(Cpu)).move_t(self.mask, 0, Bool).await?
+                    CopyCtx::instance(ThoDevice::from(self.mask.device())).move_t(self.mask, 0, Bool).await?
                 },
 
                 dists: None,

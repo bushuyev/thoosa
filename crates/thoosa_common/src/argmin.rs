@@ -210,7 +210,7 @@ where
         debug!(
             "gradient: p={:?} device={:?} requires_grad={:?}",
             p,
-            p.device(),
+            p.device_idx(),
             p.requires_grad()
         );
         let grad = p.grad(); //.to_device(Cpu);
@@ -283,7 +283,7 @@ mod tests {
                 debug!(
                     "cost: p={:?} device={:?} requires_grad={:?}",
                     p,
-                    p.device(),
+                    p.device_idx(),
                     p.requires_grad()
                 );
 
@@ -310,7 +310,7 @@ mod tests {
                 debug!(
                     "gradient: p={:?} device={:?} requires_grad={:?}",
                     p,
-                    p.device(),
+                    p.device_idx(),
                     p.requires_grad()
                 );
                 let grad = p.grad(); //.to_device(Cpu);

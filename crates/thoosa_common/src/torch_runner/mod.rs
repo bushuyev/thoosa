@@ -324,6 +324,7 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
+            debug!("TestTensorLoader::out_id: input_id={input_id:?}");
             // SimpleId::from(format!("loaded_{}", input_id.0))
             CompKey::new([KeyElt::new(input_id.0.to_string().into(), "resource key")])
         }
@@ -407,14 +408,30 @@ mod tests {
             device: Device,
             use_matmul: bool,
         ) -> Self {
-            Self {
-                id,
-                k: ThoTensor::new(
+
+
+            let k_t =
+            if use_matmul {
+                ThoTensor::new(
+                    SimpleId::from("mul_k"),
+                    Tensor::ones([dim, 1], (kind, device))
+                        .f_mul_scalar_(k)
+                        .unwrap(),
+                ).unwrap()
+            } else {
+                ThoTensor::new(
                     SimpleId::from("mul_k"),
                     Tensor::ones([dim], (kind, device))
                         .f_mul_scalar_(k)
                         .unwrap(),
-                ).unwrap(),
+                ).unwrap()
+            };
+
+            debug!("ClcTask::new: use_matmul={use_matmul} k_t.size={:?}", k_t.size());
+
+            Self {
+                id,
+                k: k_t,
                 fail_until,
                 use_matmul,
             }
@@ -454,13 +471,22 @@ mod tests {
             loaded: &ThoTensor<LoadedTensor, CompKey<1>>,
             k: &ThoTensor<MulK, SimpleId>,
         ) -> Result<ThoTensor<ClcTaskOutput, CompKey<2>>, ThoosaError> {
-            debug!("LoadedTensor::clc_sum: loaded.t.size={:?} loaded=\n{:?}",loaded.size(),loaded);
+            debug!("LoadedTensor::clc_sum: loaded={:?} k.t={:?}",loaded.t,k.t);
 
+            let multed = loaded.t_ref().f_multiply(&k.as_ref());
+
+            debug!("LoadedTensor::clc_sum: multed={multed:?}");
+
+            let sum = multed?
+                .f_sum_dim_intlist(1, false, loaded.t_ref().kind());;
+
+            debug!("LoadedTensor::clc_sum: sum={sum:?}");
+
+            let tensor = sum?
+                .view((-1, 1));
             ThoTensor::new(
                 id,
-                loaded.t_ref().f_multiply(&k.as_ref())?
-                .f_sum_dim_intlist(0, false, loaded.t_ref().kind())?
-                .view((-1, 1))
+                tensor
             )
         }
     }
@@ -522,9 +548,7 @@ mod tests {
                         );
 
                         if !is_all_on_cpu {
-                            debug!(
-                                "MulTask::do_run: MyError::OutOfMemory on DumpedToCpu is_all_on_cpu={is_all_on_cpu}"
-                            );
+                            debug!("MulTask::do_run: MyError::OutOfMemory on DumpedToCpu is_all_on_cpu={is_all_on_cpu}");
                             return Err(MyError::OutOfMemory.into());
                         }
                     }
@@ -622,10 +646,7 @@ mod tests {
             let loaded_id_name = "LoadedTensorId"; //loaded.id().id_name().clone();
             let _output_id_name = "MulTaskOutputId"; //loaded.id().id_name().clone();
 
-            debug!(
-                "LoadAndMulTask::run: loaded_id_name={loaded_id_name:?} output_id.name()={:?}",
-                output_id.name()
-            );
+            debug!("LoadAndMulTask::run: loaded_id_name={loaded_id_name:?} output_id.name()={:?}",output_id.name());
 
             let _set_loaded = [&loaded_id as &dyn CachableIdTr]
                 .into_iter()
@@ -690,7 +711,7 @@ mod tests {
             device: Device,
             use_matmul: bool,
         ) -> Self {
-            let dim_1 = dim.dim_1();
+            let dim_1 = if use_matmul {dim.dim_0()} else {dim.dim_1()};
             Self {
                 id,
                 loader: Arc::new(TestTensorLoader::new(dim, kind)),
@@ -805,7 +826,7 @@ mod tests {
         Ok(())
     }
 
-    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_no_oom_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -879,22 +900,16 @@ mod tests {
 
         let expected = exp_f(self_k * mul_k, &result.t_ref());
 
-        debug!(
-            "mul_check: res={res}  result_t.size()={:?} \n\n",
-            result.size()
-        );
+        debug!("mul_check: res={res}  result_t.size()={:?} \n\n",result.size());
 
         let ok = expected.allclose(&result.t_ref(), rtol, atol, false);
         // if !ok {
-        debug!(
-            "mul_check: res={res} expected=\n{expected} result_t=\n{} \n\n",
-            result.t_ref()
-        );
+        debug!("mul_check: res={res} expected=\n{expected} result_t=\n{} \n\n",result.t_ref());
         // }
         assert!(ok);
     }
 
-    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_oom_till_min_permits_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -935,13 +950,12 @@ mod tests {
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
-        )
-            .await?;
+        ).await?;
 
         Ok(())
     }
 
-    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_oom_compete_for_permits_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -992,7 +1006,7 @@ mod tests {
         Ok::<_, ThoosaError>(())
     }
 
-    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_oom_splits_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -1040,13 +1054,12 @@ mod tests {
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
-        )
-            .await?;
+        ).await?;
 
         Ok::<_, ThoosaError>(())
     }
 
-    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_oom_permits_and_splits_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -1099,8 +1112,8 @@ mod tests {
         Ok(())
     }
 
-    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn heavy_test_load_and_mul_oom_dump_to_cpu() -> Result<(), ThoosaError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    async fn test_load_and_mul_oom_dump_to_cpu() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1159,7 +1172,7 @@ mod tests {
         let _global_ctx = GlobalCtx::init_devices(2);
 
         const MUL_K: f64 = 2.;
-        let size = [100000, 3];
+        let size = [3, 100000];
 
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
@@ -1206,9 +1219,9 @@ mod tests {
                 .await
                 // .get(&SimpleId::from(format!("loaded_resource_{i}")));
                 .get(
-                    &CompKey::new([KeyElt::new(format!("loaded_resource_{i}").into(), "resource key")])
+                    &CompKey::new([KeyElt::new(format!("resource_{i}").into(), "resource key")])
                 );
-            let reff = cached_loaded.expect(&format!("no entry for loaded_resource_{i}"));
+            let reff = cached_loaded.expect(&format!("no entry for resource_{i}"));
             debug!(
                 "i={i} 0 cached_loaded: key={:?} val={:?}",
                 reff.key(),
@@ -1221,9 +1234,9 @@ mod tests {
                 .await
                 .get(
                     // &SimpleId::from(format!("mult_mul_task_0_inp_loaded_resource_{i}"))
-                    &CompKey::new([KeyElt::new(0.into(), "mult_task_id"), KeyElt::new(format!("loaded_resource_{i}").into(), "resource key")])
+                    &CompKey::new([KeyElt::new(0.into(), "mult_task_id"), KeyElt::new(format!("resource_{i}").into(), "resource key")])
                 );
-            let reff = cached_multed.expect(&format!("no entry for loaded_resource_{i}"));
+            let reff = cached_multed.expect(&format!("no entry for esource_{i}"));
             debug!(
                 "i={i} 0 cached_multed: key={:?} val={:?}",
                 reff.key(),
@@ -1234,12 +1247,11 @@ mod tests {
         }
 
         let mut loaded_tensors_ids = HashSet::new();
-        let loaded_tensor_3 = SimpleId::from("loaded_resource_3");
+        let loaded_tensor_3 =  CompKey::new([KeyElt::new("resource_3".to_string().into(), "resource key")]);
         loaded_tensors_ids.insert(&loaded_tensor_3 as &dyn CachableIdTr);
 
         let mut multed_tensors_ids = HashSet::new();
-        let mult_mul_task_0_inp_loaded_resource_3 =
-            SimpleId::from("mult_mul_task_0_inp_loaded_resource_3");
+        let mult_mul_task_0_inp_loaded_resource_3 = SimpleId::from("mult_mul_task_0_inp_loaded_resource_3");
         multed_tensors_ids.insert(&mult_mul_task_0_inp_loaded_resource_3 as &dyn CachableIdTr);
 
         let mut required_ids = HashMap::new();
@@ -1253,7 +1265,7 @@ mod tests {
                 .await
                 .get(
                     // &SimpleId::from(format!("loaded_resource_{i}"))
-                    &CompKey::new([KeyElt::new(format!("loaded_resource_{i}").into(), "resource key")])
+                    &CompKey::new([KeyElt::new(format!("resource_{i}").into(), "resource key")])
                 );
             let reff = cached_loaded.expect(&format!("no entry for loaded_resource_{i}"));
             debug!(
@@ -1272,7 +1284,7 @@ mod tests {
                 .await
                 .get(
                     // &SimpleId::from(format!("mult_mul_task_0_inp_loaded_resource_{i}"))
-                    &CompKey::new([KeyElt::new(0.into(), "mult_task_id"), KeyElt::new(format!("loaded_resource_{i}").into(), "resource key")])
+                    &CompKey::new([KeyElt::new(0.into(), "mult_task_id"), KeyElt::new(format!("resource_{i}").into(), "resource key")])
                 );
             let reff = cached_multed.expect(&format!("no entry for loaded_resource_{i}"));
             debug!(
@@ -1291,7 +1303,7 @@ mod tests {
         Ok(())
     }
 
-    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoosaError> {
         debug!("test_real_oom_dump_and_split");
         unsafe {
@@ -1310,7 +1322,7 @@ mod tests {
         debug!("test_real_oom_dump_and_split: input_n={input_n} dim_1={dim_1}");
 
         const MUL_K: i64 = 1;
-        let size = [dim_1, input_n,];
+        let size = [dim_1, input_n];
 
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
@@ -1355,7 +1367,7 @@ mod tests {
 
         multed
             .with_data_ref(1,
-                           Arc::clone(&ctx_device), None, |r: &ThoTensor<ClcTaskOutput, CompKey<2>>| {
+                   Arc::clone(&ctx_device), None, |r: &ThoTensor<ClcTaskOutput, CompKey<2>>| {
                     mul_check_with_exp_f(MUL_K as f64, "resource_1", r, 0.01, 0.01, |k, t| {
                         lin_for_size(k, size, t.kind(), &t.device())
                             .sum_dim_intlist(1, false, t.kind())

@@ -333,7 +333,7 @@ impl Data for DataWithLabels {
     }
 
     fn device(&self) -> usize {
-        self.slices.device()
+        self.slices.device_idx()
     }
 }
 

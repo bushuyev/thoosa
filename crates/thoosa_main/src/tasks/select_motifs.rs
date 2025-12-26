@@ -1382,6 +1382,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_output_builder() -> Result<(), ThoosaError>  {
+        GlobalCtx::init_devices(2);
         let num_channels = 3;
         let mut output_builder = Box::new(SelectMotifsSavableResultBuilder::new(StackedMotifsOutputId::new(0,vec![]), num_channels as u32, 50, 0).await);
 
