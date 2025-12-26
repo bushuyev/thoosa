@@ -933,7 +933,7 @@ mod tests {
                 Contexts::new(
                     SplitsAdjusterContextImpl::new(
                         size,
-                        SingleDimTensorOutputBuilder::<ClsOut>::new(
+                        SingleDimTensorOutputBuilder::<SimpleId, ClsOut>::new(
                             out_id,
                             1,
                             &[1, 1],

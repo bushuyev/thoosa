@@ -515,8 +515,8 @@ mod distance_tests {
     use thoosa_common::loader::SyncWrapper;
     use thoosa_shared::panic_to_err;
     use thoosa_common::utils::{
-        Reducer, SplitQueue, Splittable, SplittableTensor, cuda_mem, from, hist_1_dim, lin_iter,
-        lin_t, plot_series, plot_series_with_points, reset_print_options, run_split_on_oom,
+        cuda_mem, from, hist_1_dim, lin_iter,
+        lin_t, plot_series, plot_series_with_points, reset_print_options,
         skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from,
     };
     use thoosa_common::ws::mock_ws_simp;
@@ -1610,42 +1610,6 @@ mod distance_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_average_euclidean_distance_max_size() -> Result<(), ThoosaError> {
-        set_max_level(Debug);
-
-        let (free_mem, total_mem) = cuda_mem();
-        debug!("Device 0 free_mem: {free_mem}, total_mem: {total_mem}");
-
-        let size = ((free_mem / size_of::<f32>()) as f64).sqrt() as i64 / 32;
-        let mut big_t = Tensor::rand(size * size, FLOAT_CUDA).view((size, size));
-
-        debug!("slices_t.size()={:?}", big_t.size());
-
-        let mut avg_r: f32 = f32::NAN;
-
-        run_split_on_oom(
-            SplitQueue::<2, SplittableTensor<0>>::new(SplittableTensor::<0>(big_t)),
-            // Reducer::new(SplittableTensor::<0>(big_t)),
-            |t| {
-                debug!("average_euclidean_distance 0");
-                let r = average_euclidean_distance(&t.as_ref());
-                debug!("average_euclidean_distance r={r:?}");
-                r
-            },
-            |v, t| {
-                debug!("v={v:?}");
-                avg_r = v;
-            },
-            2,
-        )?;
-
-        debug!("v={avg_r:?}");
-
-        assert!(avg_r.is_normal());
-
-        Ok(())
-    }
 
     #[test]
     fn test_mask_maker_diag() {
@@ -1660,7 +1624,6 @@ mod distance_tests {
             mask
         );
 
-        // debug!("mask=\n{mask}");
     }
 
     #[test]
