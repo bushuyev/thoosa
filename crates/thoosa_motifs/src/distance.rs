@@ -511,7 +511,7 @@ mod distance_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
     use tch::{Device, IndexOp, Kind};
     use thoosa_common::builder::Node::Par;
-    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigOptions};
+    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig};
     use thoosa_common::loader::SyncWrapper;
     use thoosa_shared::panic_to_err;
     use thoosa_common::utils::{

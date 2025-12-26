@@ -19,7 +19,7 @@ use thoosa_properties_map::FromHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::applicables_runner::{CachableId, Input, Output, ApplicableRunCtx, Runner, ToOrdinal};
+use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::run_configs::{RunConfig, RunId};
 use thoosa_shared::traits::WithId;
@@ -30,7 +30,7 @@ use thoosa_shared::val::Val;
 #[run_config_grid]
 pub struct FindMotifsRunConfig {
     #[in_map]
-    pub id: Option<RunId>, //TODO move to RunConfigHolder
+    pub id: Option<RunId>,
 
     #[run_config]
     #[in_map]
@@ -54,42 +54,20 @@ pub struct FindMotifsRunConfig {
 }
 
 impl FindMotifsRunConfig {
-    //TODO RunConfigHolder
-    pub fn from_properties_map__(
+
+    pub fn from_properties_map_with_id(
         id: RunId,
         properties: &HashMap<String, Val>,
     ) -> Result<FindMotifsRunConfig, thoosa_shared::ThoosaError> {
         let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map(None, properties)?;
 
-        debug!("FindMotifsRunConfig::from_properties_map__: find_motifs_run_config={find_motifs_run_config:?}");
+        debug!("FindMotifsRunConfig::from_properties_map_with_id: find_motifs_run_config={find_motifs_run_config:?}");
         
         find_motifs_run_config.set_id(id);
 
         Ok(find_motifs_run_config)
     }
 
-}
-
-pub enum FindMotifsRunConfigOptions {
-    Filter,
-    FilterUnfold,
-}
-
-
-pub struct DummyRunner;
-#[derive(Debug)]
-pub struct DummyRunnerCtx;
-impl ApplicableRunCtx for DummyRunnerCtx {
-    fn cache_area(&self) -> u64 {
-        todo!()
-    }
-
-    fn into_cached_iter_mut(self) -> impl Iterator<Item = Vec<CachableId>> {
-        [].into_iter()
-    }
-}
-impl Runner for DummyRunner {
-    type Ctx = DummyRunnerCtx;
 }
 
 impl FindMotifsRunConfig {

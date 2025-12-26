@@ -273,7 +273,7 @@ where
 
         let (channel, find_motifs_run_id) = self.store.read().get_motif_meta(*motif_id)?;
 
-        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(
+        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
             find_motifs_run_id,
             &self.store.read().list_run_config_values(find_motifs_run_id)?,
         )?;
@@ -303,7 +303,7 @@ where
 {
 
 
-    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(
+    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
         find_motifs_run_id,
         &store.read().list_run_config_values(find_motifs_run_id)?,
     )?;

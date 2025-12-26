@@ -70,7 +70,7 @@ use thoosa_shared::run_configs::{RunConfig};
 
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
-use thoosa_shared::applicables_runner::{CachableId, Input, Output, Runner, ToOrdinal};
+use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::parse_range_or_value;
@@ -740,8 +740,6 @@ mod motif_find_tests {
         //2 2 2 0 0 0 * 2 2 2 = 4  8  12 8  4 0 0 0
     }
 
-
-
     #[test]
     fn test_find_motifs_run_config_to_from_map() {
         let params = FindMotifsRunConfig::new(
@@ -754,19 +752,12 @@ mod motif_find_tests {
 
         let properties: HashMap<String, Val> = params.to_properties_iter(None).collect();
 
-        let loaded_params = FindMotifsRunConfig::from_properties_map__(0, &properties).unwrap();
+        let loaded_params = FindMotifsRunConfig::from_properties_map_with_id(0, &properties).unwrap();
 
         debug!("loaded_params={:?}", loaded_params);
 
         assert_eq!(params, loaded_params);
     }
-
-
-
-    fn test_dist(x: &[f32], y: &[f32]) -> f32 {
-        ((x[0] - y[0]) * (x[0] - y[0]) + (x[1] - y[1]) * (x[1] - y[1])).sqrt()
-    }
-
 
 }
 
