@@ -1,12 +1,13 @@
 use crate::tho_tensor::ThoTensor;
 use std::fmt::Debug;
+use std::hash::Hash;
 use log::debug;
 use tch::Device;
 use tch::Kind;
 use thoosa_shared::runner::adjusters::splits::OutputBuilder;
 use crate::dims::Dims;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{SimpleId, WithId};
+use thoosa_shared::traits::{Named, SimpleId, WithId};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -17,20 +18,26 @@ pub enum BuildAs {
 
 #[allow(dead_code)]
 #[derive(Debug)]
-pub struct SingleDimTensorOutputBuilder<D>
+pub struct SingleDimTensorOutputBuilder<Id, D>
 where
+    Id:Named + Eq + Hash + Clone +Debug + Send + Sync + 'static,
     D: Dims,
 {
-    output: ThoTensor<D, SimpleId>,
+    output: ThoTensor<D, Id>,
     added_partial_output_len: i64,
     add: BuildAs,
     dim: i64
 }
 
-impl<D: Dims> SingleDimTensorOutputBuilder<D> {
+impl<Id, D: Dims> SingleDimTensorOutputBuilder<Id, D>
+where
+    Id:Named + Eq + Hash + Clone +Debug  + Send  + Sync + 'static,
+    D: Dims,
+
+{
     #[allow(dead_code)]
     pub fn new(
-        id: <ThoTensor<D, SimpleId> as WithId>::ID,
+        id: <ThoTensor<D, Id> as WithId>::ID,
         dim: i64,
         size: &[i64],
         options: (Kind, Device),
@@ -45,11 +52,12 @@ impl<D: Dims> SingleDimTensorOutputBuilder<D> {
     }
 }
 
-impl<D> OutputBuilder for SingleDimTensorOutputBuilder<D>
+impl<Id, D> OutputBuilder for SingleDimTensorOutputBuilder<Id, D>
 where
     D: Dims,
+    Id:Named + Eq + Hash + Clone +Debug  + Send  + Sync + 'static,
 {
-    type O = ThoTensor<D, SimpleId>;
+    type O = ThoTensor<D, Id>;
 
     fn add_partial_output(&mut self, partial: Self::O) {
         let partial_size = partial.size();
@@ -101,7 +109,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_append() -> Result<(), ThoosaError>{
-        let mut builder: Box<SingleDimTensorOutputBuilder<TestDims>> = Box::new(
+        let mut builder: Box<SingleDimTensorOutputBuilder<SimpleId, TestDims>> = Box::new(
             SingleDimTensorOutputBuilder::new("test".into(), 0, &[10], FLOAT_CPU, BuildAs::Append),
         );
 
@@ -126,7 +134,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sum() -> Result<(), ThoosaError>{
-        let mut builder: Box<SingleDimTensorOutputBuilder<TestDims>> = Box::new(
+        let mut builder: Box<SingleDimTensorOutputBuilder<SimpleId, TestDims>> = Box::new(
             SingleDimTensorOutputBuilder::new("test".into(), 0, &[3], FLOAT_CPU, BuildAs::Sum),
         );
 

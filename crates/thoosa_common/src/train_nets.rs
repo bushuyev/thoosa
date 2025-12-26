@@ -4,8 +4,7 @@ use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace, TPEOptimizer};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
 use crate::utils::{
-    cuda_mem, run_split_on_oom, tensor_mem_size, DummyListener, Reducer,
-    SplitQueue, Splittable, SplittableDataBatch, SplittableTensor,
+    cuda_mem, tensor_mem_size, DummyListener
 };
 use crate::utils::{pad_to, plot_series, DataBatch, ListenerResponse, TrainListener};
 use crate::ws::Workspace;
@@ -48,7 +47,6 @@ use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
 
-use crate::tho_device::{ThoDevice};
 use crate::batches::AsyncDataBatch;
 use crate::dims::{
     AnyDims, AnyMetrics, AnySub, Batch, ChannelsData, ChannelsMotifsData,
@@ -57,6 +55,7 @@ use crate::dims::{
     TCD, TCSD,
 };
 use crate::find_motifs_run_config::*;
+use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -64,7 +63,7 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
-use thoosa_shared::run_configs::{RunConfig};
+use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
 
@@ -1890,11 +1889,10 @@ mod train_tests {
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use crate::utils::{
         cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath,
-        vs_mem_size, SplittableDataBatch, TrainListener,
+        vs_mem_size, TrainListener,
     };
     use crate::utils::{
-        lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch,
-        Reducer, SplitQueue, Splittable, SplittableTensor,
+        lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size, DataBatch,
     };
     use crate::ws::mock_ws_simp;
     use crate::ws::{FsWorkspace, Workspace, WsMockBuilder};
@@ -2030,32 +2028,6 @@ mod train_tests {
         Ok(())
     }
     
-
-    fn label_test_nets(
-        num_features: u32,
-        k: f64,
-        params: LabelNetTypeParams,
-        device: Device,
-    ) -> Vec<(
-        RunId,
-        Box<dyn Fn() -> LabelNetParams + Sync + Send>,
-        Box<
-            dyn Fn() -> ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>
-                + Sync
-                + Send,
-        >,
-    )> {
-        vec![(
-            0u32,
-            Box::new(move || LabelNetParams::new(2, 3, 3, 100, params.clone())),
-            Box::new(move || {
-                ThoModuleWithStore::new("".into(),
-                                        dummy_label_net(num_features, k, device, "test_label_net").unwrap(),
-                )
-            }),
-        )]
-    }
-
     //5 ch
     fn lin_test_tensor(input_n: i64, channels: u32) -> Tensor {
         Tensor::vstack(

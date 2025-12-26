@@ -30,8 +30,6 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_with_data::with_data;
 
-// #[derive(Debug, cached_derive::Cached)]
-// #[cache_name = "LoadedTensorId"]
 pub struct CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
@@ -121,26 +119,25 @@ where
     }
 }
 
-impl<ResC, L, CLC, RSV, R, C> OutId for CrossLoader<ResC, L, CLC, RSV, R, C>
-where
-    C:RunCtx+'static,
-    ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
-    R: Debug + Send + Sync + 'static,
-    C: RunCtx + 'static,
-{
-    fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        SimpleId::from(format!("cross_{}", input_id))
-    }
-}
+// impl<ResC, L, CLC, RSV, R, C> OutId for CrossLoader<ResC, L, CLC, RSV, R, C>
+// where
+//     C:RunCtx+'static,
+//     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
+//     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+//     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
+//     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
+//     R: Debug + Send + Sync + 'static,
+//     C: RunCtx + 'static,
+// {
+//     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
+//         SimpleId::from(format!("cross_{}", input_id))
+//     }
+// }
 
 //TODO move to lib
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync> {
-    id: SimpleId,
     resources_config: RC,
 }
 
@@ -155,14 +152,10 @@ impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
 impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
     pub fn new(id: SimpleId, resources_config: RC) -> Self {
         Self {
-            id,
             resources_config,
         }
     }
 
-    pub fn id(&self) -> &SimpleId {
-        &self.id
-    }
 
     pub fn resources_config(&self) -> &RC {
         &self.resources_config
@@ -170,35 +163,16 @@ impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
 }
 
 impl<ResC: ResourcesConfig + Debug + Send + Sync> WithId for ResourcesConfigInput<ResC> {
-    type ID = SimpleId;
+    type ID = ();
 
     fn id(&self) -> &Self::ID {
-        &self.id
+        &()
     }
 }
 
 impl<RC: ResourcesConfig + Debug + Send + Sync> Input for ResourcesConfigInput<RC> {}
 
-#[derive(Debug, Clone, DummyData)]
-#[dummy_data(clone)]
-pub struct CrossResult {
-    id: SimpleId,
-}
 
-impl WithId for CrossResult {
-    type ID = SimpleId;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-impl Output for CrossResult {}
-
-impl CrossResult {
-    pub fn new(id: SimpleId) -> Self {
-        Self { id }
-    }
-}
 impl<ResC, L, CLC, RSV, R, C> Stage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
@@ -214,7 +188,7 @@ where
     type In<'a> = ResourcesConfigInput<ResC>
     where
         Self: 'a;
-    type Out = CrossResult;
+    type Out = ();
 }
 
 // #[async_trait]
@@ -340,7 +314,7 @@ where
 
         (self.on_all_done)(&receiver).await;
 
-        Ok(Arc::new(DevicesWrap::wrap(CrossResult::new(self.out_id(WithId::id(input.as_ref()))), 0)))
+        Ok(Arc::new(DevicesWrap::wrap((), 0)))
     }
 }
 

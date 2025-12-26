@@ -18,9 +18,6 @@ use crate::copy_mode::{CopyMode, CpuOnly};
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
-    fn eqq(&self, _other: &dyn CachableIdTr) -> bool {
-        false
-    }
 
     fn as_any<'a>(&'a self) -> &'a (dyn Any + Send + Sync);
     fn eq_dyn(&self, other: &dyn CachableIdTr) -> bool;
@@ -38,7 +35,6 @@ pub mod mock_cachable_id {
         pub CachableId {}
 
         impl CachableIdTr for CachableId {
-            fn eqq(&self, other:&dyn CachableIdTr) -> bool;
             #[allow(unused_parens)]
             fn as_any<'a>(&'a self) ->  (&'a (dyn Any + Send + Sync));
             fn eq_dyn(&self, other: &dyn CachableIdTr) -> bool;
@@ -134,7 +130,12 @@ pub trait Named {// like Type name
 }
 ///////////////////////////////////
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub struct SimpleId(pub &'static str);
+pub struct SimpleId(
+    #[cfg(debug_assertions)]
+    pub &'static str,
+    #[cfg(not(debug_assertions))]
+    ()
+);
 
 unsafe impl Send for SimpleId {}
 unsafe impl Sync for SimpleId {}

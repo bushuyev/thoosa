@@ -1,6 +1,6 @@
 use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
 use crate::tasks::cross_loader::{
-    CrossLoader, CrossResult, ResourcesConfigInput,
+    CrossLoader, ResourcesConfigInput,
 };
 use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
@@ -287,7 +287,7 @@ where
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
         let best = 0;
-        let mut js: JoinSet<Result<Arc<DevicesWrap<CrossResult>>, ThoosaError>> = JoinSet::new();
+        let mut js: JoinSet<Result<Arc<DevicesWrap<()>>, ThoosaError>> = JoinSet::new();
 
         debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
         for stage in self.run_config_stages.iter() {

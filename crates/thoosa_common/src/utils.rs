@@ -17,8 +17,6 @@ use plotters::element::PathElement;
 use plotters::prelude::*;
 use rand::prelude::ThreadRng;
 use rand::Rng;
-use std::panic::AssertUnwindSafe;
-use std::pin::pin;
 use parking_lot::lock_api::{RawRwLock, RwLock};
 use std::sync::Arc;
 use tch::display::PrinterOptions;
@@ -534,271 +532,6 @@ pub fn cuda_mem() -> (usize, usize) {
     (free, total)
 }
 
-pub trait Splittable<const SIZE: usize> {
-    fn split(&self) -> Option<[Self; SIZE]>
-    where
-        Self: Sized;
-}
-
-impl<R, S> Splittable<1> for RwLock<R, S>
-where
-    R: RawRwLock,
-{
-    fn split(&self) -> Option<[Self; 1]>
-    where
-        Self: Sized,
-    {
-        todo!()
-    }
-}
-
-pub trait Splitter<const SIZE: usize> {
-    type S: Splittable<SIZE>;
-    fn next(&mut self) -> Option<Self::S>;
-    fn split(&mut self, split: Self::S) -> Result<(), ThoosaError>;
-}
-
-#[derive(Debug)]
-pub struct SplitQueue<const SIZE: usize, T> {
-    queue: VecDeque<T>,
-}
-
-impl<const SIZE: usize, T> SplitQueue<SIZE, T>
-where
-    T: Debug + Splittable<SIZE>,
-{
-    pub fn new(chunk: T) -> Self {
-        Self {
-            queue: VecDeque::from([chunk]),
-        }
-    }
-}
-
-impl<const SIZE: usize, T> Splitter<SIZE> for SplitQueue<SIZE, T>
-where
-    T: Debug + Splittable<SIZE>,
-{
-    type S = T;
-
-    fn next(&mut self) -> Option<T> {
-        let v = self.queue.pop_front();
-
-        debug!(
-            "SplitQueue::next: self.queue.len={} pop_front={v:?}",
-            self.queue.len()
-        );
-
-        v
-    }
-
-    fn split(&mut self, chunk: T) -> Result<(), ThoosaError> {
-        debug!("SplitQueue::split: chunk={chunk:?}");
-
-        let splits = chunk.split();
-        if let Some(splits) = splits {
-            for split in splits.into_iter().rev() {
-                debug!("SplitQueue::split: push_front chunk={split:?}");
-
-                self.queue.push_front(split);
-            }
-            Ok(())
-        } else {
-            Err(ThoosaError::new("Can't split anymore".to_owned()))
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Reducer<T> {
-    value: Option<T>,
-}
-
-impl<T> Reducer<T> {
-    pub fn new(value: T) -> Self {
-        Self { value: Some(value) }
-    }
-}
-
-impl<T> Splitter<1> for Reducer<T>
-where
-    T: Debug + Splittable<1>,
-{
-    type S = T;
-
-    fn next(&mut self) -> Option<Self::S> {
-        self.value.take()
-    }
-
-    fn split(&mut self, v: Self::S) -> Result<(), ThoosaError> {
-        match v.split() {
-            None => Err(ThoosaError::new("Can't split anymore".to_owned())),
-            Some(a) => {
-                let [v_0] = a;
-                self.value = Some(v_0);
-
-                Ok(())
-            }
-        }
-    }
-}
-
-// impl <R, T> Splitter<1> for Reducer<RwLock<R, T>> where R:RawRwLock, T:Debug + Splittable<1> {
-//     type S = RwLock<R, T>;
-//
-//     fn next(&mut self) -> Option<Self::S> {
-//         self.value.take()
-//     }
-//
-//     fn split(&mut self, v: Self::S) -> Result<(), ThoosaError> {
-//         match v.split() {
-//             None => {
-//                 Err(ThoosaError::new("Can't split anymore".to_owned()))
-//             }
-//             Some(a) => {
-//                 let [v_0] = a;
-//                 self.value = Some(v_0);
-//
-//                 Ok(())
-//             }
-//         }
-//     }
-// }
-
-pub async fn run_split_on_oom_2<
-    's,
-    'v,
-    'fr,
-    const SIZE: usize,
-    S: 's,
-    SV: 'v,
-    F,
-    FR: 'fr + Debug,
-    OkF,
-    OkR,
->(
-    mut splitter: S,
-    mut f: F,
-    on_ok: OkF,
-    max_attempts: i32,
-) -> Result<(), ThoosaError>
-where
-    SV: Splittable<SIZE>,
-    S: for<'x> Splitter<SIZE, S = SV>,
-    //F: for <'f> AsyncFnMut(&'f mut V) -> Result<FR, ThoosaError>,
-    // F: for<'a, 'b> AsyncFnMut(&'a mut (dyn Splittable<SIZE> + 'b)) -> Result<FR, ThoosaError>,
-    F: AsyncFnMut(Arc<SV>) -> Result<FR, ThoosaError>,
-    OkF: AsyncFn(FR, Arc<SV>) -> OkR,
-{
-    'out: while let Some(split_0) = splitter.next() {
-        let split_0_arc = Arc::new(split_0);
-        for attempt in 0..max_attempts {
-            match panic_to_err_async!(f(Arc::clone(&split_0_arc)).await) {
-                Ok(fr) => {
-                    on_ok(fr, Arc::clone(&split_0_arc)).await;
-                    continue 'out;
-                }
-                Err(e) if e.is_oom() => {
-                    debug!(
-                        "run_split_on_oom: splitting on oom, max_attempts={max_attempts} attempt={attempt}"
-                    );
-                }
-                Err(e) => {
-                    debug!("run_split_on_oom: failed on oom {e:?}");
-                    return Err(e);
-                }
-            }
-        }
-        if let Err(e) = splitter.split(Arc::into_inner(split_0_arc).unwrap()) {
-            return Err(e);
-        }
-    }
-
-    Ok(())
-}
-
-pub fn run_split_on_oom<const SIZE: usize, F, FR, V, S, OkF, OkR>(
-    mut splitter: S,
-    mut f: F,
-    mut on_ok: OkF,
-    max_attempts: i32,
-) -> Result<(), ThoosaError>
-where
-    F: FnMut(&mut V) -> Result<FR, ThoosaError>,
-    S: Splitter<SIZE, S = V>,
-    OkF: FnMut(FR, &mut V) -> OkR,
-{
-    'out: while let Some(mut split_0) = splitter.next() {
-        for attempt in 0..max_attempts {
-            match panic_to_err!(f(&mut split_0)) {
-                Ok(fr) => {
-                    on_ok(fr, &mut split_0);
-                    continue 'out;
-                }
-                Err(e) if e.is_oom() => {
-                    debug!(
-                        "run_split_on_oom: splitting on oom, max_attempts={max_attempts} attempt={attempt}"
-                    );
-                }
-                Err(e) => {
-                    debug!("run_split_on_oom: failed on oom {e:?}");
-                    return Err(e);
-                }
-            }
-        }
-        if let Err(e) = splitter.split(split_0) {
-            return Err(e);
-        }
-    }
-
-    Ok(())
-}
-
-#[derive(Debug)]
-pub struct SplittableTensor<const D: i64>(pub Tensor); //TODO more than one dimension?
-
-impl<const S: usize, const D: i64> Splittable<S> for SplittableTensor<D> {
-    fn split(&self) -> Option<[Self; S]>
-    where
-        Self: Sized,
-    {
-        let split_size = self.0.size()[D as usize] / S as i64 + 1; //TODO if self.0.size()[D as usize] < 2
-
-        debug!(
-            "SplittableTensor::split: self.0.size()={:?} S={S} D={D} split_size={split_size}",
-            self.0.size()
-        );
-
-        let splits = self
-            .0
-            .split(split_size, D)
-            .into_iter()
-            .map(|t| SplittableTensor::<D>(t))
-            .collect::<Vec<_>>();
-
-        debug!("SplittableTensor::split: splits={splits:?}");
-
-        // let splits_len = splits.len();
-
-        splits.try_into().ok()
-    }
-}
-
-//TODO for batch + degrade Kind: Double->Float->BFloat16
-pub struct CompositeReducer {
-    _reducers: Vec<Box<dyn Splittable<1>>>,
-}
-
-impl CompositeReducer {
-    pub fn new(_reducers: Vec<Box<dyn Splittable<1>>>) -> Self {
-        Self { _reducers }
-    }
-}
-
-impl<const D: i64> AsRef<Tensor> for SplittableTensor<D> {
-    fn as_ref(&self) -> &Tensor {
-        &self.0
-    }
-}
 
 pub fn kick_register_cuda_hooks() {
     unsafe {
@@ -827,7 +560,7 @@ impl TrainListener for DummyListener {
 pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{hist_1_dim, mix_x_binary_with_labels, pad_to_2, CompositeReducer, Splittable, SplittableTensor, TrainListener};
+    use crate::utils::{hist_1_dim, mix_x_binary_with_labels, pad_to_2, TrainListener};
     use clap::{arg, command, Args, Parser, Subcommand};
 
     use log::debug;
@@ -860,51 +593,8 @@ pub mod tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-    #[test]
-    fn test_splittable_tensor() {
-        let t = Tensor::rand(&[3, 3], FLOAT_CPU);
-        debug!("t=\n{t}");
 
-        let sp_t = SplittableTensor::<0>(t.shallow_clone());
 
-        debug!("sp_t=\n{sp_t:?}");
-
-        let splits: [_; 2] = sp_t.split().expect("some splits");
-
-        debug!("splits={splits:?}");
-
-        assert_eq!(
-            t,
-            Tensor::concat(&[splits[0].as_ref(), splits[1].as_ref()], 0)
-        )
-    }
-
-    #[test]
-    fn test_composite_reducer() {
-        let _reducer = CompositeReducer::new(vec![]);
-        //TODO
-    }
-
-    // #[test]
-    // fn test_run_split_on_oom_2(){
-    //
-    //
-    //     fn run_step<ST>(step:ST)
-    //     where ST:AsyncFnOnce()->Result<(), ThoosaError> + Send + 'static {
-    //
-    //
-    //         rayon::scope(|scope|{
-    //             scope.spawn_future(
-    //                 step
-    //             );
-    //         });
-    //     }
-    //
-    //     run_step(async || {
-    //         Ok(())
-    //     });
-    //
-    // }
 
     #[test]
     fn test_clc_step() {
@@ -922,16 +612,6 @@ pub mod tests {
         assert_eq!(slices_num, u.size()[1] as u32);
     }
 
-    #[test]
-    fn test_splittable_tensor_cant_split() {
-        let t = Tensor::rand(&[3, 3], FLOAT_CPU);
-        debug!("t=\n{t}");
-
-        let sp_t = SplittableTensor::<0>(t.shallow_clone());
-        let splits: Option<[_; 4]> = sp_t.split();
-
-        assert!(splits.is_none())
-    }
 
     #[test]
     fn test_cdt_for_dir() {
@@ -1850,7 +1530,6 @@ pub trait DataBatch<D: Dims> {
     fn valid_batch(&self) -> (ThoBatch<D>, Tensor);
 }
 
-pub trait SplittableDataBatch<D: Dims>: DataBatch<D> + Splittable<1> + Debug {}
 
 pub trait TrainListener: Send + Sync {
     fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<ListenerResponse> {
