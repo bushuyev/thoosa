@@ -77,7 +77,7 @@ impl<const LEN:usize> Named for CompKey<LEN> {
     }
 }
 
-impl<const LEN_A: usize, const LEN_B: usize> Add<&CompKey<LEN_B>> for CompKey<LEN_A>
+impl<const LEN_A: usize, const LEN_B: usize> Add<&CompKey<LEN_B>> for &CompKey<LEN_A>
 where
     [(); LEN_A + LEN_B]:, // “const-evaluatable” witness
 {
@@ -112,11 +112,11 @@ mod tests {
     }
 
     #[test]
-    fn test_0(){
+    fn test_add_1_2(){
         let key_a = CompKey::new([KeyElt::new(0.into(), "key1")]);
         let key_b = CompKey::new([KeyElt::new(0.into(), "key2"), KeyElt::new(0.into(), "key3")]);
 
-        let key_c:CompKey<3> = key_a + &key_b;
+        let key_c:CompKey<3> = &key_a + &key_b;
         debug!("key_c={key_c:?}");
 
         assert_eq!(
