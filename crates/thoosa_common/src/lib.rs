@@ -1,4 +1,5 @@
 #![feature(async_fn_traits, fn_traits, unboxed_closures,  async_iterator)]
+#![feature(generic_const_exprs)]
 #![feature(macro_metavar_expr_concat)]
 #![allow(async_fn_in_trait)]
 extern crate core;
