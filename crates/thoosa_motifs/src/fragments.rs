@@ -23,7 +23,7 @@ use tch::IndexOp;
 use tch::Kind::Float;
 use tch::Tensor;
 use thoosa_common::find_motifs_run_config::{
-    FindMotifsRunConfig, FindMotifsRunConfigOptions,
+    FindMotifsRunConfig,
 };
 use thoosa_common::loader::{LoadRunner, Loader, SyncWrapper};
 use thoosa_shared::panic_to_err;

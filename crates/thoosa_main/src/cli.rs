@@ -54,7 +54,7 @@ use thoosa_motifs::fragments::{
     MotifsBy, MotifsToTensorArgs, PlotMotifSlicesArgs};
 use thoosa_properties_map::ToHashmap;
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
-use thoosa_shared::applicables_runner::{Input, Runner, ToOrdinal};
+use thoosa_shared::applicables_runner::{Input};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};

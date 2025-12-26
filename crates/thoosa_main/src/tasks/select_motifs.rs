@@ -268,7 +268,7 @@ where
         let find_motifs_run_configs = find_motifs_run_ids
             .iter()
             .map(|find_motifs_run_id| -> Result<_, ThoosaError> {
-                Ok(Arc::new(FindMotifsRunConfig::from_properties_map__(
+                Ok(Arc::new(FindMotifsRunConfig::from_properties_map_with_id(
                     *find_motifs_run_id,
                     &store.read().list_run_config_values(*find_motifs_run_id)?,
                 )?))
