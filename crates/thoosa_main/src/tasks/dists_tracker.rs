@@ -23,6 +23,7 @@ use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::copy_mode::CpuOnly;
@@ -114,9 +115,9 @@ impl DistsMask {
             Ok(Self {
 
                 mask: if self.sizes.is_some() {//was packed
-                    CopyCtx::instance().move_t(self.mask, 0, Uint8).await?
+                    CopyCtx::instance(ThoDevice::from(Cpu)).move_t(self.mask, 0, Uint8).await?
                 } else {
-                    CopyCtx::instance().move_t(self.mask, 0, Bool).await?
+                    CopyCtx::instance(ThoDevice::from(Cpu)).move_t(self.mask, 0, Bool).await?
                 },
 
                 dists: None,

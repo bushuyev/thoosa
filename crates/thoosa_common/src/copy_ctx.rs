@@ -6,12 +6,15 @@ use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, OnceLock};
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
+use tch::Device::Cpu;
 use tokio_utils::Pool;
+use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::ThoosaError;
+use crate::tho_device::ThoDevice;
 
 pub struct CopyCtx {
-    _cu_ctx: Arc<ThoCudaContext>,
-    _buffs: usize,
+    cu_ctx: Arc<ThoCudaContext>,
+    buffs: usize,
     buf_size: usize,
     bufs_pool: Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
 }
@@ -19,7 +22,10 @@ pub struct CopyCtx {
 impl Debug for CopyCtx {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CopyCtx")
+            .field("cu_ctx", &self.cu_ctx)
+            .field("buffs", &self.buffs)
             .field("buf_size", &self.buf_size)
+            .field("bufs_pool.remaining_capacity", &self.bufs_pool.remaining_capacity())
             .finish()
     }
 }
@@ -30,8 +36,8 @@ impl CopyCtx {
         let bufs_pool = Self::build_pool(buffs, buf_size, &cu_ctx);
 
         Self {
-            _cu_ctx: cu_ctx,
-            _buffs: buffs,
+            cu_ctx,
+            buffs,
             buf_size,
             bufs_pool,
         }
@@ -57,9 +63,9 @@ impl CopyCtx {
     #[cfg(test)]
     #[allow(dead_code)]
     pub fn rebuild(&mut self, mem_k: f64, buffs: usize) {
-        assert_eq!(self.bufs_pool.remaining_capacity(), self._buffs);
+        assert_eq!(self.bufs_pool.remaining_capacity(), self.buffs);
         self
-            ._cu_ctx
+            .cu_ctx
             .bind_to_thread()
             .expect("failed to bind CUDA context to thread");
 
@@ -67,22 +73,27 @@ impl CopyCtx {
             &mut self.bufs_pool,
             Arc::new(Pool::from_vec(vec![(
                 PinnedHostBuffer::new(1).unwrap(),
-                Arc::new(ThoCudaStream::new(self._cu_ctx.ordinal() as i32)),
+                Arc::new(ThoCudaStream::new(self.cu_ctx.ordinal() as i32)),
             )])),
         )));
 
-        self._buffs = buffs;
+        self.buffs = buffs;
         self.buf_size = Self::clc_buff_size(mem_k, buffs);
-        self.bufs_pool = Self::build_pool(buffs, self.buf_size, &self._cu_ctx)
+        self.bufs_pool = Self::build_pool(buffs, self.buf_size, &self.cu_ctx)
     }
 
-    pub fn instance() -> &'static CopyCtx {
-        static INSTANCE: OnceLock<CopyCtx> = OnceLock::new();
+    pub fn instance<D:Into<ThoDevice>>(device: D) -> &'static CopyCtx {
+        let device:ThoDevice = device.into();
+        assert_ne!(device, ThoDevice::from(Cpu));
+        static INSTANCE: OnceLock<Vec<CopyCtx>> = OnceLock::new();
 
         INSTANCE.get_or_init(|| {
+            let num_gpu_devices = GlobalCtx::global().device_count() - 1;
+
             // Self::make_instance(2.0, 64)
-            Self::make_instance(0.2, 16)//MAX 32,  leave 16 for clc https://github.com/pytorch/pytorch/issues/34878
-        })
+            (0..num_gpu_devices).map(|i|Self::make_instance(0.2, 16)).collect()//MAX 32,  leave 16 for clc https://github.com/pytorch/pytorch/issues/34878
+
+        }).get(device.gpu_ordinal()).expect(&format!("No copy ctx for device={}", 0))
     }
 
     pub fn make_instance(mem_k: f64, buffs: usize) -> CopyCtx {

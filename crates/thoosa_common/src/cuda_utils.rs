@@ -491,6 +491,7 @@ mod tests {
     use thoosa_shared::traits::SimpleId;
     use thoosa_shims::{context::ThoCudaContext, stream::ThoCudaStream};
     use crate::dims::AnyDims;
+    use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
 
     #[ctor::ctor]
@@ -872,13 +873,13 @@ mod tests {
 
 
         // try CPU; switch to Device::Cuda(0) if you want to test on GPU
-        let dev = Device::Cpu;
+        let dev = ThoDevice::from(Device::Cpu);
 
         let n = 12_345; //0_003i64;
         let channels = 20;
         let mask = Tensor::randint( 2, [channels * n], (Kind::Bool, Cuda(0))).view((channels, n));
         let size = mask.size();
-        let packed = CopyCtx::instance().copy(&pack_bits_bool(&mask), 0, Uint8).await?;
+        let packed = CopyCtx::instance(dev).copy(&pack_bits_bool(&mask), 0, Uint8).await?;
 
         let mask_size = mask.numel()*mask.kind().elt_size_in_bytes();
         let packed_size = packed.numel()*packed.kind().elt_size_in_bytes();

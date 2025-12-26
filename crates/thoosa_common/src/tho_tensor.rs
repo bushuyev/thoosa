@@ -376,29 +376,30 @@ where
 #[async_trait]
 impl<D: Dims, Id> CopyToDevice for ThoTensor<D, Id>
 where
-    Id: Named + Debug + Clone + Send + Sync , //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
+    Id: Named + Debug + Clone + Send + Sync,
 {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
         debug!("CopyToDevice for ThoTensor: self.id={:?} self.t.size={:?} self.t.device={:?} dst_device={dst_device}", self.id, self.t.size(), self.t.device());
+
         //should not copy device to itself
         assert!(!ThoDevice::from(dst_device).eq(&ThoDevice::from(self.t.device())));
         let id = self.id.clone();
-        let copy =
-            if tensor_mem_size(self.t.kind(), &self.t.size()) < CopyCtx::instance().buf_size() {
-                self.t.f_to_device(ThoDevice::from(dst_device).deref().clone())?
-            } else {
-                assert!(self.t.is_contiguous());
-                CopyCtx::instance()
-                    .copy_from_ptr(
-                        self.t.data_ptr() as usize,
-                        &self.t.size(),
-                        dst_device,
-                        self.t.kind(),
-                    ).await?
-            };
 
-        // trace!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
+        let copy = if tensor_mem_size(self.t.kind(), &self.t.size()) < CopyCtx::instance(dst_device).buf_size() {
+            self.t.f_to_device(ThoDevice::from(dst_device).deref().clone())?
+        } else {
+            assert!(self.t.is_contiguous());
 
+            CopyCtx::instance(dst_device)
+                .copy_from_ptr(
+                    self.t.data_ptr() as usize,
+                    &self.t.size(),
+                    dst_device,
+                    self.t.kind(),
+                ).await?
+        };
+
+        trace!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
 
         Ok(ThoTensor::new(id, copy)?)
     }
