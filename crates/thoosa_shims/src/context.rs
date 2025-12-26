@@ -28,6 +28,7 @@ fn check(status: CuResult, label: &str) -> Result<(), String> {
     }
 }
 
+#[derive(Debug)]
 pub struct ThoCudaContext {
     device: i32,
     cu_device: CuDevice,

@@ -55,7 +55,7 @@ pub fn first_free_bit(c: u64) -> u64 {
 #[derive(Debug)]
 pub struct GlobalCtx {
     semaphores: Vec<Box<dyn PermitSource>>,
-    device_count: usize,
+    num_devices: usize,
     device_locks: Vec<Arc<AsyncRwLock<()>>>,
     caches: tokio::sync::RwLock<HashMap<&'static str, &'static dyn FuturesRunnerMapPurger>>,
     is_all_on_cpu: Vec<AtomicBool>,
@@ -68,9 +68,14 @@ static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
 
 #[cfg_attr(test, automock)]
 impl GlobalCtx {
-    fn new(device_count: usize) -> Self {
-        debug!("GlobalCtx::new: device_count={device_count}");
-        let semaphores = (0..device_count)
+
+    fn new(num_devices: usize) -> Self {
+        debug!("GlobalCtx::new: num_devices={num_devices}");
+
+        assert!(num_devices > 0);//TODO test if it works without GPU
+
+
+        let semaphores = (0..num_devices)
             // .map(|_| Box::new(RunnerSemaphore::new(100)) as Box<dyn PermitSource>) //TODO config
             .map(|device_idx| Box::new(Arbiter::new(MAX_PERMITS, device_idx)) as Box<dyn PermitSource>)
             .collect();
@@ -80,15 +85,15 @@ impl GlobalCtx {
         Self {
             semaphores,
 
-            device_count,
+            num_devices,
 
-            device_locks: (0..device_count)
+            device_locks: (0..num_devices)
                 .map(|_| Arc::new(AsyncRwLock::new(())))
                 .collect(),
 
             caches: tokio::sync::RwLock::new(HashMap::new()),
 
-            is_all_on_cpu: (0..device_count).map(|_| AtomicBool::new(false)).collect(),
+            is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
 
             caches_areas: parking_lot::RwLock::new(CacheAreasKeeper::new()),
 
@@ -97,11 +102,12 @@ impl GlobalCtx {
         }
     }
 
-    pub fn init_devices(count: usize) -> &'static GlobalCtx {
-        debug!("GlobalCtx::init_devices: device_count={count}");
+    ///num_devices: number of devices - CPU + GPU count
+    pub fn init_devices(num_devices: usize) -> &'static GlobalCtx {
+        debug!("GlobalCtx::init_devices: num_devices={num_devices}");
 
         GLOBAL_CTX
-            .set(GlobalCtx::new(count))
+            .set(GlobalCtx::new(num_devices))
             .expect("`init_devices` must only be called once at program start");
 
         Self::global()
@@ -125,7 +131,7 @@ impl GlobalCtx {
     }
 
     pub fn device_count(&self) -> usize {
-        self.device_count
+        self.num_devices
     }
 
     pub fn device_lock(device_idx: usize) -> Arc<AsyncRwLock<()>> {

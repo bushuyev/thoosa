@@ -1812,7 +1812,7 @@ pub fn replace_extension<'a>(path: &'a PathBuf, new_extension: &'a str) -> (&'a 
     (file_stem, json)
 }
 
-#[async_trait]
+#[async_trait]//TODO it doesn't need to be dyn compatible, remove async_trait and change dst_device form usize to D:Into<ThoDevice> ?
 #[delegatable_trait]
 #[automock]
 pub trait CopyToDevice {

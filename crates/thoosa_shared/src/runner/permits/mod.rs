@@ -8,7 +8,6 @@ use crate::traits::CachableIdTr;
 use tokio::sync::{Notify, OwnedSemaphorePermit, mpsc};
 
 pub mod runner_queue;
-pub mod runner_semaphore;
 
 #[derive(Debug)]
 pub enum PermitStep {
