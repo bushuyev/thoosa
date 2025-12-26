@@ -426,13 +426,9 @@ mod tests {
 
 
     impl OutId for ClcTask {
-        fn out_id(
-            &self,
-            input_id: &<Self::In<'static> as WithId>::ID,
-        ) -> <Self::Out as WithId>::ID {
-            // SimpleId::from(format!("mult_{}_inp_{}", self.id, input_id))
+        fn out_id(&self, input_id: &CompKey<1>) -> CompKey<2> {
 
-            self.id + &input_id
+            &self.id + input_id
         }
     }
 
@@ -1443,5 +1439,4 @@ mod tests {
 
 
 }
-
 
