@@ -13,7 +13,7 @@ use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::Dims;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
 use thoosa_common::tho_tensor::ThoTensor;

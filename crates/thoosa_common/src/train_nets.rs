@@ -61,7 +61,7 @@ use crate::tho_tensor::ThoTensor;
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::applicables_runner::{CachableId, Input, Output, Runner, ToOrdinal};
+use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{RunConfig};

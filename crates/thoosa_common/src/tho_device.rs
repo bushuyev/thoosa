@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 use std::ops::Deref;
 use tch::Device;
-use thoosa_shared::applicables_runner::ToOrdinal;
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct ThoDevice(Device);
 
@@ -59,19 +58,5 @@ impl ThoDevice {
     }
 
 }
-
-
-impl ToOrdinal for ThoDevice {
-    fn ordinal(&self) -> usize {
-        match self.0 {
-            Device::Cpu => 0,
-            Device::Cuda(d) => d + 1,
-            _ => {
-                unimplemented!()
-            }
-        }
-    }
-}
-
 
 
