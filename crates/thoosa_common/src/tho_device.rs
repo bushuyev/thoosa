@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use tch::Device;
 use thoosa_shared::applicables_runner::ToOrdinal;
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct ThoDevice(Device);
 
 impl Deref for ThoDevice {
@@ -45,6 +45,19 @@ impl ThoDevice {
             }
         }
     }
+
+    pub fn gpu_ordinal(&self) -> usize {
+        match &self.0 {
+            Device::Cpu => {
+                panic!("not a gpu device")
+            },
+            Device::Cuda(v) => *v,
+            _ => {
+                unimplemented!()
+            }
+        }
+    }
+
 }
 
 
