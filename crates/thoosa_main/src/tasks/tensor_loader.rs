@@ -30,7 +30,7 @@ pub struct RawTensorLoader<C>
 where
     C: RunCtx + MotifsCtx + 'static,
 {
-    id: CompKey<1>,
+    id: CompKey,
     device: ThoDevice,
     loader_fn: Box<LoadFn>,
     _ctx: PhantomData<C>,
