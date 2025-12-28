@@ -59,7 +59,7 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
-use thoosa_shared::{parse_resources, RangeOrValue};
+use thoosa_shared::{parse_resources, simple_id, RangeOrValue};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{cdt, cdt_for_dir, ResourceType, ThoosaError};
@@ -271,7 +271,7 @@ where
     let loader_2 = Arc::new(RawTensorLoader::<RunCtx2>::new(
         move |key, _| {
             ThoTensor::new(
-                key.applied_id().clone(),
+                simple_id!(key.id().to_string()),
                 Tensor::load(tensors_path_2.join(format!(
                     "{}_{}.pt",
                     key.import_id(),

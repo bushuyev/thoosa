@@ -24,7 +24,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::{simple_id, CopyToDevice, ThoosaError};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, Named, SimpleId, WithId};
 use thoosa_store::Store;
@@ -368,7 +368,7 @@ where
             // let select_motifs_run_id = input.select_motifs_run_config.id.expect("no id in select_motifs_run_config");
             //select_motifs_run_id  -
             let select_motifs_run_id = vec![];//can be used to return select_motifs_run_i ran earlier on find_motifs_run_id
-            let find_and_select_motifs_id = SimpleId(format!("{find_motifs_run_id}_{select_motifs_run_id:?}").leak());
+            let find_and_select_motifs_id = simple_id!(format!("{find_motifs_run_id}_{select_motifs_run_id:?}"));
 
             let motifs = ThoTensor::new(
                 find_and_select_motifs_id.clone(),

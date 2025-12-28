@@ -3,7 +3,7 @@ use crate::tho_device::ThoDevice;
 use crate::copy_ctx::CopyCtx;
 use crate::cuda_utils::tensor_mem_size;
 use crate::dims::{AnyDims, Dimensional, Dims};
-use thoosa_shared::panic_to_err;
+use thoosa_shared::{panic_to_err, simple_id};
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
 use mockall::automock;
@@ -161,7 +161,7 @@ impl<D: Dims, Id: Named + Debug + Clone> Borrow<Tensor> for ThoTensor<D, Id> {
 impl<D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
     fn from(tensor: Tensor) -> Self {
         Self {
-            id: "1".into(),
+            id: simple_id!("1"),
             t: tensor,
             pd: PhantomData,
             tracking: Default::default(),
@@ -172,7 +172,7 @@ impl<D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
 impl<D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
     fn from(tensor: &Tensor) -> Self {
         Self {
-            id: "2".into(),
+            id: simple_id!("2"),
             t: tensor.shallow_clone(),
             pd: PhantomData,
             tracking: Default::default(),

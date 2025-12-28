@@ -224,7 +224,7 @@ mod tests {
     use tch::{Device, Tensor};
     use crate::tasks::cross_dims::ChannelsData2;
     use thoosa_common::tho_device::ThoDevice;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::{simple_id, ThoosaError};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::SimpleId;
     use thoosa_common::tho_tensor::ThoTensor;
@@ -240,7 +240,7 @@ mod tests {
         let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
                 Ok(ThoTensor::new(
-                    key.applied_id().clone(),
+                    simple_id!(key.id().to_string()),
                     Tensor::from_slice(&data_0).view((-1, 1)),
                 )?)
             },

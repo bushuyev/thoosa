@@ -112,7 +112,7 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
                 let _permit = if __with_data_permits_ctx.read().acquired_permits() == 0 {
                     let name = __with_data_permits_ctx.read().name();
                     let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global()
-                        .acquire_one(to_device_idx, ::std::sync::Arc::new(::thoosa_shared::traits::SimpleId(name)))
+                        .acquire_one(to_device_idx, ::std::sync::Arc::new(::thoosa_shared::simple_id!(name)))
                         .await?;
                     Some(permit)
                 } else {

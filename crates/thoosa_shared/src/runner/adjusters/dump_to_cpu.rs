@@ -14,6 +14,7 @@ use crate::runner::common::{DropIf, RunCtx};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::oom_handler::{Adjuster, RunCtxContext};
 use crate::runner::permits::MAX_PERMITS;
+use crate::simple_id;
 
 #[derive(Debug)]
 pub struct DumpToCpu<A>
@@ -88,7 +89,7 @@ where
             let mut try_count = 0;
             loop {
 
-                match GlobalCtx::global().acquire_many(device_idx, MAX_PERMITS - acquired_permits, Arc::new(SimpleId(format!("dump_to_cpu_for_{}", ctx_name).leak()))).await {
+                match GlobalCtx::global().acquire_many(device_idx, MAX_PERMITS - acquired_permits, Arc::new(simple_id!(format!("dump_to_cpu_for_{}", ctx_name)))).await {
                     Ok(permits) => {
                         debug!("DumpToCpu::adjust: acquired {permits:?} on {try_count}");
 
