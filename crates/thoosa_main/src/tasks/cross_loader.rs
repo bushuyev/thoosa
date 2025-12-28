@@ -571,8 +571,8 @@ mod tests {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
-    struct Observation {
-        tensor_ids: Vec<&'static str>,
+    struct Observation<ID> {
+        tensor_ids: Vec<ID>,
         batch_0_ids: Vec<u32>,
         batch_1_ids: Vec<u32>,
     }
@@ -739,7 +739,7 @@ mod tests {
                 .finish(),
         );
 
-        let observations = Arc::new(Mutex::new(Vec::<Observation>::new()));
+        let observations = Arc::new(Mutex::new(Vec::<Observation<SimpleId>>::new()));
         let produced_outputs = Arc::new(Mutex::new(Vec::<TestBatchOutput>::new()));
         let counter = Arc::new(AtomicUsize::new(0));
 
@@ -751,7 +751,7 @@ mod tests {
             mock_cross_loader_clc::build::<TestBatchOutput, MockRunCtx>()
                 .with_run_batch_fn(move |input, _ctx| {
                     let observation = Observation {
-                        tensor_ids: input.tensors().iter().map(|t| WithId::id(t).0).collect(),
+                        tensor_ids: input.tensors().iter().map(|t| WithId::id(t).clone()).collect::<Vec<_>>(),
                         batch_0_ids: input.batch_0().iter().map(|r| r.as_ref().id()).collect(),
                         batch_1_ids: input.batch_1().iter().map(|r| r.as_ref().id()).collect(),
                     };
@@ -842,22 +842,22 @@ mod tests {
 
         let expected = vec![
             Observation {
-                tensor_ids: vec!["resource_a", "resource_a"],
+                tensor_ids: vec![simple_id!("resource_a"), simple_id!("resource_a")],
                 batch_0_ids: vec![resources[0].id()],
                 batch_1_ids: vec![resources[0].id()],
             },
             Observation {
-                tensor_ids: vec!["resource_a", "resource_b"],
+                tensor_ids: vec![simple_id!("resource_a"), simple_id!("resource_b")],
                 batch_0_ids: vec![resources[0].id()],
                 batch_1_ids: vec![resources[1].id()],
             },
             Observation {
-                tensor_ids: vec!["resource_b", "resource_a"],
+                tensor_ids: vec![simple_id!("resource_b"), simple_id!("resource_a")],
                 batch_0_ids: vec![resources[1].id()],
                 batch_1_ids: vec![resources[0].id()],
             },
             Observation {
-                tensor_ids: vec!["resource_b", "resource_b"],
+                tensor_ids: vec![simple_id!("resource_b"), simple_id!("resource_b")],
                 batch_0_ids: vec![resources[1].id()],
                 batch_1_ids: vec![resources[1].id()],
             },
