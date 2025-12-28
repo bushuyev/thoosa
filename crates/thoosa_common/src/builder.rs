@@ -7,7 +7,7 @@ use tch::{Tensor, nn, no_grad};
 use crate::dims::{AnyDims, Dims};
 use crate::my_tch::{Fp, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule, my_linear, AdaptiveMaxPool1d, Split1};
 use crate::train_nets::ThoModuleWithStore;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{simple_id, ThoosaError};
 use thoosa_shared::traits::SimpleId;
 use crate::runs::Simple;
 use crate::tho_tensor::ThoTensor;
@@ -132,7 +132,7 @@ impl Node {
         self,
         vs: &nn::Path,
     ) -> Result<ThoModuleWithStore<DI, DO>, ThoosaError> {
-        Ok(ThoModuleWithStore::new("".into(), self.build_tch_module(vs)?))
+        Ok(ThoModuleWithStore::new(simple_id!(""), self.build_tch_module(vs)?))
     }
 
     pub fn build_tch_module<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(

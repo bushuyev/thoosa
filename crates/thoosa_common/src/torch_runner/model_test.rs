@@ -31,7 +31,7 @@ mod tests {
     use std::sync::OnceLock;
     use crate::tho_device::ThoDevice;
     use crate::dims::Dims;
-    use thoosa_shared::CopyToDevice;
+    use thoosa_shared::{simple_id, CopyToDevice};
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{CachableIdTr, Metrics, Named, SimpleId, WithId};
     use thoosa_shared::{MyError, ThoosaError};
@@ -1121,7 +1121,7 @@ mod tests {
             .run_cached(input_cache, Arc::clone(&ctx))
             .await?;
 
-        ctx.write().add_permit(GlobalCtx::global().acquire_many(1, 1, Arc::new(SimpleId("zzz"))).await?);
+        ctx.write().add_permit(GlobalCtx::global().acquire_many(1, 1, Arc::new(simple_id!("zzz"))).await?);
 
         acc.with_data_ref(1,
                           Arc::clone(&ctx), None, |acc: &ThoTensor<ClsOut, SimpleId>| {

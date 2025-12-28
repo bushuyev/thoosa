@@ -60,17 +60,4 @@ impl WithId for CachableId {
     }
 }
 
-impl Data for CachableId {
-    type Metrics = usize;
-    type M = CpuOnly<Self>;
 
-    fn size(&self) -> Self::Metrics {
-        self.0.len()
-    }
-
-    fn device(&self) -> usize {
-        0
-    }
-}
-
-impl Input for CachableId {}

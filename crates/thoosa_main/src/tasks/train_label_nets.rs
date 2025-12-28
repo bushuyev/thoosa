@@ -32,7 +32,7 @@ use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train_2
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::{shuffle_and_chunk_with_rng, CopyToDevice, ThoosaError};
+use thoosa_shared::{shuffle_and_chunk_with_rng, simple_id, CopyToDevice, ThoosaError};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::copy_mode::CpuOnly;
@@ -94,7 +94,7 @@ where
     ).await?);
 
     let motif_loader = Arc::new(ABStage::new(
-        SimpleId(format!("Loader_with_motifs_{:?}", select_motifs_run_ids).leak()),
+        simple_id!(format!("Loader_with_motifs_{:?}", select_motifs_run_ids)),
         Arc::clone(&loader),
         Arc::clone(&apply_motif_nets)
     ));

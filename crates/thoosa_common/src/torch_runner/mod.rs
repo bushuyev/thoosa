@@ -103,7 +103,7 @@ mod tests {
     use tch::{Device, IndexOp, Kind, Scalar, Tensor};
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, Select, SimpleId, WithId};
-    use thoosa_shared::CopyToDevice;
+    use thoosa_shared::{key_elt, simple_id, CopyToDevice};
     use thoosa_shared::{MyError, ThoosaError};
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::{fmt, EnvFilter};
@@ -326,7 +326,7 @@ mod tests {
         ) -> <Self::Out as WithId>::ID {
             debug!("TestTensorLoader::out_id: input_id={input_id:?}");
             // SimpleId::from(format!("loaded_{}", input_id.0))
-            CompKey::new([KeyElt::new(input_id.0.to_string().into(), "resource key")])
+            CompKey::new([key_elt!(input_id.0, "resource key")])
         }
     }
 
@@ -717,7 +717,7 @@ mod tests {
                 loader: Arc::new(TestTensorLoader::new(dim, kind)),
                 clc_task: Arc::new(ClcTask::new(
                     // SimpleId::from("mul_task_0"),
-                    CompKey::new([KeyElt::new(0.into(), "mul_task_0")]),
+                    CompKey::new([key_elt!(0, "mul_task_0")]),
                     k,
                     fail_until,
                     dim_1,
@@ -1219,7 +1219,7 @@ mod tests {
                 .await
                 // .get(&SimpleId::from(format!("loaded_resource_{i}")));
                 .get(
-                    &CompKey::new([KeyElt::new(format!("resource_{i}").into(), "resource key")])
+                    &CompKey::new([key_elt!(i, "resource key")])
                 );
             let reff = cached_loaded.expect(&format!("no entry for resource_{i}"));
             debug!(
@@ -1234,7 +1234,7 @@ mod tests {
                 .await
                 .get(
                     // &SimpleId::from(format!("mult_mul_task_0_inp_loaded_resource_{i}"))
-                    &CompKey::new([KeyElt::new(0.into(), "mult_task_id"), KeyElt::new(format!("resource_{i}").into(), "resource key")])
+                    &CompKey::new([key_elt!("MulTask", "MulTask"), key_elt!(i, "resource key")])
                 );
             let reff = cached_multed.expect(&format!("no entry for esource_{i}"));
             debug!(
@@ -1247,7 +1247,7 @@ mod tests {
         }
 
         let mut loaded_tensors_ids = HashSet::new();
-        let loaded_tensor_3 =  CompKey::new([KeyElt::new("resource_3".to_string().into(), "resource key")]);
+        let loaded_tensor_3 =  CompKey::new([key_elt!("resource_3", "resource_3")]);
         loaded_tensors_ids.insert(&loaded_tensor_3 as &dyn CachableIdTr);
 
         let mut multed_tensors_ids = HashSet::new();
@@ -1265,7 +1265,7 @@ mod tests {
                 .await
                 .get(
                     // &SimpleId::from(format!("loaded_resource_{i}"))
-                    &CompKey::new([KeyElt::new(format!("resource_{i}").into(), "resource key")])
+                    &CompKey::new([key_elt!(i, "resource key")])
                 );
             let reff = cached_loaded.expect(&format!("no entry for loaded_resource_{i}"));
             debug!(
@@ -1284,7 +1284,7 @@ mod tests {
                 .await
                 .get(
                     // &SimpleId::from(format!("mult_mul_task_0_inp_loaded_resource_{i}"))
-                    &CompKey::new([KeyElt::new(0.into(), "mult_task_id"), KeyElt::new(format!("resource_{i}").into(), "resource key")])
+                    &CompKey::new([key_elt!("MulTask", "MulTask"), key_elt!(i, "resource key")])
                 );
             let reff = cached_multed.expect(&format!("no entry for loaded_resource_{i}"));
             debug!(
@@ -1423,15 +1423,15 @@ mod tests {
             let tensor = Tensor::from_slice(&[0., 1., 2.]);
             debug!("device={:?}", tensor.device());
 
-            tmp_cache.insert(ThoTensor::<AnyDims, SimpleId>::new(SimpleId("test"), tensor)?);
-            let wrap = tmp_cache.get(&SimpleId("test")).unwrap();
+            tmp_cache.insert(ThoTensor::<AnyDims, SimpleId>::new(simple_id!("test"), tensor)?);
+            let wrap = tmp_cache.get(&simple_id!("test")).unwrap();
 
             let v = &wrap.load_from_any_device_(1).await?;
 
             //ThoTensor is sync so &ThoTensor is Send =
             async {
                 GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await?;
-                //can't drop self.id=SimpleId("test"), locked
+                //can't drop self.id=simple_id!("test"), locked
                 Ok::<_, ThoosaError>(())
             }.await?;
 

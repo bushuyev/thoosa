@@ -4664,6 +4664,7 @@ dependencies = [
  "torch-sys",
  "tracing",
  "tracing-subscriber",
+ "with-id",
 ]
 
 [[package]]
@@ -5887,6 +5888,12 @@ name = "wit-bindgen"
 version = "0.45.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c573471f125075647d03df72e026074b7203790d41351cd6edc96f46bcccd36"
+
+[[package]]
+name = "with-id"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f159105e7eb7c30b46f7e5450aac05fafec95971ed42d4ba9931c27ea4dd1f6f"
 
 [[package]]
 name = "writeable"

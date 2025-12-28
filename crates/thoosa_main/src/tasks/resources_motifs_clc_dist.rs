@@ -22,7 +22,7 @@ use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Select, SimpleId, WithId};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{simple_id, ThoosaError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
 use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
@@ -359,7 +359,7 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
         batched_motifs_output: &'a StackedMotifsOutput,
     ) -> ClcResourcesMotifsDistInput<'a> {
         Self {
-            id: SimpleId("ClcResourcesMotifsDistInput"),
+            id: simple_id!("ClcResourcesMotifsDistInput"),
             batch,
             resource_ids,
             stacked_motifs_output: batched_motifs_output,
@@ -421,7 +421,7 @@ impl ClcResourcesMotifsDistOutput {
         debug!("ClcResourcesMotifsDistOutput::new: select_motifs_run_id={select_motifs_run_id} channel_masks_dists_ids={channel_masks_dists_ids:?} resources_iter={resources_iter:?}");
 
         Self {
-            id: SimpleId("ClcResourcesMotifsDistOutput"),
+            id: simple_id!("ClcResourcesMotifsDistOutput"),
             select_motifs_run_id,
             channel_masks_dists_ids,
             resources_iter,

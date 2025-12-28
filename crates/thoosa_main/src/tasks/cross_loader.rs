@@ -559,7 +559,7 @@ mod tests {
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::{cdt_for_dir, ResourceType, ThoosaError};
+    use thoosa_shared::{cdt_for_dir, simple_id, ResourceType, ThoosaError};
     use thoosa_store::{MockStore, MockStoreBuilder, SqlStore};
     use tokio::task::yield_now;
     use tokio::time::sleep;
@@ -641,7 +641,7 @@ mod tests {
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
                 Ok(ThoTensor::new(
-                    key.applied_id().clone(),
+                    simple_id!(key.id().to_string()),
                     Tensor::from_slice(v.as_slice()).view((1, 10)),
                 )?)
             },

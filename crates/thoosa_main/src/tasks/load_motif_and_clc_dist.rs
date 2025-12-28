@@ -25,7 +25,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Select, SimpleId, WithId};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{simple_id, ThoosaError};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::copy_mode::CpuOrGpu;
 
@@ -110,7 +110,7 @@ where
 {
     pub fn new(motif_loader: Arc<ML>, clc_dist: Arc<CLC>) -> Self {
         Self {
-            id: SimpleId("LoadMotifAndClcDistanceStage"),
+            id: simple_id!("LoadMotifAndClcDistanceStage"),
             motif_loader,
             clc_dist,
             // output_builder: Box::new(|id| Box::new(DistOutputBuilder::new(id))),

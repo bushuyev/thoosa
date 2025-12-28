@@ -388,9 +388,7 @@ mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{DataId, SimpleId};
     use thoosa_shared::data_with_extra::DataWithExtra;
-    use thoosa_shared::{
-        cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoosaError,
-    };
+    use thoosa_shared::{cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, simple_id, ResourceType, ThoosaError};
     use thoosa_store::SqlStore;
     use thoosa_common::tho_tensor::ThoTensor;
     use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
@@ -533,13 +531,13 @@ mod tests {
         let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
                 let tensor = Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem())))?;
-                Ok(ThoTensor::new(key.applied_id().clone(), tensor)?)
+                Ok(ThoTensor::new(simple_id!(key.id().to_string()), tensor)?)
             },
             ThoDevice::from(Device::Cpu),
         ));
 
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
-        ctx.write().add_permit(global_ctx.acquire_many(0, 1, Arc::new(SimpleId("test"))).await?);
+        ctx.write().add_permit(global_ctx.acquire_many(0, 1, Arc::new(simple_id!("test"))).await?);
 
         let cache_area = ctx.read().cache_area();
         let resources_input = Arc::new(DevicesWrap::wrap(
