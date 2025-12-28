@@ -1,9 +1,10 @@
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
 use crate::traits::Named;
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ElvVal {
     Str(String),
     U32(u32)
@@ -30,13 +31,20 @@ impl From<&str> for ElvVal {
 
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Ord)]
 pub struct KeyElt {
     val: ElvVal,
 
     #[cfg(debug_assertions)]
     name: Cow<'static, str>,
 }
+
+impl PartialOrd for KeyElt {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.val.partial_cmp(&other.val)
+    }
+}
+
 
 impl KeyElt {
     pub fn new(
@@ -105,10 +113,17 @@ impl Hash for KeyElt {
 }
 
 
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Ord, PartialOrd)]
 pub struct CompKey<const LEN:usize> {
     vals:[KeyElt;LEN]
 }
+
+// impl<const LEN:usize> PartialOrd<Self> for CompKey<LEN> {
+//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+//         self.vals.partial_cmp()
+//     }
+// }
+
 
 impl <const LEN:usize> CompKey<LEN> {
     pub fn new(vals: [KeyElt; LEN]) -> Self {
@@ -142,8 +157,8 @@ where
     }
 }
 
-impl From<(u32, &'static str)> for CompKey<1> {
-    fn from(value: (u32, &'static str)) -> Self {
+impl From<(u32, &str)> for CompKey<1> {
+    fn from(value: (u32, &str)) -> Self {
         CompKey::new([key_elt!(value.0, value.1)])
     }
 }
@@ -172,6 +187,16 @@ mod tests {
              [KeyElt { val: 0.into(), name: "key1".into() }, KeyElt { val: 1.into(), name: "key2".into() }, KeyElt { val: 2.into(), name: "key3".into() }],
             key_c.vals
         );
+    }
+
+
+    #[test]
+    fn test_partial_ord(){
+
+        let key_0 = CompKey::new([key_elt!(0, "a"), key_elt!(10, "b")]);
+        let key_1 = CompKey::new([key_elt!(1, "a"), key_elt!(1, "b")]);
+
+        assert!(key_1.gt(&key_0));
     }
 
 }

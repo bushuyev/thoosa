@@ -12,11 +12,12 @@ use tch::Device;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::Dims;
-use thoosa_shared::{simple_id, ThoosaError};
+use thoosa_shared::{key_elt, simple_id, ThoosaError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_shared::comp_id::CompKey;
 use thoosa_with_data::with_data;
 // use crate::tasks::stages_seq::StagesSeq;
 
@@ -29,6 +30,7 @@ pub struct RawTensorLoader<C>
 where
     C: RunCtx + MotifsCtx + 'static,
 {
+    id: CompKey<1>,
     device: ThoDevice,
     loader_fn: Box<LoadFn>,
     _ctx: PhantomData<C>,
@@ -109,6 +111,7 @@ where
             + 'static,
     {
         Self {
+            id: (0, "TensorLoader").into(),
             device,
             loader_fn: Box::new(loader_fn),
             _ctx: PhantomData,
