@@ -33,7 +33,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{simple_id, ThoosaError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
@@ -223,7 +223,7 @@ where
                          Arc::clone(&input),
                          apply_motif_net_ctx,
                          Contexts::new(
-                             SplitsAdjusterContextImpl::new(input._size().into(), SingleDimTensorOutputBuilder::new("".into(), 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
+                             SplitsAdjusterContextImpl::new(input._size().into(), SingleDimTensorOutputBuilder::new(simple_id!(""), 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
                              NoopRunnableContext {},
                              PermitsAndDumpToCpuAdjustableContex::new(
                                  PermitsAdjustContextImpl::new(ctx_name),
@@ -248,7 +248,7 @@ where
 
 
         let tensor = ThoTensor::new(
-            "".into(),
+            simple_id!(""),
             Tensor::f_concat(
                 &matches.into_iter().map(|v| v.t).collect::<Vec<_>>(), 1
             )?
@@ -273,7 +273,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        format!("ApplyMotifNets_{}_{}", self.id, input_id).into()
+        simple_id!(format!("ApplyMotifNets_{}_{}", self.id, input_id))
     }
 }
 
@@ -364,7 +364,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        format!("ApplyMotifNet: {:?}", input_id).into()
+        simple_id!(format!("ApplyMotifNet: {:?}", input_id))
     }
 }
 
@@ -415,7 +415,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
 
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} slices.size={:?}",  slices.size());
 
-                let slices_tensor = ThoTensor::new("".into(), slices)?;
+                let slices_tensor = ThoTensor::new(simple_id!(""), slices)?;
                 let out = net.data().tho_forward(&slices_tensor, false)?;
 
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} out.size={:?}", out.size());

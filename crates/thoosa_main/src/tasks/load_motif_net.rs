@@ -16,7 +16,7 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{simple_id, ThoosaError};
 use thoosa_shared::traits::{Adjustable, SimpleId, WithId};
 use crate::tasks::run_ctx_2::MotifsCtx;
 
@@ -35,7 +35,7 @@ pub struct LoadMotifNetInput {
 impl LoadMotifNetInput {
     pub fn new(motif_id: u32, channel:u32/*train_motif_nets_run_id: RunId*/) -> Self {
         Self {
-            id: format!("motif_net_{}_{}", motif_id, channel).into(),
+            id: simple_id!(format!("motif_net_{}_{}", motif_id, channel)),
             motif_id,
             channel,
         }
@@ -139,7 +139,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        format!("LoadMotifNet_{}", input_id).into()
+        simple_id!(format!("LoadMotifNet_{}", input_id))
     }
 }
 

@@ -88,7 +88,7 @@ where
     R:RunCtx + MotifsCtx + Adjustable + 'static
 {
     let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-        "".into(), ws, store, select_motifs_run_ids.clone(), stage_ctx,
+        simple_id!(""), ws, store, select_motifs_run_ids.clone(), stage_ctx,
         #[cfg(test)]
         None
     ).await?);
@@ -288,7 +288,7 @@ where
                     let new_name = format!("Train_{label}");
                     let out_key = {
 
-                        let out_id = SimpleId::from(new_name.clone());  //self.out_id(input.id());
+                        let out_id = simple_id!(new_name.clone());  //self.out_id(input.id());
                         Arc::new(out_id) as Arc<dyn CachableIdTr>
                     };
                     let train_label_ctx = Arc::clone(&ctx).write().branch(&new_name);
@@ -344,8 +344,8 @@ where
 
 
                                            Ok((
-                                               ThoTensor::<Batch<MotifProbability>, SimpleId>::new("".into(), x)?,
-                                               ThoTensor::<Batch<LabelProbability>, SimpleId>::new("".into(), y)?,
+                                               ThoTensor::<Batch<MotifProbability>, SimpleId>::new(simple_id!(""), x)?,
+                                               ThoTensor::<Batch<LabelProbability>, SimpleId>::new(simple_id!(""), y)?,
                                            ))
                                        }.boxed()
                                    }),
@@ -391,7 +391,7 @@ where
                         "label".to_string()
                     ));
 
-                    let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new("".into()), cache_area)), Arc::clone(&train_label_ctx)).await?).unwrap().take_data(0).await?;
+                    let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(simple_id!("")), cache_area)), Arc::clone(&train_label_ctx)).await?).unwrap().take_data(0).await?;
 
                     debug!("train_label_net: label={label_} result={result:?}");
                     Ok(
@@ -413,7 +413,7 @@ where
                 .into_iter()
                 .collect::<Result<Vec<_>, ThoosaError>>()?;
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new("".into(), results), cache_area)))
+            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(simple_id!(""), results), cache_area)))
         }
     }
 }

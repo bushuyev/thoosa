@@ -20,7 +20,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Data, SimpleId, WithId};
-use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
+use thoosa_shared::{simple_id, TensorIdSliceIdx, ThoosaError};
 use thoosa_common::tho_tensor::ThoTensor;
 
 #[derive(Debug)]
@@ -144,7 +144,7 @@ pub struct CrossUnfoldClcOutput<R: Debug> {
 impl<R: Debug> CrossUnfoldClcOutput<R> {
     pub fn new(clc_result: R, iter_0: SlicesIter, iter_1: SlicesIter) -> Self {
         Self {
-            id: "".into(),
+            id: simple_id!(""),
             clc_result,
             iter_0,
             iter_1,

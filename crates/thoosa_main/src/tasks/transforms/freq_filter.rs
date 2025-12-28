@@ -14,7 +14,7 @@ use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_common::find_motifs_run_config::InputFilter;
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{simple_id, ThoosaError};
 use thoosa_shared::traits::{CachableIdTr, SimpleId, WithId};
 use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::cross_dims::ChannelsData2;
@@ -57,7 +57,7 @@ where
                 ).repeat([20, 1, 1]).to_device(Cuda(0));
 
                 Some(ThoTensor::new(
-                    format!("{}-{}", band_pass_config.low_hz, high_hz).into(),
+                    simple_id!(format!("{}-{}", band_pass_config.low_hz, high_hz)),
                     kernel
                 )?)
 
@@ -75,7 +75,7 @@ where
     C: RunCtx + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        SimpleId::from(format!("filtered_{}_inp", input_id))
+        simple_id!(format!("filtered_{}_inp", input_id))
     }
 }
 

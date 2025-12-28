@@ -29,7 +29,7 @@ use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::distance::MaskMaker::{Le, LeRunningMean, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{simple_id, ThoosaError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
@@ -346,7 +346,7 @@ where
 
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::
             new(
-                SimpleId::from("ab"),
+                simple_id!("ab"),
                 Arc::clone(loader),
                 Arc::new(FreqFilter::<C>::new(filter_config)?),
             ))))

@@ -135,7 +135,7 @@ where
         > + Adjustable + OutId + Sync + Send + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        SimpleId::from(format!("{}_avg_ec_dist", input_id))
+        simple_id!(format!("{}_avg_ec_dist", input_id))
     }
 }
 
