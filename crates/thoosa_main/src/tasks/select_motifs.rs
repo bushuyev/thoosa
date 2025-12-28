@@ -244,7 +244,7 @@ where
 
 
         Self {
-            id: "SelectMotifsStage".into(),
+            id: simple_id!("SelectMotifsStage"),
             store: Arc::clone(store),
             ws: Arc::clone(ws),
             loader,
@@ -414,7 +414,7 @@ where
 
 
                     let clc_resources_input = Arc::new(ClcResourcesMotifsDistInputDeviceWrapper::new(
-                        format!("ClcResourcesMotifsDistInputDeviceWrapper: resource_ids={resource_ids:?}").into(),
+                        simple_id!(format!("ClcResourcesMotifsDistInputDeviceWrapper: resource_ids={resource_ids:?}")),
                         t_1_batch,
                         resource_ids,
                         motif_data

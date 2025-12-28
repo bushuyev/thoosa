@@ -12,7 +12,7 @@ use tch::Device;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::Dims;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{simple_id, ThoosaError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
@@ -93,7 +93,7 @@ where
     C: RunCtx + MotifsCtx + 'static,
 {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        SimpleId::from(format!("loaded_{}", input_id.id()))
+        simple_id!(format!("loaded_{}", input_id.id()))
     }
 }
 

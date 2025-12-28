@@ -61,7 +61,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        format!("ClcResourcesMotifsDist_{}", input_id).into()
+        simple_id!(format!("ClcResourcesMotifsDist_{}", input_id))
     }
 }
 

@@ -18,7 +18,7 @@ use thoosa_common::dims::Dims;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
+use thoosa_shared::{simple_id, TensorIdSliceIdx, ThoosaError};
 use thoosa_shared::traits::{CachableIdTr, Data, DataId, Select, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -329,7 +329,7 @@ where
 
     for (resource_id, slices) in resource_ids_slices {
         let out_key = {
-            let out_id = SimpleId::from(format!("{motif_id}_{resource_id}_tmp_cache"));
+            let out_id = simple_id!(format!("{motif_id}_{resource_id}_tmp_cache"));
             Arc::new(out_id) as Arc<dyn CachableIdTr>
         };
 
