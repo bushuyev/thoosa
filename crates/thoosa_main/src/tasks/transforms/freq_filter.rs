@@ -14,8 +14,9 @@ use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_common::find_motifs_run_config::InputFilter;
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft};
-use thoosa_shared::{simple_id, ThoosaError};
-use thoosa_shared::traits::{CachableIdTr, SimpleId, WithId};
+use thoosa_shared::{key_elt, ThoosaError};
+use thoosa_shared::traits::{CachableIdTr, WithId};
+use thoosa_shared::comp_id::CompKey;
 use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::RunCtx2;
@@ -33,7 +34,7 @@ where
     C: RunCtx + 'static,
 {
     // filters:Vec<> TODO
-    band_pass_tensor: Option<ThoTensor<BandPassDims, SimpleId>>,
+    band_pass_tensor: Option<ThoTensor<BandPassDims, CompKey>>,
     _ctx: PhantomData<C>,
 }
 
@@ -57,7 +58,10 @@ where
                 ).repeat([20, 1, 1]).to_device(Cuda(0));
 
                 Some(ThoTensor::new(
-                    simple_id!(format!("{}-{}", band_pass_config.low_hz, high_hz)),
+                    CompKey::new([
+                        key_elt!(format!("{}", band_pass_config.low_hz), "low_hz"),
+                        key_elt!(format!("{}", high_hz), "high_hz"),
+                    ]),
                     kernel
                 )?)
 
@@ -75,7 +79,8 @@ where
     C: RunCtx + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        simple_id!(format!("filtered_{}_inp", input_id))
+        let stage_key = CompKey::new([key_elt!("filtered_inp", "stage")]);
+        &stage_key + input_id
     }
 }
 
@@ -84,8 +89,8 @@ where
     C: RunCtx + 'static,
 {
     type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData2, SimpleId>;
-    type Out = ThoTensor<ChannelsData2, SimpleId>;
+    type In<'a> = ThoTensor<ChannelsData2, CompKey>;
+    type Out = ThoTensor<ChannelsData2, CompKey>;
 }
 
 // #[async_trait]
@@ -122,7 +127,7 @@ where
         let filtered = input
             .with_data_ref(
                 device_idx,
-               Arc::clone(&ctx), None, |tensor: &ThoTensor<ChannelsData2, SimpleId>| {
+               Arc::clone(&ctx), None, |tensor: &ThoTensor<ChannelsData2, CompKey>| {
 
                let t = notch_band_rfft(tensor.t_ref(), 200., 58., 62.)?;//TODO params
 
@@ -164,6 +169,8 @@ mod tests {
     use thoosa_common::transforms::filters::BandPassFilterParams;
     use thoosa_shared::ThoosaError;
     use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_shared::comp_id::CompKey;
+    use thoosa_shared::key_elt;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::transforms::freq_filter::FreqFilter;
 
@@ -183,7 +190,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(RunCtx2::new(1, 1, "test")));
 
         let r = Arc::new(bf).run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new("test".into(), Tensor::rand(&[20, 100], FLOAT_CPU))?, 0)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::new(CompKey::new([key_elt!("test", "test")]), Tensor::rand(&[20, 100], FLOAT_CPU))?, 0)),
             ctx.clone()
         ).await?;
 

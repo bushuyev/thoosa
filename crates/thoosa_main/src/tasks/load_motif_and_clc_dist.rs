@@ -24,10 +24,11 @@ use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::MonoMetrics;
-use thoosa_shared::traits::{Adjustable, Data, DataId, Select, SimpleId, WithId};
-use thoosa_shared::{simple_id, ThoosaError};
+use thoosa_shared::traits::{Adjustable, Data, DataId, Select, WithId};
+use thoosa_shared::{key_elt, ThoosaError};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::copy_mode::CpuOrGpu;
+use thoosa_shared::comp_id::CompKey;
 
 #[derive(Cached)]
 pub struct LoadMotifAndClcDistanceStage<ML, CLC, C>
@@ -45,7 +46,7 @@ where
             Ctx = C,
         > + Adjustable + OutId + Sync + Send + 'static,
 {
-    id: SimpleId,
+    id: CompKey,
     pub motif_loader: Arc<ML>,
     clc_dist: Arc<CLC>,
     // output_builder: Box<dyn Fn(<Self as WithId>::ID) -> Box<dyn OutputBuilder<O = AverageDistanceValue>> + Send + Sync>,
@@ -86,7 +87,7 @@ where
             Ctx = C,
         > + Adjustable + OutId + Sync + Send + 'static,
 {
-    type ID = SimpleId;
+    type ID = CompKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -110,7 +111,7 @@ where
 {
     pub fn new(motif_loader: Arc<ML>, clc_dist: Arc<CLC>) -> Self {
         Self {
-            id: simple_id!("LoadMotifAndClcDistanceStage"),
+            id: CompKey::new([key_elt!("LoadMotifAndClcDistanceStage", "stage")]),
             motif_loader,
             clc_dist,
             // output_builder: Box::new(|id| Box::new(DistOutputBuilder::new(id))),
@@ -135,7 +136,7 @@ where
         > + Adjustable + OutId + Sync + Send + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        simple_id!(format!("{}_avg_ec_dist", input_id))
+        CompKey::new([key_elt!(input_id.0, format!("{input_id}_avg_ec_dist"))])
     }
 }
 
@@ -184,7 +185,7 @@ where
 
         let motif_size = motif.size().clone();
 
-        debug!("LoadMotifAndClcDistanceStage::run: out_id={} motif_size={motif_size:?}", out_id);
+        debug!("LoadMotifAndClcDistanceStage::run: out_id={out_id:?} motif_size={motif_size:?}");
 
 
         let dist = OOMHandler::new(
@@ -239,12 +240,12 @@ impl Select<MotifSlicesSelector> for ThoTensor<MotifSlices, DataId> {
 
 #[derive(Debug)]
 pub struct DistOutputBuilder {
-    id: SimpleId,
+    id: CompKey,
     values: Vec<f32>,
 }
 
 impl DistOutputBuilder {
-    pub fn new(id: SimpleId) -> Self {
+    pub fn new(id: CompKey) -> Self {
         Self { id, values: vec![] }
     }
 }
@@ -277,7 +278,9 @@ mod tests {
     use std::sync::Arc;
     use tch::Tensor;
     use thoosa_shared::ThoosaError;
-    use thoosa_shared::traits::{DataId, SimpleId, WithId};
+    use thoosa_shared::traits::{DataId, WithId};
+    use thoosa_shared::comp_id::CompKey;
+    use thoosa_shared::key_elt;
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_and_clc_average_euclidean_distance() -> Result<(), ThoosaError> {
         GlobalCtx::init_devices(2);
@@ -292,8 +295,8 @@ mod tests {
         let call_log = Arc::new(Mutex::new(Vec::new()));
 
         let clc_stage = Arc::new(mock_average_stage::builder().fail_while_dim0_gt(3).with_do_run(vec![
-            AverageDistanceValue::new("0".into(), 10.0),
-            AverageDistanceValue::new("1".into(), 30.0)
+            AverageDistanceValue::new(CompKey::new([key_elt!(0u32, "avg_0")]), 10.0),
+            AverageDistanceValue::new(CompKey::new([key_elt!(1u32, "avg_1")]), 30.0)
         ]).with_call_log(Arc::clone(&call_log)).finish());
 
         let stage = Arc::new(LoadMotifAndClcDistanceStage::new(
@@ -310,7 +313,7 @@ mod tests {
         let result_value: AverageDistanceValue = result.with_data_ref(0, Arc::clone(&ctx), None, |val: &AverageDistanceValue| Ok(val.clone())).await?;
 
         assert_eq!(result_value.value(), 20.0);
-        let expected_id = SimpleId::from(format!("{}_avg_ec_dist", input_id_value));
+        let expected_id = CompKey::new([key_elt!(input_id_value.0, format!("{input_id_value}_avg_ec_dist"))]);
         assert_eq!(result_value.id(), &expected_id);
 
         let recorded = call_log.lock().clone();
