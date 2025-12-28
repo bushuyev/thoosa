@@ -33,8 +33,9 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{simple_id, ThoosaError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, SimpleId, WithId};
+use thoosa_shared::{key_elt, ThoosaError};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, WithId};
+use thoosa_shared::comp_id::CompKey;
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_common::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
@@ -57,7 +58,7 @@ pub struct ApplyMotifNets<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
-    id:SimpleId,
+    id:CompKey,
     ws:Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
     store:Arc<parking_lot::RwLock<Box<dyn Store>>>,
     pd:PhantomData<C>,
@@ -73,7 +74,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     pub async fn new<R>(
-        id: SimpleId,
+        id: CompKey,
         ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
         store: &Arc<parking_lot::RwLock<Box<dyn Store>>>,
         select_motifs_run_id: Vec<RunId>,
@@ -168,8 +169,8 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData2, SimpleId>;
-    type Out = ThoTensor<MotifProbability, SimpleId>;
+    type In<'a> = ThoTensor<ChannelsData2, CompKey>;
+    type Out = ThoTensor<MotifProbability, CompKey>;
 }
 
 
@@ -197,7 +198,7 @@ where
             .map(|apply_motif_net|{
                 let input = Arc::clone(&input);
                 let out_id = apply_motif_net.out_id(&input.id());
-                let apply_motif_net_ctx = ctx.write().branch(format!("apply_motif_net_ctx_{}", out_id).leak());
+                let apply_motif_net_ctx = ctx.write().branch(format!("apply_motif_net_ctx_{out_id:?}").leak());
                 let out_id = Arc::new(out_id) as Arc<dyn CachableIdTr>;
                 let slice_step = self.slice_step;
 
@@ -223,7 +224,7 @@ where
                          Arc::clone(&input),
                          apply_motif_net_ctx,
                          Contexts::new(
-                             SplitsAdjusterContextImpl::new(input._size().into(), SingleDimTensorOutputBuilder::new(simple_id!(""), 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
+                             SplitsAdjusterContextImpl::new(input._size().into(), SingleDimTensorOutputBuilder::new(CompKey::new([key_elt!("", "empty")]), 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
                              NoopRunnableContext {},
                              PermitsAndDumpToCpuAdjustableContex::new(
                                  PermitsAdjustContextImpl::new(ctx_name),
@@ -248,7 +249,7 @@ where
 
 
         let tensor = ThoTensor::new(
-            simple_id!(""),
+            CompKey::new([key_elt!("", "empty")]),
             Tensor::f_concat(
                 &matches.into_iter().map(|v| v.t).collect::<Vec<_>>(), 1
             )?
@@ -273,7 +274,9 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        simple_id!(format!("ApplyMotifNets_{}_{}", self.id, input_id))
+        let stage_key = CompKey::new([key_elt!("ApplyMotifNets", "stage")]);
+        let out_id = &stage_key + &self.id;
+        &out_id + input_id
     }
 }
 
@@ -284,7 +287,7 @@ where
 
 #[derive(Debug)]
 struct ApplyMotifNetInput<'a> {
-    batch: &'a ThoTensor<Batch<ChannelsData2>, SimpleId>,
+    batch: &'a ThoTensor<Batch<ChannelsData2>, CompKey>,
     motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>
 }
 
@@ -307,7 +310,7 @@ impl Data for ApplyMotifNetInput<'_> {
 }
 
 impl <'a> ApplyMotifNetInput<'a> {
-    pub fn new(batch: &'a ThoTensor<Batch<ChannelsData2>, SimpleId>, motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>) -> Self {
+    pub fn new(batch: &'a ThoTensor<Batch<ChannelsData2>, CompKey>, motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>) -> Self {
         Self {  batch, motif_net }
     }
 }
@@ -364,7 +367,8 @@ where
     C: RunCtx + MotifsCtx + Adjustable
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        simple_id!(format!("ApplyMotifNet: {:?}", input_id))
+        let stage_key = CompKey::new([key_elt!("ApplyMotifNet", "stage")]);
+        &stage_key + input_id
     }
 }
 
@@ -373,8 +377,8 @@ impl <C>  Stage for ApplyMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable{
     type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData2, SimpleId>;
-    type Out = ThoTensor<MotifProbability, SimpleId>;
+    type In<'a> = ThoTensor<ChannelsData2, CompKey>;
+    type Out = ThoTensor<MotifProbability, CompKey>;
 }
 
 impl <C> AsyncStage for ApplyMotifNet<C> where
@@ -390,7 +394,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
             (guard.device_idx(), guard.cache_area())
         };
         async move {
-            with_data!(ctx, device_idx, net_wrapper, input; |net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, input:&ThoTensor<ChannelsData2, SimpleId>|{
+            with_data!(ctx, device_idx, net_wrapper, input; |net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, input:&ThoTensor<ChannelsData2, CompKey>|{
                 let motif_id = net.extra().motif_id();
                  #[cfg(test)]
                 if self.fail_if_size_bigger_than.map(|v| v < input.size()[1] as usize).unwrap_or(false) {
@@ -415,8 +419,10 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
 
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} slices.size={:?}",  slices.size());
 
-                let slices_tensor = ThoTensor::new(simple_id!(""), slices)?;
+                let out_id = self.out_id(input.id());
+                let slices_tensor = ThoTensor::<Batch<Slice>, CachableId>::from(slices);
                 let out = net.data().tho_forward(&slices_tensor, false)?;
+                let out = ThoTensor::new(out_id, out.t())?;
 
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} out.size={:?}", out.size());
 
@@ -430,17 +436,17 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
 #[cfg(test)]
 pub fn motif_test_net_(
     device: Device,
-    motif_t: Arc<ThoTensor<Batch<Slice>, SimpleId>>,
+    motif_t: Arc<ThoTensor<Batch<Slice>, CompKey>>,
     step: u32,
 ) -> (
     Box<dyn Fn() -> MotifNetParams + Sync + Send>,
     Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
 ) {
-    let motif_width = motif_t.as_ref().as_ref().size()[1] as u32;
+    let motif_width = motif_t.as_ref().t_ref().size()[1] as u32;
     (
         Box::new(move || MotifNetParams::new(motif_width, 1, step)),
         Box::new(move || {
-            *dummy_motif_net::<Batch<Slice>, MotifProbability>(motif_width, 1., device, "test", &motif_t.as_ref().as_ref().i((0, ..)), step as i64).unwrap()//first slice
+            *dummy_motif_net::<Batch<Slice>, MotifProbability>(motif_width, 1., device, "test", &motif_t.as_ref().t_ref().i((0, ..)), step as i64).unwrap()//first slice
         }),
     )
 }
@@ -469,8 +475,8 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
     let mut cfg = nn::ConvConfig { bias: false, stride, ..Default::default() };
 
 
-    let tho_tensor:Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::new("".into(), t)?);
-    let ones = Arc::new(ThoTensor::new("".into(), Tensor::ones([1, 1, l], FLOAT_CPU))?);
+    let tho_tensor: Arc<ThoTensor<AnyDims, CachableId>> = Arc::new(ThoTensor::from(t));
+    let ones: Arc<ThoTensor<AnyDims, CachableId>> = Arc::new(ThoTensor::from(Tensor::ones([1, 1, l], FLOAT_CPU)));
 
     let node = SeqBuilder::new(num_features, None)
         .closure(
@@ -559,12 +565,14 @@ pub(crate) mod tests {
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_motifs::generators::noise::resource_tensor;
     use thoosa_properties_map::ToHashmap;
+    use thoosa_shared::applicables_runner::CachableId;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::perf_logging::PERF;
     use thoosa_shared::traits::Named;
-    use thoosa_shared::traits::SimpleId;
+    use thoosa_shared::comp_id::CompKey;
+    use thoosa_shared::key_elt;
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
     use crate::tasks::apply_motif_nets::{dummy_motif_net, motif_test_net_, ApplyMotifNets};
@@ -613,9 +621,9 @@ pub(crate) mod tests {
         let motif_0_1_id = 1; //channel 0 motif 1
         let motif_1_0_id = 0; //channel 1 motif 0
 
-        let motif_0_0 = Arc::new(ThoTensor::new("motif_0_0".into(), motifs_tensor(100, 3, MotifKind::Pulse))?);
-        let motif_0_1 = Arc::new(ThoTensor::new("motif_0_1".into(), motifs_tensor(100, 3, MotifKind::Triangle))?);
-        let motif_1_0 = Arc::new(ThoTensor::new("motif_1_0".into(), motifs_tensor(100, 3, MotifKind::Sin))?);
+        let motif_0_0 = Arc::new(ThoTensor::new(CompKey::new([key_elt!("motif_0_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Pulse))?);
+        let motif_0_1 = Arc::new(ThoTensor::new(CompKey::new([key_elt!("motif_0_1", "motif_id")]), motifs_tensor(100, 3, MotifKind::Triangle))?);
+        let motif_1_0 = Arc::new(ThoTensor::new(CompKey::new([key_elt!("motif_1_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Sin))?);
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 3, 100, input_n_0 as u32)
@@ -660,7 +668,7 @@ pub(crate) mod tests {
 
 
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-            "1".into(),
+            CompKey::new([key_elt!("1", "apply_motif_nets_id")]),
             &ws,
             &store,
             vec![select_motifs_run_id],
@@ -680,7 +688,7 @@ pub(crate) mod tests {
         let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
         let out = apply_motif_nets.run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new("test_batch".into(), resource_a_t)?, 0)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::new(CompKey::new([key_elt!("test_batch", "test_batch")]), resource_a_t)?, 0)),
             Arc::clone(&run_ctx)
         ).await?;
 
@@ -695,7 +703,7 @@ pub(crate) mod tests {
 
         let sin_interval_starts_in_resources_a = resource_a_intervals[1][0][0].start;
 
-        with_data!(run_ctx, 0, out; |r:&ThoTensor<MotifProbability, SimpleId>|{
+        with_data!(run_ctx, 0, out; |r:&ThoTensor<MotifProbability, CompKey>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
 
             let (pulse_matches_vals, pulse_matches_idx) = &r.t.i((0, ..)).topk(1i64, 0, true, true);
@@ -736,7 +744,7 @@ pub(crate) mod tests {
         let train_motifs_run_id:RunId = 3;
         let motif_0_0_id = 0; //channel 0 motif 0
 
-        let motif_0_0 = Arc::new(ThoTensor::new("motif_0_0".into(), motifs_tensor(100, 3, MotifKind::Pulse))?);
+        let motif_0_0 = Arc::new(ThoTensor::new(CompKey::new([key_elt!("motif_0_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Pulse))?);
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 1, 100, input_n_0 as u32)
@@ -773,7 +781,7 @@ pub(crate) mod tests {
 
 
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-            "1".into(),
+            CompKey::new([key_elt!("1", "apply_motif_nets_id")]),
             &ws,
             &store,
             vec![select_motifs_run_id],
@@ -791,7 +799,7 @@ pub(crate) mod tests {
         let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
         let out = apply_motif_nets.run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new("test_batch".into(), resource_a_t)?, 0)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::new(CompKey::new([key_elt!("test_batch", "test_batch")]), resource_a_t)?, 0)),
             Arc::clone(&run_ctx)
         ).await?;
 
@@ -803,7 +811,7 @@ pub(crate) mod tests {
         let pulse_interval_starts_in_resources_a = resource_a_intervals[0][0][0].start;
 
 
-        with_data!(run_ctx, 0, out; |r:&ThoTensor<MotifProbability, SimpleId>|{
+        with_data!(run_ctx, 0, out; |r:&ThoTensor<MotifProbability, CompKey>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
 
             let (pulse_matches_vals, pulse_matches_idx) = &r.t.i((0, ..)).topk(1i64, 0, true, true);
@@ -828,7 +836,7 @@ pub(crate) mod tests {
 
         let test_net = dummy_motif_net::<AnyDims, AnyDims>(100, 1., Cpu, "test", &motif_t.i((0, ..)), 1)?;
 
-        let resource = ThoTensor::new("".into(), resource_a_t.shallow_clone())?;
+        let resource: ThoTensor<AnyDims, CachableId> = resource_a_t.shallow_clone().into();
         let out = test_net.tho_forward(&resource, false)?.t;//.i((0, .., 0));//channel[1], slices, vals[1]
 
         /*plot_series_with_lanes(

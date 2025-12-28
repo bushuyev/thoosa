@@ -38,8 +38,9 @@ use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{simple_id, ThoosaError};
-use thoosa_shared::traits::{Adjustable, DataId, MonoMetrics, SimpleId, WithId};
+use thoosa_shared::{key_elt, ThoosaError};
+use thoosa_shared::traits::{Adjustable, DataId, MonoMetrics, WithId};
+use thoosa_shared::comp_id::CompKey;
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -63,12 +64,12 @@ use crate::tasks::slices_iter::SlicesIter;
 
 pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
 
-    id:SimpleId,
+    id:CompKey,
     store: Arc<RwLock<Box<dyn Store>>>,
     ws:Arc<RwLock<Box<dyn Workspace>>>,
     loader:Arc<L>,
@@ -82,7 +83,7 @@ where
 
 impl <L, ML, C> Debug for SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -96,11 +97,11 @@ where
 
 impl  <L, ML, C> WithId for SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
-    type ID = SimpleId;
+    type ID = CompKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -218,7 +219,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
 
 impl <L, ML, C> SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
@@ -244,7 +245,7 @@ where
 
 
         Self {
-            id: simple_id!("SelectMotifsStage"),
+            id: CompKey::new([key_elt!("SelectMotifsStage", "stage")]),
             store: Arc::clone(store),
             ws: Arc::clone(ws),
             loader,
@@ -318,7 +319,7 @@ where
 
 impl <L,ML, C> Stage  for  SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 
@@ -331,7 +332,7 @@ where
 
 impl <L, ML, C> AsyncStage  for  SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
@@ -414,17 +415,20 @@ where
 
 
                     let clc_resources_input = Arc::new(ClcResourcesMotifsDistInputDeviceWrapper::new(
-                        simple_id!(format!("ClcResourcesMotifsDistInputDeviceWrapper: resource_ids={resource_ids:?}")),
+                        CompKey::new([
+                            key_elt!("ClcResourcesMotifsDistInputDeviceWrapper", "stage"),
+                            key_elt!(format!("{resource_ids:?}"), "resource_ids"),
+                        ]),
                         t_1_batch,
                         resource_ids,
                         motif_data
                     ));
 
                     debug!("SelectMotifsStage::run: clc_resources_input={clc_resources_input:?}");
-                    // let output_builder = (self.output_builder)(SimpleId("zzz"));
+                    // let output_builder = (self.output_builder)(CompKey("zzz"));
                     let motif_added_slices = Arc::clone(&channels_motifs_added_slices);
                     tokio::spawn(async move {
-                        let out_id = Arc::new(simple_id!("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
+                        let out_id = Arc::new(CompKey::new([key_elt!("zzz", "mock")])); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
 
                         let required_ids = HashMap::new();
 
@@ -658,7 +662,9 @@ pub mod tests {
     use thoosa_shared::{cdt_for_dir, gen_motif, MotifKind, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::ResourceType::NotInGroup;
     use thoosa_shared::run_configs::RunId;
-    use thoosa_shared::traits::{DataId, SimpleId};
+    use thoosa_shared::traits::DataId;
+    use thoosa_shared::comp_id::CompKey;
+    use thoosa_shared::key_elt;
     use thoosa_store::{IdSlice, MockStoreBuilder};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_motifs::generators::noise;
@@ -746,7 +752,7 @@ pub mod tests {
         ));
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(mock_run_ctx::default(1))),
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(CompKey::new([key_elt!("test", "test")]), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(mock_run_ctx::default(1))),
         ).await?;
 
         Ok(())
@@ -822,7 +828,7 @@ pub mod tests {
         ));
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(mock_run_ctx::default(0))),
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(CompKey::new([key_elt!("test", "test")]), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(mock_run_ctx::default(0))),
         ).await?;
 
         Ok(())
@@ -903,7 +909,7 @@ pub mod tests {
 
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(mock_run_ctx::default(0))),
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(CompKey::new([key_elt!("test", "test")]), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(mock_run_ctx::default(0))),
         ).await?;
 
         Ok(())
@@ -1038,7 +1044,7 @@ pub mod tests {
 
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(mock_run_ctx::default(1))),
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(CompKey::new([key_elt!("test", "test")]), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(mock_run_ctx::default(1))),
         ).await?;
 
         Ok(())
@@ -1374,7 +1380,7 @@ pub mod tests {
             .finish();
 
         let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new("test".into(), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(ctx)),
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(CompKey::new([key_elt!("test", "test")]), Simple::new(NotInGroup(resources_group.into()))), 0)), Arc::new(RwLock::new(ctx)),
         ).await?;
 
         Ok(())

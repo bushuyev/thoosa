@@ -9,7 +9,7 @@ use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
-use thoosa_shared::simple_id;
+use thoosa_shared::key_elt;
 use futures_util::{future::BoxFuture, StreamExt};
 use log::{debug, info, trace};
 use parking_lot::{Mutex, RwLock};
@@ -36,9 +36,10 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{panic_to_err, ThoosaError};
+use thoosa_shared::comp_id::CompKey;
 
 fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
     match device {
@@ -50,11 +51,11 @@ fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct TrainNetInput{
-    id:SimpleId
+    id:CompKey
 }
 
 impl TrainNetInput {
-    pub fn new(id: SimpleId) -> Self {
+    pub fn new(id: CompKey) -> Self {
         Self { id }
     }
 }
@@ -63,7 +64,7 @@ impl Input for TrainNetInput {
 }
 
 impl WithId for TrainNetInput {
-    type ID = SimpleId;
+    type ID = CompKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -78,7 +79,7 @@ where
     N:Debug + Send + Sync + 'static,
     R:Debug + Send + Sync + 'static,
 {
-    id:SimpleId,
+    id:CompKey,
     pub var_store: VarStore,
     pub node_params:N,
     pub run_config:R,
@@ -90,7 +91,7 @@ where
     N:Debug + Send + Sync + 'static,
     R:Debug + Send + Sync + 'static,
 {
-    pub fn new(id: SimpleId, var_store: VarStore, node_params: N, run_config: R, min_loss:f32) -> Self {
+    pub fn new(id: CompKey, var_store: VarStore, node_params: N, run_config: R, min_loss:f32) -> Self {
         Self { id, var_store, node_params, run_config, min_loss }
     }
 }
@@ -100,7 +101,7 @@ where
     N:Debug + Send + Sync + 'static,
     R:Debug + Send + Sync + 'static,
 {
-    type ID = SimpleId;
+    type ID = CompKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -378,13 +379,13 @@ where
                 &self.descr,
             ).await?;
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new(simple_id!(""), var_store, node_params, run_config, loss), 0)))
+            Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new(CompKey::new([key_elt!("TrainNetOutput", "stage")]), var_store, node_params, run_config, loss), 0)))
         }
     }
 }
 
 pub struct TrainStepInput<DI: Dims, DO: Dims> {
-    id: SimpleId,
+    id: CompKey,
     x: ThoBatch<DI>,
     expected_y: ThoBatch<DO>,
 }
@@ -392,7 +393,7 @@ pub struct TrainStepInput<DI: Dims, DO: Dims> {
 impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
     fn new(x: ThoBatch<DI>, expected_y: ThoBatch<DO>) -> Self {
         Self {
-            id: simple_id!("train_step"),
+            id: CompKey::new([key_elt!("train_step", "stage")]),
             x,
             expected_y,
         }
@@ -412,7 +413,7 @@ impl<DI: Dims, DO: Dims> Input for TrainStepInput<DI, DO> {
 }
 
 impl<DI: Dims, DO: Dims> WithId for TrainStepInput<DI, DO> {
-    type ID = SimpleId;
+    type ID = CompKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -655,7 +656,7 @@ where
     C: RunCtx,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    fn out_id<'a>(&self, _input_id: &SimpleId) -> () {
+    fn out_id<'a>(&self, _input_id: &CompKey) -> () {
         ()
     }
 }
@@ -699,6 +700,8 @@ mod tests {
     use thoosa_shared::traits::MonoMetrics;
     use crate::tasks::train_net::{TrainNet, TrainNetInput};
     use futures::FutureExt;
+    use thoosa_shared::comp_id::CompKey;
+    use thoosa_shared::key_elt;
 
     #[derive(Clone, Debug)]
     struct DummyX;
@@ -815,7 +818,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
         let output = train_net
             .run(
-                Arc::new(DevicesWrap::wrap(TrainNetInput::new("test".into()), 0)),
+                Arc::new(DevicesWrap::wrap(TrainNetInput::new(CompKey::new([key_elt!("test", "test")])), 0)),
                 Arc::clone(&ctx),
             )
             .await?;

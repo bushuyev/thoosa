@@ -34,11 +34,12 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::{simple_id, CopyToDevice, ThoosaError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, SimpleId, WithId};
+use thoosa_shared::{key_elt, CopyToDevice, ThoosaError};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
+use thoosa_shared::comp_id::CompKey;
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
@@ -50,7 +51,7 @@ use crate::tasks::train_net::{TrainNet, TrainNetInput};
 #[derive(Debug)]
 pub struct TrainMotifNets<L, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     run_configs: Arc<OptRunConfigs<
@@ -70,7 +71,7 @@ where
 
 impl <L, C> OutId for TrainMotifNets<L, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -82,7 +83,7 @@ where
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct TrainMotifNetInput{
-    id:SimpleId,
+    id:CompKey,
     select_motifs_run_id: Vec<RunId>,
     opt_config:Arc<OptConfig>
 }
@@ -90,12 +91,12 @@ pub struct TrainMotifNetInput{
 impl Input for TrainMotifNetInput {}
 impl TrainMotifNetInput {
     pub fn new(select_motifs_run_id: Vec<RunId>, opt_config:Arc<OptConfig>) -> Self {
-        Self { id: simple_id!("TrainMotifNetInput"), select_motifs_run_id, opt_config }
+        Self { id: CompKey::new([key_elt!("TrainMotifNetInput", "stage")]), select_motifs_run_id, opt_config }
     }
 }
 
 impl WithId for TrainMotifNetInput {
-    type ID = SimpleId;
+    type ID = CompKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -103,7 +104,7 @@ impl WithId for TrainMotifNetInput {
 }
 impl <L, C> Stage for TrainMotifNets<L, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     type Ctx = C;
@@ -114,7 +115,7 @@ where
 impl <L, C> TrainMotifNets<L, C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
 {
     pub fn new(
         loader:Arc<L>,
@@ -151,7 +152,7 @@ where
 impl <L, C> AsyncStage for TrainMotifNets<L, C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
         let (device_idx, cache_area, ctx_name) = {
@@ -258,7 +259,7 @@ where
                     "motifs".to_string()
                 ));
 
-                let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(simple_id!("")), 0)), Arc::clone(&ctx)).await?).unwrap().take_data(0).await?;
+                let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(CompKey::new([key_elt!("", "empty")])), 0)), Arc::clone(&ctx)).await?).unwrap().take_data(0).await?;
 
                 store.read().get_motif_meta(motif_id_rate.0).map(|(channel, find_motifs_run_id)|{
                     TrainMotifsNetResult::new(
@@ -296,11 +297,11 @@ where
 #[derive(Debug)]
 struct DataWithLabels {
     slices:ThoBatch<Slice>,
-    labels: ThoTensor<Labels, SimpleId>
+    labels: ThoTensor<Labels, CompKey>
 }
 
 impl DataWithLabels {
-    pub fn new(slices: ThoBatch<Slice>, labels: ThoTensor<Labels, SimpleId>) -> Self {
+    pub fn new(slices: ThoBatch<Slice>, labels: ThoTensor<Labels, CompKey>) -> Self {
         Self { slices, labels }
     }
 }
@@ -341,8 +342,8 @@ impl Data for DataWithLabels {
 pub struct MotifsBatch<C> {
     batch_size: u32,
 
-    train_motifs:Arc<DevicesWrap<ThoTensor<MotifSlices, SimpleId>>>,
-    valid_motifs:Arc<DevicesWrap<ThoTensor<MotifSlices, SimpleId>>>,
+    train_motifs:Arc<DevicesWrap<ThoTensor<MotifSlices, CompKey>>>,
+    valid_motifs:Arc<DevicesWrap<ThoTensor<MotifSlices, CompKey>>>,
     
     random_slices:Arc<DevicesWrap<ThoTensor<MotifSlices, DataId>>>,
     motif_meta:MotifMeta,
@@ -373,11 +374,13 @@ where
             let motifs_t = motif.data().t_ref();
             let train_motifs = motifs_t.i((0..split, .. ));
             let valid_motifs = motifs_t.i((split.., .. ));
+            let train_motifs = ThoTensor::new(CompKey::new([key_elt!("train_motifs", "split")]), train_motifs)?;
+            let valid_motifs = ThoTensor::new(CompKey::new([key_elt!("valid_motifs", "split")]), valid_motifs)?;
 
             Ok::<_, ThoosaError>(Self {
 
-                train_motifs:  Arc::new(DevicesWrap::wrap(train_motifs.into(), cache_area)),
-                valid_motifs: Arc::new(DevicesWrap::wrap(valid_motifs.into(), cache_area)),
+                train_motifs:  Arc::new(DevicesWrap::wrap(train_motifs, cache_area)),
+                valid_motifs: Arc::new(DevicesWrap::wrap(valid_motifs, cache_area)),
                 random_slices,
                 motif_meta,
                 batch_size: batch_size as u32,
@@ -387,7 +390,7 @@ where
         })
     }
 
-    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SimpleId>>>) -> Result<(ThoBatch<Slice>, Tensor), ThoosaError> {
+    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, CompKey>>>) -> Result<(ThoBatch<Slice>, Tensor), ThoosaError> {
 
         static COUNTER:AtomicU32 = AtomicU32::new(0);
 
@@ -395,7 +398,7 @@ where
 
         let num_slices = (self.batch_size / 2) as i64;
 
-        with_data!(Arc::clone(&self.ctx), self.device_idx, motifs, random_slices; |motifs:&ThoTensor<MotifSlices, SimpleId>, random_slices:&ThoTensor<MotifSlices, DataId>|{
+        with_data!(Arc::clone(&self.ctx), self.device_idx, motifs, random_slices; |motifs:&ThoTensor<MotifSlices, CompKey>, random_slices:&ThoTensor<MotifSlices, DataId>|{
 
             let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?.set_requires_grad(true);//TODO config
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?.set_requires_grad(true);

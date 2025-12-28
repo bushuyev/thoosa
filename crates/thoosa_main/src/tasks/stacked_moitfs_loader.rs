@@ -24,9 +24,9 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::{simple_id, CopyToDevice, ThoosaError};
+use thoosa_shared::{key_elt, CopyToDevice, ThoosaError};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, Named, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, Named, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -35,11 +35,12 @@ use crate::tasks::cross_dims::{ChannelsMotifsDists, ChannelsMotifsSlices, MotifS
 use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use crate::tasks::run_ctx_2::MotifsCtx;
+use thoosa_shared::comp_id::CompKey;
 
 #[derive(Debug, Clone, DummyData)]
 pub struct StackedMotifsInput {
 
-    id:SimpleId,
+    id:CompKey,
     find_motifs_run_config: Arc<FindMotifsRunConfig>,
     // select_motifs_run_config: Arc<SelectMotifsRunConfig>,
 }
@@ -47,9 +48,10 @@ pub struct StackedMotifsInput {
 impl StackedMotifsInput {
     pub fn new( find_config: Arc<FindMotifsRunConfig>) -> Self {
         debug!("StackedMotifsInput: find_config={find_config:?}");
+        let find_motifs_run_id = find_config.id.unwrap();
         Self {
             // id: format!("{}_{}", find_config.id.unwrap(), select_config.id.unwrap()).into(),//TODO in select motifs SelectMotifsRunConfig is saved in run_grid right before running stage so no sense to cache by select_motifs_run_config. No other cases yet.
-            id: simple_id!(format!("{}", find_config.id.unwrap()/*, select_config.id.unwrap()*/)),
+            id: CompKey::new([key_elt!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}"))]),
             find_motifs_run_config: find_config,
             // select_motifs_run_config: select_config
         }
@@ -58,7 +60,7 @@ impl StackedMotifsInput {
 impl Input for StackedMotifsInput {}
 
 impl WithId for StackedMotifsInput {
-    type ID = SimpleId;
+    type ID = CompKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -83,12 +85,12 @@ impl Named for StackedMotifsOutputId {}
 #[derive(Debug)]
 pub struct StackedMotifsOutput {
     id:StackedMotifsOutputId,
-    pub motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>,
-    pub motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SimpleId>
+    pub motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, CompKey>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>,
+    pub motifs_avg_dists: ThoTensor<ChannelsMotifsDists, CompKey>
 }
 
 impl StackedMotifsOutput {
-    pub fn new(id: StackedMotifsOutputId, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SimpleId>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>, motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SimpleId>) -> Self {
+    pub fn new(id: StackedMotifsOutputId, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, CompKey>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>, motifs_avg_dists: ThoTensor<ChannelsMotifsDists, CompKey>) -> Self {
         Self { id, motifs, motifs_avg_dists }
     }
 
@@ -368,7 +370,10 @@ where
             // let select_motifs_run_id = input.select_motifs_run_config.id.expect("no id in select_motifs_run_config");
             //select_motifs_run_id  -
             let select_motifs_run_id = vec![];//can be used to return select_motifs_run_i ran earlier on find_motifs_run_id
-            let find_and_select_motifs_id = simple_id!(format!("{find_motifs_run_id}_{select_motifs_run_id:?}"));
+            let find_and_select_motifs_id = CompKey::new([
+                key_elt!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
+                key_elt!(format!("{select_motifs_run_id:?}"), "select_motifs_run_id"),
+            ]);
 
             let motifs = ThoTensor::new(
                 find_and_select_motifs_id.clone(),
