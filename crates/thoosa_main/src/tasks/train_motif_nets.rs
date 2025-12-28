@@ -258,7 +258,7 @@ where
                     "motifs".to_string()
                 ));
 
-                let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new("".into()), 0)), Arc::clone(&ctx)).await?).unwrap().take_data(0).await?;
+                let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(simple_id!("")), 0)), Arc::clone(&ctx)).await?).unwrap().take_data(0).await?;
 
                 store.read().get_motif_meta(motif_id_rate.0).map(|(channel, find_motifs_run_id)|{
                     TrainMotifsNetResult::new(

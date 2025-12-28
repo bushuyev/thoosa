@@ -315,7 +315,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
-                    SimpleId::from("resources"),
+                    simple_id!("resources"),
                     find_motifs_args.resource_config(),
                 ),
                 0
@@ -355,7 +355,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
-                    SimpleId::from("resources"),
+                    simple_id!("resources"),
                     select_motifs_args.resource_config(),
                 ),
                 0
@@ -431,7 +431,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
-                    SimpleId::from(train_label_nets_args.train_resource_group.to_string()),//TODO the group is needed to load resouces not belonging to label being trained
+                    simple_id!(train_label_nets_args.train_resource_group.to_string()),//TODO the group is needed to load resouces not belonging to label being trained
                     train_label_nets_args.resource_config(),
                 ),
                 0
@@ -492,7 +492,7 @@ where
 
             let find_motifs_input = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
-                    SimpleId::from("resources"),
+                    simple_id!("resources"),
                     run_all_params.find_resource_config()?
                 ).check(&store)?,
                 0
@@ -500,7 +500,7 @@ where
 
             let select_motifs_input = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
-                    SimpleId::from("resources"),
+                    simple_id!("resources"),
                     run_all_params.select_resource_config()?,
                 ).check(&store)?,
                 0
@@ -508,7 +508,7 @@ where
 
             let train_labels_input = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
-                    SimpleId::from(run_all_params.train_resource_group.to_string()),//TODO the group is needed to load resouces not belonging to label being trained
+                    simple_id!(run_all_params.train_resource_group.to_string()),//TODO the group is needed to load resouces not belonging to label being trained
                     run_all_params.train_resource_config()
                 ).check(&store)?,
                 0

@@ -9,6 +9,7 @@ use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
+use thoosa_shared::simple_id;
 use futures_util::{future::BoxFuture, StreamExt};
 use log::{debug, info, trace};
 use parking_lot::{Mutex, RwLock};
@@ -377,7 +378,7 @@ where
                 &self.descr,
             ).await?;
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new("".into(), var_store, node_params, run_config, loss), 0)))
+            Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new(simple_id!(""), var_store, node_params, run_config, loss), 0)))
         }
     }
 }
@@ -391,7 +392,7 @@ pub struct TrainStepInput<DI: Dims, DO: Dims> {
 impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
     fn new(x: ThoBatch<DI>, expected_y: ThoBatch<DO>) -> Self {
         Self {
-            id: "train_step".into(),
+            id: simple_id!("train_step"),
             x,
             expected_y,
         }

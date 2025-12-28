@@ -3,7 +3,7 @@ use std::ops::Range;
 use log::{debug, trace};
 use tch::{IndexOp, Tensor};
 use thoosa_common::dims::{AnyMetrics, Batch, Dims};
-use thoosa_shared::{MyError, ThoosaError};
+use thoosa_shared::{simple_id, MyError, ThoosaError};
 use thoosa_shared::traits::{Adjustable, DataId, Select, SimpleId};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
@@ -47,7 +47,7 @@ impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SimpleId> {
         };
 
         let sub = ThoTensor::new(
-            SimpleId::from(format!("{}:{ranges:?}", self.id().0)),
+            simple_id!(format!("{}:{ranges:?}", self.id())),
             stacked,
         )?;
 

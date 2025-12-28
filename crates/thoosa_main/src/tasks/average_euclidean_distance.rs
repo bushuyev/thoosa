@@ -98,7 +98,7 @@ where
     C: RunCtx + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        SimpleId::from(format!("{}_avg_ec_dist", input_id))
+        simple_id!(format!("{}_avg_ec_dist", input_id))
     }
 }
 
@@ -116,7 +116,7 @@ where
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
         Ok(AverageDistanceValue::new(
-            "todo".into(),
+            simple_id!("todo"),
             panic_to_err!(average_euclidean_distance(input.data().t_ref()))?
         ))
     }
