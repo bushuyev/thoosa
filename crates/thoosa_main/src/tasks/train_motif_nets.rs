@@ -34,7 +34,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::{simple_id, CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, SimpleId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
@@ -90,7 +90,7 @@ pub struct TrainMotifNetInput{
 impl Input for TrainMotifNetInput {}
 impl TrainMotifNetInput {
     pub fn new(select_motifs_run_id: Vec<RunId>, opt_config:Arc<OptConfig>) -> Self {
-        Self { id: SimpleId("TrainMotifNetInput"), select_motifs_run_id, opt_config }
+        Self { id: simple_id!("TrainMotifNetInput"), select_motifs_run_id, opt_config }
     }
 }
 

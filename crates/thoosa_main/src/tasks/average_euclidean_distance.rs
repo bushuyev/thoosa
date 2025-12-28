@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::average_euclidean_distance;
-use thoosa_shared::{panic_to_err, CopyToDevice, ThoosaError};
+use thoosa_shared::{panic_to_err, simple_id, CopyToDevice, ThoosaError};
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::Adjustable;
@@ -54,7 +54,7 @@ where
 {
     pub fn new() -> Self {
         Self {
-            id: SimpleId("AverageEuclideanDistanceStage"),
+            id: simple_id!("AverageEuclideanDistanceStage"),
             _ctx: PhantomData,
         }
     }
@@ -155,7 +155,7 @@ pub mod mock_average_stage {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{Adjustable, WithId};
     use thoosa_shared::traits::{DataId, MonoMetrics, Named, SimpleId};
-    use thoosa_shared::{CopyToDevice, MyError, ThoosaError};
+    use thoosa_shared::{simple_id, CopyToDevice, MyError, ThoosaError};
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
     use thoosa_common::tho_tensor::ThoTensor;
@@ -248,7 +248,7 @@ pub mod mock_average_stage {
                 Ok(value)
             });
 
-            self.mock.expect_out_id().return_const(SimpleId("whatever"));
+            self.mock.expect_out_id().return_const(simple_id!("whatever"));
 
             self.mock
         }

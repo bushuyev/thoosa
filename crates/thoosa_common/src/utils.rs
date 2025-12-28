@@ -26,7 +26,7 @@ use tch::nn::VarStore;
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::{nn, Device, Kind, TchError, Tensor};
-use thoosa_shared::{gauss_i, panic_to_err, panic_to_err_async, pulse_in_rand, pulse_v, pulses_in_const, saw, MotifKind, ThoosaError};
+use thoosa_shared::{gauss_i, panic_to_err, panic_to_err_async, pulse_in_rand, pulse_v, pulses_in_const, saw, simple_id, MotifKind, ThoosaError};
 use torch_sys::cuda::atc_cuda_device_count;
 use thoosa_shared::traits::{Named, SimpleId};
 use crate::my_tch::{LossFp, ThoModule};
@@ -1873,7 +1873,7 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
         .end_seq().build_tch_module(path));
 
     Ok(Box::new(ThoModuleWithStore::with_factory(
-        "test_net".into(),
+        simple_id!("test_net"),
         Arc::clone(&builder)(&vs.root())?,
         vs,
         Some(builder)

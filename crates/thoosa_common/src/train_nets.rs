@@ -12,7 +12,7 @@ use clap::clap_derive::Args;
 use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
 use std::cell::RefCell;
-use thoosa_shared::{panic_to_err, panic_to_err_async, CopyToDevice};
+use thoosa_shared::{panic_to_err, panic_to_err_async, simple_id, CopyToDevice};
 
 use log::{debug, info, trace, warn, Log};
 use parking_lot::{Mutex, RwLock};
@@ -426,7 +426,7 @@ pub fn load_final_model(
     debug!("load_final_model:  final_node_params={final_node_params:?}");
 
     let final_params_for_builder = final_node_params.clone();
-    let node = ThoModuleWithStore::load("".into(),
+    let node = ThoModuleWithStore::load(simple_id!(""),
                                         move |path: &nn::Path| final_net(&final_params_for_builder).build_tch_module(path),
                                         model_path,
                                         *device,

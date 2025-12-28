@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
 use crate::traits::Named;
@@ -21,26 +22,73 @@ impl From<String> for ElvVal {
     }
 }
 
+impl From<&str> for ElvVal {
+    fn from(value: &str) -> Self {
+        ElvVal::Str(value.to_string())
+    }
+}
+
+
 
 #[derive(Debug, Clone)]
-pub struct  KeyElt {
-    val:ElvVal,
+pub struct KeyElt {
+    val: ElvVal,
 
     #[cfg(debug_assertions)]
-    name:&'static str,
+    name: Cow<'static, str>,
 }
 
 impl KeyElt {
     pub fn new(
         val: ElvVal,
-        #[cfg(debug_assertions)] name: &'static str
+        #[cfg(debug_assertions)] name: Cow<'static, str>,
     ) -> Self {
         Self {
             val,
             #[cfg(debug_assertions)]
-            name
+            name,
         }
     }
+
+    // Optional: easy access in debug builds
+    #[cfg(debug_assertions)]
+    pub fn name(&self) -> &str {
+        self.name.as_ref()
+    }
+}
+
+#[macro_export]
+macro_rules! key_elt {
+    // string literal -> borrowed
+    ($val:expr, $name:literal $(,)?) => {{
+        #[cfg(debug_assertions)]
+        {
+            thoosa_shared::comp_id::KeyElt::new(
+                ($val).into(),
+                ::std::borrow::Cow::Borrowed($name),
+            )
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            thoosa_shared::comp_id::KeyElt::new(($val).into())
+        }
+    }};
+
+    // any expression -> owned (works for String, &str, &String, etc.)
+    ($val:expr, $name:expr $(,)?) => {{
+        #[cfg(debug_assertions)]
+        {
+            thoosa_shared::comp_id::KeyElt::new(
+                ($val).into(),
+                ::std::borrow::Cow::Owned(::std::string::String::from($name)),
+            )
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            // $name intentionally not referenced here
+            thoosa_shared::comp_id::KeyElt::new(($val).into())
+        }
+    }};
 }
 
 impl Eq for KeyElt {}
@@ -96,7 +144,7 @@ where
 
 impl From<(u32, &'static str)> for CompKey<1> {
     fn from(value: (u32, &'static str)) -> Self {
-        CompKey::new([KeyElt::new(value.0.into(), value.1)])
+        CompKey::new([key_elt!(value.0, value.1)])
     }
 }
 
@@ -113,14 +161,15 @@ mod tests {
 
     #[test]
     fn test_add_1_2(){
-        let key_a = CompKey::new([KeyElt::new(0.into(), "key1")]);
-        let key_b = CompKey::new([KeyElt::new(0.into(), "key2"), KeyElt::new(0.into(), "key3")]);
+        
+        let key_a = CompKey::new([key_elt!(0, "key1")]);
+        let key_b = CompKey::new([key_elt!(1, "key2"), key_elt!(2, "key3")]);
 
         let key_c:CompKey<3> = &key_a + &key_b;
         debug!("key_c={key_c:?}");
 
         assert_eq!(
-             [KeyElt { val: 0.into(), name: "key1" }, KeyElt { val: 0.into(), name: "key2" }, KeyElt { val: 0.into(), name: "key3" }],
+             [KeyElt { val: 0.into(), name: "key1".into() }, KeyElt { val: 1.into(), name: "key2".into() }, KeyElt { val: 2.into(), name: "key3".into() }],
             key_c.vals
         );
     }

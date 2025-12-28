@@ -38,7 +38,7 @@ use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{simple_id, ThoosaError};
 use thoosa_shared::traits::{Adjustable, DataId, MonoMetrics, SimpleId, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
@@ -424,7 +424,7 @@ where
                     // let output_builder = (self.output_builder)(SimpleId("zzz"));
                     let motif_added_slices = Arc::clone(&channels_motifs_added_slices);
                     tokio::spawn(async move {
-                        let out_id = Arc::new(SimpleId("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
+                        let out_id = Arc::new(simple_id!("zzz")); //self.clc_resources_motifs_dist.out_id(input.id()); //.clone();
 
                         let required_ids = HashMap::new();
 

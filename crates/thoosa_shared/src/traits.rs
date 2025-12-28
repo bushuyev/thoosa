@@ -1,6 +1,7 @@
 use ambassador::delegatable_trait;
 use mockall::automock;
 use std::any::Any;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -132,10 +133,33 @@ pub trait Named {// like Type name
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct SimpleId(
     #[cfg(debug_assertions)]
-    pub &'static str,
-    #[cfg(not(debug_assertions))]
-    ()
+    pub Cow<'static, str>,
+
 );
+
+#[macro_export]
+macro_rules! simple_id {
+    ($name:literal $(,)?) => {{
+        #[cfg(debug_assertions)]
+        {
+            thoosa_shared::traits::SimpleId(
+                std::borrow::Cow::Borrowed($name)
+            )
+        }
+        #[cfg(not(debug_assertions))]
+        thoosa_shared::traits::SimpleId{}
+    }};
+    ($name:expr $(,)?) => {{
+         #[cfg(debug_assertions)]
+        {
+            thoosa_shared::traits::SimpleId(
+                ::std::borrow::Cow::Owned(::std::string::String::from($name))
+            )
+        }
+        #[cfg(not(debug_assertions))]
+        thoosa_shared::traits::SimpleId{}
+    }}
+}
 
 unsafe impl Send for SimpleId {}
 unsafe impl Sync for SimpleId {}
@@ -146,23 +170,34 @@ impl Named for SimpleId {
     }
 }
 
+#[cfg(debug_assertions)]
 impl From<&'static str> for SimpleId {
     fn from(value: &'static str) -> Self {
-        SimpleId(value)
+        SimpleId(value.into())
     }
 }
 
+#[cfg(debug_assertions)]
 impl From<String> for SimpleId {
     fn from(value: String) -> Self {
-        SimpleId(value.leak())//TODO remove it
+        simple_id!(&value)
+    }
+}
+#[cfg(debug_assertions)]
+impl Display for SimpleId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+
+        write!(f, "{}", self.0)
+
+    }
+}
+#[cfg(not(debug_assertions))]
+impl Display for SimpleId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "n/a")
     }
 }
 
-impl Display for SimpleId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 ///////////////////////////////////
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct TmpId(Uuid);
