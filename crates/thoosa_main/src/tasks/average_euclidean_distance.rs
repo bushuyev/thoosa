@@ -11,18 +11,19 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::average_euclidean_distance;
-use thoosa_shared::{panic_to_err, simple_id, CopyToDevice, ThoosaError};
+use thoosa_shared::{key_elt, panic_to_err, CopyToDevice, ThoosaError};
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::Adjustable;
-use thoosa_shared::traits::{DataId, SimpleId, WithId};
+use thoosa_shared::traits::{DataId, WithId};
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_shared::comp_id::CompKey;
 
 pub struct AverageEuclideanDistanceStage<C>
 where
     C: RunCtx + 'static,
 {
-    id: SimpleId,
+    id: CompKey,
     _ctx: PhantomData<C>,
 }
 
@@ -41,7 +42,7 @@ impl<C> WithId for AverageEuclideanDistanceStage<C>
 where
     C: RunCtx + 'static,
 {
-    type ID = SimpleId;
+    type ID = CompKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -54,7 +55,7 @@ where
 {
     pub fn new() -> Self {
         Self {
-            id: simple_id!("AverageEuclideanDistanceStage"),
+            id: CompKey::new([key_elt!("AverageEuclideanDistanceStage", "stage")]),
             _ctx: PhantomData,
         }
     }
@@ -63,12 +64,12 @@ where
 #[derive(Debug, Clone, DummyData)]
 #[dummy_data(clone)]
 pub struct AverageDistanceValue {
-    id: SimpleId,
+    id: CompKey,
     value: f32,
 }
 
 impl AverageDistanceValue {
-    pub fn new(id: SimpleId, value: f32) -> Self {
+    pub fn new(id: CompKey, value: f32) -> Self {
         Self { id, value }
     }
 
@@ -78,7 +79,7 @@ impl AverageDistanceValue {
 }
 
 impl WithId for AverageDistanceValue {
-    type ID = SimpleId;
+    type ID = CompKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -98,7 +99,7 @@ where
     C: RunCtx + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        simple_id!(format!("{}_avg_ec_dist", input_id))
+        CompKey::new([key_elt!(input_id.0, format!("{input_id}_avg_ec_dist"))])
     }
 }
 
@@ -116,7 +117,7 @@ where
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
         Ok(AverageDistanceValue::new(
-            simple_id!("todo"),
+            CompKey::new([key_elt!("todo", "todo")]),
             panic_to_err!(average_euclidean_distance(input.data().t_ref()))?
         ))
     }
@@ -154,8 +155,9 @@ pub mod mock_average_stage {
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{Adjustable, WithId};
-    use thoosa_shared::traits::{DataId, MonoMetrics, Named, SimpleId};
-    use thoosa_shared::{simple_id, CopyToDevice, MyError, ThoosaError};
+    use thoosa_shared::traits::{DataId, MonoMetrics, Named};
+    use thoosa_shared::{key_elt, CopyToDevice, MyError, ThoosaError};
+    use thoosa_shared::comp_id::CompKey;
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
     use thoosa_common::tho_tensor::ThoTensor;
@@ -248,7 +250,7 @@ pub mod mock_average_stage {
                 Ok(value)
             });
 
-            self.mock.expect_out_id().return_const(simple_id!("whatever"));
+            self.mock.expect_out_id().return_const(CompKey::new([key_elt!("whatever", "mock")]));
 
             self.mock
         }

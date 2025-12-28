@@ -22,7 +22,9 @@ use thoosa_motifs::find::FindMotifsSavableResult;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
-use thoosa_shared::traits::{Data, Named, SimpleId, WithId};
+use thoosa_shared::traits::{Data, Named, WithId};
+use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::key_elt;
 use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
@@ -36,7 +38,7 @@ where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: for<'i> Cached<
         In<'i> = Resource,
-        Out = ThoTensor<ChannelsData2, SimpleId>,
+        Out = ThoTensor<ChannelsData2, CompKey>,
         Ctx=C
     > + OutId + 'static,
 
@@ -69,7 +71,7 @@ impl<ResC, L, CLC, RSV, R, C> Debug for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx=C> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -84,7 +86,7 @@ impl<ResC, L, CLC, RSV, R, C> CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx=C> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -123,14 +125,14 @@ where
 // where
 //     C:RunCtx+'static,
 //     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-//     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+//     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx=C> + OutId + 'static,
 //     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
 //     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
 //     R: Debug + Send + Sync + 'static,
 //     C: RunCtx + 'static,
 // {
 //     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-//         SimpleId::from(format!("cross_{}", input_id))
+//         CompKey::from(format!("cross_{}", input_id))
 //     }
 // }
 
@@ -150,7 +152,7 @@ impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
 }
 
 impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
-    pub fn new(id: SimpleId, resources_config: RC) -> Self {
+    pub fn new(id: CompKey, resources_config: RC) -> Self {
         Self {
             resources_config,
         }
@@ -177,7 +179,7 @@ impl<ResC, L, CLC, RSV, R, C> Stage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx=C> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: Debug + Send + Sync + 'static,
@@ -201,7 +203,7 @@ where
     Self::Out: Data + WithId + Send + Sync,
     <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SimpleId>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx=C> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: Debug + Send + Sync + 'static,
@@ -559,7 +561,9 @@ mod tests {
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::{cdt_for_dir, simple_id, ResourceType, ThoosaError};
+    use thoosa_shared::{cdt_for_dir, ResourceType, ThoosaError};
+    use thoosa_shared::key_elt;
+    use thoosa_shared::comp_id::CompKey;
     use thoosa_store::{MockStore, MockStoreBuilder, SqlStore};
     use tokio::task::yield_now;
     use tokio::time::sleep;
@@ -579,21 +583,21 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq, Eq, DummyData)]
     struct TestBatchOutput {
-        id: SimpleId,
+        id: CompKey,
         call_index: usize,
     }
 
     impl TestBatchOutput {
         fn new(call_index: usize) -> Self {
             Self {
-                id: SimpleId::from("batch_output"),
+                id: CompKey::new([key_elt!("batch_output", "batch_output")]),
                 call_index,
             }
         }
     }
 
     impl WithId for TestBatchOutput {
-        type ID = SimpleId;
+        type ID = CompKey;
 
         fn id(&self) -> &Self::ID {
             &self.id
@@ -641,7 +645,7 @@ mod tests {
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
                 Ok(ThoTensor::new(
-                    simple_id!(key.id().to_string()),
+                    CompKey::new([key_elt!(key.id(), format!("resource_id={}", key.id()))]),
                     Tensor::from_slice(v.as_slice()).view((1, 10)),
                 )?)
             },
@@ -703,7 +707,7 @@ mod tests {
         let cache_area = ctx.read().cache_area();
         let input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(
-                "".into(),
+                CompKey::new([key_elt!("", "empty")]),
                 Simple::new(ResourceType::List(resource_keys)),
             ),
             cache_area,
@@ -739,7 +743,7 @@ mod tests {
                 .finish(),
         );
 
-        let observations = Arc::new(Mutex::new(Vec::<Observation<SimpleId>>::new()));
+        let observations = Arc::new(Mutex::new(Vec::<Observation<CompKey>>::new()));
         let produced_outputs = Arc::new(Mutex::new(Vec::<TestBatchOutput>::new()));
         let counter = Arc::new(AtomicUsize::new(0));
 
@@ -751,7 +755,7 @@ mod tests {
             mock_cross_loader_clc::build::<TestBatchOutput, MockRunCtx>()
                 .with_run_batch_fn(move |input, _ctx| {
                     let observation = Observation {
-                        tensor_ids: input.tensors().iter().map(|t| WithId::id(t).clone()).collect::<Vec<_>>(),
+                        tensor_ids: input.tensors().iter().map(|t| t.id().clone()).collect::<Vec<_>>(),
                         batch_0_ids: input.batch_0().iter().map(|r| r.as_ref().id()).collect(),
                         batch_1_ids: input.batch_1().iter().map(|r| r.as_ref().id()).collect(),
                     };
@@ -822,7 +826,7 @@ mod tests {
         let cache_area = ctx.read().cache_area();
         let input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(
-                SimpleId::from("resources"),
+                CompKey::new([key_elt!("resources", "resources")]),
                 Simple::new(ResourceType::List(vec![
                     "resource_a".to_string(),
                     "resource_b".to_string(),
@@ -842,22 +846,34 @@ mod tests {
 
         let expected = vec![
             Observation {
-                tensor_ids: vec![simple_id!("resource_a"), simple_id!("resource_a")],
+                tensor_ids: vec![
+                    CompKey::new([key_elt!("resource_a", "resource_a")]),
+                    CompKey::new([key_elt!("resource_a", "resource_a")]),
+                ],
                 batch_0_ids: vec![resources[0].id()],
                 batch_1_ids: vec![resources[0].id()],
             },
             Observation {
-                tensor_ids: vec![simple_id!("resource_a"), simple_id!("resource_b")],
+                tensor_ids: vec![
+                    CompKey::new([key_elt!("resource_a", "resource_a")]),
+                    CompKey::new([key_elt!("resource_b", "resource_b")]),
+                ],
                 batch_0_ids: vec![resources[0].id()],
                 batch_1_ids: vec![resources[1].id()],
             },
             Observation {
-                tensor_ids: vec![simple_id!("resource_b"), simple_id!("resource_a")],
+                tensor_ids: vec![
+                    CompKey::new([key_elt!("resource_b", "resource_b")]),
+                    CompKey::new([key_elt!("resource_a", "resource_a")]),
+                ],
                 batch_0_ids: vec![resources[1].id()],
                 batch_1_ids: vec![resources[0].id()],
             },
             Observation {
-                tensor_ids: vec![simple_id!("resource_b"), simple_id!("resource_b")],
+                tensor_ids: vec![
+                    CompKey::new([key_elt!("resource_b", "resource_b")]),
+                    CompKey::new([key_elt!("resource_b", "resource_b")]),
+                ],
                 batch_0_ids: vec![resources[1].id()],
                 batch_1_ids: vec![resources[1].id()],
             },

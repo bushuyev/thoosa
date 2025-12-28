@@ -3,10 +3,11 @@ use std::ops::Range;
 use log::{debug, trace};
 use tch::{IndexOp, Tensor};
 use thoosa_common::dims::{AnyMetrics, Batch, Dims};
-use thoosa_shared::{simple_id, MyError, ThoosaError};
-use thoosa_shared::traits::{Adjustable, DataId, Select, SimpleId};
+use thoosa_shared::{key_elt, ThoosaError};
+use thoosa_shared::traits::{Adjustable, DataId, Select};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
+use thoosa_shared::comp_id::CompKey;
 
 #[derive(Clone, Debug)]
 pub struct ChannelsData2;
@@ -22,8 +23,8 @@ pub struct ChannelsDataVec {
     pub ranges:Vec<Range<MonoMetrics<1, 2>>>
 }
 
-impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SimpleId> {
-    type Output = ThoTensor<ChannelsData2, SimpleId>;
+impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, CompKey> {
+    type Output = ThoTensor<ChannelsData2, CompKey>;
 
     fn subview(&self, selector: ChannelsDataVec) -> Result<Self::Output, ThoosaError> {
         let ChannelsDataVec { ranges } = selector;
@@ -46,10 +47,8 @@ impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SimpleId> {
             Tensor::vstack(subs.as_slice())
         };
 
-        let sub = ThoTensor::new(
-            simple_id!(format!("{}:{ranges:?}", self.id())),
-            stacked,
-        )?;
+        let ranges_key = CompKey::new([key_elt!(format!("{ranges:?}"), "ranges")]);
+        let sub = ThoTensor::new(self.id() + &ranges_key, stacked)?;
 
         trace!("ChannelsData2::select: Vec sub.t=\n{}", sub.t_ref());
 
@@ -60,8 +59,8 @@ impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SimpleId> {
 #[derive(Debug, Clone, Default)]
 pub struct ChannelsData2Selector(pub Range<MonoMetrics<1, 2>>);
 
-impl Select<ChannelsData2Selector> for ThoTensor<ChannelsData2, SimpleId> {
-    type Output = ThoTensor<ChannelsData2, SimpleId>;
+impl Select<ChannelsData2Selector> for ThoTensor<ChannelsData2, CompKey> {
+    type Output = ThoTensor<ChannelsData2, CompKey>;
 
     fn subview(&self, selector: ChannelsData2Selector) -> Result<Self::Output, ThoosaError> {
         let size: MonoMetrics<1, 2> = self.size().try_into()?;
@@ -93,8 +92,8 @@ impl From<Range<MonoMetrics<1, 2>>> for ChannelsData2Selector {
 #[derive(Debug, Clone, Default)]
 pub struct BatchChannelsData2Selector(pub Range<MonoMetrics<0, 3>>);
 
-impl Select<BatchChannelsData2Selector> for ThoTensor<Batch<ChannelsData2>, SimpleId> {
-    type Output = ThoTensor<Batch<ChannelsData2>, SimpleId>;
+impl Select<BatchChannelsData2Selector> for ThoTensor<Batch<ChannelsData2>, CompKey> {
+    type Output = ThoTensor<Batch<ChannelsData2>, CompKey>;
 
     fn subview(&self, selector: BatchChannelsData2Selector) -> Result<Self::Output, ThoosaError> {
         todo!()
@@ -103,12 +102,12 @@ impl Select<BatchChannelsData2Selector> for ThoTensor<Batch<ChannelsData2>, Simp
 
 
 impl ChannelsData2 {
-    fn sub_single(t: &ThoTensor<ChannelsData2, SimpleId>, range: &Range<MonoMetrics<1, 2>>, size: &MonoMetrics<1, 2>) -> Tensor {
+    fn sub_single(t: &ThoTensor<ChannelsData2, CompKey>, range: &Range<MonoMetrics<1, 2>>, size: &MonoMetrics<1, 2>) -> Tensor {
         let channel_range = range.start.dim_0()..min(size.dim_0(), range.end.dim_0());
         let data_range = range.start.dim_1()..min(size.dim_1(), range.end.dim_1());
 
         debug!("ChannelsData2::subview: channel_range={channel_range:?} data_range={data_range:?} size={size:?}");
-        trace!("ChannelsData2::subview: t=\n{t}");
+        trace!("ChannelsData2::subview: t=\n{}", t.t_ref());
 
         let sub_t = t.t_ref().i((channel_range.clone(), data_range.clone()));
 

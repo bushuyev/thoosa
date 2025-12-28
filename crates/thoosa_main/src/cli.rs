@@ -59,7 +59,8 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
-use thoosa_shared::{parse_resources, simple_id, RangeOrValue};
+use thoosa_shared::{key_elt, parse_resources, RangeOrValue};
+use thoosa_shared::comp_id::CompKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{cdt, cdt_for_dir, ResourceType, ThoosaError};
@@ -271,7 +272,7 @@ where
     let loader_2 = Arc::new(RawTensorLoader::<RunCtx2>::new(
         move |key, _| {
             ThoTensor::new(
-                simple_id!(key.id().to_string()),
+                CompKey::new([key_elt!(key.id(), format!("resource_id={}", key.id()))]),
                 Tensor::load(tensors_path_2.join(format!(
                     "{}_{}.pt",
                     key.import_id(),
@@ -315,7 +316,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
-                    simple_id!("resources"),
+                    CompKey::new([key_elt!("resources", "resources")]),
                     find_motifs_args.resource_config(),
                 ),
                 0
@@ -355,7 +356,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
-                    simple_id!("resources"),
+                    CompKey::new([key_elt!("resources", "resources")]),
                     select_motifs_args.resource_config(),
                 ),
                 0
@@ -431,7 +432,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
-                    simple_id!(train_label_nets_args.train_resource_group.to_string()),//TODO the group is needed to load resouces not belonging to label being trained
+                    CompKey::new([key_elt!(train_label_nets_args.train_resource_group.as_str(), format!("train_resource_group={}", train_label_nets_args.train_resource_group))]),//TODO the group is needed to load resouces not belonging to label being trained
                     train_label_nets_args.resource_config(),
                 ),
                 0
@@ -492,7 +493,7 @@ where
 
             let find_motifs_input = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
-                    simple_id!("resources"),
+                    CompKey::new([key_elt!("resources", "resources")]),
                     run_all_params.find_resource_config()?
                 ).check(&store)?,
                 0
@@ -500,7 +501,7 @@ where
 
             let select_motifs_input = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
-                    simple_id!("resources"),
+                    CompKey::new([key_elt!("resources", "resources")]),
                     run_all_params.select_resource_config()?,
                 ).check(&store)?,
                 0
@@ -508,7 +509,7 @@ where
 
             let train_labels_input = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(
-                    simple_id!(run_all_params.train_resource_group.to_string()),//TODO the group is needed to load resouces not belonging to label being trained
+                    CompKey::new([key_elt!(run_all_params.train_resource_group.as_str(), format!("train_resource_group={}", run_all_params.train_resource_group))]),//TODO the group is needed to load resouces not belonging to label being trained
                     run_all_params.train_resource_config()
                 ).check(&store)?,
                 0
