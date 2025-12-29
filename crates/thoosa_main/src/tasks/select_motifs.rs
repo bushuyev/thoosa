@@ -554,7 +554,7 @@ where
 
                 stream::iter(lock.into_inner()).map(move |(motif_id, slices)| {
 
-                    store.write().add_slices_to_motif(run_config_id, *motif_id, channel as i64, slices).unwrap(); //TODO unwrap
+                    store.write().add_slices_to_motif(run_config_id, *motif_id, channel as i64, slices).unwrap(); //TODO unwrap + calculate dist before adding slices and add only if dist decreased?
 
 
 
