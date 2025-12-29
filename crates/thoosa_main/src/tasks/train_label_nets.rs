@@ -68,7 +68,7 @@ where
     pd: PhantomData<L>,
     motif_loader: Arc<LM>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    apply_motif_nets:Arc<ApplyMotifNets<C>>,
+    num_nets:u32,
     store: Arc<RwLock<Box<dyn Store>>>,
     opt_config:Arc<OptConfig>,
 
@@ -88,10 +88,9 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     R:RunCtx + MotifsCtx + Adjustable + 'static
 {
-    let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-        CompKey::new([key_elt!("", "empty")]), ws, store, select_motifs_run_ids.clone(), stage_ctx,
-        #[cfg(test)]
-        None
+    let apply_motif_nets = Arc::new(ApplyMotifNets::new(ws, store, select_motifs_run_ids.clone(), stage_ctx,
+                                                        #[cfg(test)]
+                                                        None
     ).await?);
 
     let motif_loader = Arc::new(ABStage::new(
@@ -107,7 +106,7 @@ where
     TrainLabelNets::new(
         select_motifs_run_ids,
         motif_loader,
-        apply_motif_nets,
+        apply_motif_nets.num_nets() as u32,
         run_configs,
         ws,
         store,
@@ -125,7 +124,7 @@ where
     pub async fn new(
         select_motifs_run_ids: Vec<RunId>,
         motif_loader: Arc<LM>,
-        apply_motif_nets:Arc<ApplyMotifNets<C>>,
+        num_nets:u32,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
@@ -137,7 +136,7 @@ where
             pd: PhantomData,
             motif_loader,
             ws:Arc::clone(&ws),
-            apply_motif_nets,
+            num_nets,
             store: Arc::clone(store),
             opt_config,
             select_motifs_run_ids,
@@ -259,10 +258,10 @@ where
         let store = Arc::clone(&self.store);
         let cache_area = cache_area.clone();
         let channels = self.ws.read().channels() as i64;
-        let num_nets = self.apply_motif_nets.num_nets() as u32;
 
 
-        debug!("TrainLabelNets::run: channels={channels} self.apply_motif_nets.slice_step={}", self.apply_motif_nets.slice_step);
+
+        debug!("TrainLabelNets::run: channels={channels} num_nets={}", self.num_nets);
 
         async move {
 
@@ -286,8 +285,8 @@ where
                 let loader = Arc::clone(&self.motif_loader);
                 let select_motifs_run_ids = self.select_motifs_run_ids.clone();
                 let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
-
-                tokio::spawn(async move {
+                let num_nets = self.num_nets;
+                async move {
                     let (label, resources_1) = label_tain_and_valid_sets;
                     let new_name = format!("Train_{label}");
                     let out_key = {
@@ -366,6 +365,7 @@ where
                                 LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs {
                                     num_layers, slices_len
                                 }) => {
+
                                     let net_params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
 
                                     Ok((any_len_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
@@ -380,10 +380,12 @@ where
                             let pred_y = pred;//.squeeze();
                             debug!("train_label_net: pred_y={:?} target={:?} kind={:?}",pred_y.size(),target.size(),target.kind());
                             trace!("train_label_net: pred_y=\n{pred_y} target=\n{target} kind={:?}",target.kind());
-                            Ok(pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean))
+                            Ok(pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean).set_requires_grad(true))
                         },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore|{
-                            AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e|e.into())
+                            let o = AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e|e.into());
+                            debug!("train_label_net: run optimizer: o={o:?}");
+                            o
                         },
                         |t:ThoBatch<MotifProbability>| {
                             debug!("train_label_net: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
@@ -398,7 +400,7 @@ where
                     let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(CompKey::new([key_elt!("", "empty")])), cache_area)), Arc::clone(&train_label_ctx)).await?).unwrap().take_data(0).await?;
 
                     debug!("train_label_net: label={label_} result={result:?}");
-                    Ok(
+                    Ok::<_, ThoosaError>(
                         TrainLabelNetsRunConfigResult::new(
                             select_motifs_run_ids,//TODO
                             label_,
@@ -409,13 +411,11 @@ where
                         )
                     )
 
-                })
+                }
 
             })
                 .buffer_unordered(10)//TODO config
-                .try_collect::<Vec<_>>().await?
-                .into_iter()
-                .collect::<Result<Vec<_>, ThoosaError>>()?;
+                .try_collect::<Vec<_>>().await?;
 
             Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(CompKey::new([key_elt!("", "empty")]), results), cache_area)))
         }
@@ -924,7 +924,7 @@ mod tests {
 
 
         let input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(CompKey::new([key_elt!("test", "test")]), NetResources::new(Labeled::new(train_group.to_string()), Labeled::new("valid_group".to_string()))),
+            ResourcesConfigInput::new(NetResources::new(Labeled::new(train_group.to_string()), Labeled::new("valid_group".to_string()))),
             0
         ));
 

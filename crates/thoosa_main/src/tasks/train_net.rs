@@ -245,15 +245,11 @@ where
             let mut last_valid_loss = [0f32; 3];
 
             for idx in 1..cycles {
-                debug!(
-                    "TrainNet::run_inner, train:  0. cuda_mem={:?}",
-                    maybe_cuda_mem(&device)
-                );
+                debug!("TrainNet::run_inner, train:  0. cuda_mem={:?}",maybe_cuda_mem(&device));
+
                 let mut batches = batch.train_batch_stream().await;
-                debug!(
-                    "TrainNet::run_inner, train:  1. cuda_mem={:?} ",
-                    maybe_cuda_mem(&device)
-                );
+                debug!("TrainNet::run_inner, train:  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
+
                 while let Some(Ok((x_t_0, expected_y))) = batches.next().await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, expected_y));
 
@@ -279,15 +275,11 @@ where
 
                 if idx % 10 == 0 || idx == cycles - 1 {
 
-                    debug!(
-                        "TrainNet::run_inner, valid:  0. cuda_mem={:?}",
-                        maybe_cuda_mem(&device)
-                    );
+                    debug!("TrainNet::run_inner, valid:  0. cuda_mem={:?}",maybe_cuda_mem(&device));
+
                     let mut batches = batch.valid_batch_stream().await;
-                    debug!(
-                        "TrainNet::run_inner, valid:  1. cuda_mem={:?}",
-                        maybe_cuda_mem(&device)
-                    );
+                    debug!("TrainNet::run_inner, valid:  1. cuda_mem={:?}",maybe_cuda_mem(&device));
+
                     while let Some(Ok((x_t_0,y_t))) = batches.next().await {
                         tch::no_grad(||{
 
@@ -306,7 +298,7 @@ where
                     }
 
                 }
-                info!(".");
+                print!(".");
                 std::io::stdout().flush()?;
             }
             debug!("train: final valid last_valid_loss={last_valid_loss:?} avg_valid_loss={}",last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
@@ -616,19 +608,13 @@ where
         {
             let mut opt = self.opt.lock();
 
-            debug!(
-                "TrainStep::do_run: 2. cuda_mem={:?}",
-                maybe_cuda_mem(&self.device)
-            );
+            debug!("TrainStep::do_run: 2. cuda_mem={:?}",maybe_cuda_mem(&self.device));
             debug!("TrainStep::do_run: loss={loss}");
             trace!("TrainStep::do_run: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
 
             predicted_y.drop();
             drop(expected_y);
-            debug!(
-                "TrainStep::do_run: 2.1 cuda_mem={:?}",
-                maybe_cuda_mem(&self.device)
-            );
+            debug!("TrainStep::do_run: 2.1 cuda_mem={:?}",maybe_cuda_mem(&self.device));
             let t1 = Instant::now();
 
             panic_to_err!({
@@ -637,11 +623,7 @@ where
             })?;
 
 
-            debug!(
-                "trTrainStep::do_runain: 3. cuda_mem={:?}  optimizer_size={}",
-                maybe_cuda_mem(&self.device),
-                optimizer_mem_size(&opt)
-            );
+            debug!("trTrainStep::do_runain: 3. cuda_mem={:?}  optimizer_size={}",maybe_cuda_mem(&self.device),optimizer_mem_size(&opt));
             debug!("TrainStep::do_run: device={:?}  backward_step done in {}",self.device,t1.elapsed().as_millis());
         }
 

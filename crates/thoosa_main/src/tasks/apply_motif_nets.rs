@@ -62,8 +62,6 @@ where
     ws:Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
     store:Arc<parking_lot::RwLock<Box<dyn Store>>>,
     pd:PhantomData<C>,
-    load_motif_net:Arc<LoadMotifNet<C>>,//TODO not needed?
-    // loaded_motif_nets:Vec<Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>>,
     apply_motif_nets: Vec<Arc<ApplyMotifNet<C>>>,
     pub slice_step: u32,//should be in the input
     pub motif_width:u32,
@@ -74,7 +72,6 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     pub async fn new<R>(
-        id: CompKey,
         ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
         store: &Arc<parking_lot::RwLock<Box<dyn Store>>>,
         select_motifs_run_id: Vec<RunId>,
@@ -139,13 +136,13 @@ where
         let slice_step = slice_step.into_iter().next().expect("no motif_width");
         debug!("ApplyMotifNets::run: motif_width={motif_width:?}");
 
+        let mut select_motifs_run_id_sorted = select_motifs_run_id.clone();//TODO move to util CompKey::from Vec
+        select_motifs_run_id_sorted.sort();
         Ok(Self {
-            id,
+            id: CompKey::new(select_motifs_run_id_sorted.into_iter().map(|run_id|key_elt!(run_id, format!("select_motifs_run_id_{run_id}"))).collect::<Vec<_>>()),
             ws: Arc::clone(&ws),
             store:Arc::clone(&store),
             pd: PhantomData,
-            load_motif_net: Arc::new(LoadMotifNet::new(&ws)),
-            // loaded_motif_nets,
             apply_motif_nets: loaded_motif_nets
                 .into_iter()
                 .map(|net| Arc::new(ApplyMotifNet::new(
@@ -174,7 +171,7 @@ where
 }
 
 
-// #[async_trait]
+
 impl <C>AsyncStage for ApplyMotifNets<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static
@@ -199,20 +196,21 @@ where
                 let input = Arc::clone(&input);
                 let out_id = apply_motif_net.out_id(&input.id());
                 let apply_motif_net_ctx = ctx.write().branch(format!("apply_motif_net_ctx_{out_id:?}").leak());
-                let out_id = Arc::new(out_id) as Arc<dyn CachableIdTr>;
+
                 let slice_step = self.slice_step;
 
                 let slices = ((input.size().dim::<1>() as u32 - self.motif_width)/slice_step) as i64 + 1;
 
                 debug!("ApplyMotifNets::run: input.size={:?} self.motif_width={:?} slice_step={slice_step} slices={slices} min_split_len={min_split_len} overlap_len={overlap_len}", input.size(), self.motif_width);
+                let ctx_key = Arc::new(CompKey::from(format!("ApplyMotifNets_{:?}", input.id()).as_str())) as Arc<dyn CachableIdTr>;//TODO format
 
-                tokio::spawn(
-                    async move {
+
+                async move {
                     let map = HashMap::new();
 
                      let r= AsyncOOMHandler::new(
                          vec![
-                             Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, Arc::clone(&out_id))))),
+                             Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, move |n| GlobalCtx::global().acquire_many(device_idx, n, Arc::clone(&ctx_key) as Arc<dyn CachableIdTr>)))),
                              Adjusters::RunContext(Box::new(DumpToCpu::new())),
                              Adjusters::Input(Box::new(SplitsAdjuster::<ChannelsData2Selector, MonoMetrics<1,2>>::new_with_overlap(
                                  [-1, min_split_len].into(),
@@ -224,7 +222,7 @@ where
                          Arc::clone(&input),
                          apply_motif_net_ctx,
                          Contexts::new(
-                             SplitsAdjusterContextImpl::new(input._size().into(), SingleDimTensorOutputBuilder::new(CompKey::new([key_elt!("", "empty")]), 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
+                             SplitsAdjusterContextImpl::new(input._size().into(), SingleDimTensorOutputBuilder::new(out_id, 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
                              NoopRunnableContext {},
                              PermitsAndDumpToCpuAdjustableContex::new(
                                  PermitsAdjustContextImpl::new(ctx_name),
@@ -235,21 +233,16 @@ where
                     debug!("ApplyMotifNets::run: r={r:?}");
                     r
                  }
-                )
 
             })
             .buffered(10)//TODO config, TODO - use buffer_unordered and then sort by motif_id?
-            .try_collect::<Vec<_>>().await?
-            .into_iter().
-            collect::<Result<Vec<_>, ThoosaError>>();
+            .try_collect::<Vec<_>>().await?;
 
         debug!("ApplyMotifNets::run: matches={matches:?}");
 
-        let matches = matches?;
-
 
         let tensor = ThoTensor::new(
-            CompKey::new([key_elt!("", "empty")]),
+            self.out_id(input.id()),
             Tensor::f_concat(
                 &matches.into_iter().map(|v| v.t).collect::<Vec<_>>(), 1
             )?
@@ -274,15 +267,9 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        let stage_key = CompKey::new([key_elt!("ApplyMotifNets", "stage")]);
-        let out_id = &stage_key + &self.id;
-        &out_id + input_id
+        &self.id + input_id
     }
 }
-
-
-
-
 
 
 #[derive(Debug)]
@@ -668,7 +655,6 @@ pub(crate) mod tests {
 
 
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-            CompKey::new([key_elt!("1", "apply_motif_nets_id")]),
             &ws,
             &store,
             vec![select_motifs_run_id],
@@ -781,12 +767,11 @@ pub(crate) mod tests {
 
 
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-            CompKey::new([key_elt!("1", "apply_motif_nets_id")]),
             &ws,
             &store,
             vec![select_motifs_run_id],
             Arc::new(RwLock::new(mock_run_ctx::default(1))),
-            trigger_oom_len//Some(1000)
+            trigger_oom_len //Some(1000)
         ).await?);
 
         let (resource_a_t, resource_a_intervals) = resource_tensor(input_n_0, &[

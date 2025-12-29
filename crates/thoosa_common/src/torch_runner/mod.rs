@@ -325,7 +325,6 @@ mod tests {
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
             debug!("TestTensorLoader::out_id: input_id={input_id:?}");
-            // SimpleId::from(format!("loaded_{}", input_id.0))
             CompKey::new([key_elt!(input_id.0, "resource key")])
         }
     }
@@ -716,7 +715,6 @@ mod tests {
                 id,
                 loader: Arc::new(TestTensorLoader::new(dim, kind)),
                 clc_task: Arc::new(ClcTask::new(
-                    // SimpleId::from("mul_task_0"),
                     CompKey::new([key_elt!(0, "mul_task_0")]),
                     k,
                     fail_until,

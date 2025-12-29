@@ -1366,13 +1366,11 @@ where
                 ); //motif_id ?
 
                 let (loss, node_params) = panic_to_err_async!(
-                    train_clone
-                        .async_call_mut((
+                    (train_clone)(
                             &vs,
                             run_config.clone(),
                             &mut listener /*Arc::new(Mutex::new(Box::new(listener)))*/
-                        ))
-                        .await
+                    ).await
                 ).unwrap_or_else(|e| {
                     warn!("opt_train failed with {e:?} on {run_config:?} ");
                     (f32::MAX, Default::default())
