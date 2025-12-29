@@ -56,6 +56,7 @@ impl RunCtx for RunCtx2 {
         self.device_idx
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RunCtx2::purge_gpu_caches"))]
     fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
     where
         Self: Sized

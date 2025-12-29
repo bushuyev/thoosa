@@ -711,6 +711,7 @@ where
         O::M::wrap(o, cache_area)
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="add_cache_area"))]
     pub fn add_cache_area(&self, ca: u64) -> u64 {
         self.cache_area.fetch_or(ca, Ordering::SeqCst) | ca
     }
