@@ -14,6 +14,7 @@ use lazy_static::lazy_static;
 use log::{debug, error, trace};
 use num_traits::PrimInt;
 use rand::{Rng, SeedableRng};
+use rand::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::backtrace::Backtrace;
@@ -34,6 +35,7 @@ use ambassador::delegatable_trait;
 use mockall::automock;
 use rand::prelude::{SliceRandom, StdRng};
 use time_series_generator::{generate_sine_wave, generate_triangle_wave};
+
 
 pub mod resource;
 pub mod val;
@@ -1907,6 +1909,26 @@ pub fn shuffle_and_chunk_with_rng<R: rand::Rng + ?Sized>(
         .map(|chunk| chunk.to_vec().into_boxed_slice())
         .collect()
 }
+
+
+
+/// Returns up to `n` *references* to randomly chosen distinct elements (no clones).
+pub fn sample_n_refs<'a, T, R: Rng + ?Sized>(v: &'a [T], n: usize, rng: &mut R) -> Vec<&'a T> {
+    v.choose_multiple(rng, n).collect() // returns min(n, v.len())
+}
+
+/// Returns up to `n` randomly chosen distinct elements by *cloning* them.
+pub fn sample_n_cloned<T: Clone, R: Rng + ?Sized>(v: &[T], n: usize, rng: &mut R) -> Vec<T> {
+    v.choose_multiple(rng, n).cloned().collect()
+}
+
+/// Consumes the vector, shuffles it, and truncates to up to `n` elements (no clones).
+pub fn sample_n_owned<T, R: Rng + ?Sized>(mut v: Vec<T>, n: usize, rng: &mut R) -> Vec<T> {
+    v.shuffle(rng);
+    v.truncate(n.min(v.len()));
+    v
+}
+
 
 #[cfg(test)]
 #[test]

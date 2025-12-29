@@ -192,7 +192,6 @@ mod tests {
     }
 
     #[derive(Debug, Clone, Default)]
-    // impl Adjustable for ThoTensor2<ABData, SimpleId> {}
     struct ABRange {
         range:std::ops::Range<ABMetrics>
     }

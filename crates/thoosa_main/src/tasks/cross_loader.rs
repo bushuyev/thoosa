@@ -152,7 +152,7 @@ impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
 }
 
 impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
-    pub fn new(id: CompKey, resources_config: RC) -> Self {
+    pub fn new(resources_config: RC) -> Self {
         Self {
             resources_config,
         }
@@ -706,10 +706,7 @@ mod tests {
 
         let cache_area = ctx.read().cache_area();
         let input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(
-                CompKey::new([key_elt!("", "empty")]),
-                Simple::new(ResourceType::List(resource_keys)),
-            ),
+            ResourcesConfigInput::new(Simple::new(ResourceType::List(resource_keys))),
             cache_area,
         ));
 
@@ -825,13 +822,10 @@ mod tests {
 
         let cache_area = ctx.read().cache_area();
         let input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(
-                CompKey::new([key_elt!("resources", "resources")]),
-                Simple::new(ResourceType::List(vec![
-                    "resource_a".to_string(),
-                    "resource_b".to_string(),
-                ])),
-            ),
+            ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
+                "resource_a".to_string(),
+                "resource_b".to_string(),
+            ]))),
             cache_area,
         ));
 

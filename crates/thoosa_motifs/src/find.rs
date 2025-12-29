@@ -136,14 +136,13 @@ impl FixedFindMotifsConfig {
 #[derive(Debug, Clone, DummyData)]
 #[dummy_data(clone)]
 pub struct FindMotifsSavableResult {
-    run_config: Arc<FindMotifsRunConfig>,
 }
 
 
 
 impl FindMotifsSavableResult {
-    pub fn new(run_config: Arc<FindMotifsRunConfig>) -> Self {
-        Self { run_config }
+    pub fn new() -> Self {
+        Self {  }
     }
 }
 
@@ -157,16 +156,16 @@ impl SavableResult for FindMotifsSavableResult {
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoosaError> {
-        Ok(self.run_config.id.expect("id"))
+        Ok(0)
     }
 }
 
 impl Output for FindMotifsSavableResult {}
 impl WithId for FindMotifsSavableResult {
-    type ID = RunId;
+    type ID = ();
 
     fn id(&self) -> &Self::ID {
-        self.run_config.id.as_ref().unwrap()
+        &()
     }
 }
 

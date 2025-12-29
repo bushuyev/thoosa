@@ -191,7 +191,7 @@ where
             let store = Arc::clone(&self.store);
             let out_key = Arc::clone(&out_key);
 
-            tokio::spawn(async move {
+            async move {
                 let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>> =
                     motif_loader
                         .run(
@@ -272,15 +272,15 @@ where
                         result.run_config,
                     )
                 })
-            })
+            }
 
         })
         .buffer_unordered(10)//TODO config
         .filter_map(|join_res| async move {
             match join_res {
-                Ok(opt_i) => opt_i.ok(),
+                Ok(opt_i) => Some(opt_i),
                 Err(e) => {
-                    error!("train motif failed: {e}");
+                    error!("train motif failed: {e:?}");
                     None
                 }
             }
@@ -400,8 +400,8 @@ where
 
         with_data!(Arc::clone(&self.ctx), self.device_idx, motifs, random_slices; |motifs:&ThoTensor<MotifSlices, CompKey>, random_slices:&ThoTensor<MotifSlices, DataId>|{
 
-            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?.set_requires_grad(true);//TODO config
-            let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?.set_requires_grad(true);
+            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;//TODO config
+            let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
 
            /*
            let test_dir = Path::new("/tmp/motifs");//.join(cdt_for_dir());

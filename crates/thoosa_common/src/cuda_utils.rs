@@ -202,25 +202,31 @@ pub async fn copy_d2h_from_ptr(
 
                 let stream = buf_stream.1.clone();
                 // from cuda to pinned buffer
-                let raw = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
-                    buf_ptr as *mut c_void,
-                    src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
-                    c_buf_size,
-                    stream.as_mut_ptr(),
-                );
-                let r: sys::CUresult = std::mem::transmute(raw);
-                if r != sys::CUresult::CUDA_SUCCESS {
-                    return Err(MyError::SomethingElse(format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")).into());
-                }
+                tokio::task::spawn_blocking(move || {
+                    let raw = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
+                        buf_ptr as *mut c_void,
+                        src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
+                        c_buf_size,
+                        stream.as_mut_ptr(),
+                    );
+                    let r: sys::CUresult = std::mem::transmute(raw);
+                    if r != sys::CUresult::CUDA_SUCCESS {
+                        return Err::<(), MyError>(MyError::SomethingElse(format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")).into());
+                    }
 
-                buf_stream.1.synchronize();
+                    stream.synchronize();
 
+                    Ok(())
 
-                std::ptr::copy_nonoverlapping(
-                    buf_ptr as *mut _,
-                    dst_off_ptr as *mut u8,
-                    c_buf_size,
-                );
+                }).await.map_err(|e|MyError::SomethingElse(format!("{:?}", e)))??;
+
+                tokio::task::spawn_blocking(move || {
+                    std::ptr::copy_nonoverlapping(
+                        buf_ptr as *mut _,
+                        dst_off_ptr as *mut u8,
+                        c_buf_size,
+                    );
+                }).await.map_err(|e|MyError::SomethingElse(format!("{:?}", e)))?;
 
 
                 drop(buf_stream);
@@ -345,34 +351,40 @@ pub async fn copy_h2d_from_ptr(
                 // let stream = buf_stream.1.clone();
 
                 //----------------------------------------------------------
-                // 1. copy   CPU-tensor  →  pinned host buffer   (memcpy)
+                // 1. tokio::task::spawn_blocking(move || {copy   CPU-tensor  →  pinned host buffer   (memcpy)
                 //----------------------------------------------------------
                 debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={c_buf_size} thread_name={:?}", os_thread_id());
-                std::ptr::copy_nonoverlapping(
-                    src_off_ptr as *const u8,
-                    buf_ptr as *mut u8,
-                    c_buf_size,
-                );
+                tokio::task::spawn_blocking(move || {
+                    std::ptr::copy_nonoverlapping(
+                        src_off_ptr as *const u8,
+                        buf_ptr as *mut u8,
+                        c_buf_size,
+                    );
+                }).await.unwrap();
 
 
                 //----------------------------------------------------------
                 // 2. copy   pinned host buffer  →  GPU tensor   (CUDA)
                 //----------------------------------------------------------
-                let raw = thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
-                    dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
-                    buf_ptr as *const c_void,
-                    c_buf_size,
-                    buf_stream.1.as_mut_ptr(),
-                );
-                let r: sys::CUresult = std::mem::transmute(raw);
-                if r != sys::CUresult::CUDA_SUCCESS {
-                    panic!("cuMemcpyHtoDAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}");
-                }
+                tokio::task::spawn_blocking(move || {
+                    let raw = thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
+                        dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
+                        buf_ptr as *const c_void,
+                        c_buf_size,
+                        buf_stream.1.as_mut_ptr(),
+                    );
+                    let r: sys::CUresult = std::mem::transmute(raw);
+                    if r != sys::CUresult::CUDA_SUCCESS {
+                        panic!("cuMemcpyHtoDAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}");
+                    }
+                    buf_stream.1.synchronize();
+                    drop(buf_stream); // return buffer/stream to pool
 
+                }).await.unwrap();
 
                 // wait for GPU work to finish before recycling buffer
-                buf_stream.1.synchronize();
-                drop(buf_stream); // return buffer/stream to pool
+
+
             }
         })
         .collect::<JoinSet<()>>()
