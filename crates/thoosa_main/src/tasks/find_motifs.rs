@@ -57,7 +57,7 @@ where
     L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C>  + OutId + 'static,
     C: RunCtx + 'static,
 {
-    run_config: FindMotifsRunConfig,
+    run_config: Arc<FindMotifsRunConfig>,
     cross_loader: Arc<CrossLoader<
             RC,
         L,
@@ -86,7 +86,7 @@ where
         >>
     ) -> Result<Self, ThoosaError> {
         Ok(Self {
-            run_config,
+            run_config: Arc::new(run_config),
             cross_loader
         })
     }
@@ -287,8 +287,8 @@ where
         input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
-        let best = 0;
-        let mut js: JoinSet<Result<Arc<DevicesWrap<()>>, ThoosaError>> = JoinSet::new();
+
+        let mut js: JoinSet<Result<Arc<DevicesWrap<()>>, ThoosaError>> = JoinSet::new();//TODO to stream + spawn
 
         debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
         for stage in self.run_config_stages.iter() {
@@ -301,33 +301,18 @@ where
             });
         }
 
-        // let results =js.join_all().await;
-
         let mut failed = AtomicU8::new(0);
 
-        let mut successes = 0u32;
         while let Some(res) = js.join_next().await {
-            match res? {
-                Ok(_) => {
-                    successes += 1;
-                }
-                Err(e) => {
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    error!("Find motifs failed: {e:?}");
-                }
+            if let Err(e) = res? {
+                failed.fetch_add(1, Ordering::Relaxed);
+                error!("Find motifs failed: {e:?}");
             }
         }
 
         info!("failed {} out of {}",failed.load(Ordering::Relaxed),self.run_config_stages.len());
 
-        let cache_area = ctx.read().cache_area();
-        let num_devices = GlobalCtx::global().device_count();
-
-        let result = FindMotifsSavableResult::new(Arc::new(
-            self.run_config_stages[best].run_config.clone(),
-        ));
-
-        Ok(Arc::new(DevicesWrap::wrap(result, 0)))
+        Ok(Arc::new(DevicesWrap::wrap(FindMotifsSavableResult::new(), 0)))
     }
 }
 
@@ -544,15 +529,12 @@ mod tests {
 
         let cache_area = ctx.read().cache_area();
         let resources_input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(
-                CompKey::new([key_elt!("resources", "resources")]),
-                Simple::new(ResourceType::List(
-                    vec!["t_0_0", "t_0_1", "t_1_0", "t_1_1"]
-                        .into_iter()
-                        .map(|v| v.to_string())
-                        .collect(),
-                )),
-            ),
+            ResourcesConfigInput::new(Simple::new(ResourceType::List(
+                vec!["t_0_0", "t_0_1", "t_1_0", "t_1_1"]
+                    .into_iter()
+                    .map(|v| v.to_string())
+                    .collect(),
+            ))),
             0
         ));
 
@@ -636,10 +618,7 @@ mod tests {
             ).expect("SelectMotifs2");
 
         let input_wrapper = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(
-                CompKey::new([key_elt!("resources", "resources")]),
-                Labeled::new("test".to_string()),
-            ),
+            ResourcesConfigInput::new(Labeled::new("test".to_string())),
             0
         ));
 

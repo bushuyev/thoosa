@@ -8,7 +8,7 @@ use thoosa_shared::runner::global_ctx::GlobalCtx;
 use crate::runner::permits::MAX_PERMITS;
 use thoosa_shared::runner::statistics::Statistics;
 use async_trait::async_trait;
-use log::{debug, trace};
+use log::{debug, info, trace};
 use mockall::automock;
 use mockall_double::double;
 use parking_lot::RwLock;
@@ -571,7 +571,7 @@ where
 
                                         match te.what() {
                                             MyError::OutOfMemory => {
-                                                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+                                                info!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                 if !adjuster.degrade(&mut contexts) {
                                                     match adjuster {

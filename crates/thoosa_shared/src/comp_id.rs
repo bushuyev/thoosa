@@ -131,8 +131,15 @@ impl CompKey {
 /// Nice ergonomics: `CompKey::from([..])` with only one allocation (boxing the array).
 impl<const N: usize> From<[KeyElt; N]> for CompKey {
     fn from(vals: [KeyElt; N]) -> Self {
-        // Box<[KeyElt; N]> unsizes to Box<[KeyElt]>
         Self { vals: Box::new(vals) }
+    }
+}
+
+impl From<&str> for CompKey {
+    fn from(value: &str) -> Self {
+        Self {
+            vals: Box::new([key_elt!(value, value)])
+        }
     }
 }
 

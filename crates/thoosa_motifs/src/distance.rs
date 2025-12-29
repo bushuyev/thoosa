@@ -139,9 +139,12 @@ pub fn clc_dist_d2_and_mask(
     with_distances: bool,
     mask_makers: &mut [MaskMaker],
 ) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
-    let de = t_0.device();
+    let device = t_0.device();
 
     if t_0.size()[1] < 2 /*|| t_1.size()[1] < 2 TODO - when calculating distances between slices and motifs there can be single motif?*/ {
+        return Err(format!("Not enough slices in dimension 0 to calculate distances and mask: t_0.size={:?} t_1.size={:?}", t_0.size(), t_1.size()).into());
+    }
+    if t_1.size()[1] < 2 {
         return Err(format!("Not enough slices in dimension 1 to calculate distances and mask: t_0.size={:?} t_1.size={:?}", t_0.size(), t_1.size()).into());
     }
 
@@ -160,7 +163,7 @@ pub fn clc_dist_d2_and_mask(
         mask_opt = Some(new_mask);
     }
 
-    let mask = mask_opt.unwrap_or_else(|| Tensor::ones(distances.size(), (Bool, de)));
+    let mask = mask_opt.unwrap_or_else(|| Tensor::ones(distances.size(), (Bool, device)));
 
     Ok((
         mask,

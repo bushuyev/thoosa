@@ -59,7 +59,7 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
-use thoosa_shared::{key_elt, parse_resources, RangeOrValue};
+use thoosa_shared::{key_elt, parse_resources, simple_id, RangeOrValue};
 use thoosa_shared::comp_id::CompKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
@@ -68,6 +68,8 @@ use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Runtime;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
+use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::BandPassFilter;
+use thoosa_common::transforms::filters::BandPassFilterParamsRangeOrValue;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use thoosa_shared::runner::common::RunCtx;
 use thoosa_shared::runner::common::runnable::AsyncStage;
@@ -315,10 +317,7 @@ where
             debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}");
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
-                ResourcesConfigInput::new(
-                    CompKey::new([key_elt!("resources", "resources")]),
-                    find_motifs_args.resource_config(),
-                ),
+                ResourcesConfigInput::new(find_motifs_args.resource_config()),
                 0
             ));
 
@@ -355,10 +354,7 @@ where
             let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue = serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
-                ResourcesConfigInput::new(
-                    CompKey::new([key_elt!("resources", "resources")]),
-                    select_motifs_args.resource_config(),
-                ),
+                ResourcesConfigInput::new(select_motifs_args.resource_config()),
                 0
             ));
             //TODO move it into SelectMotifsStage
@@ -431,10 +427,8 @@ where
             let train_motif_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = serde_json5::from_str(&train_label_nets_args.run_config_cnt).expect("TrainLabelNets");
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
-                ResourcesConfigInput::new(
-                    CompKey::new([key_elt!(train_label_nets_args.train_resource_group.as_str(), format!("train_resource_group={}", train_label_nets_args.train_resource_group))]),//TODO the group is needed to load resouces not belonging to label being trained
-                    train_label_nets_args.resource_config(),
-                ),
+                ResourcesConfigInput::new( //TODO the group is needed to load resouces not belonging to label being trained
+                                           train_label_nets_args.resource_config()),
                 0
             ));
 
@@ -492,26 +486,18 @@ where
             debug!("RunAll: run_all_params={:?}", run_all_params);
 
             let find_motifs_input = Arc::new(DevicesWrap::wrap(
-                ResourcesConfigInput::new(
-                    CompKey::new([key_elt!("resources", "resources")]),
-                    run_all_params.find_resource_config()?
-                ).check(&store)?,
+                ResourcesConfigInput::new(run_all_params.find_resource_config()?).check(&store)?,
                 0
             ));
 
             let select_motifs_input = Arc::new(DevicesWrap::wrap(
-                ResourcesConfigInput::new(
-                    CompKey::new([key_elt!("resources", "resources")]),
-                    run_all_params.select_resource_config()?,
-                ).check(&store)?,
+                ResourcesConfigInput::new(run_all_params.select_resource_config()?).check(&store)?,
                 0
             ));
 
             let train_labels_input = Arc::new(DevicesWrap::wrap(
-                ResourcesConfigInput::new(
-                    CompKey::new([key_elt!(run_all_params.train_resource_group.as_str(), format!("train_resource_group={}", run_all_params.train_resource_group))]),//TODO the group is needed to load resouces not belonging to label being trained
-                    run_all_params.train_resource_config()
-                ).check(&store)?,
+                ResourcesConfigInput::new( //TODO the group is needed to load resouces not belonging to label being trained
+                                           run_all_params.train_resource_config()).check(&store)?,
                 0
             ));
 
@@ -519,9 +505,16 @@ where
             let find_motifs_run_config_range_or_value:FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue{
                 id: None,
                 step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-                window: RangeOrValue::Range { range: Range { start: 1000, end: 2001 }, step: Some((1000, 1)) },
+                window: RangeOrValue::Value(1000), //RangeOrValue::Range { range: Range { start: 1000, end: 2001 }, step: Some((1000, 1)) },
                 min_tracker_step: None,
-                filter: None,
+                filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
+                    low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((100., 1)) },
+                    band_hz: RangeOrValue::Value(100.),
+                    kernel_size: RangeOrValue::Value(100),
+                    stride: RangeOrValue::Value(1),
+                    padding: RangeOrValue::Value(0),
+                })),
+                // filter: None,
                 slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ mean: RangeOrValue::Value(0.02)}),
             };
 
@@ -1032,7 +1025,7 @@ async fn run_plot_motif_slices(
                     let ctx = Arc::clone(&ctx);
                     let ws = Arc::clone(&ws);
                     let suffix = suffix.clone();
-                    tokio::spawn(async move {
+                    async move {
                         debug!("run_plot_motif_slices: motif_id={motif_id}");
                         if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix).await {
                             error!("motif {motif_id} failed: e={e:?}");
@@ -1043,10 +1036,10 @@ async fn run_plot_motif_slices(
                         if done % 32 == 0 {
                             info!("done {done} from  {motifs_len}");
                         }
-                    })})
+                    }})
                 .buffer_unordered(10)
-                .try_collect::<Vec<()>>()
-                .await?;
+                .collect::<Vec<()>>()
+                .await;
         }
     }
 

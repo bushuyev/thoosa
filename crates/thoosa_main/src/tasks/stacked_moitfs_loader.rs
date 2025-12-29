@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use log::{debug, trace, warn};
 use parking_lot::RwLock;
+use rand::rng;
 use tch::Kind::Float;
 use tch::{IndexOp, Tensor};
 use cached_derive::Cached;
@@ -24,7 +25,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::{key_elt, CopyToDevice, ThoosaError};
+use thoosa_shared::{key_elt, sample_n_owned, CopyToDevice, ThoosaError};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, Named, WithId};
 use thoosa_store::Store;
@@ -215,6 +216,8 @@ where
         let find_motifs_run_config_id = find_motifs_run_config.id;
         let motif_ids = self.store.read().list_motifs(find_motifs_run_config_id.expect("no id in find_motifs_run_config"))?;
 
+        assert!(!motif_ids.is_empty(), "no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}");
+
         let loaded_motifs = futures::stream::iter(motif_ids)
             .map( |motif_id| {
                 let done_cnt = Arc::clone(&done_cnt);
@@ -264,7 +267,7 @@ where
 
         with_data!(Arc::clone(&ctx), device_idx, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
 
-            let channels_motifs = data.into_iter().fold(
+            let channels_motifs = data.iter().fold(
 
                 (0..num_channels).map(|_|vec![]).collect::<Vec<_>>(),//vec for each channel
 
@@ -275,10 +278,10 @@ where
                         "window is not same: find_motifs_run_config.window={} item.extra().window={}item.extra().window, motif_id={:?}", find_motifs_run_config.window, item.extra().window, item.data().id()
                     );
 
-                    if item.size().dim_0() < 1000 {//TODO config + sample random 1000
+                    // if item.size().dim_0() < 1000 {//TODO config + sample random 1000
 
                         acc[item.extra().channel as usize].push(item.data());
-                    }
+                    // }
                 acc
             });
 
@@ -289,6 +292,8 @@ where
                     .map(|t|t.size().dim_0() as usize)//num motif slices known for each motif
                     .sum::<usize>())
                 .max().unwrap_or(0);
+
+            assert!(max_motif_slices > 0, "no motif slices for {data:?}");
 
 
             let mut channels_motif_ids = vec![Vec::<DataId>::new(); num_channels as usize];
@@ -352,9 +357,13 @@ where
                 };
 
                 channels_motif_avg_dists_tensors_vec.push(moitf_avg_dists_t);
+
+
                 channels_motifs_tensors_vec.push(motifs_t);
 
             };
+
+
 
             debug!("SelectMotifsStage::run: channels_motif_avg_dists_tensors_vec={channels_motif_avg_dists_tensors_vec:?}");
             debug!("SelectMotifsStage::run: channels_motifs_tensors_vec={channels_motifs_tensors_vec:?}");
