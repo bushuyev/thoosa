@@ -22,7 +22,7 @@ use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Select, WithId};
-use thoosa_shared::{key_elt, ThoosaError};
+use thoosa_shared::{mono_key, ThoosaError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
 use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
@@ -31,7 +31,7 @@ use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::slices_iter::SlicesIter;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::comp_id::SynKey;
 
 pub struct ClcResourcesMotifsDist<C>
 where
@@ -62,7 +62,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        let stage_key = CompKey::new([key_elt!("ClcResourcesMotifsDist", "stage")]);
+        let stage_key = SynKey::new([mono_key!("ClcResourcesMotifsDist", "stage")]);
         &stage_key + input_id
     }
 }
@@ -226,8 +226,8 @@ where
 
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistInputDeviceWrapper {
-    id: CompKey,
-    batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, CompKey>>>>,
+    id: SynKey,
+    batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
     resource_ids: Vec<ResourceId>,
     stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>,
 }
@@ -254,13 +254,13 @@ impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 impl ClcResourcesMotifsDistInputDeviceWrapper {
-    pub fn new(id: CompKey, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, CompKey>>>>, resource_ids: Vec<ResourceId>, stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>) -> Self {
+    pub fn new(id: SynKey, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, resource_ids: Vec<ResourceId>, stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>) -> Self {
         Self { id, batch, resource_ids, stacked_motifs }
     }
 }
 
 impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
-    type ID = CompKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -279,7 +279,7 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
         let stacked_motifs = Arc::clone(&self.stacked_motifs);
         with_data!(Arc::clone(&permits_ctx), to_device_idx, [t_1_batch], stacked_motifs;
             |
-             batch_v:&[&ThoTensor<ChannelsData2, CompKey>],
+             batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
              stacked_motifs:&StackedMotifsOutput
             |{
 
@@ -330,7 +330,7 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
 
         with_data!(Arc::clone(&permits_ctx), to_device_idx, [t_1_batch], stacked_motifs_output;
             |
-             batch_v:&[&ThoTensor<ChannelsData2, CompKey>],
+             batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
              stacked_motifs_output:&StackedMotifsOutput
             |{
                 let inpt = ClcResourcesMotifsDistInput::new(
@@ -347,8 +347,8 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
 
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistInput<'a> {
-    id: CompKey,
-    batch: &'a [&'a ThoTensor<ChannelsData2, CompKey>],
+    id: SynKey,
+    batch: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
     resource_ids: Vec<ResourceId>,
     stacked_motifs_output: &'a StackedMotifsOutput,
 }
@@ -356,12 +356,12 @@ pub struct ClcResourcesMotifsDistInput<'a> {
 
 impl<'a> ClcResourcesMotifsDistInput<'a> {
     pub fn new(
-        batch: &'a [&'a ThoTensor<ChannelsData2, CompKey>],
+        batch: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
         resource_ids: Vec<ResourceId>,
         batched_motifs_output: &'a StackedMotifsOutput,
     ) -> ClcResourcesMotifsDistInput<'a> {
         Self {
-            id: CompKey::new([key_elt!("ClcResourcesMotifsDistInput", "stage")]),
+            id: SynKey::new([mono_key!("ClcResourcesMotifsDistInput", "stage")]),
             batch,
             resource_ids,
             stacked_motifs_output: batched_motifs_output,
@@ -397,7 +397,7 @@ impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
 
 
 impl<'a> WithId for ClcResourcesMotifsDistInput<'a> {
-    type ID = CompKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -408,7 +408,7 @@ impl<'a> Input for ClcResourcesMotifsDistInput<'a> {}
 
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistOutput {
-    pub id: CompKey,
+    pub id: SynKey,
     pub find_motifs_run_id: RunId,
     pub channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<DataId>)>>,
     pub resources_iter: SlicesIter,
@@ -423,7 +423,7 @@ impl ClcResourcesMotifsDistOutput {
         debug!("ClcResourcesMotifsDistOutput::new: select_motifs_run_id={find_motifs_run_id} channel_masks_dists_ids={channel_masks_dists_ids:?} resources_iter={resources_iter:?}");
 
         Self {
-            id: CompKey::new([key_elt!("ClcResourcesMotifsDistOutput", "stage")]),
+            id: SynKey::new([mono_key!("ClcResourcesMotifsDistOutput", "stage")]),
             find_motifs_run_id,
             channel_masks_dists_ids,
             resources_iter,
@@ -467,7 +467,7 @@ impl Data for ClcResourcesMotifsDistOutput {
 }
 
 impl WithId for ClcResourcesMotifsDistOutput {
-    type ID = CompKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id

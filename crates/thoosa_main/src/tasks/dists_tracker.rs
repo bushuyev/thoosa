@@ -32,7 +32,7 @@ use thoosa_common::ws::Workspace;
 use thoosa_motifs::find::{FixedFindMotifsConfig, SimpleMotifTracker};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::WithId;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_store::fs_store::FileMotifTrackerStore;
@@ -55,7 +55,7 @@ impl Output for DistsMask {}
 impl Input for DistsMask {}
 
 impl WithId for DistsMask {
-    type ID = CompKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         todo!()

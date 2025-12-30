@@ -38,9 +38,9 @@ use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{key_elt, ThoosaError};
+use thoosa_shared::{mono_key, ThoosaError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, DataId, MonoMetrics, WithId};
-use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::comp_id::SynKey;
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -64,12 +64,12 @@ use crate::tasks::slices_iter::SlicesIter;
 
 pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
 
-    id:CompKey,
+    id: SynKey,
     store: Arc<RwLock<Box<dyn Store>>>,
     ws:Arc<RwLock<Box<dyn Workspace>>>,
     loader:Arc<L>,
@@ -83,7 +83,7 @@ where
 
 impl <L, ML, C> Debug for SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -97,11 +97,11 @@ where
 
 impl  <L, ML, C> WithId for SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
-    type ID = CompKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -219,7 +219,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
 
 impl <L, ML, C> SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
@@ -245,7 +245,7 @@ where
 
 
         Self {
-            id: CompKey::new([key_elt!("SelectMotifsStage", "stage")]),
+            id: SynKey::new([mono_key!("SelectMotifsStage", "stage")]),
             store: Arc::clone(store),
             ws: Arc::clone(ws),
             loader,
@@ -319,7 +319,7 @@ where
 
 impl <L,ML, C> Stage  for  SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 
@@ -332,7 +332,7 @@ where
 
 impl <L, ML, C> AsyncStage  for  SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
@@ -417,9 +417,9 @@ where
 
 
                     let clc_resources_input = Arc::new(ClcResourcesMotifsDistInputDeviceWrapper::new(
-                        CompKey::new([
-                            key_elt!("ClcResourcesMotifsDistInputDeviceWrapper", "stage"),
-                            key_elt!(format!("{resource_ids:?}"), "resource_ids"),
+                        SynKey::new([
+                            mono_key!("ClcResourcesMotifsDistInputDeviceWrapper", "stage"),
+                            mono_key!(format!("{resource_ids:?}"), "resource_ids"),
                         ]),
                         t_1_batch,
                         resource_ids,
@@ -427,7 +427,7 @@ where
                     ));
 
                     debug!("SelectMotifsStage::run: clc_resources_input={clc_resources_input:?}");
-                    let ctx_key = Arc::new(CompKey::from(format!("ClcResourcesMotifsDist_{}", run_config.id.expect("run config id")).as_str())) as Arc<dyn CachableIdTr>;//TODO format
+                    let ctx_key = Arc::new(SynKey::from(format!("ClcResourcesMotifsDist_{}", run_config.id.expect("run config id")).as_str())) as Arc<dyn CachableIdTr>;//TODO format
 
 
                     let motif_added_slices = Arc::clone(&channels_motifs_added_slices);
@@ -667,8 +667,8 @@ pub mod tests {
     use thoosa_shared::ResourceType::NotInGroup;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::traits::DataId;
-    use thoosa_shared::comp_id::CompKey;
-    use thoosa_shared::key_elt;
+    use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::mono_key;
     use thoosa_store::{IdSlice, MockStoreBuilder};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_motifs::generators::noise;

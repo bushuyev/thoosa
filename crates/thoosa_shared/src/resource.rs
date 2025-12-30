@@ -1,4 +1,4 @@
-use crate::{key_elt, ThoosaError};
+use crate::{mono_key, ThoosaError};
 use crate::applicables_runner::{CachableId, Input};
 use crate::traits::{Named, WithId};
 use log::trace;
@@ -9,7 +9,7 @@ use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
 
 #[automock]

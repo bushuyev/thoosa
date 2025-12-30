@@ -13,7 +13,7 @@ use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCo
 use thoosa_shared::applicables_runner::*;
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{Data, WithId};
-use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::comp_id::SynKey;
 
 #[derive(Debug, cached_derive::Cached)]
 pub struct ABStage<A, B, C>
@@ -29,7 +29,7 @@ where
     B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>
 {
-    id:CompKey,
+    id: SynKey,
     stage_a: Arc<A>,
     stage_b: Arc<B>,
 
@@ -95,7 +95,7 @@ where
     B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>
 {
-    pub fn new<I:Into<CompKey>>(id:I, stage_a: Arc<A>, stage_b: Arc<B>) -> ABStage<A, B, C> {
+    pub fn new<I:Into<SynKey>>(id:I, stage_a: Arc<A>, stage_b: Arc<B>) -> ABStage<A, B, C> {
         ABStage {
             id: id.into(),
             stage_a,
@@ -118,7 +118,7 @@ where
     B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>
 {
-    type ID = CompKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
