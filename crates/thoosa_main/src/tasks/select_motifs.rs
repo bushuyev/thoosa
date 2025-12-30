@@ -437,7 +437,7 @@ where
                         let required_ids = HashMap::new();
 
                         let ClcResourcesMotifsDistOutput {
-                            select_motifs_run_id, //can be taken from motif_data, no need to trip through ClcResourcesMotifsDist?
+                            find_motifs_run_id, //can be taken from motif_data, no need to trip through ClcResourcesMotifsDist?
                             channel_masks_dists_ids,
                             resources_iter,
                             ..
@@ -472,7 +472,7 @@ where
                             )
                             .await?;
 
-                        info!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?} select_motifs_run_id={select_motifs_run_id}");
+                        info!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?} find_motifs_run_id={find_motifs_run_id}");
                         for channel_mask_dists_ids in channel_masks_dists_ids.into_iter().enumerate() {
                             if let (channel, Some(mask_dists_ids)) = channel_mask_dists_ids {
                                 debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
