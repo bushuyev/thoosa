@@ -60,7 +60,7 @@ use crate::tho_tensor::ThoTensor;
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::applicables_runner::{CachableId, Input, Output};
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::MonoKey;
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
@@ -135,7 +135,7 @@ pub struct TrainLabelNetsRunConfigResult {
 }
 
 impl WithId for Box<TrainLabelNetsRunConfigResult> {
-    type ID = CachableId;
+    type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
         todo!()
@@ -305,7 +305,7 @@ unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO>
     for ThoModuleWithStore<DI, DO>
 {
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         self.module.tho_forward(t, train)
     }
 }
@@ -355,7 +355,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         self.module.debug();
     }
 
-    pub fn infer(&self, t: &ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> {
+    pub fn infer(&self, t: &ThoTensor<DI, SimpleId>) -> ThoTensor<DO, SimpleId> {
         self.module.tho_forward(t, false).unwrap()
     }
 
@@ -1653,7 +1653,7 @@ impl LoadMotifNetOutput {
 }
 
 impl WithId for LoadMotifNetOutput {
-    type ID = CachableId;
+    type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
         todo!()
@@ -1921,7 +1921,7 @@ mod train_tests {
     use tch::{IndexOp, Kind, Reduction};
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::OptRunConfigSource;
-    use thoosa_shared::applicables_runner::{CachableId, Input};
+    use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::{OptRunConfigs, RunId};
     use thoosa_shared::test_utils::set_panic_hook;
@@ -1929,6 +1929,7 @@ mod train_tests {
     use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, slices_len, CopyToDevice, ThoosaError};
     use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
     use torch_sys::at_autocast_clear_cache;
+    use thoosa_shared::traits::SimpleId;
 
     #[ctor::ctor]
     fn test_init() {
@@ -2006,12 +2007,12 @@ mod train_tests {
         let t_0 = lin_test_tensor(1000, 5);
         debug!("t_0.size={:?}", t_0.size());
 
-        let t: ThoTensor<AnyDims, CachableId> = t_0.unfold(1, 100, 10).into();
+        let t: ThoTensor<AnyDims, SimpleId> = t_0.unfold(1, 100, 10).into();
 
         debug!("t.size={:?}", t.size());
 
         //sums and multiplies by k
-        let r_0: ThoTensor<AnyDims, CachableId> =
+        let r_0: ThoTensor<AnyDims, SimpleId> =
             utils::test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, true)?;
         debug!("r_0.size={:?}", r_0.size());
 
@@ -2299,7 +2300,7 @@ mod train_tests {
 
     fn dummy_final_net_input<const LABELS_SIZE: usize, D: Dims>(
         batch_size: usize,
-    ) -> (ThoTensor<D, CachableId>, Tensor) {
+    ) -> (ThoTensor<D, SimpleId>, Tensor) {
         let mut rng = rand::rng();
         let data = (0..batch_size)
             .map(|label| {

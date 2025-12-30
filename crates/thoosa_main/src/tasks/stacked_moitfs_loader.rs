@@ -22,7 +22,7 @@ use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRun
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_shared::applicables_runner::{CachableId, Input, Output};
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::{mono_key, sample_n_owned, CopyToDevice, ThoosaError};

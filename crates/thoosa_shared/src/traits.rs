@@ -9,7 +9,7 @@ use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
 use std::sync::Arc;
 use log::debug;
 use uuid::uuid;
-use crate::applicables_runner::{CachableId, Input};
+use crate::applicables_runner::Input;
 use crate::{CopyToDevice, ThoosaError};
 use uuid::Uuid;
 use async_trait::async_trait;

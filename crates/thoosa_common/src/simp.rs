@@ -2,6 +2,7 @@ use crate::dims::{AnyDims, Batch};
 use crate::tho_tensor::ThoTensor;
 use crate::utils::DataBatch;
 use tch::Tensor;
+use thoosa_shared::traits::SimpleId;
 
 #[derive(Debug)]
 pub struct DummyDs {
@@ -25,7 +26,7 @@ impl DataBatch<AnyDims> for DummyDs {
     fn train_batch(
         &self,
     ) -> (
-        ThoTensor<Batch<AnyDims>, thoosa_shared::applicables_runner::CachableId>,
+        ThoTensor<Batch<AnyDims>, SimpleId>,
         Tensor,
     ) {
         let (x, y): (Vec<Tensor>, Vec<Tensor>) =
@@ -52,7 +53,7 @@ impl DataBatch<AnyDims> for DummyDs {
     fn valid_batch(
         &self,
     ) -> (
-        ThoTensor<Batch<AnyDims>, thoosa_shared::applicables_runner::CachableId>,
+        ThoTensor<Batch<AnyDims>, SimpleId>,
         Tensor,
     ) {
         self.train_batch()
