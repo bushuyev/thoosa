@@ -1,8 +1,9 @@
+use std::any::Any;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
-use crate::traits::Named;
+use crate::traits::{CachableIdTr, Named};
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ElvVal {
@@ -36,9 +37,25 @@ pub struct MonoKey {
     name: Cow<'static, str>,
 }
 
+impl From<&str> for MonoKey {
+    fn from(value: &str) -> Self {
+        MonoKey {
+            val: value.into(),
+            #[cfg(debug_assertions)]
+            name: Cow::Owned(value.to_owned()),
+        }
+    }
+}
+
 impl PartialOrd for MonoKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.val.partial_cmp(&other.val)
+    }
+}
+
+impl Named for MonoKey {
+    fn name(&self) -> &'static str {
+        "MonoKey"
     }
 }
 
@@ -164,6 +181,19 @@ impl Add<&MonoKey> for &SynKey {
         v.extend(self.vals.iter().cloned());
         v.push(rhs.clone());
         SynKey::from_vec(v)
+    }
+}
+
+impl Add<&MonoKey> for MonoKey {
+    type Output = SynKey;
+
+    fn add(self, rhs: &MonoKey) -> Self::Output {
+        SynKey {
+            vals: Box::new([
+                self,
+                rhs.clone()
+            ]),
+        }
     }
 }
 

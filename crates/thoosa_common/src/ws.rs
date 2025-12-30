@@ -25,7 +25,7 @@ use tch::nn::{self, VarStore};
 use tch::{Device, TchError, Tensor};
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{ThoosaError, cdt_for_dir, recurse_files, simple_id};
+use thoosa_shared::{ThoosaError, cdt_for_dir, recurse_files, simple_id, mono_key};
 
 #[derive(Debug)]
 pub struct FsWorkspace {
@@ -241,7 +241,7 @@ impl Workspace for FsWorkspace {
             let params_for_builder = motif_node_params.clone();
 
             let module = ThoModuleWithStore::load(
-                simple_id!(format!("MotifNet_{}", motif_id)),
+                mono_key!(motif_id, format!("MotifNet_{}", motif_id)),
                 move |path: &nn::Path| motif_node_2(&params_for_builder).build_tch_module(path),
                 model,
                 device.clone(),
@@ -293,7 +293,7 @@ impl Workspace for FsWorkspace {
                 //TODO ChannelsMotifsFlattenData
                 // let module = LabelModule::ChannelsMotifsData(ThoModuleWithStore::load(LabelNetParams::label_net(&label_node_params), model_path.clone(), *device).expect(format!("can't load {model_path:?}").as_str()));
                 let params_for_builder = label_node_params.clone();
-                let module = ThoModuleWithStore::load(simple_id!(""),
+                let module = ThoModuleWithStore::load(mono_key!(run_id, format!("Label_model_{label}_{run_id}")),
                                                       move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
                                                       model_path.clone(),
                                                       *device,
