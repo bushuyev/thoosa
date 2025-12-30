@@ -1,5 +1,5 @@
 use crate::{mono_key, ThoosaError};
-use crate::applicables_runner::{CachableId, Input};
+use crate::applicables_runner::Input;
 use crate::traits::{Named, WithId};
 use log::trace;
 use mockall::automock;

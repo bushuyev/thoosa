@@ -13,7 +13,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_shared::{CopyToDevice, ThoosaError};
-use thoosa_shared::applicables_runner::{CachableId, Input, Output};
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, Select, SimpleId, WithId};
 use torch_sys::IntList;
 use log::{debug, trace};
@@ -30,8 +30,8 @@ unsafe impl<D: Dims, Id: Named + Debug + Clone> Sync for ThoTensor<D, Id> {}
 impl<I:Named + Debug + Clone + Send + Sync, D: Dims> Input for ThoTensor<D, I> {}
 impl<I:Named + Debug + Clone + Send + Sync, D: Dims> Input for &ThoTensor<D, I> {}
 
-impl<D: Dims> WithId for &ThoTensor<D, CachableId> {
-    type ID = CachableId;
+impl<D: Dims> WithId for &ThoTensor<D, SimpleId> {
+    type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -41,15 +41,15 @@ impl<D: Dims> WithId for &ThoTensor<D, CachableId> {
 //TODO remove?
 
 
-impl<D: Dims> AsRef<Tensor> for ThoTensor<D, CachableId> {
+impl<D: Dims> AsRef<Tensor> for ThoTensor<D, SimpleId> {
     fn as_ref(&self) -> &Tensor {
         &self.t
     }
 }
 
-impl<D: Dims> ThoTensor<D, CachableId> {
+impl<D: Dims> ThoTensor<D, SimpleId> {
     //TODO remove
-    pub fn shallow_clone<DO: Dims>(&self) -> ThoTensor<DO, CachableId> {
+    pub fn shallow_clone<DO: Dims>(&self) -> ThoTensor<DO, SimpleId> {
         ThoTensor {
             id: self.id.clone(),
             t: self.t.shallow_clone(),
@@ -92,7 +92,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
 
 }
 
-impl<D: Dims> Display for ThoTensor<D, CachableId> {
+impl<D: Dims> Display for ThoTensor<D, SimpleId> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.t, f)
     }
@@ -158,7 +158,7 @@ impl<D: Dims, Id: Named + Debug + Clone> Borrow<Tensor> for ThoTensor<D, Id> {
     }
 }
 
-impl<D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
+impl<D: Dims> From<Tensor> for ThoTensor<D, SimpleId> {
     fn from(tensor: Tensor) -> Self {
         Self {
             id: simple_id!("1"),
@@ -169,7 +169,7 @@ impl<D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
     }
 }
 
-impl<D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
+impl<D: Dims> From<&Tensor> for ThoTensor<D, SimpleId> {
     fn from(tensor: &Tensor) -> Self {
         Self {
             id: simple_id!("2"),
