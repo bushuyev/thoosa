@@ -168,9 +168,10 @@ where
         S:Debug + Clone + 'static,
         P:PermitsCtx;
 
-    async fn with_selected_data<S, R>(
+    async fn with_selected_data<S, R, P>(
         wrap:&DevicesWrap<O>,
         to_device_idx: usize,
+        permits_ctx: Arc<parking_lot::RwLock<P>>,
         selector: S,
         do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>,
     ) -> Result<R, ThoosaError>
@@ -178,6 +179,7 @@ where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
         S:Clone,
+        P:PermitsCtx,
         Self:Sized;
 
     fn dump_to_cpu(wrap:&DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoosaError>> + std::marker::Send
@@ -267,11 +269,12 @@ where
         }
     }
 
-    async fn with_selected_data<S, R>(wrap: &DevicesWrap<O>, to_device_idx: usize, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>) -> Result<R, ThoosaError>
+    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>) -> Result<R, ThoosaError>
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
         S:Clone,
+        P:PermitsCtx,
         Self: Sized
     {
         match wrap.load_from_any_device_(to_device_idx).await {
@@ -484,11 +487,12 @@ where
         Err(MyError::NotFound.into())
     }
 
-    async fn with_selected_data<S, R>(wrap: &DevicesWrap<O>, to_device_idx: usize, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>) -> Result<R, ThoosaError>
+    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>) -> Result<R, ThoosaError>
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
         S:Clone,
+        P:PermitsCtx,
         Self: Sized
     {
         let read_guard: RwLockReadGuard<'_, Option<O>> = wrap.cached_data[to_device_idx].read().await;
@@ -514,6 +518,11 @@ where
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t = src.subview(selector.clone())?;
                 debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
+                let _permit =  if permits_ctx.read().acquired_permits() == 0 {
+                    Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
+                } else {
+                    None
+                };
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
                 return do_run(data);
@@ -732,18 +741,20 @@ where
         O::M::dump_to_cpu(self, device_idx).await
     }
 
-    pub async fn with_selected_data<S, R>(
+    pub async fn with_selected_data<S, R, P>(
         &self,
         to_device_idx: usize,
+        permits_ctx: Arc<parking_lot::RwLock<P>>,
         selector: S,
         do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>,
     ) -> Result<R, ThoosaError>
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+        P:PermitsCtx,
         S: Clone,
     {
-        O::M::with_selected_data(self, to_device_idx, selector, do_run).await
+        O::M::with_selected_data(self, to_device_idx, permits_ctx, selector, do_run).await
     }
 
     pub fn is_on_cpu_since(&self, threshold_age: u64) -> bool {

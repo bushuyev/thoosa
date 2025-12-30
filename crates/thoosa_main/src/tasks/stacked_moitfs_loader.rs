@@ -242,7 +242,7 @@ where
                         .with_data_ref(0, Arc::clone(&ctx_for_clc), None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
                         .await?;
 
-                    debug!("SelectMotifsStage::run: find_motifs_run_id={:?}  motif={motif:?} avg_motif_dist={avg_motif_dist}", find_motifs_run_config_id);
+                    debug!("StackedMotifsLoader::run: find_motifs_run_id={:?}  motif={motif:?} avg_motif_dist={avg_motif_dist}", find_motifs_run_config_id);
 
                     motif_avg_dists.write().insert(DataId(motif_id as u32), avg_motif_dist);
 
@@ -303,7 +303,7 @@ where
 
                 let channel_motifs = &channels_motifs.get(c as usize).expect(&format!("not enough channels: len={} c={}", channels_motifs.len(), c));
 
-                debug!("SelectMotifsStage::run: channel {c} max_motif_slices={max_motif_slices} channel_motifs={channel_motifs:?}");
+                debug!("StackedMotifsLoader::run: channel {c} max_motif_slices={max_motif_slices} channel_motifs={channel_motifs:?}");
 
                 let channel_motifs_tensors = channel_motifs.iter().map(|motif|  {
                     debug!("SelectMotifsStage::run: motif={motif:?} id={}", motif.id());
@@ -316,7 +316,7 @@ where
 
 
 
-                debug!("SelectMotifsStage::run: c={c}, channel_motifs_tensors={:?}", channel_motifs_tensors);
+                debug!("StackedMotifsLoader::run: c={c}, channel_motifs_tensors={:?}", channel_motifs_tensors);
 
                 let (motifs_t, moitf_avg_dists_t) = if channel_motifs_tensors.is_empty() {
                     (
@@ -330,7 +330,7 @@ where
                     .filter_map(|motif|  {
                         let read_guard = motif_avg_dists.read();
                         read_guard.get(&motif.id()).map(|avg_dist|{
-                             debug!("SelectMotifsStage::run: motif.id={} dist={avg_dist}", motif.id());
+                            debug!("StackedMotifsLoader::run: motif.id={} dist={avg_dist}", motif.id());
 
                             Some(Tensor::from_slice(vec![*avg_dist; motif.size().dim_0() as usize].as_slice()))
                         })
@@ -343,14 +343,14 @@ where
                     let motif_avg_dists_t = Tensor::cat(&channel_avg_dists_tensors, 0).to_device(ThoDevice::from(device_idx).into());
 
                     if channel_t.size()[0] < max_motif_slices as i64 {
-                        debug!("SelectMotifsStage::run: c={c}, channel_t.size={:?} padding to {:?}", channel_t.size(), [max_motif_slices as i64, find_motifs_run_config.window  as i64]);
+                        debug!("StackedMotifsLoader::run: c={c}, channel_t.size={:?} padding to {:?}", channel_t.size(), [max_motif_slices as i64, find_motifs_run_config.window  as i64]);
                         (
                             pad_to(&channel_t, &[max_motif_slices as i64, find_motifs_run_config.window  as i64]).expect("pad to failed"),
                             pad_to(&motif_avg_dists_t, &[max_motif_slices as i64]).expect("pad to failed")
                         )
 
                     } else {
-                        debug!("SelectMotifsStage::run: c={c}, channel_t.size={:?}", channel_t.size());
+                        debug!("StackedMotifsLoader::run: c={c}, channel_t.size={:?}", channel_t.size());
 
                         (channel_t, motif_avg_dists_t)
                     }
@@ -365,15 +365,15 @@ where
 
 
 
-            debug!("SelectMotifsStage::run: channels_motif_avg_dists_tensors_vec={channels_motif_avg_dists_tensors_vec:?}");
-            debug!("SelectMotifsStage::run: channels_motifs_tensors_vec={channels_motifs_tensors_vec:?}");
+            debug!("StackedMotifsLoader::run: channels_motif_avg_dists_tensors_vec={channels_motif_avg_dists_tensors_vec:?}");
+            debug!("StackedMotifsLoader::run: channels_motifs_tensors_vec={channels_motifs_tensors_vec:?}");
 
             let channels_motifs_t = Tensor::stack(&channels_motifs_tensors_vec, 0);
             let channels_motif_avg_dists_t = Tensor::stack(&channels_motif_avg_dists_tensors_vec, 0);
 
-            debug!("SelectMotifsStage::run: num_channels={num_channels}, channels_motif_ids={channels_motif_ids:?} channels_motifs_t.size={:?}", channels_motifs_t.size());
-            trace!("SelectMotifsStage::run: channels_motif_avg_dists_t=\n{channels_motif_avg_dists_t}");
-            trace!("SelectMotifsStage::run: channels_motifs_t=\n{channels_motifs_t}");
+            debug!("StackedMotifsLoader::run: num_channels={num_channels}, channels_motif_ids={channels_motif_ids:?} channels_motifs_t.size={:?}", channels_motifs_t.size());
+            trace!("StackedMotifsLoader::run: channels_motif_avg_dists_t=\n{channels_motif_avg_dists_t}");
+            trace!("StackedMotifsLoader::run: channels_motifs_t=\n{channels_motifs_t}");
 
             let find_motifs_run_id = find_motifs_run_config.id.expect("no id in find_motifs_run_config");
             // let select_motifs_run_id = input.select_motifs_run_config.id.expect("no id in select_motifs_run_config");

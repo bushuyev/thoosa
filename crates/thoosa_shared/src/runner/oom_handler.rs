@@ -377,7 +377,7 @@ where
                     debug!("AsyncOOMHandler::run: input_id={input_id:?} selector={selector:?}");
 
                     let selected = input
-                        .with_selected_data(device_idx, selector.clone(), |data| Ok(data))
+                        .with_selected_data(device_idx, Arc::clone(&run_ctx), selector.clone(), |data| Ok(data))
                         .await?;
 
                     Arc::new(DevicesWrap::wrap(selected, cache_area))
