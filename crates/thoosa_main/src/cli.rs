@@ -59,8 +59,8 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
-use thoosa_shared::{key_elt, parse_resources, simple_id, RangeOrValue};
-use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::{mono_key, parse_resources, simple_id, RangeOrValue};
+use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{cdt, cdt_for_dir, ResourceType, ThoosaError};
@@ -274,7 +274,7 @@ where
     let loader_2 = Arc::new(RawTensorLoader::<RunCtx2>::new(
         move |key, _| {
             ThoTensor::new(
-                CompKey::new([key_elt!(key.id(), format!("resource_id={}", key.id()))]),
+                SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
                 Tensor::load(tensors_path_2.join(format!(
                     "{}_{}.pt",
                     key.import_id(),
@@ -577,19 +577,24 @@ where
             info!("select motifs done: find_motif_run_ids={find_motif_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
 
 
+
+            let common_training_args = CommonTrainingRunConfigRangeOrValue {
+                cycles: RangeOrValue::Value(10),
+                batch_size: RangeOrValue::Value(11),
+                lr: RangeOrValue::Value(0.0001),
+            };
+            let opt_config = Arc::new(OptConfig::new(10, 3));
+
             let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
                 id: None,
-                common_training_args: CommonTrainingRunConfigRangeOrValue {
-                    cycles: RangeOrValue::Value(10),
-                    batch_size: RangeOrValue::Value(11),
-                    lr: RangeOrValue::Value(0.0001),
-                },
+                common_training_args: common_training_args.clone(),
                 num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
                 step: RangeOrValue::Value(10),
             };
 
+
             let input_wrapper = Arc::new(DevicesWrap::wrap(
-                TrainMotifNetInput::new(select_motifs_run_ids.clone(), Arc::new(OptConfig::new(100, 10))),
+                TrainMotifNetInput::new(select_motifs_run_ids.clone(), Arc::clone(&opt_config)),
                 0
             ));
 
@@ -617,18 +622,13 @@ where
             ///////////////////
             let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue{
                 id: None,
-                common_training_args: CommonTrainingRunConfigRangeOrValue {
-                    cycles: RangeOrValue::Value(100),
-                    batch_size: RangeOrValue::Value(20),
-                    lr: RangeOrValue::Value(0.0001),
-                },
+                common_training_args,
                 net: LabelNetTypeArgsRangeOrValue::FixedNumSlices(FixedNumSlicesNetArgsRangeOrValue{
                     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
                     slices_len: RangeOrValue::Value(1000)
                 }),
             };
 
-            let opt_config = Arc::new(OptConfig::new(100, 10));//TODO use one from  motifs?
             let select_motifs_run_ids = select_motifs_run_ids.clone();
 
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
@@ -647,7 +647,7 @@ where
                         &ws,
                         &store,
                         Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "init label nets"))),
-                        opt_config
+                        Arc::clone(&opt_config)
                     ).await.map(|v|Arc::new(v))
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train label nets"))),

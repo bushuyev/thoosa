@@ -554,7 +554,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
     let token_stream = quote! {
 
-        #[derive(Debug, serde::Deserialize, serde::Serialize)]
+        #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
         pub #range_or_value_type #range_or_value_struct_ident {
             #range_or_value_fields
         }

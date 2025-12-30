@@ -25,7 +25,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::{key_elt, sample_n_owned, CopyToDevice, ThoosaError};
+use thoosa_shared::{mono_key, sample_n_owned, CopyToDevice, ThoosaError};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, Named, WithId};
 use thoosa_store::Store;
@@ -36,12 +36,12 @@ use crate::tasks::cross_dims::{ChannelsMotifsDists, ChannelsMotifsSlices, MotifS
 use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use crate::tasks::run_ctx_2::MotifsCtx;
-use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::comp_id::SynKey;
 
 #[derive(Debug, Clone, DummyData)]
 pub struct StackedMotifsInput {
 
-    id:CompKey,
+    id: SynKey,
     find_motifs_run_config: Arc<FindMotifsRunConfig>,
     // select_motifs_run_config: Arc<SelectMotifsRunConfig>,
 }
@@ -52,7 +52,7 @@ impl StackedMotifsInput {
         let find_motifs_run_id = find_config.id.unwrap();
         Self {
             // id: format!("{}_{}", find_config.id.unwrap(), select_config.id.unwrap()).into(),//TODO in select motifs SelectMotifsRunConfig is saved in run_grid right before running stage so no sense to cache by select_motifs_run_config. No other cases yet.
-            id: CompKey::new([key_elt!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}"))]),
+            id: SynKey::new([mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}"))]),
             find_motifs_run_config: find_config,
             // select_motifs_run_config: select_config
         }
@@ -61,7 +61,7 @@ impl StackedMotifsInput {
 impl Input for StackedMotifsInput {}
 
 impl WithId for StackedMotifsInput {
-    type ID = CompKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -86,12 +86,12 @@ impl Named for StackedMotifsOutputId {}
 #[derive(Debug)]
 pub struct StackedMotifsOutput {
     id:StackedMotifsOutputId,
-    pub motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, CompKey>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>,
-    pub motifs_avg_dists: ThoTensor<ChannelsMotifsDists, CompKey>
+    pub motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SynKey>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>,
+    pub motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SynKey>
 }
 
 impl StackedMotifsOutput {
-    pub fn new(id: StackedMotifsOutputId, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, CompKey>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>, motifs_avg_dists: ThoTensor<ChannelsMotifsDists, CompKey>) -> Self {
+    pub fn new(id: StackedMotifsOutputId, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SynKey>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>, motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SynKey>) -> Self {
         Self { id, motifs, motifs_avg_dists }
     }
 
@@ -379,9 +379,9 @@ where
             // let select_motifs_run_id = input.select_motifs_run_config.id.expect("no id in select_motifs_run_config");
             //select_motifs_run_id  -
             let select_motifs_run_id = vec![];//can be used to return select_motifs_run_i ran earlier on find_motifs_run_id
-            let find_and_select_motifs_id = CompKey::new([
-                key_elt!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
-                key_elt!(format!("{select_motifs_run_id:?}"), "select_motifs_run_id"),
+            let find_and_select_motifs_id = SynKey::new([
+                mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
+                mono_key!(format!("{select_motifs_run_id:?}"), "select_motifs_run_id"),
             ]);
 
             let motifs = ThoTensor::new(

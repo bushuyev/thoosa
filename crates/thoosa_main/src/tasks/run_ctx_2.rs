@@ -12,7 +12,7 @@ use thoosa_shared::runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::Named;
-use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::comp_id::SynKey;
 use thoosa_common::torch_runner::TorchPermsCtx;
 use crate::tasks::stacked_moitfs_loader::{StackedMotifsLoader, StackedMotifsOutputId};
 use crate::tasks::motif_loader::MotifLoader;
@@ -26,7 +26,7 @@ pub struct RunCtx2 {
     name: &'static str,
     pub(crate) perms: TorchPermsCtx,//TODO pub
 
-    loaded_raw_tensors:Vec<CompKey>,
+    loaded_raw_tensors:Vec<SynKey>,
     batched_motifs_id:Vec<StackedMotifsOutputId>
 }
 
@@ -123,7 +123,7 @@ impl Drop for RunCtx2 {
 
 pub trait MotifsCtx {
     fn add_stacked_motifs_id(&mut self, id:StackedMotifsOutputId);
-    fn add_loaded_raw_tensor_id(&mut self, id:CompKey);
+    fn add_loaded_raw_tensor_id(&mut self, id: SynKey);
 }
 
 
@@ -132,7 +132,7 @@ impl MotifsCtx for RunCtx2 {
         self.batched_motifs_id.push(id);
     }
 
-    fn add_loaded_raw_tensor_id(&mut self, id: CompKey) {
+    fn add_loaded_raw_tensor_id(&mut self, id: SynKey) {
         self.loaded_raw_tensors.push(id);
     }
 }
@@ -143,7 +143,7 @@ impl MotifsCtx for MockRunCtx {
 
     }
 
-    fn add_loaded_raw_tensor_id(&mut self, id: CompKey) {
+    fn add_loaded_raw_tensor_id(&mut self, id: SynKey) {
 
     }
 }

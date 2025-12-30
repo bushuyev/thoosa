@@ -29,20 +29,20 @@ impl From<&str> for ElvVal {
 }
 
 #[derive(Debug, Clone, Ord)]
-pub struct KeyElt {
+pub struct MonoKey {
     val: ElvVal,
 
     #[cfg(debug_assertions)]
     name: Cow<'static, str>,
 }
 
-impl PartialOrd for KeyElt {
+impl PartialOrd for MonoKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.val.partial_cmp(&other.val)
     }
 }
 
-impl KeyElt {
+impl MonoKey {
     pub fn new(
         val: ElvVal,
         #[cfg(debug_assertions)] name: Cow<'static, str>,
@@ -61,65 +61,66 @@ impl KeyElt {
 }
 
 #[macro_export]
-macro_rules! key_elt {
+macro_rules! mono_key {
     ($val:expr, $name:literal $(,)?) => {{
         #[cfg(debug_assertions)]
         {
-            thoosa_shared::comp_id::KeyElt::new(
+            thoosa_shared::comp_id::MonoKey::new(
                 ($val).into(),
                 ::std::borrow::Cow::Borrowed($name),
             )
         }
         #[cfg(not(debug_assertions))]
         {
-            thoosa_shared::comp_id::KeyElt::new(($val).into())
+            thoosa_shared::comp_id::MonoKey::new(($val).into())
         }
     }};
 
     ($val:expr, $name:expr $(,)?) => {{
         #[cfg(debug_assertions)]
         {
-            thoosa_shared::comp_id::KeyElt::new(
+            thoosa_shared::comp_id::MonoKey::new(
                 ($val).into(),
                 ::std::borrow::Cow::Owned(::std::string::String::from($name)),
             )
         }
         #[cfg(not(debug_assertions))]
         {
-            thoosa_shared::comp_id::KeyElt::new(($val).into())
+            thoosa_shared::comp_id::MonoKey::new(($val).into())
         }
     }};
 }
 
-impl Eq for KeyElt {}
-impl PartialEq for KeyElt {
+impl Eq for MonoKey {}
+impl PartialEq for MonoKey {
     fn eq(&self, other: &Self) -> bool {
         self.val.eq(&other.val)
     }
 }
 
-impl Hash for KeyElt {
+impl Hash for MonoKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.val.hash(state)
     }
 }
 
+
 /// ✅ Dynamic-length key, stored as a boxed slice (one allocation, no capacity slack).
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Ord, PartialOrd)]
-pub struct CompKey {
-    vals: Box<[KeyElt]>,
+pub struct SynKey {
+    vals: Box<[MonoKey]>,
 }
 
-impl CompKey {
-    pub fn new<I:Into<Box<[KeyElt]>>>(vals: I) -> Self {
+impl SynKey {
+    pub fn new<I:Into<Box<[MonoKey]>>>(vals: I) -> Self {
         Self { vals: vals.into() }
     }
 
-    pub fn from_vec(vals: Vec<KeyElt>) -> Self {
+    pub fn from_vec(vals: Vec<MonoKey>) -> Self {
         Self { vals: vals.into_boxed_slice() }
     }
 
-    pub fn as_slice(&self) -> &[KeyElt] {
+    pub fn as_slice(&self) -> &[MonoKey] {
         &self.vals
     }
 
@@ -129,48 +130,72 @@ impl CompKey {
 }
 
 /// Nice ergonomics: `CompKey::from([..])` with only one allocation (boxing the array).
-impl<const N: usize> From<[KeyElt; N]> for CompKey {
-    fn from(vals: [KeyElt; N]) -> Self {
+impl<const N: usize> From<[MonoKey; N]> for SynKey {
+    fn from(vals: [MonoKey; N]) -> Self {
         Self { vals: Box::new(vals) }
     }
 }
 
-impl From<&str> for CompKey {
+impl From<&str> for SynKey {
     fn from(value: &str) -> Self {
         Self {
-            vals: Box::new([key_elt!(value, value)])
+            vals: Box::new([mono_key!(value, value)])
         }
     }
 }
 
 /// Add now produces a dynamic-length CompKey (LEN = runtime sum).
-impl Add<&CompKey> for &CompKey {
-    type Output = CompKey;
+impl Add<&SynKey> for &SynKey {
+    type Output = SynKey;
 
-    fn add(self, rhs: &CompKey) -> Self::Output {
+    fn add(self, rhs: &SynKey) -> Self::Output {
         let mut v = Vec::with_capacity(self.vals.len() + rhs.vals.len());
         v.extend(self.vals.iter().cloned());
         v.extend(rhs.vals.iter().cloned());
-        CompKey::from_vec(v)
+        SynKey::from_vec(v)
     }
 }
 
-impl Named for CompKey {
+impl Add<&MonoKey> for &SynKey {
+    type Output = SynKey;
+
+    fn add(self, rhs: &MonoKey) -> Self::Output {
+        let mut v = Vec::with_capacity(self.vals.len() + 1);
+        v.extend(self.vals.iter().cloned());
+        v.push(rhs.clone());
+        SynKey::from_vec(v)
+    }
+}
+
+impl Add<&SynKey> for &MonoKey {
+    type Output = SynKey;
+
+    fn add(self, rhs: &SynKey) -> Self::Output {
+        let mut v = Vec::with_capacity(rhs.vals.len() + 1);
+        v.push(self.clone());
+        v.extend(rhs.vals.iter().cloned());
+        SynKey::from_vec(v)
+    }
+}
+
+
+
+impl Named for SynKey {
     fn name(&self) -> &'static str {
         "CompKey"
     }
 }
 
-impl From<(u32, &str)> for CompKey {
+impl From<(u32, &str)> for SynKey {
     fn from(value: (u32, &str)) -> Self {
-        CompKey::from([key_elt!(value.0, value.1)])
+        SynKey::from([mono_key!(value.0, value.1)])
     }
 }
 
 #[cfg(test)]
 mod tests {
     use log::debug;
-    use crate::comp_id::{CompKey, KeyElt};
+    use crate::comp_id::{SynKey, MonoKey};
 
     #[ctor::ctor]
     fn init() {
@@ -179,8 +204,8 @@ mod tests {
 
     #[test]
     fn test_add_1_2() {
-        let key_a: CompKey = [key_elt!(0, "key1")].into();
-        let key_b: CompKey = [key_elt!(1, "key2"), key_elt!(2, "key3")].into();
+        let key_a: SynKey = [mono_key!(0, "key1")].into();
+        let key_b: SynKey = [mono_key!(1, "key2"), mono_key!(2, "key3")].into();
 
         let key_c = &key_a + &key_b;
         debug!("key_c={key_c:?}");
@@ -188,17 +213,17 @@ mod tests {
         assert_eq!(
             key_c.as_slice(),
             &[
-                KeyElt { val: 0.into(), name: "key1".into() },
-                KeyElt { val: 1.into(), name: "key2".into() },
-                KeyElt { val: 2.into(), name: "key3".into() },
+                MonoKey { val: 0.into(), name: "key1".into() },
+                MonoKey { val: 1.into(), name: "key2".into() },
+                MonoKey { val: 2.into(), name: "key3".into() },
             ]
         );
     }
 
     #[test]
     fn test_partial_ord() {
-        let key_0: CompKey = [key_elt!(0, "a"), key_elt!(10, "b")].into();
-        let key_1: CompKey = [key_elt!(1, "a"), key_elt!(1, "b")].into();
+        let key_0: SynKey = [mono_key!(0, "a"), mono_key!(10, "b")].into();
+        let key_1: SynKey = [mono_key!(1, "a"), mono_key!(1, "b")].into();
 
         assert!(key_1.gt(&key_0));
     }
