@@ -19,6 +19,15 @@ impl ::core::fmt::Debug for SingleFieldRangeOrValue {
         )
     }
 }
+#[automatically_derived]
+impl ::core::clone::Clone for SingleFieldRangeOrValue {
+    #[inline]
+    fn clone(&self) -> SingleFieldRangeOrValue {
+        SingleFieldRangeOrValue {
+            val: ::core::clone::Clone::clone(&self.val),
+        }
+    }
+}
 impl thoosa_run_config_args::RunConfigRangeOrValue for SingleFieldRangeOrValue {}
 impl thoosa_shared::run_configs::RunConfig for SingleField {
     fn set_id(&mut self, id: thoosa_shared::run_configs::RunId) {
@@ -191,6 +200,15 @@ impl ::core::fmt::Debug for OuterRangeOrValue {
             "inner",
             &&self.inner,
         )
+    }
+}
+#[automatically_derived]
+impl ::core::clone::Clone for OuterRangeOrValue {
+    #[inline]
+    fn clone(&self) -> OuterRangeOrValue {
+        OuterRangeOrValue {
+            inner: ::core::clone::Clone::clone(&self.inner),
+        }
     }
 }
 impl thoosa_run_config_args::RunConfigRangeOrValue for OuterRangeOrValue {}

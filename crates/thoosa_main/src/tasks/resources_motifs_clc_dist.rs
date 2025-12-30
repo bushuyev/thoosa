@@ -119,7 +119,7 @@ where
 
         #[cfg(test)]
         if self.fail_if_size_bigger_than.map(|v| v < batch_1_t.size()[1] as usize).unwrap_or(false) {
-            debug!("ClcResourcesMotifsDist::do_run: triggering OOM");
+            debug!("ClcResourcesMotifsDist::do_run: triggering OOM: v={:?} batch_1_t.size()[1]={}", self.fail_if_size_bigger_than, batch_1_t.size()[1]);
             return Err(ThoosaError::oom());
         }
 

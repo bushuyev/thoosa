@@ -462,6 +462,7 @@ pub mod mock_motif_loader {
     use thoosa_shared::traits::WithId;
     use thoosa_common::tho_tensor::ThoTensor;
     use dashmap::DashMap;
+    use mockall::predicate::always;
     use parking_lot::RwLock;
     use tch::Tensor;
     use tokio::runtime::Handle;
@@ -520,7 +521,7 @@ pub mod mock_motif_loader {
                         Arc::clone(&ctx), None, |v: &MotifLoaderInput| {
                             Ok(Arc::clone(data_map
                                 .get(v)
-                                .expect(&format!("no mock data for {input:? } in MockMotifLoader"))))
+                                .expect(&format!("no mock data for v={v:? } in MockMotifLoader"))))
                         }).await
                     })
                 })
@@ -536,8 +537,9 @@ pub mod mock_motif_loader {
 
     }
     pub fn build()->MockMotifLoaderBuilder {
+
         MockMotifLoaderBuilder {
-            mock: Default::default(),
+            mock: MockMotifLoader::new(),
         }
     }
 }

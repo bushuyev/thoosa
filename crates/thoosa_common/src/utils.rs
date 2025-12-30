@@ -1898,9 +1898,9 @@ pub fn motif_test_net(
     )
 }
 
-pub fn assert_close<A:Into<f64> + Display, B:Into<f64> + Display>(val_0: A, val_1: B, max_diff: f64) {
-    let a = <A as Into<f64>>::into(val_0);
-    let b = <B as Into<f64>>::into(val_1);
+pub fn assert_close<A:Into<f64> + Display, B:Into<f64> + Display>(val_a: A, val_b: B, max_diff: f64) {
+    let a = <A as Into<f64>>::into(val_a);
+    let b = <B as Into<f64>>::into(val_b);
     let diff = (a - b).abs();
     assert!(
         diff <= max_diff,
