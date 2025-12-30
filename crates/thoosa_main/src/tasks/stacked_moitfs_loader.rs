@@ -133,6 +133,7 @@ impl WithId for StackedMotifsOutput {
 
 impl Output for StackedMotifsOutput {}
 
+///loads motif slices found during initial find motifs stage. Used from SelectMotifs - slices added there are not loaded
 #[derive(Debug, Cached)]
 pub struct StackedMotifsLoader<ML, C>
 where
@@ -216,8 +217,13 @@ where
         let find_motifs_run_config_id = find_motifs_run_config.id;
         let motif_ids = self.store.read().list_motifs(find_motifs_run_config_id.expect("no id in find_motifs_run_config"))?;
 
-        assert!(!motif_ids.is_empty(), "no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}");
+        if motif_ids.is_empty() {
+            warn!("no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}");
+            return Err(ThoosaError::new("no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}"))
+        }
 
+
+        //TODO extract method load_motifs
         let loaded_motifs = futures::stream::iter(motif_ids)
             .map( |motif_id| {
                 let done_cnt = Arc::clone(&done_cnt);
@@ -265,6 +271,7 @@ where
             .collect::<Vec<_>>()
             .await;
 
+        //TODO extract method stack_motifs
         with_data!(Arc::clone(&ctx), device_idx, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
 
             let channels_motifs = data.iter().fold(
