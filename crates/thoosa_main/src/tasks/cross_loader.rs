@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
+use futures_util::FutureExt;
 use tch::Tensor;
 use thoosa_common::dims::{AnyMetrics, AnySub, ChannelsData, ChannelsSlicesData, Dims};
 use thoosa_common::runs::Simple;
@@ -31,6 +32,7 @@ use thoosa_shared::traits::MonoMetrics;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_with_data::with_data;
+use crate::tasks::slices_iter::SlicesIter;
 
 pub struct CrossLoader<ResC, L, CLC, RSV, R, C>
 where
@@ -278,7 +280,7 @@ where
 
                 debug!("CrossLoader::run: t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}");
                 let batches_concated = [t_0_batch.clone(), t_1_batch].concat();
-                let mut cross_clc_output = with_data!(Arc::clone(&ctx), device_idx, [batches_concated]; |data|{
+                let mut cross_clc_output = /*with_data!(Arc::clone(&ctx), device_idx, [batches_concated]; |data|{
 
                      let input = CrossInput::new(
                             data,
@@ -291,7 +293,46 @@ where
                         let mut out = Arc::clone(&self.batch_clc).do_run(&input, Arc::clone(&ctx))?;
 
                         Ok::<_, ThoosaError>(out)
-                })?;
+                })?*/{
+                    let __with_data_permits_ctx = ::std::sync::Arc::clone(&(Arc::clone(&ctx)));
+                    let __with_data_device = device_idx;
+                    let batch_clc = Arc::clone(&self.batch_clc);
+                    let ctx = Arc::clone(&ctx);
+                    let t_0_batch_resources = t_0_batch_resources.clone();
+                    async {
+                        let to_device_idx = __with_data_device;
+                        let __device_idx = to_device_idx;
+                        let _permit = if __with_data_permits_ctx.read().acquired_permits() == 0 {
+                            let name = __with_data_permits_ctx.read().name();
+                            let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(to_device_idx, ::std::sync::Arc::new(::thoosa_shared::simple_id!(name ))).await?;
+                            Some(permit)
+                        } else { None };
+                        let __with_data_vec_0 = (batches_concated).clone();
+                        let __with_data_vec_guards_0 = ::futures_util::future::try_join_all(__with_data_vec_0.iter().map(|wrap| wrap.load_from_any_device_(__device_idx))).await?;
+                        let __with_data_vec_refs_0: ::std::vec::Vec<_> = __with_data_vec_guards_0.iter().map(|item| &**item).collect();
+                        (|data| async move {
+                            let ctx = Arc::clone(&ctx);
+
+
+
+                            let out = async move {
+                                let input = CrossInput::new(
+                                    data,
+                                    t_0_batch_resources.as_slice(),
+                                    t_1_batch_resources.as_slice(),
+                                );
+
+                                async {
+                                    debug!("CrossLoader::run: input={input:?}");
+                                }.await;
+
+                                batch_clc.do_run(&input, ctx)
+                            }.await;
+
+                            Ok::<_, ThoosaError>(out)
+                        })(&__with_data_vec_refs_0).await
+                    }.await
+                }??;
 
                 let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await;
 
