@@ -276,11 +276,11 @@ where
             })
             .collect::<Result<Vec<_>, ThoosaError>>()?;
 
-        //for each FindMotifsRunConfigs X SelectMotifsRunConfig
-        let stacked_motifs = futures::stream::iter(
-            find_motifs_run_configs
-                .into_iter()
-        )
+            //for each FindMotifsRunConfigs X SelectMotifsRunConfig
+            let stacked_motifs = futures::stream::iter(
+                find_motifs_run_configs
+                    .into_iter()
+            )
             .then(|find_motifs_run_config| {
                 let stacked_motifs_loader = Arc::clone(&stacked_motifs_loader);
                 let ctx = Arc::clone(&ctx_for_loader);
