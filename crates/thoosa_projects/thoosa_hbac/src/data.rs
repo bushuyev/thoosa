@@ -17,6 +17,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::DataBatch;
 use thoosa_main::data::{AllTrainSplitter, Set, Splitter, parquet_to_tensor_by_path};
 use thoosa_shared::ThoosaError;
+use thoosa_shared::traits::SimpleId;
 
 #[allow(dead_code)]
 pub struct ByPatientIdSplitter {
@@ -758,7 +759,7 @@ impl EEGs {
         batch_size: usize,
         data: &Vec<EEG>,
     ) -> (
-        ThoTensor<Batch<ChannelsData>, thoosa_shared::applicables_runner::CachableId>,
+        ThoTensor<Batch<ChannelsData>, SimpleId>,
         Tensor,
     ) {
         let mut rng = rand::rng();
@@ -789,7 +790,7 @@ impl DataBatch<ChannelsData> for EEGs {
     fn train_batch(
         &self,
     ) -> (
-        ThoTensor<Batch<ChannelsData>, thoosa_shared::applicables_runner::CachableId>,
+        ThoTensor<Batch<ChannelsData>, SimpleId>,
         Tensor,
     ) {
         Self::random_subset(self.batch_size, &self.train_set)
@@ -798,7 +799,7 @@ impl DataBatch<ChannelsData> for EEGs {
     fn valid_batch(
         &self,
     ) -> (
-        ThoTensor<Batch<ChannelsData>, thoosa_shared::applicables_runner::CachableId>,
+        ThoTensor<Batch<ChannelsData>, SimpleId>,
         Tensor,
     ) {
         Self::random_subset(self.batch_size, &self.valid_set)

@@ -29,13 +29,13 @@ use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore, TrainMotifsN
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_shared::applicables_runner::{CachableId, Input, Output};
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{mono_key, ThoosaError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_shared::comp_id::{SynKey, MonoKey};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
@@ -420,7 +420,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} slices.size={:?}",  slices.size());
 
                 let out_id = self.out_id(input.id());
-                let slices_tensor = ThoTensor::<Batch<Slice>, CachableId>::from(slices);
+                let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
                 let out = net.data().tho_forward(&slices_tensor, false)?;
                 let out = ThoTensor::new(out_id, out.t())?;
 
@@ -475,8 +475,8 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
     let mut cfg = nn::ConvConfig { bias: false, stride, ..Default::default() };
 
 
-    let tho_tensor: Arc<ThoTensor<AnyDims, CachableId>> = Arc::new(ThoTensor::from(t));
-    let ones: Arc<ThoTensor<AnyDims, CachableId>> = Arc::new(ThoTensor::from(Tensor::ones([1, 1, l], FLOAT_CPU)));
+    let tho_tensor: Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::from(t));
+    let ones: Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::from(Tensor::ones([1, 1, l], FLOAT_CPU)));
 
     let node = SeqBuilder::new(num_features, None)
         .closure(
@@ -565,12 +565,11 @@ pub(crate) mod tests {
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_motifs::generators::noise::resource_tensor;
     use thoosa_properties_map::ToHashmap;
-    use thoosa_shared::applicables_runner::CachableId;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::perf_logging::PERF;
-    use thoosa_shared::traits::Named;
+    use thoosa_shared::traits::{Named, SimpleId};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_store::MockStoreBuilder;
@@ -834,7 +833,7 @@ pub(crate) mod tests {
 
         let test_net = dummy_motif_net::<AnyDims, AnyDims>(100, 1., Cpu, "test", &motif_t.i((0, ..)), 1)?;
 
-        let resource: ThoTensor<AnyDims, CachableId> = resource_a_t.shallow_clone().into();
+        let resource: ThoTensor<AnyDims, SimpleId> = resource_a_t.shallow_clone().into();
         let out = test_net.tho_forward(&resource, false)?.t;//.i((0, .., 0));//channel[1], slices, vals[1]
 
         /*plot_series_with_lanes(

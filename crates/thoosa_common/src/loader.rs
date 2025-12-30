@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16};
 use std::task::Waker;
 use std::{fmt, thread};
 use tch::{Device, IndexOp, Tensor};
-use thoosa_shared::applicables_runner::{CachableId, Input};
+use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::resource::{Resource, ResourceId};
 
 struct ResourcesBeingLoadedData<V>

@@ -70,7 +70,7 @@ use thoosa_shared::run_configs::{RunConfig};
 
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
-use thoosa_shared::applicables_runner::{CachableId, Input, Output};
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::parse_range_or_value;

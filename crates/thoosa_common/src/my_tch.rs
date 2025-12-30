@@ -12,14 +12,13 @@ use tch::nn::{
 };
 
 use thoosa_shared::ThoosaError;
-
+use thoosa_shared::traits::SimpleId;
 use crate::builder::Node;
 // use crate::{data, utils};
 use crate::builder::SeqBuilder;
 use crate::dims::{AnyDims, Dims};
 use crate::tho_tensor::ThoTensor;
 use crate::utils::*;
-use thoosa_shared::applicables_runner::CachableId;
 
 #[derive(Debug)]
 pub struct MySequential<DI: Dims, DO: Dims> {
@@ -42,7 +41,7 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
         }
     }
 
-    fn run_layers(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn run_layers(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}",t.as_ref().size(),t.device_idx(),self.layers[0]);
 
         let output_t = self.layers[0].tho_forward(&t.as_ref().into(), train)?;
@@ -68,7 +67,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
         }
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         if self.layers.is_empty() {
             Ok(t.shallow_clone())
         } else {
@@ -148,7 +147,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyParallel<DI, DO> {
         }
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         debug!("MyParallel::forward: xs={:?}", t.size());
         let t = (self.join)(
             (self.split)(t.as_ref())?
@@ -196,7 +195,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for Split1<DI, DO> {
        self.layer.debug()
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         debug!("MyParallel::forward: xs={:?}", t.size());
         let t = (self.join)(
             (self.split)(t.as_ref())?
@@ -245,7 +244,7 @@ impl MyMaxPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         Ok(t.as_ref()
             .f_max_pool1d(
                 self.kernel_size,
@@ -270,7 +269,7 @@ impl AdaptiveMaxPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         Ok(t.as_ref()
             .f_adaptive_avg_pool1d(self.output_size as i64)?
             .into())
@@ -295,7 +294,7 @@ impl MyBatchNorm1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyBatchNorm1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         Ok(self.batch_norm.forward_t(t.as_ref(), train).into())
     }
 }
@@ -315,13 +314,13 @@ impl<ND> MyConv<ND> {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 1]> {
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
     }
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 2]> {
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
     }
 }
@@ -351,7 +350,7 @@ impl MyAvgPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAvgPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         Ok(t.as_ref()
             .f_avg_pool1d(
                 self.kernel_size,
@@ -371,7 +370,7 @@ pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send {
         0
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError>;
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError>;
 }
 
 // unsafe impl <DI:Dims, DO:Dims>  Send for ThoModuleWithStore<DI, DO>{}
@@ -397,7 +396,7 @@ impl MyFuncModule {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyFuncModule {
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         (self.func)(t.as_ref()).map(|t|t.into())
     }
 }
@@ -422,7 +421,7 @@ impl Debug for MyClosureModule {
 }
 
 impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyClosureModule {
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         (self.func)(t.as_ref()).map(|v|v.into())
     }
 }
@@ -450,7 +449,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLin
         );
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> Result<ThoTensor<DO, CachableId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         #[cfg(debug_assertions)]
         {
             debug!("Module for MyLinear::forward: descr={}", self.descr);

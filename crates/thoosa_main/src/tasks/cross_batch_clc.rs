@@ -22,7 +22,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoosaError};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::comp_id::{MonoKey, SynKey};
 
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
@@ -136,7 +136,7 @@ where
 
 #[derive(Debug)]
 pub struct CrossUnfoldClcOutput<R: Debug> {
-    id: SynKey,
+    id: MonoKey,
     clc_result: R,
     iter_0: SlicesIter,
     iter_1: SlicesIter,
@@ -145,14 +145,14 @@ pub struct CrossUnfoldClcOutput<R: Debug> {
 impl<R: Debug> CrossUnfoldClcOutput<R> {
     pub fn new(clc_result: R, iter_0: SlicesIter, iter_1: SlicesIter) -> Self {
         Self {
-            id: SynKey::new([mono_key!("CrossUnfoldClcOutput", "stage")]),
+            id: mono_key!("CrossUnfoldClcOutput", "stage"),
             clc_result,
             iter_0,
             iter_1,
         }
     }
 
-    pub fn id(&self) -> &SynKey {
+    pub fn id(&self) -> &MonoKey {
         &self.id
     }
 
@@ -176,7 +176,7 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
 }
 
 impl<R: Debug> WithId for CrossUnfoldClcOutput<R> {
-    type ID = SynKey;
+    type ID = MonoKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
