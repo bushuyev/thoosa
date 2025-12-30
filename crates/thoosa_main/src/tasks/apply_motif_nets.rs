@@ -8,13 +8,14 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::time::Instant;
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
-use log::{debug, info};
+use log::{debug, error, info};
 use parking_lot::lock_api::RwLock;
 use tch::{nn, Device, IndexOp, Kind, Tensor};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::nn::VarStore;
 use tokio::task::JoinError;
+use tracing::warn;
 use cached_derive::Cached;
 
 use thoosa_shared::runner::global_ctx::GlobalCtx;
@@ -115,7 +116,16 @@ where
             }
         })
         .buffered(10)//TODO config order is important to keep output tensor same
-        .try_collect::<Vec<_>>().await?;
+            .filter_map(|r|async {
+                match r {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        error!("ApplyMotifNets::run: can't load net for motif; there must have been an error while training the net: e={e:?}");
+                        None
+                    }
+                }
+            })
+        .collect::<Vec<_>>().await;
 
 
         //TODO all motif nets should have same width/step, handle different ones?

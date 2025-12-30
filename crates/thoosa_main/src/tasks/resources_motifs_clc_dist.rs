@@ -409,22 +409,22 @@ impl<'a> Input for ClcResourcesMotifsDistInput<'a> {}
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistOutput {
     pub id: CompKey,
-    pub select_motifs_run_id: RunId,
+    pub find_motifs_run_id: RunId,
     pub channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<DataId>)>>,
     pub resources_iter: SlicesIter,
 }
 
 impl ClcResourcesMotifsDistOutput {
     pub fn new(
-        select_motifs_run_id: RunId,
+        find_motifs_run_id: RunId,
         channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<DataId>)>>,
         resources_iter: SlicesIter,
     ) -> Self {
-        debug!("ClcResourcesMotifsDistOutput::new: select_motifs_run_id={select_motifs_run_id} channel_masks_dists_ids={channel_masks_dists_ids:?} resources_iter={resources_iter:?}");
+        debug!("ClcResourcesMotifsDistOutput::new: select_motifs_run_id={find_motifs_run_id} channel_masks_dists_ids={channel_masks_dists_ids:?} resources_iter={resources_iter:?}");
 
         Self {
             id: CompKey::new([key_elt!("ClcResourcesMotifsDistOutput", "stage")]),
-            select_motifs_run_id,
+            find_motifs_run_id,
             channel_masks_dists_ids,
             resources_iter,
         }
@@ -433,7 +433,7 @@ impl ClcResourcesMotifsDistOutput {
     pub async fn to_cpu(self) -> ClcResourcesMotifsDistOutput {
         ClcResourcesMotifsDistOutput {
             id: self.id,
-            select_motifs_run_id: self.select_motifs_run_id,
+            find_motifs_run_id: self.find_motifs_run_id,
             channel_masks_dists_ids: futures::stream::iter(self.channel_masks_dists_ids.into_iter())
                 .map( |op|{
                     async {

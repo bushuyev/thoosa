@@ -545,7 +545,7 @@ where
 
 
             let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
-                None,
+                Some(find_motif_run_ids.clone()),
                 SelectMotifsRunConfigRangeOrValue{
                     id: None,
                     motif_selector: MotifSelectorRangeOrValue::ByLabelVariance(ByLabelVarianceConfigRangeOrValue{ _dummy: 0 })

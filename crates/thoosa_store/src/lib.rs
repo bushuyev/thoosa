@@ -1408,7 +1408,7 @@ impl Store for SqlStore {
 
         let t = guard.transaction()?;
 
-        debug!("save_slices_groups_as_motifs_from_file: run_id={run_id:?}, channel={channel:?}");
+        debug!("save_groups_as_motifs: run_id={run_id:?}, channel={channel:?}");
 
         {
             for (group, slices) in groups {
@@ -1422,8 +1422,8 @@ impl Store for SqlStore {
                 let motif_id: i64 =
                     t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
-                debug!("save_slices_groups_as_motifs_from_tmp_db: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted}");
-                trace!("save_slices_groups_as_motifs_from_tmp_db: slices={slices:?} ");
+                debug!("save_groups_as_motifs: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices.len={}", slices.len());
+                trace!("save_groups_as_motifs: slices={slices:?} ");
 
                 let mut slices_chunks = slices.into_iter().array_chunks::<500>();
                 while let Some(chunk) = slices_chunks.next() {
