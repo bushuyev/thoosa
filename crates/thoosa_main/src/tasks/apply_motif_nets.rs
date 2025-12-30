@@ -326,7 +326,7 @@ struct ApplyMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable
 {
-    id: MonoKey,
+    id: SynKey,
     net_wrapper:Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
     slice_step:u32,
     pd:PhantomData<C>,
@@ -344,9 +344,8 @@ where
         fail_if_size_bigger_than:Option<usize>
     ) -> Self {
 
-
         Self {
-            id: mono_key!(net_wrapper.id().to_string(), "ApplyMotifNet"),
+            id: mono_key!("ApplyMotifNet", "ApplyMotifNet") + net_wrapper.id(),
             net_wrapper,
             slice_step,
             pd: PhantomData ,
@@ -527,7 +526,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 
     let module = node.clone().build_tch_module(&vs.root())?;
     Ok(Box::new(ThoModuleWithStore::with_factory(
-        "test_net".into(),
+        "test_net",
         module,
         vs,
         Some(Arc::new( move |path:&nn::Path| {

@@ -12,7 +12,7 @@ use clap::clap_derive::Args;
 use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
 use std::cell::RefCell;
-use thoosa_shared::{panic_to_err, panic_to_err_async, simple_id, CopyToDevice};
+use thoosa_shared::{mono_key, panic_to_err, panic_to_err_async, simple_id, CopyToDevice};
 
 use log::{debug, info, trace, warn, Log};
 use parking_lot::{Mutex, RwLock};
@@ -61,6 +61,7 @@ use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
+use thoosa_shared::comp_id::MonoKey;
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
@@ -258,7 +259,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
 type ModuleFactory<DI, DO> = dyn Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError>;
 
 pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Send> {
-    id:SimpleId,
+    id:MonoKey,
     module: Box<dyn ThoModule<DI, DO>>,
     var_store: VarStore,
     module_factory: Option<Arc<ModuleFactory<DI, DO>>>,
@@ -268,7 +269,7 @@ impl <DI, DO> WithId for ThoModuleWithStore<DI, DO>
 where
     DI: Dims + Send + 'static + ?Sized,
     DO: Dims + Send, {
-    type ID = SimpleId;
+    type ID = MonoKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -311,25 +312,25 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO>
 
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI, DO> {
     // #[cfg(test)]
-    pub fn new(id: SimpleId, module: Box<dyn ThoModule<DI, DO>>) -> Self {
+    pub fn new(id: MonoKey, module: Box<dyn ThoModule<DI, DO>>) -> Self {
         Self::with_factory(id, module, VarStore::new(Cpu), None)
     }
 
-    pub fn with_factory(
-        id: SimpleId,
+    pub fn with_factory<I:Into<MonoKey>>(
+        id: I,
         module: Box<dyn ThoModule<DI, DO>>,
         var_store: VarStore,
         module_factory: Option<Arc<ModuleFactory<DI, DO>>>,
     ) -> Self {
         Self {
-            id,
+            id: id.into(),
             module,
             var_store,
             module_factory,
         }
     }
 
-    pub fn load<F>(id: SimpleId, builder: F, model: PathBuf, device: Device) -> Result<Self, ThoosaError>
+    pub fn load<F>(id: MonoKey, builder: F, model: PathBuf, device: Device) -> Result<Self, ThoosaError>
     where
         F: Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> + Send + Sync + 'static,
     {
@@ -426,7 +427,7 @@ pub fn load_final_model(
     debug!("load_final_model:  final_node_params={final_node_params:?}");
 
     let final_params_for_builder = final_node_params.clone();
-    let node = ThoModuleWithStore::load(simple_id!(""),
+    let node = ThoModuleWithStore::load(mono_key!(run_id, "final_model"),
                                         move |path: &nn::Path| final_net(&final_params_for_builder).build_tch_module(path),
                                         model_path,
                                         *device,
@@ -1925,7 +1926,7 @@ mod train_tests {
     use thoosa_shared::run_configs::{OptRunConfigs, RunId};
     use thoosa_shared::test_utils::set_panic_hook;
     use thoosa_shared::val::Val;
-    use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, pulse_in_rand, sin_v, slices_len, CopyToDevice, ThoosaError};
+    use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, slices_len, CopyToDevice, ThoosaError};
     use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
     use torch_sys::at_autocast_clear_cache;
 
@@ -2075,7 +2076,7 @@ mod train_tests {
 
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(
-            "".into(),
+            mono_key!("", ""),
            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
            thoosa_shared::replace_extension(&model_path, "safetensors").1.into(),
            Cpu,
