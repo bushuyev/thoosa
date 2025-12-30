@@ -153,6 +153,12 @@ impl<const N: usize> From<[MonoKey; N]> for SynKey {
     }
 }
 
+impl From<MonoKey> for SynKey {
+    fn from(vals: MonoKey) -> Self {
+        Self { vals: Box::new([vals]) }
+    }
+}
+
 impl From<&str> for SynKey {
     fn from(value: &str) -> Self {
         Self {
@@ -203,6 +209,17 @@ impl Add<&SynKey> for &MonoKey {
     fn add(self, rhs: &SynKey) -> Self::Output {
         let mut v = Vec::with_capacity(rhs.vals.len() + 1);
         v.push(self.clone());
+        v.extend(rhs.vals.iter().cloned());
+        SynKey::from_vec(v)
+    }
+}
+
+impl Add<&SynKey> for MonoKey {
+    type Output = SynKey;
+
+    fn add(self, rhs: &SynKey) -> Self::Output {
+        let mut v = Vec::with_capacity(rhs.vals.len() + 1);
+        v.push(self);
         v.extend(rhs.vals.iter().cloned());
         SynKey::from_vec(v)
     }

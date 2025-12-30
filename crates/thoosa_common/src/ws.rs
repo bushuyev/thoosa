@@ -241,7 +241,7 @@ impl Workspace for FsWorkspace {
             let params_for_builder = motif_node_params.clone();
 
             let module = ThoModuleWithStore::load(
-                mono_key!(motif_id, format!("MotifNet_{}", motif_id)),
+                mono_key!("MotifNet", "MotifNet") + &mono_key!(motif_id, "motif_id"),
                 move |path: &nn::Path| motif_node_2(&params_for_builder).build_tch_module(path),
                 model,
                 device.clone(),
@@ -293,10 +293,11 @@ impl Workspace for FsWorkspace {
                 //TODO ChannelsMotifsFlattenData
                 // let module = LabelModule::ChannelsMotifsData(ThoModuleWithStore::load(LabelNetParams::label_net(&label_node_params), model_path.clone(), *device).expect(format!("can't load {model_path:?}").as_str()));
                 let params_for_builder = label_node_params.clone();
-                let module = ThoModuleWithStore::load(mono_key!(run_id, format!("Label_model_{label}_{run_id}")),
-                                                      move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
-                                                      model_path.clone(),
-                                                      *device,
+                let module = ThoModuleWithStore::load(
+                    mono_key!(run_id, format!("Label_model_{label}_{run_id}")).into(),
+                      move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
+                      model_path.clone(),
+                      *device,
                 )
                 .expect(format!("can't load {model_path:?}").as_str());
 

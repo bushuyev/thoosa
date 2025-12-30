@@ -61,7 +61,7 @@ use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::comp_id::MonoKey;
+use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
@@ -196,10 +196,6 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
     }
 }
 
-
-
-
-
 #[derive(Debug)]
 pub struct TrainFinalNetsRunConfigResult {
     train_label_nodes_run_ids: Vec<RunId>,
@@ -259,7 +255,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
 type ModuleFactory<DI, DO> = dyn Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError>;
 
 pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Send> {
-    id:MonoKey,
+    id:SynKey,
     module: Box<dyn ThoModule<DI, DO>>,
     var_store: VarStore,
     module_factory: Option<Arc<ModuleFactory<DI, DO>>>,
@@ -269,7 +265,7 @@ impl <DI, DO> WithId for ThoModuleWithStore<DI, DO>
 where
     DI: Dims + Send + 'static + ?Sized,
     DO: Dims + Send, {
-    type ID = MonoKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -312,11 +308,11 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO>
 
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI, DO> {
     // #[cfg(test)]
-    pub fn new(id: MonoKey, module: Box<dyn ThoModule<DI, DO>>) -> Self {
+    pub fn new(id: SynKey, module: Box<dyn ThoModule<DI, DO>>) -> Self {
         Self::with_factory(id, module, VarStore::new(Cpu), None)
     }
 
-    pub fn with_factory<I:Into<MonoKey>>(
+    pub fn with_factory<I:Into<SynKey>>(
         id: I,
         module: Box<dyn ThoModule<DI, DO>>,
         var_store: VarStore,
@@ -330,7 +326,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         }
     }
 
-    pub fn load<F>(id: MonoKey, builder: F, model: PathBuf, device: Device) -> Result<Self, ThoosaError>
+    pub fn load<F>(id: SynKey, builder: F, model: PathBuf, device: Device) -> Result<Self, ThoosaError>
     where
         F: Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> + Send + Sync + 'static,
     {
@@ -427,10 +423,11 @@ pub fn load_final_model(
     debug!("load_final_model:  final_node_params={final_node_params:?}");
 
     let final_params_for_builder = final_node_params.clone();
-    let node = ThoModuleWithStore::load(mono_key!(run_id, "final_model"),
-                                        move |path: &nn::Path| final_net(&final_params_for_builder).build_tch_module(path),
-                                        model_path,
-                                        *device,
+    let node = ThoModuleWithStore::load(
+        mono_key!(run_id, "final_model").into(),
+        move |path: &nn::Path| final_net(&final_params_for_builder).build_tch_module(path),
+        model_path,
+        *device,
     )?;
 
     Ok((final_node_params, node))
@@ -2077,7 +2074,7 @@ mod train_tests {
 
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(
-            mono_key!("", ""),
+            mono_key!("", "").into(),
            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
            thoosa_shared::replace_extension(&model_path, "safetensors").1.into(),
            Cpu,
