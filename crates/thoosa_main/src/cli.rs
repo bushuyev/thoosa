@@ -579,11 +579,11 @@ where
 
 
             let common_training_args = CommonTrainingRunConfigRangeOrValue {
-                cycles: RangeOrValue::Value(10),
+                cycles: RangeOrValue::Value(60),
                 batch_size: RangeOrValue::Value(11),
                 lr: RangeOrValue::Value(0.0001),
             };
-            let opt_config = Arc::new(OptConfig::new(10, 3));
+            let opt_config = Arc::new(OptConfig::new(60, 20));
 
             let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
                 id: None,

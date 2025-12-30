@@ -1873,7 +1873,7 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
         .end_seq().build_tch_module(path));
 
     Ok(Box::new(ThoModuleWithStore::with_factory(
-        simple_id!("test_net"),
+        "test_net",
         Arc::clone(&builder)(&vs.root())?,
         vs,
         Some(builder)
