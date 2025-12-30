@@ -510,7 +510,7 @@ where
                 filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
                     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((100., 1)) },
                     band_hz: RangeOrValue::Value(100.),
-                    kernel_size: RangeOrValue::Value(100),
+                    kernel_size: RangeOrValue::Value(1000),
                     stride: RangeOrValue::Value(1),
                     padding: RangeOrValue::Value(0),
                 })),
