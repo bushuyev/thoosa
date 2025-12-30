@@ -143,7 +143,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        mono_key!("LoadMotifNet", "")//TODO LoadMotifNet does not cache so Id does not matter, but should be same as one built in load_motif_nets - move to util
+        mono_key!("MotifNet", "MotifNet") + input_id//TODO should be same as in Ws::load_motif_nets
 
     }
 }

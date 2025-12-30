@@ -110,7 +110,7 @@ where
             let stage_ctx = Arc::clone(&stage_ctx);
             async move {
 
-                debug!("ApplyMotifNets::run: channel={channel} channels_motifs={motif_id}");
+                debug!("ApplyMotifNets::new: channel={channel} motif_id={motif_id} load_motif_net={load_motif_net:?}");
 
                 load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(motif_id, channel as u32), 0)), stage_ctx).await
             }
@@ -118,9 +118,13 @@ where
         .buffered(10)//TODO config order is important to keep output tensor same
             .filter_map(|r|async {
                 match r {
-                    Ok(v) => Some(v),
+                    Ok(net) => {
+                        debug!("ApplyMotifNets::new: loaded net={net:?}");
+
+                        Some(net)
+                    },
                     Err(e) => {
-                        error!("ApplyMotifNets::run: can't load net for motif; there must have been an error while training the net: e={e:?}");
+                        error!("ApplyMotifNets::new: can't load net for motif; there must have been an error while training the net: e={e:?}");
                         None
                     }
                 }
@@ -144,7 +148,7 @@ where
 
         let motif_width = motif_width.into_iter().next().expect("no motif_width");
         let slice_step = slice_step.into_iter().next().expect("no motif_width");
-        debug!("ApplyMotifNets::run: motif_width={motif_width:?}");
+        debug!("ApplyMotifNets::new: motif_width={motif_width:?} slice_step={slice_step:?}");
 
         let mut select_motifs_run_id_sorted = select_motifs_run_id.clone();//TODO move to util CompKey::from Vec
         select_motifs_run_id_sorted.sort();
@@ -406,7 +410,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
 
                 let motif_width = net.extra().motif_net_params.num_features() as i64;
 
-                debug!("ApplyMotifNet::run, ok: motif_id={motif_id} c={c} motif_width={motif_width} input.t.size={:?}", input.t.size());
+                debug!("ApplyMotifNet::run, ok: motif_id={motif_id} c={c} motif_width={motif_width} input.t.size={:?} self.slice_step={}", input.t.size(), self.slice_step);
                 let t = input.t.i((c, ..));
                 let t  = if t.size()[0] >= motif_width {
                     t

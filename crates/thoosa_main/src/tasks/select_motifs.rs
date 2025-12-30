@@ -448,7 +448,10 @@ where
                                     GlobalCtx::global().acquire_many(device_idx, n, Arc::clone(&ctx_key))
                                 }))),
                                 Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                                #[cfg(not(debug_assertions))]
                                 Adjusters::Input(Box::new(SplitsAdjuster::<ClcResourcesMotifsDistInputDeviceWrapperSelector, i64>::new(2))),
+                                #[cfg(debug_assertions)]
+                                Adjusters::Input(Box::new(SplitsAdjuster::<ClcResourcesMotifsDistInputDeviceWrapperSelector, i64>::new(1))),//need min_split_len to trigger OOM
                             ], None)
                             .run(
                                 &clc_stage,
@@ -571,6 +574,8 @@ where
                         match &motif_selector {
                             //TODO add relevant MotifSelector variants
                             MotifSelector::ByLabelVariance(_) => {
+                                //TODO mock it
+                                #[cfg(not(debug_assertions))]
                                 ML::cache().await.remove(&ML::out_id(&clc_dist.motif_loader, &motif_id));
 
                                 let dist = clc_dist.run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(DataId(*motif_id)), 0)), Arc::clone(&ctx)).await
@@ -635,6 +640,7 @@ pub mod tests {
     use std::collections::{HashMap, HashSet};
     use std::path::Path;
     use std::sync::Arc;
+    use dashmap::DashMap;
     use log::{debug, LevelFilter};
     use log::Level::Debug;
     use log::LevelFilter::{Info, Trace};
@@ -676,6 +682,7 @@ pub mod tests {
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::dists_tracker::DistsMask;
     use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
+    use crate::tasks::motif_loader::mock_motif_loader::MockMotifLoader;
     use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::select_motifs::{fold_dists, fold_mask, SelectMotifsSavableResultBuilder, SelectMotifsStage};
@@ -690,12 +697,19 @@ pub mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_1_resource_1_label_1_channel_1_motif() -> Result<(), ThoosaError> {
+        //TODO this doesn't work
+        // let dash_map = Box::leak(Box::new(DashMap::new()));
+        // MockMotifLoader::cache_context().expect().times(0..).return_const(&*dash_map);
+
+
         let test_dir = Path::new("/tmp/test_single_label_one_motif");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
         log::set_max_level(Trace);
         reset_print_options();
         GlobalCtx::init_devices(2);
+
+
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
 
@@ -741,7 +755,8 @@ pub mod tests {
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            ((channel_0_motifs_ids[0] as u32).into(), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
+            (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
         ]).finish());
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
@@ -817,8 +832,10 @@ pub mod tests {
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            ((channel_0_motifs_ids[0] as u32).into(), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_t)),
+            (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
         ]).finish());
+
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
             &ws,
@@ -893,10 +910,11 @@ pub mod tests {
         let motif_0_t = motifs_tensor(100, 3, MotifKind::Pulse);
         let motif_1_t = motifs_tensor(100, 2, MotifKind::Triangle);
 
-
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            ((motifs_ids[0] as u32).into(), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_t)),
-            ((motifs_ids[1] as u32).into(), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_1_t)),
+            (MotifLoaderInput::all_slices(DataId(motifs_ids[0] as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(DataId(motifs_ids[0] as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_t)),
+            (MotifLoaderInput::all_slices(DataId(motifs_ids[1] as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_1_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(DataId(motifs_ids[1] as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_1_t)),
         ]).finish());
 
 
@@ -1027,11 +1045,18 @@ pub mod tests {
                 ])
                 .finish(),
         );
+        //
+        // MotifLoaderInput::all_slices(DataId(channel_0_motif_0 as u32))
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            ((channel_0_motif_0 as u32).into(), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))),
-            ((channel_0_motif_1 as u32).into(), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motifs_tensor(100, 2, MotifKind::Triangle))),
-            ((channel_1_motif_0 as u32).into(), (MotifMeta { channel: 1, find_motifs_run_id, window: 100 }, motifs_tensor(100, 4, MotifKind::Sin))),
+            (MotifLoaderInput::all_slices(DataId(channel_0_motif_0 as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))),
+            (MotifLoaderInput::find_motif_slices_only(DataId(channel_0_motif_0 as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))),
+
+            (MotifLoaderInput::all_slices(DataId(channel_0_motif_1 as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motifs_tensor(100, 2, MotifKind::Triangle))),
+            (MotifLoaderInput::find_motif_slices_only(DataId(channel_0_motif_1 as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motifs_tensor(100, 2, MotifKind::Triangle))),
+
+            (MotifLoaderInput::all_slices(DataId(channel_1_motif_0 as u32)), (MotifMeta { channel: 1, find_motifs_run_id, window: 100 }, motifs_tensor(100, 4, MotifKind::Sin))),
+            (MotifLoaderInput::find_motif_slices_only(DataId(channel_1_motif_0 as u32)), (MotifMeta { channel: 1, find_motifs_run_id, window: 100 }, motifs_tensor(100, 4, MotifKind::Sin))),
         ]).finish());
 
 
