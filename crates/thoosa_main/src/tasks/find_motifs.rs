@@ -29,7 +29,7 @@ use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::distance::MaskMaker::{Le, LeRunningMean, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
-use thoosa_shared::{key_elt, ThoosaError};
+use thoosa_shared::{mono_key, ThoosaError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
@@ -44,7 +44,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
-use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::comp_id::SynKey;
 
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
@@ -54,7 +54,7 @@ pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>
 struct FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C>  + OutId + 'static,
+    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + OutId + 'static,
     C: RunCtx + 'static,
 {
     run_config: Arc<FindMotifsRunConfig>,
@@ -71,7 +71,7 @@ where
 impl<RC, L, C> FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C>  + OutId + 'static,
+    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + OutId + 'static,
     C: RunCtx + 'static,
 {
     pub fn new(
@@ -113,7 +113,7 @@ impl MeanDistsCtx {
 pub struct FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + 'static,
 {
     run_config_stages: Vec<FindMotifsStages<RC, LoaderStageChoice<L, C>, C>>,
@@ -123,7 +123,7 @@ where
 impl<RC, L, C> FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + 'static,
 {
     pub fn new(
@@ -261,8 +261,8 @@ where
 impl<RC, L, C> Stage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + 'static,
     C: RunCtx + 'static,
 {
     type Ctx = C;
@@ -277,8 +277,8 @@ where
 impl<RC, L, C> AsyncStage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C> +  'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> +  'static,
     C: RunCtx + 'static,
 {
 
@@ -320,7 +320,7 @@ where
 pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig) -> Result<Arc<LoaderStageChoice<L, C>>, ThoosaError>
 where
     C: 'static + RunCtx,
-    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C>
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>
 {
     let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.filter.as_ref() {
         None => {
@@ -332,7 +332,7 @@ where
 
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::
             new(
-                CompKey::new([key_elt!("ab", "stage")]),
+                SynKey::new([mono_key!("ab", "stage")]),
                 Arc::clone(loader),
                 Arc::new(FreqFilter::<C>::new(filter_config)?),
             ))))
@@ -373,8 +373,8 @@ mod tests {
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::DataId;
-    use thoosa_shared::comp_id::CompKey;
-    use thoosa_shared::key_elt;
+    use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::mono_key;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::{cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoosaError};
     use thoosa_store::SqlStore;
@@ -519,13 +519,13 @@ mod tests {
         let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
                 let tensor = Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem())))?;
-                Ok(ThoTensor::new(CompKey::new([key_elt!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
+                Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
             },
             ThoDevice::from(Device::Cpu),
         ));
 
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
-        ctx.write().add_permit(global_ctx.acquire_many(0, 1, Arc::new(CompKey::new([key_elt!("test", "test")]))).await?);
+        ctx.write().add_permit(global_ctx.acquire_many(0, 1, Arc::new(SynKey::new([mono_key!("test", "test")]))).await?);
 
         let cache_area = ctx.read().cache_area();
         let resources_input = Arc::new(DevicesWrap::wrap(

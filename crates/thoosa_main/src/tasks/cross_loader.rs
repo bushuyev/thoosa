@@ -23,8 +23,8 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::traits::{Data, Named, WithId};
-use thoosa_shared::comp_id::CompKey;
-use thoosa_shared::key_elt;
+use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::mono_key;
 use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
@@ -38,7 +38,7 @@ where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: for<'i> Cached<
         In<'i> = Resource,
-        Out = ThoTensor<ChannelsData2, CompKey>,
+        Out = ThoTensor<ChannelsData2, SynKey>,
         Ctx=C
     > + OutId + 'static,
 
@@ -71,7 +71,7 @@ impl<ResC, L, CLC, RSV, R, C> Debug for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -86,7 +86,7 @@ impl<ResC, L, CLC, RSV, R, C> CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -179,7 +179,7 @@ impl<ResC, L, CLC, RSV, R, C> Stage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C:RunCtx+'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: Debug + Send + Sync + 'static,
@@ -203,7 +203,7 @@ where
     Self::Out: Data + WithId + Send + Sync,
     <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: Debug + Send + Sync + 'static,
@@ -562,8 +562,8 @@ mod tests {
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::{cdt_for_dir, ResourceType, ThoosaError};
-    use thoosa_shared::key_elt;
-    use thoosa_shared::comp_id::CompKey;
+    use thoosa_shared::mono_key;
+    use thoosa_shared::comp_id::SynKey;
     use thoosa_store::{MockStore, MockStoreBuilder, SqlStore};
     use tokio::task::yield_now;
     use tokio::time::sleep;
@@ -583,21 +583,21 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq, Eq, DummyData)]
     struct TestBatchOutput {
-        id: CompKey,
+        id: SynKey,
         call_index: usize,
     }
 
     impl TestBatchOutput {
         fn new(call_index: usize) -> Self {
             Self {
-                id: CompKey::new([key_elt!("batch_output", "batch_output")]),
+                id: SynKey::new([mono_key!("batch_output", "batch_output")]),
                 call_index,
             }
         }
     }
 
     impl WithId for TestBatchOutput {
-        type ID = CompKey;
+        type ID = SynKey;
 
         fn id(&self) -> &Self::ID {
             &self.id
@@ -645,7 +645,7 @@ mod tests {
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
                 Ok(ThoTensor::new(
-                    CompKey::new([key_elt!(key.id(), format!("resource_id={}", key.id()))]),
+                    SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
                     Tensor::from_slice(v.as_slice()).view((1, 10)),
                 )?)
             },
@@ -740,7 +740,7 @@ mod tests {
                 .finish(),
         );
 
-        let observations = Arc::new(Mutex::new(Vec::<Observation<CompKey>>::new()));
+        let observations = Arc::new(Mutex::new(Vec::<Observation<SynKey>>::new()));
         let produced_outputs = Arc::new(Mutex::new(Vec::<TestBatchOutput>::new()));
         let counter = Arc::new(AtomicUsize::new(0));
 
@@ -841,32 +841,32 @@ mod tests {
         let expected = vec![
             Observation {
                 tensor_ids: vec![
-                    CompKey::new([key_elt!("resource_a", "resource_a")]),
-                    CompKey::new([key_elt!("resource_a", "resource_a")]),
+                    SynKey::new([mono_key!("resource_a", "resource_a")]),
+                    SynKey::new([mono_key!("resource_a", "resource_a")]),
                 ],
                 batch_0_ids: vec![resources[0].id()],
                 batch_1_ids: vec![resources[0].id()],
             },
             Observation {
                 tensor_ids: vec![
-                    CompKey::new([key_elt!("resource_a", "resource_a")]),
-                    CompKey::new([key_elt!("resource_b", "resource_b")]),
+                    SynKey::new([mono_key!("resource_a", "resource_a")]),
+                    SynKey::new([mono_key!("resource_b", "resource_b")]),
                 ],
                 batch_0_ids: vec![resources[0].id()],
                 batch_1_ids: vec![resources[1].id()],
             },
             Observation {
                 tensor_ids: vec![
-                    CompKey::new([key_elt!("resource_b", "resource_b")]),
-                    CompKey::new([key_elt!("resource_a", "resource_a")]),
+                    SynKey::new([mono_key!("resource_b", "resource_b")]),
+                    SynKey::new([mono_key!("resource_a", "resource_a")]),
                 ],
                 batch_0_ids: vec![resources[1].id()],
                 batch_1_ids: vec![resources[0].id()],
             },
             Observation {
                 tensor_ids: vec![
-                    CompKey::new([key_elt!("resource_b", "resource_b")]),
-                    CompKey::new([key_elt!("resource_b", "resource_b")]),
+                    SynKey::new([mono_key!("resource_b", "resource_b")]),
+                    SynKey::new([mono_key!("resource_b", "resource_b")]),
                 ],
                 batch_0_ids: vec![resources[1].id()],
                 batch_1_ids: vec![resources[1].id()],

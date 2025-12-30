@@ -18,7 +18,7 @@ use thoosa_common::dims::Dims;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{key_elt, TensorIdSliceIdx, ThoosaError};
+use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoosaError};
 use thoosa_shared::traits::{CachableIdTr, Data, DataId, Select, WithId};
 use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -40,7 +40,7 @@ use thoosa_shared::resource::{Resource, ResourceId};
 use crate::tasks::find_motifs::{config_to_stage, FilteredLoaderStage, LoaderStageChoice};
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use crate::tasks::transforms::freq_filter::FreqFilter;
-use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::comp_id::SynKey;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
 pub struct MotifLoaderInput {
@@ -99,7 +99,7 @@ impl WithId for MotifLoaderInput {
 #[derive(Debug, Cached)]
 pub struct MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
     store: Arc<RwLock<Box<dyn Store>>>,
@@ -109,7 +109,7 @@ where
 
 impl<L, C> MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
     pub fn new(
@@ -126,7 +126,7 @@ where
 
 impl<L, C> OutId for MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -143,7 +143,7 @@ pub struct MotifMeta {
 
 impl<L, C> Stage for MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
     type In<'a> = MotifLoaderInput;
@@ -155,7 +155,7 @@ where
 // #[async_trait]
 impl<L, C> AsyncStage for MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
 
@@ -198,7 +198,7 @@ where
 #[derive(Debug)]
 pub struct RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
     store: Arc<RwLock<Box<dyn Store>>>,
@@ -208,7 +208,7 @@ where
 
 impl <L,C> RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
     pub fn new(store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>) -> Self {
@@ -239,7 +239,7 @@ impl WithId for SlicesLoaderInput {
 impl Input for SlicesLoaderInput {}
 impl<L, C> Stage for RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
     type In<'a> = SlicesLoaderInput;
@@ -252,7 +252,7 @@ where
 // #[async_trait]
 impl<L, C> AsyncStage for RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
 
@@ -300,7 +300,7 @@ where
 async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &Arc<RwLock<C>>, find_motifs_run_id: u32, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, channel: i64, device_idx: usize, cache_area: u64) -> Result<( u32, ThoTensor<MotifSlices, DataId>), ThoosaError>
 where
     C: 'static + RunCtx,
-    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, CompKey>, Ctx=C>,
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
 {
 
 
@@ -324,15 +324,15 @@ where
 
     debug!("MotifLoader::run: find_motifs_run_id={find_motifs_run_id} window={window:?} device_idx={device_idx}");
 
-    let tmp_cache: TmpCached<ThoTensor<ChannelsData2, CompKey>> = TmpCached::new("motifs", cache_area).await;
+    let tmp_cache: TmpCached<ThoTensor<ChannelsData2, SynKey>> = TmpCached::new("motifs", cache_area).await;
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config)?;
 
     for (resource_id, slices) in resource_ids_slices {
         let out_key = {
-            let out_id = CompKey::new([
-                key_elt!(motif_id.0, format!("motif_id={motif_id}")),
-                key_elt!(resource_id, format!("resource_id={resource_id}")),
+            let out_id = SynKey::new([
+                mono_key!(motif_id.0, format!("motif_id={motif_id}")),
+                mono_key!(resource_id, format!("resource_id={resource_id}")),
             ]);
             Arc::new(out_id) as Arc<dyn CachableIdTr>
         };

@@ -20,27 +20,27 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Data, WithId};
-use thoosa_shared::{key_elt, TensorIdSliceIdx, ThoosaError};
+use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoosaError};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::comp_id::SynKey;
 
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
-    tensors: &'a [&'a ThoTensor<ChannelsData2, CompKey>],
+    tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
     resources_0: &'a [R],
     resources_1: &'a [R],
 }
 
 impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
     pub fn new(
-        tensors: &'a [&'a ThoTensor<ChannelsData2, CompKey>],
+        tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
         b_0: &'a [R],
         b_1: &'a [R],
     ) -> Self {
         Self { tensors, resources_0: b_0, resources_1: b_1 }
     }
 
-    pub fn tensors(&self) -> &'a [&'a ThoTensor<ChannelsData2, CompKey>] {
+    pub fn tensors(&self) -> &'a [&'a ThoTensor<ChannelsData2, SynKey>] {
         self.tensors
     }
 
@@ -136,7 +136,7 @@ where
 
 #[derive(Debug)]
 pub struct CrossUnfoldClcOutput<R: Debug> {
-    id: CompKey,
+    id: SynKey,
     clc_result: R,
     iter_0: SlicesIter,
     iter_1: SlicesIter,
@@ -145,14 +145,14 @@ pub struct CrossUnfoldClcOutput<R: Debug> {
 impl<R: Debug> CrossUnfoldClcOutput<R> {
     pub fn new(clc_result: R, iter_0: SlicesIter, iter_1: SlicesIter) -> Self {
         Self {
-            id: CompKey::new([key_elt!("CrossUnfoldClcOutput", "stage")]),
+            id: SynKey::new([mono_key!("CrossUnfoldClcOutput", "stage")]),
             clc_result,
             iter_0,
             iter_1,
         }
     }
 
-    pub fn id(&self) -> &CompKey {
+    pub fn id(&self) -> &SynKey {
         &self.id
     }
 
@@ -176,7 +176,7 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
 }
 
 impl<R: Debug> WithId for CrossUnfoldClcOutput<R> {
-    type ID = CompKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -270,7 +270,7 @@ where
 }
 
 
-pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, CompKey>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoosaError> {
+pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoosaError> {
     assert!(!input.is_empty(), "unfold_and_cat: input is empty");
 
     let mut batch_0_sizes = vec![];
@@ -322,8 +322,8 @@ mod tests {
     use thoosa_shared::ThoosaError;
     use thoosa_shared::resource::Resource;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_shared::comp_id::CompKey;
-    use thoosa_shared::key_elt;
+    use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::mono_key;
 
     #[test]
     fn test_cross_batch_clc() -> Result<(), ThoosaError> {
@@ -362,18 +362,18 @@ mod tests {
             UnfoldParams::new(1, 2, 1),
         ));
 
-        let tensor_00 = ThoTensor::new(CompKey::new([key_elt!(0u32, "tensor_00")]), Tensor::from_slice(&[
+        let tensor_00 = ThoTensor::new(SynKey::new([mono_key!(0u32, "tensor_00")]), Tensor::from_slice(&[
             0.00, 0.01, 0.02,
             0.10, 0.11, 0.12,
             0.20, 0.21, 0.22,
         ]).view((3,3)))?;
-        let tensor_01 = ThoTensor::new(CompKey::new([key_elt!(1u32, "tensor_01")]), Tensor::from_slice(&[
+        let tensor_01 = ThoTensor::new(SynKey::new([mono_key!(1u32, "tensor_01")]), Tensor::from_slice(&[
             1.00, 1.01, 1.02, 1.03,
             1.10, 1.11, 1.12, 1.13,
             1.20, 1.21, 1.22, 1.23,
         ]).view((3,4)))?;
 
-        let tensor_1 = ThoTensor::new(CompKey::new([key_elt!(2u32, "tensor_1")]), Tensor::from_slice(&[
+        let tensor_1 = ThoTensor::new(SynKey::new([mono_key!(2u32, "tensor_1")]), Tensor::from_slice(&[
             2.00, 2.01,
             2.10, 2.11,
             2.20, 2.21,

@@ -16,9 +16,9 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{key_elt, simple_id, ThoosaError};
+use thoosa_shared::{mono_key, simple_id, ThoosaError};
 use thoosa_shared::traits::{Adjustable, WithId};
-use thoosa_shared::comp_id::CompKey;
+use thoosa_shared::comp_id::SynKey;
 use crate::tasks::run_ctx_2::MotifsCtx;
 
 
@@ -26,7 +26,7 @@ use crate::tasks::run_ctx_2::MotifsCtx;
 
 #[derive(Debug, Clone, DummyData)]
 pub struct LoadMotifNetInput {
-    id:CompKey,
+    id: SynKey,
     motif_id:u32,
     channel:u32,
     // train_motif_nets_run_id:RunId
@@ -36,9 +36,9 @@ pub struct LoadMotifNetInput {
 impl LoadMotifNetInput {
     pub fn new(motif_id: u32, channel:u32/*train_motif_nets_run_id: RunId*/) -> Self {
         Self {
-            id: CompKey::new([
-                key_elt!(motif_id, format!("motif_id={motif_id}")),
-                key_elt!(channel, format!("channel={channel}")),
+            id: SynKey::new([
+                mono_key!(motif_id, format!("motif_id={motif_id}")),
+                mono_key!(channel, format!("channel={channel}")),
             ]),
             motif_id,
             channel,
@@ -51,7 +51,7 @@ impl Input for LoadMotifNetInput {
 }
 
 impl WithId for  LoadMotifNetInput{
-    type ID = CompKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id

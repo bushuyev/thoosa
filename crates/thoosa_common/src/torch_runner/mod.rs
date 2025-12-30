@@ -103,11 +103,11 @@ mod tests {
     use tch::{Device, IndexOp, Kind, Scalar, Tensor};
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, Select, SimpleId, WithId};
-    use thoosa_shared::{key_elt, simple_id, CopyToDevice};
+    use thoosa_shared::{mono_key, simple_id, CopyToDevice};
     use thoosa_shared::{MyError, ThoosaError};
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::{fmt, EnvFilter};
-    use thoosa_shared::comp_id::{CompKey, KeyElt};
+    use thoosa_shared::comp_id::{SynKey, MonoKey};
     use thoosa_shared::runner::tmp_cache::TmpCached;
     use thoosa_shared::copy_mode::CpuOnly;
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
@@ -135,8 +135,8 @@ mod tests {
     #[delegate(PermitsCtx, target = "perms_ctx")]
     pub struct TorchRunCtx {
         device_idx: usize,
-        loaded_tensors_cached: Vec<CompKey>,
-        multed_tensors_cached: Vec<CompKey>,
+        loaded_tensors_cached: Vec<SynKey>,
+        multed_tensors_cached: Vec<SynKey>,
         cache_area: u64,
         name: &'static str,
         perms_ctx: TorchPermsCtx,
@@ -289,8 +289,8 @@ mod tests {
         }
     }
 
-    impl Select<LoadedRange> for ThoTensor<LoadedTensor, CompKey> {
-        type Output = ThoTensor<LoadedTensor, CompKey>;
+    impl Select<LoadedRange> for ThoTensor<LoadedTensor, SynKey> {
+        type Output = ThoTensor<LoadedTensor, SynKey>;
 
         fn subview(&self, selector: LoadedRange) -> Result<Self::Output, ThoosaError> {
             let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.range.start, &selector.range.end)?;//TODO unwrap
@@ -325,13 +325,13 @@ mod tests {
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
             debug!("TestTensorLoader::out_id: input_id={input_id:?}");
-            CompKey::new([key_elt!(input_id.0, "resource key")])
+            SynKey::new([mono_key!(input_id.0, "resource key")])
         }
     }
 
     impl Stage for TestTensorLoader {
         type In<'a> = LoaderInput;
-        type Out = ThoTensor<LoadedTensor, CompKey>;
+        type Out = ThoTensor<LoadedTensor, SynKey>;
         type Ctx = TorchRunCtx;
     }
 
@@ -391,7 +391,7 @@ mod tests {
     #[derive(Debug, cached_derive::Cached)]
     #[cache_name = "MulTaskOutputId"]
     struct ClcTask {
-        id: CompKey,
+        id: SynKey,
         k: ThoTensor<MulK, SimpleId>,
         fail_until: Vec<FailUntil>,
         use_matmul: bool,
@@ -399,7 +399,7 @@ mod tests {
 
     impl ClcTask {
         pub fn new(
-            id: CompKey,
+            id: SynKey,
             k: impl Into<Scalar>,
             fail_until: Vec<FailUntil>,
             dim: i64,
@@ -442,7 +442,7 @@ mod tests {
 
 
     impl OutId for ClcTask {
-        fn out_id(&self, input_id: &CompKey) -> CompKey {
+        fn out_id(&self, input_id: &SynKey) -> SynKey {
 
             &self.id + input_id
         }
@@ -456,20 +456,20 @@ mod tests {
 
     impl LoadedTensor {
         fn clc_hadamard(
-            id: CompKey,
-            loaded: &ThoTensor<LoadedTensor, CompKey>,
+            id: SynKey,
+            loaded: &ThoTensor<LoadedTensor, SynKey>,
             k: &ThoTensor<MulK, SimpleId>,
-        ) -> Result<ThoTensor<ClcTaskOutput, CompKey>, ThoosaError> {
+        ) -> Result<ThoTensor<ClcTaskOutput, SynKey>, ThoosaError> {
 
             ThoTensor::new( id,loaded.t_ref().multiply(&k.as_ref()))
 
         }
 
         fn clc_sum(
-            id: CompKey,
-            loaded: &ThoTensor<LoadedTensor, CompKey>,
+            id: SynKey,
+            loaded: &ThoTensor<LoadedTensor, SynKey>,
             k: &ThoTensor<MulK, SimpleId>,
-        ) -> Result<ThoTensor<ClcTaskOutput, CompKey>, ThoosaError> {
+        ) -> Result<ThoTensor<ClcTaskOutput, SynKey>, ThoosaError> {
             debug!("LoadedTensor::clc_sum: loaded={:?} k.t={:?}",loaded.t,k.t);
 
             let multed = loaded.t_ref().f_multiply(&k.as_ref());
@@ -491,8 +491,8 @@ mod tests {
     }
 
     impl Stage for ClcTask {
-        type In<'a> = ThoTensor<LoadedTensor, CompKey>;
-        type Out = ThoTensor<ClcTaskOutput, CompKey>;
+        type In<'a> = ThoTensor<LoadedTensor, SynKey>;
+        type Out = ThoTensor<ClcTaskOutput, SynKey>;
         type Ctx = TorchRunCtx;
     }
 
@@ -581,7 +581,7 @@ mod tests {
 
             let output = input
                 .with_data_ref(device_idx,
-                               Arc::clone(&ctx), None, move |tensor: &ThoTensor<LoadedTensor, CompKey>| {
+                               Arc::clone(&ctx), None, move |tensor: &ThoTensor<LoadedTensor, SynKey>| {
                         Arc::clone(&stage).do_run(tensor, Arc::clone(&ctx_for_run))
                     })
                 .await?;
@@ -617,12 +617,12 @@ mod tests {
 
         loader: Arc<TestTensorLoader>,
         clc_task: Arc<ClcTask>,
-        clc_oom_runner: ClcOOMRunner<ClcTask, LoadedRange, SingleDimTensorOutputBuilder<CompKey, ClcTaskOutput>>,
+        clc_oom_runner: ClcOOMRunner<ClcTask, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
     }
 
     impl Stage for LoadAndClcTask {
         type In<'a> = LoaderInput;
-        type Out = ThoTensor<ClcTaskOutput, CompKey>;
+        type Out = ThoTensor<ClcTaskOutput, SynKey>;
         type Ctx = TorchRunCtx;
     }
 
@@ -705,7 +705,7 @@ mod tests {
             k: impl Into<Scalar>,
             fail_until: Vec<FailUntil>,
             dim: MonoMetrics<1, 2>,
-            oom_runner: ClcOOMRunner<ClcTask, LoadedRange, SingleDimTensorOutputBuilder<CompKey, ClcTaskOutput>>,
+            oom_runner: ClcOOMRunner<ClcTask, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
             kind: Kind,
             device: Device,
             use_matmul: bool,
@@ -715,7 +715,7 @@ mod tests {
                 id,
                 loader: Arc::new(TestTensorLoader::new(dim, kind)),
                 clc_task: Arc::new(ClcTask::new(
-                    CompKey::new([key_elt!(0, "mul_task_0")]),
+                    SynKey::new([mono_key!(0, "mul_task_0")]),
                     k,
                     fail_until,
                     dim_1,
@@ -782,7 +782,7 @@ mod tests {
         debug!("loaded_tensor_0_0={loaded_tensor_0_0:?}");
 
         let tensor_data_0_0 = loaded_tensor_0_0
-            .with_data_ref(load_to_device, Arc::clone(&ctx_device_0), None, |tensor_data_0_0: &ThoTensor<LoadedTensor, CompKey>| {
+            .with_data_ref(load_to_device, Arc::clone(&ctx_device_0), None, |tensor_data_0_0: &ThoTensor<LoadedTensor, SynKey>| {
                     debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
 
                     assert!(
@@ -812,7 +812,7 @@ mod tests {
 
         loaded_tensor_0_0
             .with_data_ref(load_to_device,
-                           Arc::clone(&ctx_device_0), None, move|tensor_data_0_1: &ThoTensor<LoadedTensor, CompKey>| {
+                           Arc::clone(&ctx_device_0), None, move|tensor_data_0_1: &ThoTensor<LoadedTensor, SynKey>| {
                     // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
                     assert_eq!(&tensor_data_0_0, tensor_data_0_1.t_ref());
@@ -843,7 +843,7 @@ mod tests {
             ClcOOMRunner::new(
                 OOMRunnerConfig::Permits { max: 20, step: 10 },
                 Box::new(move |id| {
-                    SingleDimTensorOutputBuilder::<CompKey, ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
                         id,
                         1,
                         &size,
@@ -875,7 +875,7 @@ mod tests {
         mul_k: f64,
         size: MonoMetrics<1, 2>,
         res: &str,
-        result: &ThoTensor<ClcTaskOutput, CompKey>,
+        result: &ThoTensor<ClcTaskOutput, SynKey>,
         rtol: f64,
         atol: f64,
     ) {
@@ -887,7 +887,7 @@ mod tests {
     fn mul_check_with_exp_f<F>(
         mul_k: f64,
         res: &str,
-        result: &ThoTensor<ClcTaskOutput, CompKey>,
+        result: &ThoTensor<ClcTaskOutput, SynKey>,
         rtol: f64,
         atol: f64,
         exp_f: F,
@@ -926,7 +926,7 @@ mod tests {
             ClcOOMRunner::new(
                 OOMRunnerConfig::Permits { max: 20, step: 10 },
                 Box::new(move |id| {
-                    SingleDimTensorOutputBuilder::<CompKey, ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
                         id,
                         1,
                         &size,
@@ -976,7 +976,7 @@ mod tests {
                     step: *PermitStep::TEN,
                 },
                 Box::new(move |id| {
-                    SingleDimTensorOutputBuilder::<CompKey, ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
                         id,
                         1,
                         &size,
@@ -1024,7 +1024,7 @@ mod tests {
             ClcOOMRunner::new(
                 OOMRunnerConfig::Splits {},
                 Box::new(move |id| {
-                    SingleDimTensorOutputBuilder::<CompKey, ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
                         id,
                         1,
                         &size,
@@ -1079,7 +1079,7 @@ mod tests {
                     step: *PermitStep::TEN,
                 },
                 Box::new(move |id| {
-                    SingleDimTensorOutputBuilder::<CompKey, ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
                         id,
                         1,
                         &size,
@@ -1130,7 +1130,7 @@ mod tests {
             ClcOOMRunner::new(
                 OOMRunnerConfig::DumpedToCpu {},
                 Box::new(move |id| {
-                    SingleDimTensorOutputBuilder::<CompKey, ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
                         id,
                         1,
                         &[3, 100],
@@ -1180,7 +1180,7 @@ mod tests {
             ClcOOMRunner::new(
                 OOMRunnerConfig::DumpedToCpu {},
                 Box::new(move |id| {
-                    SingleDimTensorOutputBuilder::<CompKey, ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
                         id,
                         1,
                         &size,
@@ -1217,7 +1217,7 @@ mod tests {
                 .await
                 // .get(&SimpleId::from(format!("loaded_resource_{i}")));
                 .get(
-                    &CompKey::new([key_elt!(i, "resource key")])
+                    &SynKey::new([mono_key!(i, "resource key")])
                 );
             let reff = cached_loaded.expect(&format!("no entry for resource_{i}"));
             debug!(
@@ -1232,7 +1232,7 @@ mod tests {
                 .await
                 .get(
                     // &SimpleId::from(format!("mult_mul_task_0_inp_loaded_resource_{i}"))
-                    &CompKey::new([key_elt!("MulTask", "MulTask"), key_elt!(i, "resource key")])
+                    &SynKey::new([mono_key!("MulTask", "MulTask"), mono_key!(i, "resource key")])
                 );
             let reff = cached_multed.expect(&format!("no entry for esource_{i}"));
             debug!(
@@ -1245,7 +1245,7 @@ mod tests {
         }
 
         let mut loaded_tensors_ids = HashSet::new();
-        let loaded_tensor_3 =  CompKey::new([key_elt!("resource_3", "resource_3")]);
+        let loaded_tensor_3 =  SynKey::new([mono_key!("resource_3", "resource_3")]);
         loaded_tensors_ids.insert(&loaded_tensor_3 as &dyn CachableIdTr);
 
         let mut multed_tensors_ids = HashSet::new();
@@ -1263,7 +1263,7 @@ mod tests {
                 .await
                 .get(
                     // &SimpleId::from(format!("loaded_resource_{i}"))
-                    &CompKey::new([key_elt!(i, "resource key")])
+                    &SynKey::new([mono_key!(i, "resource key")])
                 );
             let reff = cached_loaded.expect(&format!("no entry for loaded_resource_{i}"));
             debug!(
@@ -1282,7 +1282,7 @@ mod tests {
                 .await
                 .get(
                     // &SimpleId::from(format!("mult_mul_task_0_inp_loaded_resource_{i}"))
-                    &CompKey::new([key_elt!("MulTask", "MulTask"), key_elt!(i, "resource key")])
+                    &SynKey::new([mono_key!("MulTask", "MulTask"), mono_key!(i, "resource key")])
                 );
             let reff = cached_multed.expect(&format!("no entry for loaded_resource_{i}"));
             debug!(
@@ -1330,7 +1330,7 @@ mod tests {
             ClcOOMRunner::new(
                 OOMRunnerConfig::DumpedToCpu {},
                 Box::new(move |id| {
-                    SingleDimTensorOutputBuilder::<CompKey, ClcTaskOutput>::new(
+                    SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
                         id,
                         1,
                         &[dim_1, 1],
@@ -1365,7 +1365,7 @@ mod tests {
 
         multed
             .with_data_ref(1,
-                   Arc::clone(&ctx_device), None, |r: &ThoTensor<ClcTaskOutput, CompKey>| {
+                   Arc::clone(&ctx_device), None, |r: &ThoTensor<ClcTaskOutput, SynKey>| {
                     mul_check_with_exp_f(MUL_K as f64, "resource_1", r, 0.01, 0.01, |k, t| {
                         lin_for_size(k, size, t.kind(), &t.device())
                             .sum_dim_intlist(1, false, t.kind())
