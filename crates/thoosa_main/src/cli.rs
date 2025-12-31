@@ -507,14 +507,14 @@ where
                 step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
                 window: RangeOrValue::Value(1000), //RangeOrValue::Range { range: Range { start: 1000, end: 2001 }, step: Some((1000, 1)) },
                 min_tracker_step: None,
-                filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
-                    low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((100., 1)) },
-                    band_hz: RangeOrValue::Value(100.),
-                    kernel_size: RangeOrValue::Value(1000),
-                    stride: RangeOrValue::Value(1),
-                    padding: RangeOrValue::Value(0),
-                })),
-                // filter: None,
+                // filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
+                //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((100., 1)) },
+                //     band_hz: RangeOrValue::Value(100.),
+                //     kernel_size: RangeOrValue::Value(1000),
+                //     stride: RangeOrValue::Value(1),
+                //     padding: RangeOrValue::Value(0),
+                // })),
+                filter: None,
                 slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ mean: RangeOrValue::Value(0.02)}),
             };
 
@@ -579,11 +579,11 @@ where
 
 
             let common_training_args = CommonTrainingRunConfigRangeOrValue {
-                cycles: RangeOrValue::Value(60),
-                batch_size: RangeOrValue::Value(11),
+                cycles: RangeOrValue::Value(100),
+                batch_size: RangeOrValue::Value(20),
                 lr: RangeOrValue::Value(0.0001),
             };
-            let opt_config = Arc::new(OptConfig::new(60, 20));
+            let opt_config = Arc::new(OptConfig::new(100, 20));
 
             let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
                 id: None,
