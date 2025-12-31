@@ -830,7 +830,7 @@ mod tests {
                 let sum_1 = t_1.f_sum_dim_intlist(2, false, Kind::Float)?;
                 let dists = sum_0.unsqueeze(2) + sum_1.unsqueeze(1);
                 let mask = (sum_0.unsqueeze(2) - sum_1.unsqueeze(1)).lt(0.0);
-                Ok(DistsMask::new(mask, Some(dists), false, None))
+                Ok(DistsMask::new(mask, Some(dists), false, None)?)
             },
             (),
             UnfoldParams::new(1, unfold_size, unfold_step),

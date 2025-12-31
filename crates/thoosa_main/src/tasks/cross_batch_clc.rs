@@ -467,7 +467,7 @@ mod tests {
                     Some(Tensor::rand(&[0], FLOAT_CPU)),
                     false,
                     None,
-                ))
+                )?)
             },
             MeanDistsCtx::new(3, Cuda(0)),
             UnfoldParams::new(1, 2, 1),
