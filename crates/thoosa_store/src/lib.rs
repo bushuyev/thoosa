@@ -3394,8 +3394,11 @@ mod store_tests {
         debug!("motifs: {:?}", motifs);
 
         //7th channel
-        assert_eq!(motif_slices_444[0].motif_id, motifs[7][0].0);//TODO fails randomly because of motif_id
-        assert_eq!(motif_slices_1111[0].motif_id, motifs[7][1].0);
+        let mut motif_ids = motifs[7].iter().map(|(motif_id, _)| *motif_id).collect::<Vec<_>>();
+        motif_ids.sort();
+        let mut expected_ids = vec![motif_slices_444[0].motif_id, motif_slices_1111[0].motif_id];
+        expected_ids.sort();
+        assert_eq!(expected_ids, motif_ids);
         //
         // //TODO
         let (channel, run_id_, mut slices, resources_map) =
