@@ -1,15 +1,16 @@
-use crate::tasks::cross_dims::{ChannelsData2};
+use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::slices_iter::SlicesIter;
 use async_trait::async_trait;
-use thoosa_shared::runner::common::cachable::DevicesWrap;
+use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
-use thoosa_shared::runner::common::RunCtx;
+use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
 use log::{debug, trace};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use std::ops::Range;
 use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use tch::Tensor;
@@ -19,13 +20,14 @@ use thoosa_motifs::distance::{clc_dist_d2, clc_dist_d2_and_mask};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Data, WithId};
+use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoosaError};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
+    id: MonoKey,
     tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
     resources_0: &'a [R],
     resources_1: &'a [R],
@@ -37,7 +39,13 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
         b_0: &'a [R],
         b_1: &'a [R],
     ) -> Self {
-        Self { tensors, resources_0: b_0, resources_1: b_1 }
+        let batch_0_ids = b_0.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
+        let batch_1_ids = b_1.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
+        let id = mono_key!(
+            format!("cross_input_b0={batch_0_ids:?}_b1={batch_1_ids:?}"),
+            "CrossInput"
+        );
+        Self { id, tensors, resources_0: b_0, resources_1: b_1 }
     }
 
     pub fn tensors(&self) -> &'a [&'a ThoTensor<ChannelsData2, SynKey>] {
@@ -53,19 +61,102 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
     }
 }
 
+impl<'a, R: AsRef<Resource> + Debug + Send + Sync> WithId for CrossInput<'a, R> {
+    type ID = MonoKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
 impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Input for CrossInput<'a, R> {}
 
 impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Data for CrossInput<'a, R> {
-    type Metrics = ();
+    type Metrics = i64;
     type M = CpuOnly<Self>;
 
     fn size(&self) -> Self::Metrics {
-        ()
+        self.resources_1.len() as i64
     }
 
     fn device(&self) -> usize {
         0
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CrossInputBatch1Selector {
+    resources_batch_range: Range<i64>,
+}
+
+impl From<Range<i64>> for CrossInputBatch1Selector {
+    fn from(value: Range<i64>) -> Self {
+        Self { resources_batch_range: value }
+    }
+}
+
+impl Adjustable for CrossInputBatch1Selector {}
+
+impl<'a, R> WithDataRef for CrossInput<'a, R>
+where
+    R: AsRef<Resource> + Debug + Send + Sync + 'static,
+{
+    type O<'o> = CrossInput<'o, R>;
+
+    async fn with_data_ref<Rt, F, P>(
+        &self,
+        _to_device_idx: usize,
+        _permits_ctx: Arc<parking_lot::RwLock<P>>,
+        _trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> Result<Rt, ThoosaError>
+    where
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<Rt, ThoosaError> + Send,
+        P: PermitsCtx,
+    {
+        do_run(self)
+    }
+}
+
+impl<'a, R> WithSelectDataRef<CrossInputBatch1Selector> for CrossInput<'a, R>
+where
+    R: AsRef<Resource> + Debug + Send + Sync + 'static,
+{
+    async fn with_selected_data_ref<'o, Rt, F, P>(
+        &self,
+        _to_device_idx: usize,
+        _permits_ctx: Arc<parking_lot::RwLock<P>>,
+        selector: CrossInputBatch1Selector,
+        _trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> Result<Rt, ThoosaError>
+    where
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<Rt, ThoosaError>,
+        P: PermitsCtx,
+    {
+        let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
+        let batch_0_len = self.resources_0.len();
+        let batch_1_offset = batch_0_len + range.start;
+        let batch_1_end = batch_0_len + range.end;
+
+        let mut selected_tensors = Vec::with_capacity(batch_0_len + (range.end - range.start));
+        selected_tensors.extend_from_slice(&self.tensors[..batch_0_len]);
+        selected_tensors.extend_from_slice(&self.tensors[batch_1_offset..batch_1_end]);
+
+        let input = CrossInput::new(
+            selected_tensors.as_slice(),
+            self.resources_0,
+            &self.resources_1[range],
+        );
+
+        do_run(&input)
+    }
+}
+
+pub trait CrossClcResultMerge: Debug + Send + Sync {
+    fn merge_batch_1(self, other: Self) -> Result<Self, ThoosaError>
+    where
+        Self: Sized;
 }
 
 #[derive(Debug)]
@@ -99,7 +190,7 @@ impl UnfoldParams {
 
 pub struct CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
     C: RunCtx + 'static,
 {
     batch_clc_fn: F,
@@ -110,7 +201,7 @@ where
 
 impl<F, R, CUC, C> Debug for CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
     C: RunCtx + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -121,7 +212,7 @@ where
 
 impl<F, R, CUC, C> CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
     C: RunCtx + 'static,
 {
     pub fn new(batch_clc: F, cross_batch_ctx: CUC, unfold_params: UnfoldParams) -> Self {
@@ -131,6 +222,26 @@ where
             unfold_params,
             _ctx: PhantomData,
         }
+    }
+}
+
+impl<F, R, CUC, C> Adjustable for CrossUnfoldClc<F, R, CUC, C>
+where
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError> + Send + Sync,
+    CUC: Send + Sync,
+    R: Debug,
+    C: RunCtx + 'static,
+{
+}
+
+impl<F, R, CUC, C> OutId for CrossUnfoldClc<F, R, CUC, C>
+where
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
+    R: Debug,
+    C: RunCtx + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        input_id.clone()
     }
 }
 
@@ -201,11 +312,11 @@ impl<R: Debug> Output for CrossUnfoldClcOutput<R> {}
 
 impl<F, R, CUC, C> Stage for CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
     R: Debug,
     C: RunCtx + 'static,
 {
-    type In<'a> = CrossInput<'a, &'a Arc<Resource>>;
+    type In<'a> = CrossInput<'a, Arc<Resource>>;
 
     type Out = CrossUnfoldClcOutput<R>;
     type Ctx = C;
@@ -214,7 +325,7 @@ where
 
 impl<F, R, CUC, C> SyncStage for CrossUnfoldClc<F, R, CUC, C>//CUC Cross Unfold Context
 where
-    for<'a> F: Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError> + 'a,
+    for<'a> F: Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError> + 'a,
     R: Debug + Output + Input + Send + 'static,
     for<'a> CUC: 'a,
     C: RunCtx + 'static,
@@ -383,15 +494,15 @@ mod tests {
 
         let resource_00 = Arc::new(Resource::new(0, 0, "file_00", 10));
         let resource_01 = Arc::new(Resource::new(1, 0, "file_01", 10));
-        let chunk_0_resources = vec![&resource_00, &resource_01];
+        let chunk_0_resources = vec![Arc::clone(&resource_00), Arc::clone(&resource_01)];
 
         let resource_1 = Arc::new(Resource::new(2, 0, "file_1", 10));
-        let chunk_1_resources = vec![&resource_1];
+        let chunk_1_resources = vec![Arc::clone(&resource_1)];
 
         let input = CrossInput::new(
             &tensors,
-            &chunk_0_resources.as_slice(),
-            &chunk_1_resources.as_slice(),
+            chunk_0_resources.as_slice(),
+            chunk_1_resources.as_slice(),
         );
         let out = cross_batch_clc.do_run(&input, Arc::new(RwLock::new(RunCtx2::new(0, 0, "test"))))?;
 

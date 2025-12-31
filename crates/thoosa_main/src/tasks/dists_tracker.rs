@@ -1,4 +1,4 @@
-use crate::tasks::cross_batch_clc::CrossUnfoldClcOutput;
+use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossUnfoldClcOutput};
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use thoosa_shared::runner::common::cachable::DevicesWrap;
@@ -149,6 +149,38 @@ impl DistsMask {
         }
     }
 
+}
+
+impl CrossClcResultMerge for DistsMask {
+    fn merge_batch_1(self, other: Self) -> Result<Self, ThoosaError> {
+        let left = self;
+        let right = other;
+
+        if let Some(stream) = left.stream_to_sync.as_ref() {
+            stream.synchronize();
+        }
+        if let Some(stream) = right.stream_to_sync.as_ref() {
+            stream.synchronize();
+        }
+
+        let pack = left.sizes.is_some();
+        if pack != right.sizes.is_some() {
+            return Err(ThoosaError::new("DistsMask merge: pack mismatch"));
+        }
+
+        let (mask_left, dists_left) = left.unpack();
+        let (mask_right, dists_right) = right.unpack();
+
+        let mask = Tensor::f_concat(&[mask_left, mask_right], 2)?;
+
+        let dists = match (dists_left, dists_right) {
+            (Some(left), Some(right)) => Some(Tensor::f_concat(&[left, right], 2)?),
+            (None, None) => None,
+            _ => return Err(ThoosaError::new("DistsMask merge: dists mismatch")),
+        };
+
+        Ok(DistsMask::new(mask, dists, pack, None))
+    }
 }
 
 pub struct DistsTracker<C>
