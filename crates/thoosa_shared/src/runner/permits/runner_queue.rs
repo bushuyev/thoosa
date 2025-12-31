@@ -3,6 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use log::{error, info, trace, debug};
+use parking_lot::RwLock;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{MyError, ThoosaError};
 use tokio::sync::{Notify, Semaphore, TryAcquireError, mpsc, oneshot};
@@ -124,7 +125,9 @@ impl Arbiter {
             let mut super_id: Option<Arc<dyn CachableIdTr>> = None;
             const SUPERTASK_FAIL_THRESHOLD: u32 = 3;
             let capacity: u32 = sem.available_permits() as u32;
-            let (drop_tx, mut drop_rx) = mpsc::unbounded_channel::<Arc<dyn CachableIdTr>>();
+            let (drop_tx, mut drop_rx) = mpsc::unbounded_channel::<(Arc<dyn CachableIdTr>, u8)>();
+
+
             loop {
                 if shutdown.load(Ordering::Acquire) {
                     debug!("Arbiter::spawn: shutting down device_idx={device_idx}");
@@ -150,7 +153,8 @@ impl Arbiter {
                                 match Arc::clone(&sem).try_acquire_many_owned(rq.needed as u32) {
                                     Ok(inner) => {
 
-                                        granted_counts.insert(rq.requester_id.clone(), inner.num_permits());
+                                        *granted_counts.entry(rq.requester_id.clone()).or_insert(0) +=inner.num_permits();
+
                                         granted_counts_len.store(granted_counts.len(), Ordering::Release);
                                         let perm = RunnerPerm::with_drop_signal(
                                             inner,
@@ -193,14 +197,14 @@ impl Arbiter {
                             match Arc::clone(&sem).try_acquire_many_owned(front.needed as u32) {
                                 Ok(inner) => {
                                     debug!("Arbiter::spawn: device_idx={device_idx} acquired {}", front.needed);
-
+                                    debug_assert_eq!(inner.num_permits(), front.needed as usize);
                                     let Req {
                                         needed: _,
                                         reply,
                                         requester_id,
                                     } = q.pop_front().unwrap();
 
-                                    granted_counts.insert(requester_id.clone(), inner.num_permits());
+                                    *granted_counts.entry(requester_id.clone()).or_insert(0) +=inner.num_permits();
 
                                     granted_counts_len.store(granted_counts.len(), Ordering::Release);
 
@@ -218,7 +222,7 @@ impl Arbiter {
                                     // loop to try the new head
                                 }
                                 Err(TryAcquireError::NoPermits) => {
-                                    debug!("Arbiter::spawn: device_idx={device_idx} TryAcquireError::NoPermits: q.len={} front={front:?} granted_counts={granted_counts:?}", q.len());
+                                    debug!("Arbiter::spawn: device_idx={device_idx} TryAcquireError::NoPermits: q.len={} front={front:?} granted_counts={granted_counts:?} available_permits={}", q.len(), sem.available_permits());
                                     // if q.len() >= 2 && front.needed > 1 {
                                         // Pop and fail the head to trigger drop/degradation.
                                         let Req { reply, requester_id, .. } = q.pop_front().unwrap();
@@ -230,6 +234,7 @@ impl Arbiter {
                                         if *c >= SUPERTASK_FAIL_THRESHOLD {
                                             super_id = Some(requester_id);
                                         }
+                                    break
                                     // } else {
                                     //     break;
                                     // }
@@ -267,7 +272,11 @@ impl Arbiter {
                         }
                     }
                     Some(dropped) = drop_rx.recv() => {
-                        granted_counts.remove(&dropped);
+                        let val_ref = granted_counts.get_mut(&dropped.0).expect(&format!("no entry for {:?}", dropped.0));
+                        *val_ref-= dropped.1 as usize;
+                        if *val_ref == 0 {
+                            granted_counts.remove(&dropped.0);
+                        }
                         granted_counts_len.store(granted_counts.len(), Ordering::Release);
                     }
                     _ = notify.notified() => {
@@ -279,32 +288,32 @@ impl Arbiter {
                 }
 
                 // If there is a supertask pending, try to serve it with full capacity now.
-                if let Some(sc) = super_id.clone() {
-                    if let Some(pos) = q.iter().position(|r| r.requester_id.as_ref().eq(sc.as_ref())) {
-
-                        match Arc::clone(&sem).try_acquire_many_owned(capacity) {
-                            Ok(inner) => {
-                                let Req { reply, requester_id, .. } = q.remove(pos).unwrap();
-                                granted_counts.insert(requester_id.clone(), inner.num_permits());
-                                granted_counts_len.store(granted_counts.len(), Ordering::Release);
-                                let _ = reply.send(Ok(RunnerPerm::with_drop_signal(
-                                    inner,
-                                    DropSignal::new(
-                                        Arc::clone(&notify),
-                                        drop_tx.clone(),
-                                        Arc::clone(&requester_id),
-                                    ),
-                                )));
-                                fail_counts.remove(&requester_id);
-                                super_id = None;
-                            }
-                            Err(e) => {
-                                /* not enough yet → wait for next notify */
-                                debug!("Arbiter::spawn: e={e:?}");
-                            }
-                        }
-                    }
-                }
+                // if let Some(sc) = super_id.clone() {
+                //     if let Some(pos) = q.iter().position(|r| r.requester_id.as_ref().eq(sc.as_ref())) {
+                //
+                //         match Arc::clone(&sem).try_acquire_many_owned(capacity) {
+                //             Ok(inner) => {
+                //                 let Req { reply, requester_id, .. } = q.remove(pos).unwrap();
+                //                 granted_counts.insert(requester_id.clone(), inner.num_permits());
+                //                 granted_counts_len.store(granted_counts.len(), Ordering::Release);
+                //                 let _ = reply.send(Ok(RunnerPerm::with_drop_signal(
+                //                     inner,
+                //                     DropSignal::new(
+                //                         Arc::clone(&notify),
+                //                         drop_tx.clone(),
+                //                         Arc::clone(&requester_id),
+                //                     ),
+                //                 )));
+                //                 fail_counts.remove(&requester_id);
+                //                 super_id = None;
+                //             }
+                //             Err(e) => {
+                //                 /* not enough yet → wait for next notify */
+                //                 debug!("Arbiter::spawn: e={e:?}");
+                //             }
+                //         }
+                //     }
+                // }
             }
             debug!("Arbiter::spawn: after loop");
         })

@@ -28,7 +28,7 @@ use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, Permit
 use thoosa_shared::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
-use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopRunnableContext, OOMHandler};
+use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, WithId};
 use thoosa_shared::comp_id::SynKey;
@@ -359,18 +359,18 @@ where
 
                         let out = OOMHandler::new(
                             vec![
-                                Adjusters::RunContext(Box::new(PermitsAdjuster::new(
-                                    MAX_PERMITS,
-                                    *PermitStep::TWENTY,
-                                    move |n| {
-                                        GlobalCtx::global().acquire_many(
-                                            device_idx,
-                                            n,
-                                            Arc::new(simple_id!(ctx_name))
-                                        )
-                                    },
-                                ))),
-                                Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                                // Adjusters::RunContext(Box::new(PermitsAdjuster::new(
+                                //     MAX_PERMITS,
+                                //     *PermitStep::TWENTY,
+                                //     move |n| {
+                                //         GlobalCtx::global().acquire_many(
+                                //             device_idx,
+                                //             n,
+                                //             Arc::new(simple_id!(ctx_name))
+                                //         )
+                                //     },
+                                // ))),
+                                // Adjusters::RunContext(Box::new(DumpToCpu::new())),
                                 Adjusters::Input(Box::new(SplitsAdjuster::<CrossInputBatch1Selector, i64>::new(1))),
                             ],
                             None,
@@ -382,10 +382,11 @@ where
                             Contexts::new(
                                 SplitsAdjusterContextImpl::new(input_len, CrossUnfoldClcOutputBuilder::new()),
                                 NoopRunnableContext {},
-                                PermitsAndDumpToCpuAdjustableContex::new(
-                                    PermitsAdjustContextImpl::new(ctx_name),
-                                    DumpToCpuContextImpl::new(&required_ids),
-                                ),
+                                NoopRunCtxContext{},
+                                // PermitsAndDumpToCpuAdjustableContex::new(
+                                //     PermitsAdjustContextImpl::new(ctx_name),
+                                //     DumpToCpuContextImpl::new(&required_ids),
+                                // ),
                             ),
                         )
                         .await?;
@@ -737,7 +738,7 @@ mod tests {
         test_cross_clc(None, 20).await
     }
 
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_cross_clc_with_oom() -> Result<(), ThoosaError> {
         test_cross_clc(Some(20), 40).await
     }
@@ -759,7 +760,7 @@ mod tests {
             .map(|v| v.to_string())
             .collect();
 
-        let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
+        let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa")));
 
         let resource_stats = resource_keys
             .iter()

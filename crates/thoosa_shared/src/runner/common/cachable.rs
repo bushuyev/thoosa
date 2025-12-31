@@ -419,11 +419,10 @@ where
         P: PermitsCtx + 'a
     {
         Box::pin(async move {
-            let _permit = if permits_ctx.read().acquired_permits() == 0 {
-                Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
-            } else {
-                None
-            };
+            if permits_ctx.read().acquired_permits() == 0 {
+                let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?;
+                permits_ctx.write().add_permit(permit);
+            }
 
 
             match wrap.load_from_any_device_(to_device_idx).await {
