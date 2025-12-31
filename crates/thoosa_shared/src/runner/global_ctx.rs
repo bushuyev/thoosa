@@ -234,7 +234,6 @@ impl GlobalCtx {
 
 #[cfg(test)]
 pub mod mock_global_ctx {
-    use mockall::predicate::always;
     use crate::runner::global_ctx::{ MockGlobalCtx};
 
     pub struct MockGlobalCtxBuilder {

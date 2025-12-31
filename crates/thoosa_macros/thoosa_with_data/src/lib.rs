@@ -113,7 +113,7 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
         quote! { (#closure)(#(#arg_refs),*) }
     };
 
-    let permits = if await_closure {
+    let _permits = if await_closure {
         quote! {
              if __with_data_permits_ctx.read().acquired_permits() == 0 {
                 let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(to_device_idx, ::std::sync::Arc::new(::thoosa_shared::simple_id!(name))).await?;

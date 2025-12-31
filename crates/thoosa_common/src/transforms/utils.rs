@@ -1,7 +1,10 @@
+#[cfg(test)]
 use std::f64::consts::PI;
-use tch::{Device, Kind, Tensor};
+#[cfg(test)]
+use tch::Tensor;
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn generate_signal(t: &Tensor, modulator_fr: f64, carrier_fr: f64) -> Tensor {
     let modulator = (t * modulator_fr * std::f64::consts::PI).sin();
     let carrier = (t * 2.0 * std::f64::consts::PI * carrier_fr).sin();
@@ -9,6 +12,7 @@ pub fn generate_signal(t: &Tensor, modulator_fr: f64, carrier_fr: f64) -> Tensor
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn complex_conv(signal: &Tensor, wavelet_real: &Tensor, wavelet_imag: &Tensor) -> Tensor {
     assert_eq!(signal.size().len(), 3); //for conv B x C x L
 

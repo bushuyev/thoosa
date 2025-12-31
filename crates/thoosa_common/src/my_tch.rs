@@ -8,7 +8,7 @@ use tch::Tensor;
 
 use tch::nn::ConvConfig;
 use tch::nn::{
-    BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, ModuleT, Optimizer, Path, batch_norm1d,
+    BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, ModuleT, Path, batch_norm1d,
 };
 
 use thoosa_shared::ThoosaError;
@@ -244,7 +244,7 @@ impl MyMaxPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         Ok(t.as_ref()
             .f_max_pool1d(
                 self.kernel_size,
@@ -269,7 +269,7 @@ impl AdaptiveMaxPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         Ok(t.as_ref()
             .f_adaptive_avg_pool1d(self.output_size as i64)?
             .into())
@@ -350,7 +350,7 @@ impl MyAvgPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAvgPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         Ok(t.as_ref()
             .f_avg_pool1d(
                 self.kernel_size,
@@ -396,7 +396,7 @@ impl MyFuncModule {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyFuncModule {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         (self.func)(t.as_ref()).map(|t|t.into())
     }
 }
@@ -421,7 +421,7 @@ impl Debug for MyClosureModule {
 }
 
 impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyClosureModule {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         (self.func)(t.as_ref()).map(|v|v.into())
     }
 }
@@ -449,7 +449,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLin
         );
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
         #[cfg(debug_assertions)]
         {
             debug!("Module for MyLinear::forward: descr={}", self.descr);
@@ -557,6 +557,7 @@ pub fn configure_dense(
         .end_seq()
 }
 
+#[allow(dead_code)]
 fn add_node_output_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, motifs_p_t: Tensor) {
     debug!(
         "add_node_output_batch: motif_batch_size={motif_batch_size} net_batch.len={} motifs_p_t.size={:?}",
@@ -781,7 +782,7 @@ mod tch_tests {
                 })),
                 None,
             )
-            .conv_1d("conv", (num_features / 10), 1, 1, ConvConfig::default(), None)
+            .conv_1d("conv", num_features / 10, 1, 1, ConvConfig::default(), None)
             .linear_s(
                 1,
                 #[cfg(debug_assertions)]

@@ -1,15 +1,12 @@
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
-use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::{LazyLock, OnceLock};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use dashmap::DashMap;
-use tracing::{debug, Level};
-use tracing::field::Field;
+use tracing::Level;
 use tracing_subscriber::{fmt, fmt::{format::Writer, time::FormatTime}, layer::SubscriberExt, registry, EnvFilter, Layer};
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
@@ -118,11 +115,11 @@ where
 /// Perf-only tracing to stdout, but formatted like your simplelog lines.
 pub fn maybe_init_perf_tracing_stdout_simplelog_like(perf_filter: &str, perf_file: PathBuf) -> Result<bool, ThoosaError> {
     if perf_filter.trim() == "off" {
-        return Ok((false));
+        return Ok(false);
     }
 
     let perf_f = File::create(perf_file)?;
-    let (perf_writer, perf_guard) = tracing_appender::non_blocking(perf_f);
+    let (perf_writer, _perf_guard) = tracing_appender::non_blocking(perf_f);
 
     // Local timestamp like: `2025-12-15 08:35:30`
     // (requires tracing-subscriber chrono support for ChronoLocal)
@@ -139,13 +136,13 @@ pub fn maybe_init_perf_tracing_stdout_simplelog_like(perf_filter: &str, perf_fil
         .with(layer)
         .with(PerfLayer::new())
         .try_init()
-        .map(|v|true)
+        .map(|_|true)
         .map_err(|e|ThoosaError::new(e.to_string()))
 }
 
 
 #[derive(Debug)]
-struct SpanTiming {
+pub struct SpanTiming {
     created_at: Instant,
     busy_ns: u64,//
     entered_at: Option<Instant>,

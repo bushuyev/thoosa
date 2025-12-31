@@ -41,8 +41,3 @@ approx = "0.5.1"
 chrono.workspace = true
 [build-dependencies]
 
-
-[profile.dev]
-opt-level = 0
-debug = 2
-overflow-checks = true

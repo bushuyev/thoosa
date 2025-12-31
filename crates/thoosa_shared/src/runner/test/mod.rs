@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use log::debug;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -700,7 +702,7 @@ pub(crate) mod fixtures {
                 .unwrap_or(1.0) as f32;
             let out_id = self.out_id(WithId::id(input.as_ref()));
 
-            let (device, cache_area) = {
+            let (_device, cache_area) = {
                 let guard = ctx.read();
                 (guard.device_idx, guard.cache_area)
             };
@@ -1095,7 +1097,7 @@ mod tests {
 
             debug!("LoadAndMulTask::run_2: loaded.id={:?}", loaded.id());
 
-            let (device_idx, cache_area) = {
+            let (_device_idx, cache_area) = {
                 let guard = ctx.read();
                 (guard.device_idx(), guard.cache_area())
             };

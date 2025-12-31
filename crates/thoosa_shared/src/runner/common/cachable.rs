@@ -5,8 +5,8 @@ use crate::runner::global_ctx::GlobalCtx;
 use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
 use futures_util::FutureExt;
-use futures_util::future::{try_join_all, BoxFuture, Shared};
-use log::{debug, info, trace};
+use futures_util::future::{BoxFuture, Shared};
+use log::{debug, trace};
 use mockall_double::double;
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
@@ -18,9 +18,8 @@ use std::sync::atomic::Ordering::Relaxed;
 use crate::CopyToDevice;
 use crate::MyError;
 use tokio::sync::{Notify, RwLockReadGuard};
-use crate::applicables_runner::{Input, Output};
 use crate::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
-use crate::traits::{Data, Select, SimpleId};
+use crate::traits::{Data, Select};
 use crate::runner::common::{OutId, PermitsCtx, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage};
 use crate::ThoosaError;
@@ -237,7 +236,7 @@ where
         }
     }
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoosaError>>
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, _permits_ctx: Arc<RwLock<P>>, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoosaError>>
     where
             for<'f> F: FnOnce(&O) -> Result<R, ThoosaError> + Send + 'a,
             P: PermitsCtx + 'a
@@ -253,7 +252,7 @@ where
         })
     }
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, _permits_ctx: Arc<RwLock<P>>, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
     where
         O: Select<S, Output=O>,
         for<'f> F: FnOnce(&O) -> Result<R, ThoosaError>,
@@ -269,7 +268,7 @@ where
         }
     }
 
-    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>) -> Result<R, ThoosaError>
+    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, _permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>) -> Result<R, ThoosaError>
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
@@ -287,7 +286,7 @@ where
     }
 
 
-    fn dump_to_cpu(wrap: &DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoosaError>> + std::marker::Send
+    fn dump_to_cpu(_wrap: &DevicesWrap<O>, _device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoosaError>> + std::marker::Send
     where
         Self: Sized
     {
@@ -304,21 +303,21 @@ where
         &wrap.size //TODO move to DevicesWrap?
     }
 
-    fn is_on_cpu_since(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool
+    fn is_on_cpu_since(_wrap: &DevicesWrap<O>, _threshold_age: u64) -> bool
     where
         Self: Sized
     {
         true
     }
 
-    async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoosaError>
+    async fn take_data(wrap: DevicesWrap<O>, _to_device_idx: usize) -> Result<O, ThoosaError>
     where
         Self: Sized
     {
         Ok(wrap.cached_data[0].write().await.take().expect(&format!("no cpu data {:?}", wrap.id)))
     }
 
-    async fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> bool {
+    async fn is_all_on_cpu(_wrap: &DevicesWrap<O>) -> bool {
         true
     }
 }
@@ -1048,7 +1047,6 @@ mod tests {
     extern crate self as caching_runner;
     pub use thoosa_shared::runner::common::*;
     use crate::runner::global_ctx;
-    use crate::traits::Named;
     use crate::runner::common::cachable::{DevicesWrap, WithDataRef};
     use crate::runner::common::mock_run_ctx;
     use crate::runner::test_utils::MockDataWithId;

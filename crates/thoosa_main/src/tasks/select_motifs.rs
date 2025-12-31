@@ -571,6 +571,7 @@ where
                     let motif_selector = motif_selector.clone();
                     async move {
 
+                        #[allow(unreachable_patterns)]
                         match &motif_selector {
                             //TODO add relevant MotifSelector variants
                             MotifSelector::ByLabelVariance(_) => {

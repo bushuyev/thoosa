@@ -495,6 +495,7 @@ where
     }
 }
 
+#[allow(type_alias_bounds)]
 type BuildBatchFn<LD:Dims+ 'static, X:Dims+ 'static, Y:Dims+ 'static, C> = Box<dyn Fn(
 
     Vec<Arc<DevicesWrap<ThoTensor<LD, SynKey>>>>,

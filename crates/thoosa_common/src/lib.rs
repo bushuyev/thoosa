@@ -2,6 +2,7 @@
 #![feature(generic_const_exprs)]
 #![feature(macro_metavar_expr_concat)]
 #![allow(async_fn_in_trait)]
+#![allow(incomplete_features)]
 extern crate core;
 
 pub mod utils;

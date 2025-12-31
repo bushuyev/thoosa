@@ -85,6 +85,7 @@ impl PermitsCtx for TorchPermsCtx {
 }
 
 #[cfg(test)]
+#[allow(unused_imports, unused_variables, dead_code)]
 mod tests {
 
     use dashmap::DashMap;
@@ -477,7 +478,7 @@ mod tests {
             debug!("LoadedTensor::clc_sum: multed={multed:?}");
 
             let sum = multed?
-                .f_sum_dim_intlist(1, false, loaded.t_ref().kind());;
+                .f_sum_dim_intlist(1, false, loaded.t_ref().kind());
 
             debug!("LoadedTensor::clc_sum: sum={sum:?}");
 
@@ -1449,4 +1450,3 @@ mod tests {
 
 
 }
-

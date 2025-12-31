@@ -8,7 +8,6 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
 use std::sync::Arc;
 use log::debug;
-use uuid::uuid;
 use crate::applicables_runner::Input;
 use crate::{CopyToDevice, ThoosaError};
 use uuid::Uuid;
@@ -306,7 +305,7 @@ pub trait Metrics:Default {//TODO remove Default
         Default::default()
     }
 
-    fn cap(&self, other:&mut  Self)  {
+    fn cap(&self, _other:&mut  Self)  {
         todo!()
     }
 
@@ -352,15 +351,15 @@ impl Metrics for Range<i64> {}
 ///For adjusting one of tensor's dimensions
 ///Idx - dimension to split, Size - number of dimensions
 #[derive(Debug, Clone)]
-pub struct MonoMetrics<const Idx:usize, const Size:usize> {
-     dims: [i64; Size]
+pub struct MonoMetrics<const IDX:usize, const SIZE:usize> {
+     dims: [i64; SIZE]
 }
 
-impl <const Idx:usize, const Size:usize> Metrics for MonoMetrics<Idx, Size> {
+impl <const IDX:usize, const SIZE:usize> Metrics for MonoMetrics<IDX, SIZE> {
     fn default_end(&self) -> Self {
         MonoMetrics {
             dims: self.dims.iter().enumerate().map(|(i, v)|{
-                if i == Idx {
+                if i == IDX {
                     0
                 } else {
                     *v
@@ -378,20 +377,20 @@ impl <const Idx:usize, const Size:usize> Metrics for MonoMetrics<Idx, Size> {
     }
 
     fn num_elts(&self) -> usize {
-        self.dims.iter().fold(1, |mut a, v| a * (*v as usize))
+        self.dims.iter().fold(1, |a, v| a * (*v as usize))
     }
 }
 
 //TODO remove it?
-impl <const Idx:usize, const Size:usize> Default for MonoMetrics<Idx, Size> {
+impl <const IDX:usize, const SIZE:usize> Default for MonoMetrics<IDX, SIZE> {
     fn default() -> Self {
         Self {
-            dims: [0; Size]
+            dims: [0; SIZE]
         }
     }
 }
 
-impl <const Idx:usize, const Size:usize> MonoMetrics<Idx, Size> {
+impl <const IDX:usize, const SIZE:usize> MonoMetrics<IDX, SIZE> {
 
     //TODO remove - replace with 'effective dim Idx and 'others'
     pub fn dim_0(&self) -> i64 {
@@ -405,18 +404,18 @@ impl <const Idx:usize, const Size:usize> MonoMetrics<Idx, Size> {
 
     pub fn dim<const DIM: usize>(&self) -> i64
     where
-        Assert<{ DIM < Size }>: IsTrue,
+        Assert<{ DIM < SIZE }>: IsTrue,
     {
         self.dims[DIM]
     }
-    pub fn map_to_ranges(start:&Self, end:&Self) ->Result<[Range<i64>; Size], ThoosaError> {
+    pub fn map_to_ranges(start:&Self, end:&Self) ->Result<[Range<i64>; SIZE], ThoosaError> {
 
         start.dims
             .iter()
             .zip(end.dims.iter())
             .enumerate()
             .map(|(i, (start, end))| {
-                if i == Idx {
+                if i == IDX {
                     *start..*end
                 } else {
                     0..*end
@@ -430,12 +429,12 @@ impl <const Idx:usize, const Size:usize> MonoMetrics<Idx, Size> {
 
 }
 
-impl <const Idx:usize, const Size:usize> Add<&MonoMetrics<Idx, Size>> for &MonoMetrics<Idx, Size> {
-    type Output = MonoMetrics<Idx, Size>;
+impl <const IDX:usize, const SIZE:usize> Add<&MonoMetrics<IDX, SIZE>> for &MonoMetrics<IDX, SIZE> {
+    type Output = MonoMetrics<IDX, SIZE>;
 
-    fn add(self, rhs: &MonoMetrics<Idx, Size>) -> Self::Output {
+    fn add(self, rhs: &MonoMetrics<IDX, SIZE>) -> Self::Output {
         let mut new_dims = self.dims;
-        new_dims[Idx] = new_dims[Idx] + rhs.dims[Idx];
+        new_dims[IDX] = new_dims[IDX] + rhs.dims[IDX];
 
         MonoMetrics {
             dims: new_dims,
@@ -443,70 +442,70 @@ impl <const Idx:usize, const Size:usize> Add<&MonoMetrics<Idx, Size>> for &MonoM
     }
 }
 
-impl <const Idx:usize, const Size:usize> DivAssign<i64> for MonoMetrics<Idx, Size> {
+impl <const IDX:usize, const SIZE:usize> DivAssign<i64> for MonoMetrics<IDX, SIZE> {
     fn div_assign(&mut self, rhs: i64) {
-        self.dims[Idx] /= rhs;
+        self.dims[IDX] /= rhs;
     }
 }
 
-impl <const Idx:usize, const Size:usize> PartialEq<i64> for MonoMetrics<Idx, Size> {
+impl <const IDX:usize, const SIZE:usize> PartialEq<i64> for MonoMetrics<IDX, SIZE> {
     fn eq(&self, other: &i64) -> bool {
-        self.dims[Idx].eq(other)
+        self.dims[IDX].eq(other)
     }
 }
 
-impl <const Idx:usize, const Size:usize> PartialOrd<i64> for MonoMetrics<Idx, Size> {
+impl <const IDX:usize, const SIZE:usize> PartialOrd<i64> for MonoMetrics<IDX, SIZE> {
     fn partial_cmp(&self, other: &i64) -> Option<Ordering> {
-        self.dims[Idx].partial_cmp(other)
+        self.dims[IDX].partial_cmp(other)
     }
 }
 
-impl <const Idx:usize, const Size:usize> PartialEq<MonoMetrics<Idx, Size>> for MonoMetrics<Idx, Size> {
-    fn eq(&self, other: &MonoMetrics<Idx, Size>) -> bool {
-        self.dims[Idx].eq(&other.dims[Idx])
+impl <const IDX:usize, const SIZE:usize> PartialEq<MonoMetrics<IDX, SIZE>> for MonoMetrics<IDX, SIZE> {
+    fn eq(&self, other: &MonoMetrics<IDX, SIZE>) -> bool {
+        self.dims[IDX].eq(&other.dims[IDX])
     }
 }
 
-impl <const Idx:usize, const Size:usize> PartialOrd<MonoMetrics<Idx, Size>> for MonoMetrics<Idx, Size> {
-    fn partial_cmp(&self, other: &MonoMetrics<Idx, Size>) -> Option<Ordering> {
-        self.dims[Idx].partial_cmp(&other.dims[Idx])
+impl <const IDX:usize, const SIZE:usize> PartialOrd<MonoMetrics<IDX, SIZE>> for MonoMetrics<IDX, SIZE> {
+    fn partial_cmp(&self, other: &MonoMetrics<IDX, SIZE>) -> Option<Ordering> {
+        self.dims[IDX].partial_cmp(&other.dims[IDX])
     }
 }
 
-impl<'a, const Idx:usize, const Size:usize> AddAssign<&'a MonoMetrics<Idx, Size>> for MonoMetrics<Idx, Size> {
-    fn add_assign(&mut self, rhs: &'a MonoMetrics<Idx, Size>) {
-        self.dims[Idx] += rhs.dims[Idx];
+impl<'a, const IDX:usize, const SIZE:usize> AddAssign<&'a MonoMetrics<IDX, SIZE>> for MonoMetrics<IDX, SIZE> {
+    fn add_assign(&mut self, rhs: &'a MonoMetrics<IDX, SIZE>) {
+        self.dims[IDX] += rhs.dims[IDX];
 
-        debug!("AddAssign for LoadedTensorMetrics::add_assign rhs.dim_0={} self.dim_0={}",rhs.dims[Idx], self.dims[Idx]);
+        debug!("AddAssign for LoadedTensorMetrics::add_assign rhs.dim_0={} self.dim_0={}",rhs.dims[IDX], self.dims[IDX]);
     }
 }
 
-impl<const Idx:usize, const Size:usize> AddAssign<MonoMetrics<Idx, Size>> for MonoMetrics<Idx, Size> {
-    fn add_assign(&mut self, rhs: MonoMetrics<Idx, Size>) {
-        self.dims[Idx] += rhs.dims[Idx];
+impl<const IDX:usize, const SIZE:usize> AddAssign<MonoMetrics<IDX, SIZE>> for MonoMetrics<IDX, SIZE> {
+    fn add_assign(&mut self, rhs: MonoMetrics<IDX, SIZE>) {
+        self.dims[IDX] += rhs.dims[IDX];
     }
 }
 
-impl <const Idx:usize, const Size:usize> TryFrom<Vec<i64>> for MonoMetrics<Idx, Size> {
+impl <const IDX:usize, const SIZE:usize> TryFrom<Vec<i64>> for MonoMetrics<IDX, SIZE> {
     type Error = ThoosaError;
 
     fn try_from(value: Vec<i64>) -> Result<Self, Self::Error> {
-        assert!(Size > 0);
-        assert_eq!(value.len(), Size);
+        assert!(SIZE > 0);
+        assert_eq!(value.len(), SIZE);
 
         Ok(Self { dims: value.clone().try_into().expect(&format!("can't convert {value:?} to dims")) })//TODO avoid value.clone
     }
 }
 
-impl <const Idx:usize, const Size:usize> From<&MonoMetrics<Idx, Size>> for [i64; 2] {
-    fn from(value: &MonoMetrics<Idx, Size>) -> Self {
+impl <const IDX:usize, const SIZE:usize> From<&MonoMetrics<IDX, SIZE>> for [i64; 2] {
+    fn from(value: &MonoMetrics<IDX, SIZE>) -> Self {
         value.dims.as_slice().try_into().expect(&format!("can't convert {value:?} to [i64; 2]"))
     }
 }
 
-impl <const Idx:usize, const Size:usize> From<[i64; 2]> for MonoMetrics<Idx, Size> {
+impl <const IDX:usize, const SIZE:usize> From<[i64; 2]> for MonoMetrics<IDX, SIZE> {
     fn from(value: [i64; 2]) -> Self {
-        assert_eq!(2, Size);
+        assert_eq!(2, SIZE);
 
         let mut me = Self::default();
         me.dims[0] = value[0];
@@ -515,9 +514,9 @@ impl <const Idx:usize, const Size:usize> From<[i64; 2]> for MonoMetrics<Idx, Siz
     }
 }
 
-impl <const Idx:usize, const Size:usize> From<&[i64; 2]> for MonoMetrics<Idx, Size> {
+impl <const IDX:usize, const SIZE:usize> From<&[i64; 2]> for MonoMetrics<IDX, SIZE> {
     fn from(value: &[i64; 2]) -> Self {
-        assert_eq!(2, Size);
+        assert_eq!(2, SIZE);
 
         let mut me = Self::default();
         me.dims[0] = value[0];
@@ -526,9 +525,9 @@ impl <const Idx:usize, const Size:usize> From<&[i64; 2]> for MonoMetrics<Idx, Si
     }
 }
 
-impl <const Idx:usize, const Size:usize> From<[i64; 3]> for MonoMetrics<Idx, Size> {
+impl <const IDX:usize, const SIZE:usize> From<[i64; 3]> for MonoMetrics<IDX, SIZE> {
     fn from(value: [i64; 3]) -> Self {
-        assert_eq!(3, Size);
+        assert_eq!(3, SIZE);
 
         let mut me = Self::default();
         me.dims[0] = value[0];

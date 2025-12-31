@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 #[cfg(test)]
+#[allow(unused_variables)]
 mod tests {
     use async_trait::async_trait;
     use std::ops::{Deref, Range};

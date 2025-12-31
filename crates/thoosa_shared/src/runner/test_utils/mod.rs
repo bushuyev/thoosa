@@ -1,11 +1,10 @@
 #[cfg(test)]
 use std::ops::Range;
-#[cfg(test)]
-use crate::runner::common::*;
 use async_trait::async_trait;
 use log::debug;
 use thoosa_shared::{CopyToDevice, ThoosaError};
-use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
+#[cfg(test)]
+use thoosa_shared::copy_mode::CpuOrGpu;
 #[cfg(test)]
 use thoosa_shared::traits::{Data, DummyCachableId, MockData, MockWithId, Select, WithId};
 

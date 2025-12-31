@@ -1,18 +1,22 @@
 use std::ops::{Deref, DerefMut};
 
-use argmin::core::{CostFunction, Error, Executor, Gradient, IterState, OptimizationResult};
+use argmin::core::{CostFunction, Error, Gradient};
+#[cfg(test)]
+use argmin::core::{Executor, IterState, OptimizationResult};
+#[cfg(test)]
 use argmin::solver::linesearch::MoreThuenteLineSearch;
+#[cfg(test)]
 use argmin::solver::quasinewton::LBFGS;
 use argmin_math::{
-    ArgminAdd, ArgminDot, ArgminL1Norm, ArgminL2Norm, ArgminMinMax, ArgminMul, ArgminRandom,
+    ArgminAdd, ArgminDot, ArgminL1Norm, ArgminL2Norm, ArgminMinMax, ArgminMul,
     ArgminSignum, ArgminSub, ArgminZeroLike,
 };
 use log::debug;
 // Avoid importing rand::Rng to prevent trait version conflicts
 use tch::Tensor;
 
+#[cfg(test)]
 use thoosa_shared::ThoosaError;
-use crate::dims::AnyDims;
 use crate::tho_tensor::ThoTensor;
 
 
@@ -268,7 +272,6 @@ mod tests {
     use thoosa_shared::ThoosaError;
 
     use crate::argmin::{ThoTensor, TensorProblem, run_lbfgs};
-    use crate::dims::AnyDims;
     use crate::opt::rbf_nll;
 
     #[test]
