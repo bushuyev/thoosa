@@ -800,6 +800,7 @@ mod tests {
 
         let batch_clc = Arc::new(CrossUnfoldClc::new(
             |t_0, t_1, _input, _ctx, _| {
+                debug!("test_cross_cls, batch_clc: t_0={:?}, t_1={:?}", t_0.size(), t_1.size());
                 let sum_0 = t_0.f_sum_dim_intlist(2, false, Kind::Float)?;
                 let sum_1 = t_1.f_sum_dim_intlist(2, false, Kind::Float)?;
                 let dists = sum_0.unsqueeze(2) + sum_1.unsqueeze(1);
@@ -830,7 +831,7 @@ mod tests {
                     ))
                 }
             },
-            20, //TODO config
+            100, //TODO config
             |batch| async { batch }.boxed(),
             |_receiver| async {}.boxed(),
             0,
