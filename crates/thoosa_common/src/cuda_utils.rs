@@ -395,35 +395,37 @@ pub async fn copy_h2d_from_ptr(
     Ok(dst_t)
 }
 
-//TODO Result< + OOM handling
-pub fn pack_bits_bool(b: &Tensor) -> Tensor {
+//TODO OOM handling
+pub fn pack_bits_bool(b: &Tensor) -> Result<Tensor, ThoosaError> {
     assert_eq!(b.kind(), Kind::Bool, "pack_bits_bool expects Bool");
     let dev = b.device();
 
     // 1) Flatten.
-    let mut flat = b.reshape([-1]);
+    let mut flat = b.f_reshape([-1])?;
 
     // 2) Pad to multiple of 8.
     let n = flat.numel();
     let pad: i64 = (8 - (n % 8)) as i64 % 8;
     if pad != 0 {
-        let zeros = Tensor::zeros([pad], (Kind::Bool, dev));
-        flat = Tensor::cat(&[flat, zeros], 0);
+        let zeros = Tensor::f_zeros([pad], (Kind::Bool, dev))?;
+        flat = Tensor::f_cat(&[flat, zeros], 0)?;
     }
 
     // 3) Group by 8 and cast {false,true}->{0u8,1u8}.
-    let x_u8 = flat.view([-1, 8]).to_kind(Kind::Uint8);
+    let x_u8 = flat.f_view([-1, 8])?.f_to_kind(Kind::Uint8)?;
 
     // 4) Weights (MSB->LSB).
     let w_i64 = Tensor::from_slice(&[128u8, 64, 32, 16, 8, 4, 2, 1])
-        .to_device(dev)
-        .to_kind(Kind::Int64);
+        .f_to_device(dev)?
+        .f_to_kind(Kind::Int64)?;
 
     // 5) Dot(each row, weights) -> one byte per row.
-    (x_u8.to_kind(Kind::Int64) * &w_i64)
-        .sum_dim_intlist(1, /*keepdim=*/false, Kind::Int64)
-        .to_kind(Kind::Uint8)
-        .contiguous()
+    Ok(x_u8
+        .f_to_kind(Kind::Int64)?
+        .f_mul(&w_i64)?
+        .f_sum_dim_intlist(1, /*keepdim=*/false, Kind::Int64)?
+        .f_to_kind(Kind::Uint8)?
+        .f_contiguous()?)
 }
 
 /// Unpack bytes back to Bool bits (MSB-first).
@@ -854,7 +856,7 @@ mod tests {
     }
     
     #[test]
-    fn roundtrip_pack_unpack() {
+    fn roundtrip_pack_unpack() -> Result<(), ThoosaError> {
         use tch::{Device, Kind, Tensor};
 
         // try CPU; switch to Device::Cuda(0) if you want to test on GPU
@@ -862,7 +864,7 @@ mod tests {
 
         let n = 1_00; //0_003i64;
         let mask = Tensor::randint( 2, [n], (Kind::Bool, dev));
-        let packed = pack_bits_bool(&mask);
+        let packed = pack_bits_bool(&mask)?;
 
         let mask_size = mask.numel()*mask.kind().elt_size_in_bytes();
         let packed_size = packed.numel()*packed.kind().elt_size_in_bytes();
@@ -874,6 +876,7 @@ mod tests {
 
         assert!(mask.allclose(&unpacked, 0.01, 0.01, false), "roundtrip mismatch");
         // assert!(mask.allclose(&unpack_bits_u8(&packed, None), 0.01, 0.01, false), "roundtrip mismatch");
+        Ok(())
     }
 
     #[tokio::test]
@@ -892,7 +895,8 @@ mod tests {
         let channels = 20;
         let mask = Tensor::randint( 2, [channels * n], (Kind::Bool, Cuda(0))).view((channels, n));
         let size = mask.size();
-        let packed = CopyCtx::instance(Cuda(0)).copy(&pack_bits_bool(&mask), 0, Uint8).await?;
+        let packed_mask = pack_bits_bool(&mask)?;
+        let packed = CopyCtx::instance(Cuda(0)).copy(&packed_mask, 0, Uint8).await?;
 
         let mask_size = mask.numel()*mask.kind().elt_size_in_bytes();
         let packed_size = packed.numel()*packed.kind().elt_size_in_bytes();

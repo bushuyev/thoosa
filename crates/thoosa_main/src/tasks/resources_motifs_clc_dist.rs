@@ -175,9 +175,9 @@ where
                 .map(|c| {
                     let ids = &input.stacked_motifs_output.motifs.extra().0[c];
                     if ids.is_empty() {
-                        None //no motifs in channel c
+                        Ok(None) //no motifs in channel c
                     } else {
-                        Some((
+                        Ok(Some((
                             DistsMask::new(
                                 fold_mask(
                                     mask.i((c as i64, .., ..)),
@@ -193,7 +193,7 @@ where
                                 }),
                                 true,
                                 motifs_stream.clone(),
-                            ),
+                            )?,
                             ids.iter()
                                 .fold((vec![], HashSet::new()), |mut acc, d| {
                                     if !acc.1.contains(d) {
@@ -203,10 +203,10 @@ where
                                     acc
                                 })
                                 .0,
-                        ))
+                        )))
                     }
                 })
-                .collect::<Vec<Option<(DistsMask, Vec<DataId>)>>>()
+                .collect::<Result<Vec<_>, ThoosaError>>()?
         };
 
         Ok(ClcResourcesMotifsDistOutput::new(
