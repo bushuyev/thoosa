@@ -485,7 +485,7 @@ where
                                 }
                                 debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} oom i={i}", os_thread_id());
 
-                                match adjuster {
+                                let adjust_result = match adjuster {
                                     Adjusters::Input(input_ad) => {
                                         if last_input_adjuster.is_some() {
                                             last_input_adjuster = None;
@@ -494,22 +494,32 @@ where
                                         let base_selector =
                                             input_select_adjusted.clone().unwrap_or_default();
 
-                                        input_select_adjusted = Some(
-                                            input_ad
-                                                .adjust(&base_selector, &mut contexts.input)
-                                                .await?,
-                                        );
+                                        match input_ad
+                                            .adjust(&base_selector, &mut contexts.input)
+                                            .await
+                                        {
+                                            Ok(v) => {
+                                                input_select_adjusted = Some(v);
+                                                Ok(())
+                                            }
+                                            Err(te) => Err(te),
+                                        }
                                     }
 
                                     Adjusters::Task(task_ad) => {
                                         if last_task_adjuster.is_some() {
                                             last_task_adjuster = None;
                                         }
-                                        task_adjusted.replace(Arc::new(
-                                            task_ad
-                                                .adjust(task.as_ref(), &mut contexts.runnable)
-                                                .await?,
-                                        ));
+                                        match task_ad
+                                            .adjust(task.as_ref(), &mut contexts.runnable)
+                                            .await
+                                        {
+                                            Ok(v) => {
+                                                task_adjusted.replace(Arc::new(v));
+                                                Ok(())
+                                            }
+                                            Err(te) => Err(te),
+                                        }
                                     }
 
                                     Adjusters::RunContext(context_ad) => {
@@ -517,11 +527,46 @@ where
                                             last_context_adjuster = None;
                                         }
 
-                                        context_ad
+                                        match context_ad
                                             .adjust(&run_context, &mut contexts.run_ctx)
-                                            .await?;
+                                            .await
+                                        {
+                                            Ok(_) => Ok(()),
+                                            Err(te) => Err(te),
+                                        }
                                     }
                                 };
+
+                                if let Err(te) = adjust_result {
+                                    debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjuster error te={te:?}", os_thread_id());
+
+                                    match te.what() {
+                                        MyError::OutOfMemory | MyError::AdjusterFailed => {
+                                            info!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+
+                                            if !adjuster.degrade(&mut contexts) {
+                                                match adjuster {
+                                                    Adjusters::Input(v) => {
+                                                        last_input_adjuster.replace(v);
+                                                    }
+                                                    Adjusters::Task(v) => {
+                                                        last_task_adjuster.replace(v);
+                                                    }
+                                                    Adjusters::RunContext(v) => {
+                                                        last_context_adjuster.replace(v);
+                                                    }
+                                                }
+
+                                                break;
+                                            }
+
+                                            continue;
+                                        }
+                                        _ => {
+                                            return Err(te);
+                                        }
+                                    }
+                                }
 
                                 let task_to_run = task_adjusted.clone().unwrap_or_else(|| Arc::clone(&task));
 
@@ -571,7 +616,7 @@ where
                                         run_context.write().drop_permits(DropIf::IfNotMax); //TODO config? - not needed for runner_semaphore
 
                                         match te.what() {
-                                            MyError::OutOfMemory => {
+                                            MyError::OutOfMemory | MyError::AdjusterFailed => {
                                                 info!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                 if !adjuster.degrade(&mut contexts) {

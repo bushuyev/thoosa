@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use mockall_double::double;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{MyError, ThoosaError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr};
 use crate::runner::common::{DropIf, RunCtx};
 #[double]
@@ -38,24 +38,33 @@ where
 #[delegatable_trait]
 pub trait DumpToCpuContext<'a>: Debug + RunCtxContext {
     fn ids_to_exclude(&self) -> &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>;
+    fn dump_to_cpu_retry_count_mut(&mut self) -> &mut usize;
 }
 
 #[derive(Debug)]
 pub struct DumpToCpuContextImpl<'a> {
     ids_to_exclude: &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>,
+    dump_to_cpu_retry_count: usize,
 }
 
 impl<'a> DumpToCpuContextImpl<'a> {
     pub fn new(
         ids_to_exclude: &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>,
     ) -> Self {
-        Self { ids_to_exclude }
+        Self {
+            ids_to_exclude,
+            dump_to_cpu_retry_count: 0,
+        }
     }
 }
 
 impl<'a> DumpToCpuContext<'a> for DumpToCpuContextImpl<'a> {
     fn ids_to_exclude(&self) -> &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>> {
         self.ids_to_exclude
+    }
+
+    fn dump_to_cpu_retry_count_mut(&mut self) -> &mut usize {
+        &mut self.dump_to_cpu_retry_count
     }
 }
 
@@ -76,7 +85,7 @@ where
     ) -> Result<<Self as Adjuster<C>>::A, ThoosaError> {
 
 
-        let (device_idx, mut acquired_permits,  ctx_name)  = {
+        let (device_idx, acquired_permits,  ctx_name)  = {
             let guard = adjustable.read();
             // assert_eq!(acquired_permits, MAX_PERMITS, "not enough permits {}", acquired_permits);
 
@@ -86,26 +95,24 @@ where
         debug!("DumpToCpu::adjust: adjustable={adjustable:?} acquired_permits={acquired_permits}");
 
         if acquired_permits < MAX_PERMITS {
-            let mut try_count = 0;
-            loop {
-
-                match GlobalCtx::global().acquire_many(device_idx, MAX_PERMITS - acquired_permits, Arc::new(simple_id!(format!("dump_to_cpu_for_{}", ctx_name)))).await {
-                    Ok(permits) => {
-                        debug!("DumpToCpu::adjust: acquired {permits:?} on {try_count}");
-
-                        adjustable.write().add_permit(permits);
-                        break
-                    }
-                    Err(e) => {
-                        debug!("DumpToCpu::adjust: can't acquire {acquired_permits} on {try_count} try, got {e:?}");
-                        adjustable.write().drop_permits(DropIf::Always);
-                        acquired_permits = 0;
-                    }
+            // DumpToCpu is special: only dump when we hold MAX_PERMITS to avoid
+            // dumping tensors still in use by other tasks.
+            match GlobalCtx::global().acquire_many(
+                device_idx,
+                MAX_PERMITS - acquired_permits,
+                Arc::new(simple_id!(format!("dump_to_cpu_for_{}", ctx_name))),
+            ).await {
+                Ok(permits) => {
+                    debug!("DumpToCpu::adjust: acquired {permits:?}");
+                    adjustable.write().add_permit(permits);
                 }
-
-                try_count+=1;
-                if try_count > 1000 {
-                    return Err(ThoosaError::new("Can't get permits for dumping to CPU"));
+                Err(e) => {
+                    debug!("DumpToCpu::adjust: can't acquire {acquired_permits} permits, got {e:?}");
+                    adjustable.write().drop_permits(DropIf::Always);
+                    return Err(ThoosaError::new_with_error(
+                        "DumpToCpu::adjust: can't acquire MAX_PERMITS",
+                        MyError::AdjusterFailed,
+                    ));
                 }
             }
         }
@@ -115,8 +122,18 @@ where
             .dump_all_to_cpu(ids_to_exclude, device_idx)
             .await?;
 
+        adjustable.write().drop_permits(DropIf::Always);
+
         debug!("DumpToCpu::adjust done: is_all_on_cpu={}",GlobalCtx::global().is_all_on_cpu(device_idx));
 
         Ok(Arc::clone(adjustable))
+    }
+
+    fn degrade(&self, adjust_context: &mut C) -> bool {
+        // DumpToCpu can't reduce work; we just retry acquiring MAX_PERMITS.
+        let retry_count = adjust_context.dump_to_cpu_retry_count_mut();
+        *retry_count += 1;
+
+        *retry_count <= 1000 //TODO config
     }
 }

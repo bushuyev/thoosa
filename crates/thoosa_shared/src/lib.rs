@@ -140,6 +140,7 @@ impl Display for TensorIdSliceIdx {
 pub enum MyError {
     OutOfMemory,
     OutOfPermits,
+    AdjusterFailed,
     UnsupportedDegadeLevel,
     SomethingElse(String),
     NotFound,
