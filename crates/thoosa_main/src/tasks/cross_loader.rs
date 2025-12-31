@@ -369,9 +369,6 @@ where
                                     },
                                 ))),
                                 Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                                #[cfg(not(debug_assertions))]
-                                Adjusters::Input(Box::new(SplitsAdjuster::<CrossInputBatch1Selector, i64>::new(2))),
-                                #[cfg(debug_assertions)]
                                 Adjusters::Input(Box::new(SplitsAdjuster::<CrossInputBatch1Selector, i64>::new(1))),
                             ],
                             None,
@@ -655,7 +652,6 @@ mod tests {
     use crate::cli::Commands::FindMotifs;
     use crate::tasks::cross_batch_clc::{CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
     use crate::tasks::cross_loader::{CrossLoader, ResourcesConfigInput};
-    use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use crate::tasks::slices_iter::SlicesIter;
@@ -664,25 +660,19 @@ mod tests {
     use futures_util::FutureExt;
     use log::debug;
     use parking_lot::RwLock;
-    use std::collections::HashMap;
-    use std::fs;
-    use std::path::Path;
+    use std::collections::{HashMap, HashSet};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, Once};
     use std::time::Duration;
     use futures_util::sink::With;
     use tch::{Device, Tensor};
     use thoosa_common::tho_device::ThoDevice;
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
-    use thoosa_common::ws::FsWorkspace;
-    use thoosa_motifs::distance::MaskMaker::Tril;
-    use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::{cdt_for_dir, ResourceType, ThoosaError};
+    use thoosa_shared::{ResourceType, ThoosaError};
     use thoosa_shared::mono_key;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_store::{MockStore, MockStoreBuilder, SqlStore};
+    use thoosa_store::MockStoreBuilder;
     use tokio::task::yield_now;
     use tokio::time::sleep;
     use thoosa_common::tho_tensor::ThoTensor;
@@ -731,17 +721,92 @@ mod tests {
         }
     }
 
+    fn mix_pair_value_u64(batch_0_id: u32, batch_1_id: u32) -> u64 {
+        let mut x = ((batch_0_id as u64) << 32) | batch_1_id as u64;
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xff51afd7ed558ccd);
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
+        x ^= x >> 33;
+        x
+    }
+
+    fn mix_pair_value(batch_0_id: u32, batch_1_id: u32) -> i64 {
+        (mix_pair_value_u64(batch_0_id, batch_1_id) & 0x7fff_ffff_ffff_ffff) as i64
+    }
+
+    fn tensor_value(resource_id: u32, idx: u32) -> f32 {
+        let mixed = mix_pair_value_u64(resource_id, idx) % 10_000;
+        mixed as f32 / 1000.0
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct PairValue {
+        batch_0_id: u32,
+        batch_1_id: u32,
+        value: i64,
+    }
+
+    impl PairValue {
+        fn new(batch_0_id: u32, batch_1_id: u32) -> Self {
+            Self {
+                batch_0_id,
+                batch_1_id,
+                value: mix_pair_value(batch_0_id, batch_1_id),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, DummyData)]
+    struct TestCrossClcOutput {
+        id: SynKey,
+        pairs: Vec<PairValue>,
+    }
+
+    impl TestCrossClcOutput {
+        fn new(pairs: Vec<PairValue>) -> Self {
+            Self {
+                id: SynKey::new([mono_key!("cross_clc_output", "cross_clc_output")]),
+                pairs,
+            }
+        }
+
+        fn from_batches<R: AsRef<Resource>>(batch_0: &[R], batch_1: &[R]) -> Self {
+            let mut pairs = Vec::with_capacity(batch_0.len() * batch_1.len());
+            for r_0 in batch_0 {
+                let id_0 = r_0.as_ref().id();
+                for r_1 in batch_1 {
+                    pairs.push(PairValue::new(id_0, r_1.as_ref().id()));
+                }
+            }
+            Self::new(pairs)
+        }
+    }
+
+    impl WithId for TestCrossClcOutput {
+        type ID = SynKey;
+
+        fn id(&self) -> &Self::ID {
+            &self.id
+        }
+    }
+
+    impl Input for TestCrossClcOutput {}
+    impl Output for TestCrossClcOutput {}
+
+    impl CrossClcResultMerge for TestCrossClcOutput {
+        fn merge_batch_1(self, other: Self) -> Result<Self, ThoosaError> {
+            let mut pairs = self.pairs;
+            pairs.extend(other.pairs);
+            Ok(Self { id: self.id, pairs })
+        }
+    }
+
     #[tokio::test]
     async fn test_cross_clc() -> Result<(), ThoosaError> {
         GlobalCtx::init_devices(2);
 
-        let test_dir = Path::new("/tmp/").join(cdt_for_dir());
-        fs::create_dir_all(&test_dir)?;
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000, 32000)?));
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
-
-        let run_config = FindMotifsRunConfig::new(Some(0), 1, 2, None, None);
-        let fixed_config = FixedFindMotifsConfig::new(None, 2, false, None);
+        let tensor_len = 6;
 
         let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"]
             .into_iter()
@@ -750,11 +815,18 @@ mod tests {
         let resources: Vec<Resource> = resource_keys
             .iter()
             .enumerate()
-            .map(|(i, v)| (i as u32, 1u32, v.as_str(), 10).into())
+            .map(|(i, v)| (i as u32, 1u32, v.as_str(), tensor_len as u32).into())
             .collect();
-        let resources_to_move = resources.clone();
+
+        let resources_for_store = resources.clone();
+        let store = Arc::new(RwLock::new(
+            MockStoreBuilder::new()
+                .with_list_resources_by_file_stems(resource_keys.clone(), Ok(resources_for_store))
+                .build() as Box<dyn Store>,
+        ));
 
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
+        let resources_to_move = resources.clone();
 
         let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
@@ -763,34 +835,28 @@ mod tests {
                     .position(|v| v.eq(key))
                     .expect(format!("no {key:?}").as_str())
                     + 1;
-                let v = (0..10)
-                    .map(|v| i as f32 + v as f32 / 10.)
+                let v = (0..tensor_len)
+                    .map(|idx| tensor_value(key.id(), idx as u32))
                     .collect::<Vec<f32>>();
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
                 Ok(ThoTensor::new(
                     SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
-                    Tensor::from_slice(v.as_slice()).view((1, 10)),
+                    Tensor::from_slice(v.as_slice()).view((1, tensor_len as i64)),
                 )?)
             },
             ThoDevice::from(Device::Cpu),
         ));
 
-        let batch_clc = Arc::new(CrossUnfoldClc::new(
-            |t_0, t_1, input, ctx, _| {
-                let mut mask_makers = vec![];
-                // if is_diag {
-                //     mask_makers.push(Tril);
-                // }
-                let dists = thoosa_motifs::distance::clc_dist_d2_and_mask(
-                    t_0,
-                    t_1,
-                    true,
-                    &mut mask_makers,
-                )?;
+        let received_outputs = Arc::new(Mutex::new(Vec::<TestCrossClcOutput>::new()));
+        let receiver_outputs = Arc::clone(&received_outputs);
 
-                debug!("CrossBatchClc::do_run:  dists={dists:?}");
-                Ok(DistsMask::new(dists.0, dists.1, true, None))
+        let batch_clc = Arc::new(CrossUnfoldClc::new(
+            |_t_0, _t_1, input, _ctx, _| {
+                Ok(TestCrossClcOutput::from_batches(
+                    input.batch_0(),
+                    input.batch_1(),
+                ))
             },
             (),
             UnfoldParams::new(1, 2, 1),
@@ -801,30 +867,27 @@ mod tests {
             &store,
             batch_clc,
             {
-                let ws = Arc::clone(&ws);
-                let store = Arc::clone(&store);
-                let run_config = run_config.clone();
-                let fixed_config = fixed_config.clone();
+                let receiver_outputs = Arc::clone(&receiver_outputs);
                 move |_resources: &[Arc<Resource>]| {
-                    Arc::new(DistsTracker::<RunCtx2>::new(
-                        &ws,
-                        &store,
-                        &run_config,
-                        &fixed_config,
-                        None,
-                    ))
+                    Arc::new(
+                        mock_cross_loader_receiver::build::<
+                            CrossUnfoldClcOutput<TestCrossClcOutput>,
+                            RunCtx2,
+                        >()
+                        .with_receive_fn({
+                            let receiver_outputs = Arc::clone(&receiver_outputs);
+                            move |out, _ctx| {
+                                receiver_outputs.lock().unwrap().push(out.clc_result());
+                                Ok(())
+                            }
+                        })
+                        .finish(),
+                    )
                 }
             },
             20, //TODO config
-            |batch|{
-                async {batch}.boxed()
-            },
-            |p| {
-                async {
-                    // cross_loader.receiver;
-                }
-                .boxed()
-            },
+            |batch| async { batch }.boxed(),
+            |_receiver| async {}.boxed(),
             0,
         ));
 
@@ -834,14 +897,59 @@ mod tests {
             cache_area,
         ));
 
-        let _ = cross_loader
+        let _output = cross_loader
             .run(input, Arc::clone(&ctx))
             .await?;
 
-        yield_now().await;
-        sleep(Duration::from_millis(10)).await;
+        let expected_values: HashMap<(u32, u32), i64> = resources
+            .iter()
+            .flat_map(|r_0| resources.iter().map(move |r_1| (r_0.id(), r_1.id())))
+            .map(|(id_0, id_1)| ((id_0, id_1), mix_pair_value(id_0, id_1)))
+            .collect();
 
-        //TODO
+        let mut expected_pairs = HashSet::new();
+        for (i, r_0) in resources.iter().enumerate() {
+            for r_1 in resources.iter().skip(i) {
+                let id_0 = r_0.id();
+                let id_1 = r_1.id();
+                let (min_id, max_id) = if id_0 <= id_1 {
+                    (id_0, id_1)
+                } else {
+                    (id_1, id_0)
+                };
+                expected_pairs.insert((min_id, max_id));
+            }
+        }
+
+        let outputs = std::mem::take(&mut *received_outputs.lock().unwrap());
+        let mut observed_pairs = HashSet::new();
+
+        for output in outputs {
+            for pair in output.pairs {
+                let expected_value = expected_values
+                    .get(&(pair.batch_0_id, pair.batch_1_id))
+                    .copied()
+                    .expect("missing expected pair value");
+
+                assert_eq!(
+                    pair.value,
+                    expected_value,
+                    "unexpected value for pair ({}, {})",
+                    pair.batch_0_id,
+                    pair.batch_1_id
+                );
+
+                let (min_id, max_id) = if pair.batch_0_id <= pair.batch_1_id {
+                    (pair.batch_0_id, pair.batch_1_id)
+                } else {
+                    (pair.batch_1_id, pair.batch_0_id)
+                };
+                observed_pairs.insert((min_id, max_id));
+            }
+        }
+
+        assert_eq!(observed_pairs, expected_pairs);
+
         Ok(())
     }
 
