@@ -190,23 +190,23 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
             debug!("SelectMotifsSavableResultBuilder::build: channel_masks_motif_ids={channel_masks_motif_ids:?}");
 
             if channel_masks_motif_ids.0.is_empty() {
-                None
+                Ok(None)
             } else {
-                Some(
+                Ok(Some(
                     (
                         DistsMask::new(
                             Tensor::concat(&channel_masks_motif_ids.0, 1), //1 dim - resources
                             None,
                             false,
                             None
-                        ),
+                        )?,
                         channel_masks_motif_ids.1
                     ),
-                )
+                ))
             }
 
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, ThoosaError>>()?;
 
         Ok(ClcResourcesMotifsDistOutput::new(
             self.id.find_motifs_run_id,
@@ -1434,7 +1434,7 @@ pub mod tests {
                                 None,
                                 false,
                                 None,
-                            ),
+                            )?,
                             vec![
                                 0.into()
                             ]
@@ -1463,7 +1463,7 @@ pub mod tests {
                                 None,
                                 false,
                                 None,
-                            ),
+                            )?,
                             vec![
                                 0.into()
                             ]

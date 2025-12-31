@@ -197,9 +197,9 @@ where
 
                         debug!("CrossBatchClc::do_run:  dists={dists:?}");
                         if device_idx > 0 {
-                            Ok(DistsMask::new(mask, dists, true, motifs_stream))
+                            Ok(DistsMask::new(mask, dists, true, motifs_stream)?)
                         } else {
-                            Ok(DistsMask::new(mask, dists, false, None))
+                            Ok(DistsMask::new(mask, dists, false, None)?)
                         }
 
                     }),

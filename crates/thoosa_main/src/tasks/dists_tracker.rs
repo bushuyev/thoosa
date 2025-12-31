@@ -81,26 +81,28 @@ impl Data for DistsMask {
 
 impl DistsMask {
 
-    pub fn new(mask: Tensor, dists: Option<Tensor>, pack: bool, stream_to_sync: Option<ThoCudaStream>) -> Self {
+    pub fn new(mask: Tensor, dists: Option<Tensor>, pack: bool, stream_to_sync: Option<ThoCudaStream>) -> Result<Self, ThoosaError> {
         debug!("DistsMask::new: mask={mask:?} dists={dists:?}");
 
         assert_eq!(mask.kind(), Bool);
-        Self {
-            sizes: if pack {
-                Some((mask.size(), dists.as_ref().map(|t|t.size())))
-            } else {
-                None
-            },
+        let sizes = if pack {
+            Some((mask.size(), dists.as_ref().map(|t|t.size())))
+        } else {
+            None
+        };
 
-            mask: if pack {
-                pack_bits_bool(&mask)
-            } else {
-                mask
-            },
+        let mask = if pack {
+            pack_bits_bool(&mask)?
+        } else {
+            mask
+        };
 
+        Ok(Self {
+            sizes,
+            mask,
             dists,
             stream_to_sync
-        }
+        })
     }
 
 
@@ -227,7 +229,7 @@ impl CrossClcResultMerge for DistsMask {
             _ => return Err(ThoosaError::new("DistsMask merge: dists mismatch")),
         };
 
-        Ok(DistsMask::new(mask, dists, pack, None))
+        Ok(DistsMask::new(mask, dists, pack, None)?)
     }
 }
 
