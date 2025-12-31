@@ -21,7 +21,7 @@ use tch::Tensor;
 use thoosa_common::dims::{AnyMetrics, AnySub, ChannelsData, ChannelsSlicesData, Dims};
 use thoosa_common::runs::Simple;
 use thoosa_motifs::find::FindMotifsSavableResult;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{simple_id, ThoosaError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
@@ -271,6 +271,7 @@ where
         // let chunk_size = self.chunk_size;
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
         let device_idx = ctx.read().device_idx();
+        let loader_ctx = Arc::clone(&ctx).write().branch("LoaderForCrossLoader_TODO");//self id
 
         let resources = input.with_data_ref(0, Arc::clone(&ctx), None, |input: &ResourcesConfigInput<ResC>|{
                 Ok(input
@@ -295,8 +296,9 @@ where
         for (i_0, resource_0) in resources.iter().enumerate() {
             info!("CrossLoader::run: on i_0={i_0} resource_0={resource_0:?}");
 
+
             let t_0 = Arc::clone(&self.loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone(), 0)), Arc::clone(&ctx))
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone(), 0)), Arc::clone(&loader_ctx))
                 .await?;
 
             t_0_batch_len += t_0.size().dim_1();
@@ -318,7 +320,7 @@ where
             {
 
                 let t_1 = Arc::clone(&self.loader)
-                    .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone(), 0)), Arc::clone(&ctx))
+                    .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone(), 0)), Arc::clone(&loader_ctx))
                     .await?;
 
                 t_1_batch_len += t_1.size().dim_1();
@@ -364,7 +366,7 @@ where
                                         GlobalCtx::global().acquire_many(
                                             device_idx,
                                             n,
-                                            Arc::clone(&out_key_for_permits),
+                                            Arc::new(simple_id!(ctx_name))
                                         )
                                     },
                                 ))),
@@ -663,7 +665,7 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tch::{Device, Kind, Tensor};
@@ -731,7 +733,16 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_cross_clc() -> Result<(), ThoosaError> {
+    async fn test_cross_clc_without_oom() -> Result<(), ThoosaError> {
+        test_cross_clc(None, 20).await
+    }
+
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_cross_clc_with_oom() -> Result<(), ThoosaError> {
+        test_cross_clc(Some(20), 40).await
+    }
+
+    async fn test_cross_clc(oom_limit: Option<i64>, chunk_size: usize) -> Result<(), ThoosaError> {
         GlobalCtx::init_devices(2);
 
         let tensor_len = 10usize;
@@ -777,6 +788,8 @@ mod tests {
         let resource_key_refs = resource_keys.iter().map(|v| v.as_str()).collect::<Vec<_>>();
         let resources = store.read().list_resources_by_file_stems(&resource_key_refs)?;
         let resources_to_move = resources.clone();
+        let oom_triggered = Arc::new(AtomicBool::new(false));
+        let oom_triggered_cloned = Arc::clone(&oom_triggered);
 
         let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
@@ -799,8 +812,18 @@ mod tests {
         ));
 
         let batch_clc = Arc::new(CrossUnfoldClc::new(
-            |t_0, t_1, _input, _ctx, _| {
+            move |t_0, t_1, _input, _ctx, _| {
                 debug!("test_cross_cls, batch_clc: t_0={:?}, t_1={:?}", t_0.size(), t_1.size());
+                if let Some(limit) = oom_limit {
+                    let batch_1_len = t_1.size()[1];
+                    if batch_1_len > limit {
+                        debug!(
+                            "test_cross_clc: triggering OOM: batch_1_len={batch_1_len} limit={limit}"
+                        );
+                        oom_triggered_cloned.store(true, Ordering::SeqCst);
+                        return Err(ThoosaError::oom());
+                    }
+                }
                 let sum_0 = t_0.f_sum_dim_intlist(2, false, Kind::Float)?;
                 let sum_1 = t_1.f_sum_dim_intlist(2, false, Kind::Float)?;
                 let dists = sum_0.unsqueeze(2) + sum_1.unsqueeze(1);
@@ -831,7 +854,7 @@ mod tests {
                     ))
                 }
             },
-            100, //TODO config
+            chunk_size, //TODO config
             |batch| async { batch }.boxed(),
             |_receiver| async {}.boxed(),
             0,
@@ -848,6 +871,9 @@ mod tests {
             .await?;
 
         assert_eq!(output.id(), &());
+        if oom_limit.is_some() {
+            assert!(oom_triggered.load(Ordering::SeqCst));
+        }
 
         let slices_per_resource = (tensor_len as i64 - unfold_size + 1) as u32;
         let mut expected = HashMap::new();

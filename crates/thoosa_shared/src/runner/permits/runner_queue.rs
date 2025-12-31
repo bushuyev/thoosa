@@ -218,8 +218,8 @@ impl Arbiter {
                                     // loop to try the new head
                                 }
                                 Err(TryAcquireError::NoPermits) => {
-                                    debug!("Arbiter::spawn: device_idx={device_idx} TryAcquireError::NoPermits: q.len={} front.needed={}", q.len(), front.needed);
-                                    if q.len() >= 2 && front.needed > 1 {
+                                    debug!("Arbiter::spawn: device_idx={device_idx} TryAcquireError::NoPermits: q.len={} front={front:?} granted_counts={granted_counts:?}", q.len());
+                                    // if q.len() >= 2 && front.needed > 1 {
                                         // Pop and fail the head to trigger drop/degradation.
                                         let Req { reply, requester_id, .. } = q.pop_front().unwrap();
                                         debug!("Arbiter::spawn: sending OutOfPermits reply to {:?}", requester_id);
@@ -230,9 +230,9 @@ impl Arbiter {
                                         if *c >= SUPERTASK_FAIL_THRESHOLD {
                                             super_id = Some(requester_id);
                                         }
-                                    } else {
-                                        break;
-                                    }
+                                    // } else {
+                                    //     break;
+                                    // }
                                 }
                                 Err(e) => {
                                     debug!("Arbiter::spawn: device_idx={device_idx} got e={e:?}");
