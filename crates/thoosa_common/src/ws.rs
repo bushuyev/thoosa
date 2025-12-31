@@ -1,31 +1,22 @@
 use crate::dims::{
-    Batch, ChannelsMotifsData, ChannelsSlicesData, Dims, LabelProbability, MotifProbability,
-    MotifsNetsSelectionDims, Slice,
+    Batch, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice,
 };
-use crate::find_motifs_run_config::FindMotifsRunConfig;
-use crate::train_nets::{FinalNetParams, LabelNetParams, LoadMotifNetOutput, MotifNetParams, ThoModuleWithStore, motif_node, motif_node_2};
-use async_trait::async_trait;
-use futures_util::FutureExt;
-use lazy_static::lazy_static;
-use log::{debug, info, trace, warn};
+use crate::train_nets::{FinalNetParams, LabelNetParams, MotifNetParams, ThoModuleWithStore, motif_node_2};
+use log::{debug, info, trace};
 use mockall::automock;
-use parking_lot::RwLock;
 use rayon::iter::ParallelIterator;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge};
+use rayon::iter::IntoParallelIterator;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::fs;
-use std::fs::{ReadDir, read_dir};
-use std::num::ParseIntError;
-use std::ops::ControlFlow;
+use std::fs::read_dir;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::Arc;
 use tch::nn::{self, VarStore};
-use tch::{Device, TchError, Tensor};
+use tch::{Device, Tensor};
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{ThoosaError, cdt_for_dir, recurse_files, simple_id, mono_key};
+use thoosa_shared::{ThoosaError, cdt_for_dir, recurse_files, mono_key};
 
 #[derive(Debug)]
 pub struct FsWorkspace {
@@ -408,7 +399,7 @@ impl Workspace for FsWorkspace {
         self.max_input
     }
 
-    fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError> {
+    fn clc_records(&self, _resource_ids: &Vec<String>) -> Result<i64, ThoosaError> {
         debug!(
             "FsWorkspace::clc_records: self.tensors_path={:?}",
             self.tensors_path
@@ -527,10 +518,8 @@ pub trait Workspace: Sync + Send + Debug {
     fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError>;
     fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoosaError>;
 
-    #[inline]
     fn channels(&self) -> u32;
     fn sample_rate(&self) -> u32;
-    #[inline]
     fn max_input(&self) -> u32;
     fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError>;
 }
@@ -594,7 +583,7 @@ impl WsMockBuilder {
 
         self.mock
             .expect_load_motif_nets()
-            .returning(move |channel: u32, motif_id: u32, device| {
+            .returning(move |channel: u32, motif_id: u32, _device| {
                 let channels_motif_nets_clone = Arc::clone(&channels_motif_nets_clone);
 
                 Ok(vec![(
@@ -624,7 +613,7 @@ impl WsMockBuilder {
     ) -> Self {
         self.mock
             .expect_load_label_nets()
-            .returning(move |train_label_nodes_run_ids, device| {
+            .returning(move |_train_label_nodes_run_ids, _device| {
                 Ok(HashMap::from_iter(label_nets.iter().map(
                     |(label, nodes)| {
                         (
@@ -646,13 +635,11 @@ impl WsMockBuilder {
 }
 
 #[cfg(test)]
+#[allow(unused_imports, unused_variables)]
 mod tests {
     use super::{FsWorkspace, Workspace};
-    use crate::train_nets::{
-        LabelNetParams, MaxPaddingNetArgs, MaxPaddingNetParams, MotifNetParams,
-    };
+    use crate::train_nets::{LabelNetParams, MaxPaddingNetParams, MotifNetParams};
     use log::debug;
-    use std::fs;
     use std::path::Path;
     use tch::Device::Cpu;
     use tch::nn::VarStore;

@@ -1,12 +1,6 @@
 use crate::dims::{Dims, ThoBatch};
-use crate::utils::DataBatch;
 use async_trait::async_trait;
-use futures::stream::{BoxStream, StreamExt};
-use futures::Stream;
-use futures_util::FutureExt;
-use rand::seq::{IndexedRandom, SliceRandom};
-use rand::Rng;
-use std::async_iter::AsyncIterator;
+use futures::stream::BoxStream;
 use std::fmt::Debug;
 use std::sync::Arc;
 use thoosa_shared::ThoosaError;

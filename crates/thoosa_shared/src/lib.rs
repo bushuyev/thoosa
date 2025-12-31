@@ -2,6 +2,8 @@
 #![feature(async_fn_traits, fn_traits, unboxed_closures)]
 #![feature(tuple_trait)]
 #![feature(generic_const_exprs)]
+#![allow(incomplete_features)]
+#![allow(confusable_idents)]
 
 extern crate self as thoosa_shared;
 
@@ -11,10 +13,9 @@ use crate::val::{NamedRange, NamedVal, Val};
 use bytemuck::{Pod, Zeroable};
 use chrono::SecondsFormat;
 use lazy_static::lazy_static;
-use log::{debug, error, trace};
+use log::{debug, trace};
 use num_traits::PrimInt;
-use rand::{Rng, SeedableRng};
-use rand::prelude::*;
+use rand::Rng;
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::backtrace::Backtrace;
@@ -33,7 +34,11 @@ use std::{fmt, fs};
 use async_trait::async_trait;
 use ambassador::delegatable_trait;
 use mockall::automock;
-use rand::prelude::{SliceRandom, StdRng};
+use rand::seq::{IndexedRandom, SliceRandom};
+#[cfg(test)]
+use rand::rngs::StdRng;
+#[cfg(test)]
+use rand::SeedableRng;
 use time_series_generator::{generate_sine_wave, generate_triangle_wave};
 
 
@@ -1933,7 +1938,6 @@ pub fn sample_n_owned<T, R: Rng + ?Sized>(mut v: Vec<T>, n: usize, rng: &mut R) 
 #[cfg(test)]
 #[test]
 pub fn test_shuffle_and_chunk_with_rng(){
-    const B: usize = 3;
     let mut rng = StdRng::seed_from_u64(42);
 
     let chunks = shuffle_and_chunk_with_rng(10,3, &mut rng);

@@ -96,7 +96,7 @@ impl CopyCtx {
             debug!("CopyCtx::instance, init: num_gpu_devices={num_gpu_devices}");
 
             // Self::make_instance(2.0, 64)
-            (0..num_gpu_devices).map(|i|Self::make_instance(0.2, 16)).collect()//MAX 32,  leave 16 for clc https://github.com/pytorch/pytorch/issues/34878
+            (0..num_gpu_devices).map(|_|Self::make_instance(0.2, 16)).collect()//MAX 32,  leave 16 for clc https://github.com/pytorch/pytorch/issues/34878
 
         }).get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}"))
     }

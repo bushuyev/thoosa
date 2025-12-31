@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::{Debug, Formatter};
 
 use crate::parzen::optimizer::{Distribution, ParzenEstimator};
@@ -6,7 +5,7 @@ use crate::parzen::util::uniform_weight;
 use log::{debug, trace};
 use num_traits::*;
 use rand::Rng;
-use rand::seq::{IndexedRandom, SliceRandom};
+use rand::seq::IndexedRandom;
 use tch::{IndexOp, Kind, Tensor};
 use thoosa_shared::opt_rng::opt_rnd;
 use thoosa_shared::val::Val;

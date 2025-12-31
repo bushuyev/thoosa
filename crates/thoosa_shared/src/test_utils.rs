@@ -13,9 +13,7 @@ use std::sync::atomic::Ordering;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{
     fmt,
-    fmt::{format::Writer, time::ChronoLocal},
     layer::SubscriberExt,
-    registry,
     EnvFilter, Layer,
 };
 use crate::perf_logging::{PerfLayer, SimplelogLikeEvent};

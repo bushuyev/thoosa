@@ -1,7 +1,6 @@
 use crate::tho_tensor::{ThoTensor};
 use async_trait::async_trait;
-use std::fmt::{Debug, Display};
-use std::pin::Pin;
+use std::fmt::Debug;
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{Metrics, MonoMetrics, Named, SimpleId};
 
@@ -119,7 +118,7 @@ pub struct AnySub {}
 
 #[async_trait]
 impl CopyToDevice for AnySub {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
         todo!()
     }
 }
@@ -132,7 +131,7 @@ impl Metrics for AnyMetrics {}
 unsafe impl Sync for AnyMetrics {}
 unsafe impl Send for AnyMetrics {}
 impl From<Vec<i64>> for AnyMetrics {
-    fn from(value: Vec<i64>) -> Self {
+    fn from(_value: Vec<i64>) -> Self {
         AnyMetrics
     }
 }

@@ -11,7 +11,6 @@ use thoosa_shared::{MyError, ThoosaError};
 use tokio::task::JoinSet;
 use tokio_utils::Pool;
 use thoosa_shims::context::ThoCudaContext;
-use thoosa_shims::memcpy::CuResult;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_shared::os_thread_id;
 
@@ -473,6 +472,7 @@ pub fn equal_bytes(a: &Tensor, b: &Tensor) -> bool {
 }
 
 #[cfg(test)]
+#[allow(unused_imports, unused_variables, dead_code)]
 mod tests {
     use crate::copy_ctx::CopyCtx;
     use crate::cuda_utils::{

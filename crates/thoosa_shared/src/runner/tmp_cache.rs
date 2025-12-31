@@ -19,8 +19,6 @@ use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
 
-#[cfg(test)]
-use crate::traits::SimpleId;
 
 
 ///To keep tensors in async functions in between async calls so that data can be dumped to CPU when competing task wins 100 Permits and requests others to be dumped.
@@ -195,11 +193,10 @@ where
 mod tests {
     use std::collections::HashMap;
     use std::pin::Pin;
-    use futures_util::FutureExt;
     use thoosa_dummy_data_derive::DummyData;
     use crate::{CopyToDevice, ThoosaError};
     use crate::applicables_runner::Output;
-    use crate::copy_mode::{CpuOnly, CpuOrGpu};
+    use crate::copy_mode::CpuOrGpu;
     use crate::traits::{Data, SimpleId, WithId};
     use crate::runner::global_ctx;
     // use crate::common::Data;

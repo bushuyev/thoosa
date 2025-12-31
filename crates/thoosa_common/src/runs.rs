@@ -1,22 +1,12 @@
-use crate::parzen::optimizer::ConfigurationSpace;
 use crate::ws::Workspace;
 use log::debug;
-use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
+use parking_lot::RwLock;
 use std::fmt::{Debug, Display, Formatter};
-use std::marker::PhantomData;
 use std::sync::Arc;
-use tch::nn::VarStore;
-use thoosa_properties_map::FromHashmap;
-use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
-use thoosa_shared::run_configs::RunConfig;
-use thoosa_shared::run_configs::RunId;
-use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::{ResourceType, ThoosaError, make_combos};
+use thoosa_shared::{ResourceType, ThoosaError};
 use thoosa_store::Store;
 
-type Label = i64; //TODO
 
 #[derive(Debug)]
 pub struct Simple {
@@ -52,7 +42,7 @@ impl ResourcesConfig for Simple {
                 .list_resource_set_resources_by_descr(set)
                 .expect("list_resource_set_resources"),
             ResourceType::Group(group) => {
-                let mut store_guard = store.read();
+                let store_guard = store.read();
                 store_guard
                     .list_resource_set_group_sets(group)
                     .expect("list_resource_set_group_sets")
@@ -98,7 +88,7 @@ impl ResourcesConfig for Empty {
 
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
-        store: &Arc<RwLock<Box<S>>>,
+        _store: &Arc<RwLock<Box<S>>>,
     ) -> Result<Self::R, ThoosaError> {
         Ok(())
     }
@@ -133,7 +123,7 @@ impl ResourcesConfig for Labeled {
         &self,
         store: &Arc<RwLock<Box<S>>>,
     ) -> Result<Vec<(String, Vec<Resource>)>, ThoosaError> {
-        let mut store_guard = store.read();
+        let store_guard = store.read();
 
         store_guard
             .list_group_labeled_resources_sets(&self.group)?
@@ -195,13 +185,13 @@ impl ResourcesConfig for Logits {
             .read()
             .list_resource_random_in_group(&self.group)?
             .into_iter()
-            .map(move |(resourceId, labels_p)| {
+            .map(move |(resource_id, labels_p)| {
                 debug!(
-                    "ResourcesConfig::to_resources resourceId={resourceId:?} labels_p={:?}",
+                    "ResourcesConfig::to_resources resource_id={resource_id:?} labels_p={:?}",
                     labels_p
                 );
                 Ok((
-                    resourceId,
+                    resource_id,
                     labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
                 ))
             })
@@ -296,8 +286,8 @@ impl SavableResult for DummySavableOptResult {
 
     fn save(
         &mut self,
-        store: &Arc<RwLock<Box<dyn Store>>>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        _store: &Arc<RwLock<Box<dyn Store>>>,
+        _ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoosaError> {
         Ok(0)
     }

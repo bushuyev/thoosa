@@ -200,6 +200,7 @@ where
     }
 }
 
+#[allow(async_fn_in_trait)]
 pub trait OutputBuilder: Debug + Send + Sync {
     type O;
     fn add_partial_output(&mut self, o: Self::O);

@@ -1,72 +1,60 @@
+#![allow(non_snake_case, unused_assignments, unused_variables)]
+
+#[cfg(test)]
+pub use crate::find_motifs_run_config::{FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue};
+#[cfg(test)]
+pub use thoosa_shared::RangeOrValue;
+
 use crate::builder::{Node, SeqBuilder};
-use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace, TPEOptimizer};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
-use crate::utils::{
-    cuda_mem, tensor_mem_size, DummyListener
-};
+use crate::utils::tensor_mem_size;
 use crate::utils::{pad_to, plot_series, DataBatch, ListenerResponse, TrainListener};
 use crate::ws::Workspace;
 use clap::clap_derive::Args;
-use crossbeam_utils::sync::WaitGroup;
-use futures::FutureExt;
-use std::cell::RefCell;
-use thoosa_shared::{mono_key, panic_to_err, panic_to_err_async, simple_id, CopyToDevice};
+use thoosa_shared::{mono_key, panic_to_err, panic_to_err_async, CopyToDevice};
 
-use log::{debug, info, trace, warn, Log};
-use parking_lot::{Mutex, RwLock};
+use log::{debug, info, trace, warn};
+use parking_lot::RwLock;
 use plotters::prelude::BLACK;
 use rand::seq::{IndexedRandom, SliceRandom};
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::{fmt, fs};
 
 use std::marker::PhantomData;
-use std::ops::Deref;
 use std::path::PathBuf;
-use std::rc::Rc;
 
-use tch::nn::{init, AdamW, ConvConfig, LinearConfig, OptimizerConfig, VarStore};
-use tch::Device::{Cpu, Cuda};
+use tch::nn::{init, ConvConfig, LinearConfig, VarStore};
+use tch::Device::Cpu;
 use tch::Kind::Float;
-use tch::{nn, Device, IndexOp, Reduction, Tensor};
-
-use thoosa_shared::{clc_step, slices_len};
-
-use thoosa_shared::resource::Resource;
+use tch::{nn, Device, IndexOp, Tensor};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::{make_combos, RangeOrValue, ThoosaError};
+use thoosa_shared::ThoosaError;
 
 use async_trait::async_trait;
-use futures_util::future::join_all;
-use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
 
-use crate::batches::AsyncDataBatch;
 use crate::dims::{
-    AnyDims, AnyMetrics, AnySub, Batch, ChannelsData, ChannelsMotifsData,
-    ChannelsMotifsFlattenedData, Dims, Final, LabelNetInputTensorDims, LabelNetsProbabilities,
-    LabelProbability, LabelsProbabilities, MotifProbability, MotifsNetsSelectionDims, Slice, ThoBatch,
-    TCD, TCSD,
+    Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, Slice, ThoBatch,
 };
-use crate::find_motifs_run_config::*;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::comp_id::{MonoKey, SynKey};
-use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
+use thoosa_shared::applicables_runner::Output;
+use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
+use thoosa_shared::traits::{Data, SimpleId, WithId};
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -95,6 +83,7 @@ impl TrainLabelNetsArgs {
     }
 }
 
+#[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
 pub struct TrainLabelNetsRunConfig {
@@ -339,6 +328,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         Ok(Self::with_factory(id, module, vs, Some(builder)))
     }
 
+    #[allow(dead_code)]
     fn mem_total(&self) -> usize {
         self.var_store
             .variables()
@@ -347,6 +337,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
             .sum()
     }
 
+    #[allow(dead_code)]
     fn debug(&self) {
         self.module.debug();
     }
@@ -451,6 +442,7 @@ impl TrainMotifsNetsArgs {
     }
 }
 
+#[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
 pub struct TrainMotifsNetsRunConfig {
@@ -756,7 +748,7 @@ impl LabelNetParams {
 
     fn label_net_fixed_num_slices(
         params: &LabelNetParams,
-        fixed_num_slices_params: &FixedNumSlicesNetParams,
+        _fixed_num_slices_params: &FixedNumSlicesNetParams,
     ) -> Node {
         debug!("label_net_fixed_num_slices: params={:?}", params);
 
@@ -849,7 +841,7 @@ impl LabelNetParams {
 
     fn label_net_max_padding(
         params: &LabelNetParams,
-        max_padding_params: &MaxPaddingNetParams,
+        _max_padding_params: &MaxPaddingNetParams,
     ) -> Node {
         debug!("label_node_max_padding: params={:?}", params);
 
@@ -995,7 +987,7 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
 
                     let t = if start as u32 + num_features > dim_size  {
                         debug!("any_len_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?} padding to {:?}", start as u32 + num_features, t.size(), [batch_size, motif_nets, num_features as i64]);
-                        pad_to(&t.f_narrow(2, start, (dim_size as i64 - start))?, &[batch_size, motif_nets, num_features as i64])?
+                        pad_to(&t.f_narrow(2, start, dim_size as i64 - start)?, &[batch_size, motif_nets, num_features as i64])?
                     } else {
                         debug!("any_len_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?}", start as u32 + num_features, t.size());
                         t.f_narrow(2, start, num_features as i64)?
@@ -1173,7 +1165,7 @@ impl PlotVecf32 {
 }
 
 impl TrainListener for PlotVecf32 {
-    fn on_valid_cycle(&mut self, cycle: u32, loss: f32) -> ListenerResponse {
+    fn on_valid_cycle(&mut self, _cycle: u32, loss: f32) -> ListenerResponse {
         self.data.push(loss);
 
         //TODO move into another listener
@@ -1636,7 +1628,9 @@ fn split_train_val<T>(
 
 #[derive(Debug)]
 pub struct LoadMotifNetOutput {
+    #[allow(dead_code)]
     channel: u32,
+    #[allow(dead_code)]
     nets: Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>, //single motif's nets (of different types)
 }
 
@@ -1688,6 +1682,7 @@ impl TrainFinalNetArgs {
     }
 }
 
+#[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
 pub struct TrainFinalNetRunConfig {
@@ -1777,6 +1772,7 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
         .is_some())
 }
 
+#[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum LabelNetTypeArgs {
     MaxPadding(MaxPaddingNetArgs),
@@ -1791,6 +1787,7 @@ impl Default for LabelNetTypeArgs {
     }
 }
 
+#[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct MaxPaddingNetArgs {
     #[in_map]
@@ -1804,6 +1801,7 @@ impl MaxPaddingNetArgs {
     }
 }
 
+#[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FixedNumSlicesNetArgs {
     #[in_map]
@@ -1867,6 +1865,7 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 
 
 #[cfg(test)]
+#[allow(unused_imports, unused_variables, unused_mut, dead_code)]
 mod train_tests {
     use crate::builder::{Node, SeqBuilder};
     use crate::dims::{

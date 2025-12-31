@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 use crate::CopyToDevice;
-use crate::traits::{Data, WithId};
+use crate::traits::Data;
 
 pub trait CopyMode {}
 

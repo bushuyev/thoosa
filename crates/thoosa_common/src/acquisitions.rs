@@ -1,8 +1,12 @@
+#[cfg(test)]
 use log::debug;
+#[cfg(test)]
 use tch::Tensor;
+#[cfg(test)]
 use tch::kind::FLOAT_CPU;
 #[cfg(test)]
 use crate::gaussian::{Gaussian, GaussianProcessFit};
+#[cfg(test)]
 use crate::utils::vec_f32_from;
 
 //http://arxiv.org/abs/1012.2599, (4)
@@ -63,6 +67,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(unused_imports)]
 mod tests {
     use std::ops::Deref;
 
@@ -104,7 +109,7 @@ mod tests {
 
         let y_train_min = y_train.min(); //y_train - loss fn
 
-        let next = run_lbfgs(
+        let _next = run_lbfgs(
             TensorProblem::new(|theta| {
                 expected_improvement(&theta, &y_train_min, &gpf, 0.01).negative()
             }),
@@ -118,7 +123,7 @@ mod tests {
 
 
         let x_vec = vec_f32_from(&x_t);
-        let ei_for_all_x = x_vec
+        let _ei_for_all_x = x_vec
             .iter()
             .map(|x_i| {
                 expected_improvement(&Tensor::from(*x_i).totype(Float), &y_train_min, &gpf, 0.01)

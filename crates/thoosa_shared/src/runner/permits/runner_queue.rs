@@ -3,7 +3,6 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use log::{error, info, trace, debug};
-use parking_lot::RwLock;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{MyError, ThoosaError};
 use tokio::sync::{Notify, Semaphore, TryAcquireError, mpsc, oneshot};
@@ -22,6 +21,7 @@ pub struct Arbiter {
     worker: Option<JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
     granted_counts_len: Arc<AtomicUsize>,//TODO remove?
+    #[allow(dead_code)]
     device_idx: usize
 }
 
@@ -260,7 +260,7 @@ impl Arbiter {
                     Some(req) = rx.recv() => {
                         'done: {
                             debug!("Arbiter::spawn loop: req={req:?}");
-                            for mut rq in &mut q {
+                            for rq in &mut q {
                                 if rq.requester_id.eq(&req.requester_id) {
                                     debug!("Arbiter::spawn loop: rq.requester_id={:?} is in the loop ", rq.requester_id);
                                     rq.needed = req.needed;

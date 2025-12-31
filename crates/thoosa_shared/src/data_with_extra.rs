@@ -5,7 +5,7 @@ use thoosa_shared::traits::Adjustable;
 use crate::applicables_runner::{Input, Output};
 use crate::{CopyToDevice, ThoosaError};
 use crate::copy_mode::CpuOrGpu;
-use crate::traits::{Data, DataId, Select, WithId};
+use crate::traits::{Data, Select, WithId};
 
 #[derive(Debug)]
 pub struct DataWithExtra<D, E>

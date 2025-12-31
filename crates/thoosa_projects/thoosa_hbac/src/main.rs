@@ -5,7 +5,6 @@ use std::time::Instant;
 use tch::Device::Cpu;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_main::cli::run_cli;
-use thoosa_shared::MyError;
 use thoosa_shims::context::ThoCudaContext;
 
 

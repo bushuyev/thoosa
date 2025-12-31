@@ -1,5 +1,4 @@
 use crate::utils::from;
-use log::debug;
 use serde::Deserialize;
 use tch::kind::FLOAT_CPU;
 use tch::{Device, IndexOp, Kind, TchError, Tensor};
@@ -116,8 +115,8 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor
     let spec = x.fft_rfft( n, 1, "forward");
 
     // Zero the bins in-place for all channels: spec[:, k0..=k1] = 0
-    let mut spec_z = spec.shallow_clone();
-    spec_z.i((.., k0..(k1 + 1))).fill_(0);
+    let spec_z = spec.shallow_clone();
+    let _ = spec_z.i((.., k0..(k1 + 1))).fill_(0);
 
     // Inverse FFT back to time domain, preserve original length n along dim=1
     let y = spec_z.fft_irfft(n, 1, "forward");
@@ -126,6 +125,7 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor
 
 
 #[cfg(test)]
+#[allow(unused_imports)]
 mod tests {
     use crate::transforms::filters::{band_pass_filter, clc_frequencies};
     use crate::transforms::utils::sin_t;

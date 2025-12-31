@@ -1,15 +1,13 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use log::debug;
-use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, Module};
+use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
 use crate::my_tch::{Fp, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule, my_linear, AdaptiveMaxPool1d, Split1};
-use crate::train_nets::ThoModuleWithStore;
-use thoosa_shared::{mono_key, simple_id, ThoosaError};
+use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::SimpleId;
-use crate::runs::Simple;
 use crate::tho_tensor::ThoTensor;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html

@@ -196,6 +196,7 @@ pub fn cholesky_with_jitter(t: &Tensor) -> Result<Tensor, ThoosaError> {
 }
 
 #[cfg(test)]
+#[allow(unused_imports, unused_variables)]
 mod opt_tests {
     use std::iter::once;
     use std::ops::Deref;

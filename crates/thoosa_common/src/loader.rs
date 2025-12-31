@@ -1,7 +1,7 @@
 use log::{Level, debug, log_enabled, trace};
-use parking_lot::{Condvar, Mutex, RwLock};
+use parking_lot::{Mutex, RwLock};
 use rayon::ThreadPool;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -13,19 +13,16 @@ use futures::task::Context;
 use futures::task::Poll;
 use futures::{
     future::{BoxFuture, FutureExt},
-    task::{ArcWake, waker_ref},
 };
 use std::io::Write;
-use std::ops::{Add, AddAssign, Deref, DerefMut};
+use std::ops::{AddAssign, Deref, DerefMut};
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16};
+use std::sync::atomic::{AtomicBool, AtomicU16};
 use std::task::Waker;
 use std::{fmt, thread};
-use tch::{Device, IndexOp, Tensor};
-use thoosa_shared::applicables_runner::Input;
-use thoosa_shared::resource::{Resource, ResourceId};
+use tch::{Device, Tensor};
+use thoosa_shared::resource::Resource;
 
 struct ResourcesBeingLoadedData<V>
 where
@@ -150,7 +147,7 @@ where
     }
 
     fn loader_task<'a>(
-        cache_area: u64, //TODO remove cache_area - it's kept in resources_being_loaded?
+        _cache_area: u64, //TODO remove cache_area - it's kept in resources_being_loaded?
         loader_fn: Arc<Box<dyn Fn(&'a Resource) -> SyncWrapper<V> + Sync + Send>>,
         loader_arc: Arc<RwLock<Loader<V>>>,
         key: &'a Resource,
@@ -205,7 +202,7 @@ where
     }
 
     pub fn debug(loader_arc: &Arc<RwLock<Loader<V>>>, prefix: &str) {
-        let mut loader_guard = loader_arc.read();
+        let loader_guard = loader_arc.read();
         let mut total_mem: HashMap<Device, usize> = HashMap::new();
 
         for (key, resource) in loader_guard.resources.iter() {
@@ -247,7 +244,9 @@ pub struct LoadRunner<V>
 where
     V: OfMemSize + Send + Debug + 'static,
 {
+    #[allow(dead_code)]
     futures_pool: ThreadPool,
+    #[allow(dead_code)]
     futures: Arc<RwLock<HashMap<<Self as KeyMaker>::Key, Mutex<BoxFuture<'static, ()>>>>>,
     new_futures_sender: Sender<(<Self as KeyMaker>::Key, Mutex<BoxFuture<'static, ()>>)>,
     done_futures_sender: Sender<<Self as KeyMaker>::Key>,
@@ -356,7 +355,7 @@ where
 
                     let mut map = futures_for_done.write();
 
-                    if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                    if let std::collections::hash_map::Entry::Occupied(entry) =
                         map.entry(future_id)
                     {
                         debug!(
@@ -643,6 +642,7 @@ where
     }
 }
 
+#[allow(unpredictable_function_pointer_comparisons)]
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct SyncWrapper<V>
 where
@@ -726,6 +726,7 @@ impl AddAssign for SyncWrapper<Tensor> {
 }
 
 #[cfg(test)]
+#[allow(unused_imports, unused_variables, dead_code, unused_mut)]
 mod tests {
     use std::collections::HashSet;
     use std::fmt::Debug;
