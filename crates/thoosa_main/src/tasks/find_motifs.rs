@@ -524,7 +524,7 @@ mod tests {
             ThoDevice::from(Device::Cpu),
         ));
 
-        let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
+        let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa")));
         ctx.write().add_permit(global_ctx.acquire_many(0, 1, Arc::new(SynKey::new([mono_key!("test", "test")]))).await?);
 
         let cache_area = ctx.read().cache_area();
@@ -561,7 +561,7 @@ mod tests {
                         Arc::clone(&loader),
                         run_configs,
                         FixedFindMotifsConfig::new(None, 2, false, None),
-                        ThoDevice::from(0),
+                        ThoDevice::from(1),
                     )
                     .expect("FindMotifsStage::new failed in test"),
                 )

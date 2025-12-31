@@ -105,6 +105,7 @@ impl DistsMask {
 
 
     pub async fn to_cpu(self) -> Result<Self, ThoosaError>  {
+        debug!("DistsMask::to_cpu: self.mask.device={:?}", self.mask.device());
 
         if self.mask.device().eq(&Cpu) {
             Ok(self)

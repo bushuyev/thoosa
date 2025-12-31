@@ -84,6 +84,7 @@ impl CopyCtx {
 
     pub fn instance<D:Into<ThoDevice>>(device: D) -> &'static CopyCtx {
         let device:ThoDevice = device.into();
+
         assert_ne!(device, ThoDevice::from(Cpu));
         static INSTANCE: OnceLock<Vec<CopyCtx>> = OnceLock::new();
 
