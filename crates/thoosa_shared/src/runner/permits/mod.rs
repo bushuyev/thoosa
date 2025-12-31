@@ -48,14 +48,14 @@ pub struct RunnerPerm {
 
 pub struct DropSignal {
     notify: Arc<Notify>,
-    drop_tx: mpsc::UnboundedSender<Arc<dyn CachableIdTr>>,
+    drop_tx: mpsc::UnboundedSender<(Arc<dyn CachableIdTr>, u8)>,
     requester_id: Arc<dyn CachableIdTr>,
 }
 
 impl DropSignal {
     pub fn new(
         notify: Arc<Notify>,
-        drop_tx: mpsc::UnboundedSender<Arc<dyn CachableIdTr>>,
+        drop_tx: mpsc::UnboundedSender<(Arc<dyn CachableIdTr>, u8)>,
         requester_id: Arc<dyn CachableIdTr>,
     ) -> Self {
         Self {
@@ -101,7 +101,7 @@ impl Drop for RunnerPerm {
         // Releasing permits is done by tokio::OwnedSemaphorePermit’s Drop.
         // We only need to wake the arbiter to re-check the head of queue.
         if let Some(drop_signal) = self.drop_signal.take() {
-            let _ = drop_signal.drop_tx.send(drop_signal.requester_id);
+            let _ = drop_signal.drop_tx.send((drop_signal.requester_id, self.inner.num_permits() as u8));
             drop_signal.notify.notify_one();
         }
     }
