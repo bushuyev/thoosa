@@ -200,12 +200,12 @@ where
             OOMRunnerConfig::DumpedToCpu => {
                 OOMHandler::new(
                     vec![
+                        Adjusters::RunContext(Box::new(DumpToCpu::new())),
                         Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                             MAX_PERMITS,
                             *PermitStep::FIFTY,
                             move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
                         ))),
-                        Adjusters::RunContext(Box::new(DumpToCpu::new())),
                         Adjusters::Input(Box::new(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
                             min_split_len,
                         ))),
