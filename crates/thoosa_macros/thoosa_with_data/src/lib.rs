@@ -50,10 +50,16 @@ impl Parse for WithDataInput {
 #[proc_macro]
 pub fn with_data(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as WithDataInput);
-    expand_with_data(input).into()
+    expand_with_data(input, false).into()
 }
 
-fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
+#[proc_macro]
+pub fn async_with_data(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as WithDataInput);
+    expand_with_data(input, true).into()
+}
+
+fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::TokenStream {
     let permits_ctx_expr = input.permits_ctx;
     let device_expr = input.device;
     let closure = input.closure;
@@ -101,6 +107,12 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
         }
     }
 
+    let invoke_closure = if await_closure {
+        quote! { (#closure)(#(#arg_refs),*).await }
+    } else {
+        quote! { (#closure)(#(#arg_refs),*) }
+    };
+
     quote! {
         {
             let __with_data_permits_ctx = ::std::sync::Arc::clone(&(#permits_ctx_expr));
@@ -122,7 +134,7 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
                 #(#prelude)*
                 #(#load_steps)*
 
-                (#closure)(#(#arg_refs),*)
+                #invoke_closure
             }.await
         }
     }
