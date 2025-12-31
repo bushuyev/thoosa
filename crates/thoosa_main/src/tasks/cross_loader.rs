@@ -1,10 +1,11 @@
-use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
+use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputBatch1Selector, CrossUnfoldClcOutput};
 #[cfg(test)]
 use crate::tasks::cross_batch_clc::CrossUnfoldClc;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
+use std::collections::{HashMap, HashSet};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
@@ -22,8 +23,14 @@ use thoosa_common::runs::Simple;
 use thoosa_motifs::find::FindMotifsSavableResult;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_shared::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
-use thoosa_shared::traits::{Data, Named, WithId};
+use thoosa_shared::runner::global_ctx::GlobalCtx;
+use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopRunnableContext, OOMHandler};
+use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, WithId};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::mono_key;
 use thoosa_store::Store;
@@ -34,9 +41,59 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_with_data::async_with_data;
 use crate::tasks::slices_iter::SlicesIter;
 
+#[derive(Debug)]
+struct CrossUnfoldClcOutputBuilder<R: Debug> {
+    partials: Vec<CrossUnfoldClcOutput<R>>,
+}
+
+impl<R: Debug> CrossUnfoldClcOutputBuilder<R> {
+    fn new() -> Self {
+        Self { partials: Vec::new() }
+    }
+}
+
+impl<R> OutputBuilder for CrossUnfoldClcOutputBuilder<R>
+where
+    R: CrossClcResultMerge + Debug,
+{
+    type O = CrossUnfoldClcOutput<R>;
+
+    fn add_partial_output(&mut self, o: Self::O) {
+        self.partials.push(o);
+    }
+
+    async fn build(self) -> Result<Self::O, ThoosaError> {
+        let mut iter = self.partials.into_iter();
+        let first = iter
+            .next()
+            .ok_or_else(|| ThoosaError::new("CrossUnfoldClcOutputBuilder: no partial outputs"))?;
+        let iter_0 = first.iter_0();
+        let iter_1 = first.iter_1();
+
+        let iter_0_step = iter_0.step;
+        let iter_1_step = iter_1.step;
+        let iter_0_resources = iter_0.resource_ids_sizes;
+        let mut iter_1_resources = iter_1.resource_ids_sizes;
+
+        let mut clc_result = first.clc_result();
+
+        for partial in iter {
+            let iter_1 = partial.iter_1();
+            iter_1_resources.extend(iter_1.resource_ids_sizes);
+            clc_result = clc_result.merge_batch_1(partial.clc_result())?;
+        }
+
+        Ok(CrossUnfoldClcOutput::new(
+            clc_result,
+            SlicesIter::new(iter_0_step, iter_0_resources),
+            SlicesIter::new(iter_1_step, iter_1_resources),
+        ))
+    }
+}
+
 pub struct CrossLoader<ResC, L, CLC, RSV, R, C>
 where
-    C:RunCtx+'static,
+    C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: for<'i> Cached<
         In<'i> = Resource,
@@ -46,17 +103,16 @@ where
 
     R: Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<
-        In<'i> = CrossInput<'i, &'i Arc<Resource>>,
+        In<'i> = CrossInput<'i, Arc<Resource>>,
         Out = CrossUnfoldClcOutput<R>,
         Ctx=C
-    > + Send + Sync + 'static,
+    > + Adjustable + OutId + Send + Sync + 'static,
 
     RSV: for<'i> SyncStage<
         In<'i> = CrossUnfoldClcOutput<R>,
         Out = (),
         Ctx=C
     > + Stage<Ctx=C> + Send + Sync + 'static,
-    C: RunCtx + 'static,
 {
     loader: Arc<L>,
     store: Arc<RwLock<Box<dyn Store>>>,
@@ -71,13 +127,12 @@ where
 
 impl<ResC, L, CLC, RSV, R, C> Debug for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
-    C:RunCtx+'static,
+    C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
-    C: RunCtx + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossLoader").finish()
@@ -86,13 +141,12 @@ where
 
 impl<ResC, L, CLC, RSV, R, C> CrossLoader<ResC, L, CLC, RSV, R, C>
 where
-    C:RunCtx+'static,
+    C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
-    C: RunCtx + 'static,
 {
     pub fn new<ReceiverFactory, OnAllDone, OnBatchDone>(
         loader: Arc<L>,
@@ -128,7 +182,7 @@ where
 //     C:RunCtx+'static,
 //     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
 //     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx=C> + OutId + 'static,
-//     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
+//     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
 //     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
 //     R: Debug + Send + Sync + 'static,
 //     C: RunCtx + 'static,
@@ -179,13 +233,12 @@ impl<RC: ResourcesConfig + Debug + Send + Sync> Input for ResourcesConfigInput<R
 
 impl<ResC, L, CLC, RSV, R, C> Stage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
-    C:RunCtx+'static,
+    C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
-    R: Debug + Send + Sync + 'static,
-    C: RunCtx + 'static,
+    R: CrossClcResultMerge + Debug + Send + Sync + 'static,
 {
     type Ctx=C;
 
@@ -198,7 +251,7 @@ where
 // #[async_trait]
 impl<ResC, L, CLC, RSV, R, C> AsyncStage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
-    C:RunCtx+'static,
+    C: RunCtx + Adjustable + 'static,
     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
     ResourcesConfigInput<ResC>: Data<M=CpuOnly<ResourcesConfigInput<ResC>>> + WithId + Send + Sync,
     CpuOnly<ResourcesConfigInput<ResC>>: DevicesWrapCopyMode<ResourcesConfigInput<ResC>>,
@@ -206,10 +259,9 @@ where
     <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, &'i Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
-    R: Debug + Send + Sync + 'static,
-    C: RunCtx + 'static,
+    R: CrossClcResultMerge + Debug + Send + Sync + 'static,
 {
     async fn run(
         self: Arc<Self>,
@@ -249,7 +301,7 @@ where
 
             t_0_batch_len += t_0.size().dim_1();
             t_0_batch.push(t_0);
-            t_0_batch_resources.push(resource_0);
+            t_0_batch_resources.push(Arc::clone(resource_0));
 
             if t_0_batch_len < max_batch && i_0 < resources.len() - 1 {
                 continue;
@@ -272,7 +324,7 @@ where
                 t_1_batch_len += t_1.size().dim_1();
 
                 t_1_batch.push(t_1);
-                t_1_batch_resources.push(resource_1);
+                t_1_batch_resources.push(Arc::clone(resource_1));
 
                 if t_1_batch_len < max_batch && i_1 < resources.len() - 1 {
                     continue;
@@ -297,7 +349,47 @@ where
 
                         debug!("CrossLoader::run: input={input:?}");
 
-                        let out = batch_clc.do_run(&input, ctx_for_clc)?;
+                        let ctx_name = ctx_for_clc.read().name();
+                        let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+                        let input_len = input.size();
+                        let out_key = Arc::new(batch_clc.out_id(input.id())) as Arc<dyn CachableIdTr>;
+                        let out_key_for_permits = Arc::clone(&out_key);
+
+                        let out = OOMHandler::new(
+                            vec![
+                                Adjusters::RunContext(Box::new(PermitsAdjuster::new(
+                                    MAX_PERMITS,
+                                    *PermitStep::TWENTY,
+                                    move |n| {
+                                        GlobalCtx::global().acquire_many(
+                                            device_idx,
+                                            n,
+                                            Arc::clone(&out_key_for_permits),
+                                        )
+                                    },
+                                ))),
+                                Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                                #[cfg(not(debug_assertions))]
+                                Adjusters::Input(Box::new(SplitsAdjuster::<CrossInputBatch1Selector, i64>::new(2))),
+                                #[cfg(debug_assertions)]
+                                Adjusters::Input(Box::new(SplitsAdjuster::<CrossInputBatch1Selector, i64>::new(1))),
+                            ],
+                            None,
+                        )
+                        .run(
+                            &batch_clc,
+                            Arc::new(input),
+                            Arc::clone(&ctx_for_clc),
+                            Contexts::new(
+                                SplitsAdjusterContextImpl::new(input_len, CrossUnfoldClcOutputBuilder::new()),
+                                NoopRunnableContext {},
+                                PermitsAndDumpToCpuAdjustableContex::new(
+                                    PermitsAdjustContextImpl::new(ctx_name),
+                                    DumpToCpuContextImpl::new(&required_ids),
+                                ),
+                            ),
+                        )
+                        .await?;
                         Ok::<_, ThoosaError>(out)
                     }
                 )?;
@@ -333,7 +425,7 @@ where
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_clc {
     use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
-    use thoosa_shared::runner::common::RunCtx;
+    use thoosa_shared::runner::common::{OutId, RunCtx};
     use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
     use parking_lot::RwLock;
     use std::fmt::Debug;
@@ -342,9 +434,10 @@ pub(crate) mod mock_cross_loader_clc {
     use thoosa_shared::ThoosaError;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::resource::Resource;
+    use thoosa_shared::traits::{Adjustable, WithId};
 
     type RunBatchFn<Out, C> = dyn for<'a> Fn(
-        &CrossInput<'a, &'a Arc<Resource>>,
+        &CrossInput<'a, Arc<Resource>>,
         Arc<RwLock<C>>,
     ) -> Result<CrossUnfoldClcOutput<Out>, ThoosaError>
     + Send
@@ -371,13 +464,29 @@ pub(crate) mod mock_cross_loader_clc {
         }
     }
 
+    impl<Out, C> Adjustable for MockCrossLoaderClc<Out, C>
+    where
+        Out: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {}
+
+    impl<Out, C> OutId for MockCrossLoaderClc<Out, C>
+    where
+        Out: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+            input_id.clone()
+        }
+    }
+
     impl<Out, C> Stage for MockCrossLoaderClc<Out, C>
     where
         Out: Input + Output + Send + Debug + 'static,
         C: RunCtx + 'static,
     {
         type Ctx = C;
-        type In<'a> = CrossInput<'a, &'a Arc<Resource>>;
+        type In<'a> = CrossInput<'a, Arc<Resource>>;
         type Out = CrossUnfoldClcOutput<Out>;
     }
 
@@ -416,7 +525,7 @@ pub(crate) mod mock_cross_loader_clc {
         pub fn with_run_batch_fn<F>(mut self, f: F) -> Self
         where
             F: for<'a> Fn(
-                &CrossInput<'a, &'a Arc<Resource>>,
+                &CrossInput<'a, Arc<Resource>>,
                 Arc<RwLock<C>>,
             ) -> Result<CrossUnfoldClcOutput<Out>, ThoosaError>
             + Send
@@ -615,6 +724,12 @@ mod tests {
 
     impl Input for TestBatchOutput {}
     impl Output for TestBatchOutput {}
+
+    impl CrossClcResultMerge for TestBatchOutput {
+        fn merge_batch_1(self, _other: Self) -> Result<Self, ThoosaError> {
+            Ok(self)
+        }
+    }
 
     #[tokio::test]
     async fn test_cross_clc() -> Result<(), ThoosaError> {
