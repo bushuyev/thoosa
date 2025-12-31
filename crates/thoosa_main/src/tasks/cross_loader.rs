@@ -359,18 +359,18 @@ where
 
                         let out = OOMHandler::new(
                             vec![
-                                // Adjusters::RunContext(Box::new(PermitsAdjuster::new(
-                                //     MAX_PERMITS,
-                                //     *PermitStep::TWENTY,
-                                //     move |n| {
-                                //         GlobalCtx::global().acquire_many(
-                                //             device_idx,
-                                //             n,
-                                //             Arc::new(simple_id!(ctx_name))
-                                //         )
-                                //     },
-                                // ))),
-                                // Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                                Adjusters::RunContext(Box::new(PermitsAdjuster::new(
+                                    MAX_PERMITS,
+                                    *PermitStep::TWENTY,
+                                    move |n| {
+                                        GlobalCtx::global().acquire_many(
+                                            device_idx,
+                                            n,
+                                            Arc::new(simple_id!(ctx_name))
+                                        )
+                                    },
+                                ))),
+                                Adjusters::RunContext(Box::new(DumpToCpu::new())),
                                 Adjusters::Input(Box::new(SplitsAdjuster::<CrossInputBatch1Selector, i64>::new(1))),
                             ],
                             None,
@@ -382,11 +382,11 @@ where
                             Contexts::new(
                                 SplitsAdjusterContextImpl::new(input_len, CrossUnfoldClcOutputBuilder::new()),
                                 NoopRunnableContext {},
-                                NoopRunCtxContext{},
-                                // PermitsAndDumpToCpuAdjustableContex::new(
-                                //     PermitsAdjustContextImpl::new(ctx_name),
-                                //     DumpToCpuContextImpl::new(&required_ids),
-                                // ),
+                                // NoopRunCtxContext{},
+                                PermitsAndDumpToCpuAdjustableContex::new(
+                                    PermitsAdjustContextImpl::new(ctx_name),
+                                    DumpToCpuContextImpl::new(&required_ids),
+                                ),
                             ),
                         )
                         .await?;
@@ -760,6 +760,7 @@ mod tests {
             .map(|v| v.to_string())
             .collect();
 
+        // Exercise GPU path and copy mask/dists back to CPU for DistsTracker.
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa")));
 
         let resource_stats = resource_keys
@@ -856,7 +857,7 @@ mod tests {
                 }
             },
             chunk_size, //TODO config
-            |batch| async { batch }.boxed(),
+            |batch| async { batch.to_cpu_with_dists().await.unwrap() }.boxed(),
             |_receiver| async {}.boxed(),
             0,
         ));
