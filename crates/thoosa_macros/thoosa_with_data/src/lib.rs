@@ -113,15 +113,16 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
         quote! { (#closure)(#(#arg_refs),*) }
     };
 
-    quote! {
-        {
-            let __with_data_permits_ctx = ::std::sync::Arc::clone(&(#permits_ctx_expr));
-            let __with_data_device = #device_expr;
-            async {
-                let to_device_idx = __with_data_device;
-                let __device_idx = to_device_idx;
-
-                let _permit = if __with_data_permits_ctx.read().acquired_permits() == 0 {
+    let permits = if await_closure {
+        quote! {
+             if __with_data_permits_ctx.read().acquired_permits() == 0 {
+                let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(to_device_idx, ::std::sync::Arc::new(::thoosa_shared::simple_id!(name))).await?;
+                __with_data_permits_ctx.write().add_permit(permit);
+            }
+        }
+    } else {
+        quote! {
+             let _permit = if __with_data_permits_ctx.read().acquired_permits() == 0 {
                     let name = __with_data_permits_ctx.read().name();
                     let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global()
                         .acquire_one(to_device_idx, ::std::sync::Arc::new(::thoosa_shared::simple_id!(name)))
@@ -130,6 +131,18 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
                 } else {
                     None
                 };
+        }
+    };
+
+    quote! {
+        {
+            let __with_data_permits_ctx = ::std::sync::Arc::clone(&(#permits_ctx_expr));
+            let __with_data_device = #device_expr;
+            async {
+                let to_device_idx = __with_data_device;
+                let __device_idx = to_device_idx;
+
+
 
                 #(#prelude)*
                 #(#load_steps)*

@@ -129,6 +129,54 @@ impl DistsMask {
         }
     }
 
+    pub async fn to_cpu_with_dists(self) -> Result<Self, ThoosaError>  {
+        debug!("DistsMask::to_cpu_with_dists: self.mask.device={:?}", self.mask.device());
+
+        if self.mask.device().eq(&Cpu) {
+            let dists = match self.dists {
+                Some(dists) if !dists.device().eq(&Cpu) => {
+                    let device = ThoDevice::from(dists.device());
+                    let kind = dists.kind();
+                    Some(CopyCtx::instance(device).move_t(dists, 0, kind).await?)
+                }
+                other => other,
+            };
+            Ok(Self {
+                mask: self.mask,
+                dists,
+                sizes: self.sizes,
+                stream_to_sync: None,
+            })
+        } else {
+            if let Some(stream) = self.stream_to_sync {
+                stream.synchronize();
+            }
+
+            let device = ThoDevice::from(self.mask.device());
+            let mask = if self.sizes.is_some() {//was packed
+                CopyCtx::instance(device).move_t(self.mask, 0, Uint8).await?
+            } else {
+                CopyCtx::instance(device).move_t(self.mask, 0, Bool).await?
+            };
+            let dists = match self.dists {
+                Some(dists) if dists.device().eq(&Cpu) => Some(dists),
+                Some(dists) => {
+                    let kind = dists.kind();
+                    let dists_device = ThoDevice::from(dists.device());
+                    Some(CopyCtx::instance(dists_device).move_t(dists, 0, kind).await?)
+                }
+                None => None,
+            };
+
+            Ok(Self {
+                mask,
+                dists,
+                sizes: self.sizes,
+                stream_to_sync: None,
+            })
+        }
+    }
+
     pub fn unpack(self) -> (Tensor, Option<Tensor>) {
         debug!("DistsMask::unpack: self.sizes={:?}", self.sizes);
         match &self.sizes {//was packed
