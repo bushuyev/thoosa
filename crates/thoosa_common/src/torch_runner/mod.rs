@@ -644,20 +644,20 @@ mod tests {
             debug!("LoadAndMulTask::run: loaded_id={loaded_id:?} output_id={output_id:?}");
 
             let loaded_id_name = "LoadedTensorId"; //loaded.id().id_name().clone();
-            let _output_id_name = "MulTaskOutputId"; //loaded.id().id_name().clone();
+            let output_id_name = "MulTaskOutputId"; //loaded.id().id_name().clone();
 
             debug!("LoadAndMulTask::run: loaded_id_name={loaded_id_name:?} output_id.name()={:?}",output_id.name());
 
-            let _set_loaded = [&loaded_id as &dyn CachableIdTr]
+            let set_loaded = [&loaded_id as &dyn CachableIdTr]
                 .into_iter()
                 .collect::<HashSet<&dyn CachableIdTr>>();
-            let _set_mul = [&output_id as &dyn CachableIdTr]
+            let set_mul = [&output_id as &dyn CachableIdTr]
                 .into_iter()
                 .collect::<HashSet<&dyn CachableIdTr>>();
 
             let required_ids = HashMap::from([
-                // (loaded_id_name, &set_loaded),
-                // (output_id.name(), &set_mul),
+                (loaded_id_name, &set_loaded),
+                (output_id_name, &set_mul),
             ]);
 
             let result = self
