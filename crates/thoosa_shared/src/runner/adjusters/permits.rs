@@ -2,7 +2,7 @@
 use crate::runner::oom_handler::{Adjuster, RunCtxContext};
 use ambassador::{delegatable_trait, Delegate};
 use async_trait::async_trait;
-use log::debug;
+use log::{debug, error};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -152,7 +152,8 @@ where
 
                             tokio::task::yield_now().await;
                         }
-                        _ => {
+                        inner => {
+                            error!("PermitsAdjuster::adjust: e={inner:?}");
                             // Propagate unexpected errors to let caller decide.
                             return Err(te);
                         }
