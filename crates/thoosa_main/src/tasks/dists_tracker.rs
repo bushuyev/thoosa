@@ -349,17 +349,21 @@ where
         let iter_1 = input.iter_1();
 
         let (ref mask_cpu, ref dists_cpu)= input.clc_result().unpack();
+        let mask_cpu_flat = mask_cpu.flatten(1, 2);
+        let dists_cpu_flat = dists_cpu.as_ref().map(|d| d.flatten(1, 2));
 
         tokio::task::block_in_place(|| {
             Handle::current().block_on(async {
                 stream::iter(self.channel_trackers.iter().enumerate()).map(|(channel, mt)| {
                     let iter_0 = iter_0.clone();
                     let iter_1 = iter_1.clone();
+                    let mask_cpu_flat = mask_cpu_flat.shallow_clone();
+                    let dists_cpu_flat = dists_cpu_flat.as_ref().map(|d| d.shallow_clone());
                     async move {
-                        let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
-                        let dists_flattened = dists_cpu
+                        let mask_cpu_flattened = mask_cpu_flat.i((channel as i64, ..));
+                        let dists_flattened = dists_cpu_flat
                             .as_ref()
-                            .map(|d| d.i((channel as i64, .., ..)).flatten(0, 1));
+                            .map(|d| d.i((channel as i64, ..)));
 
 
                         debug!("find_motifs_by_euc_dist: dists_flattened.size={:?}",dists_flattened.as_ref().map(|v| v.size()));
