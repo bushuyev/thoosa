@@ -1,21 +1,24 @@
 use std::f64::consts::PI;
+#[cfg(test)]
 use std::fmt;
-use ctor::ctor;
+#[cfg(test)]
 use log::debug;
-use rand::Rng;
 // Removed dependency on rand distributions here; use tch::Tensor::randn instead
 use tch::Tensor;
 use tch::kind::FLOAT_CPU;
 
+#[cfg(test)]
 use thoosa_shared::ThoosaError;
-
+#[cfg(test)]
 use crate::opt::cholesky_with_jitter;
 
+#[allow(dead_code)]
 pub struct Gaussian {
     μ: Tensor,
     σ: Tensor,
 }
 
+#[allow(dead_code)]
 impl Gaussian {
     pub fn new(μ: Tensor, σ: Tensor) -> Self {
         Self { μ, σ }
@@ -156,7 +159,7 @@ where
         &self,
         x_train: &Tensor,
         y_train: &Tensor,
-    ) -> Result<GaussianProcessFit<F>, ThoosaError> {
+    ) -> Result<GaussianProcessFit<'_, F>, ThoosaError> {
         debug!("fit: x_train={}", x_train);
         debug!("fit: y_train={}", y_train);
         let k = (self.kernel)(&x_train, &x_train);

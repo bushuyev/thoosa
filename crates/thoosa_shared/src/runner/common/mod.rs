@@ -8,7 +8,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use crate::ThoosaError;
 use crate::traits::{Named, WithId};
-use crate::runner::permits::*;
 
 pub mod cachable;
 pub mod runnable;
@@ -42,7 +41,7 @@ pub trait RunCtx: PermitsCtx {//TODO remove PermitsCtx from RunCtx
 
     fn cache_area(&self) -> u64;
 
-    fn branch(&mut self, new_name:&str)-> Arc<RwLock<Self>> {
+    fn branch(&mut self, _new_name:&str)-> Arc<RwLock<Self>> {
         todo!()
     }
 }
@@ -123,7 +122,7 @@ pub mod mock_run_ctx {
             self
         }
 
-        pub fn with_purge_gpu_caches(mut self) -> Self {
+        pub fn with_purge_gpu_caches(self) -> Self {
             MockRunCtx::purge_gpu_caches_context().expect().with(always()).returning( |_| Box::pin(async { Ok(()) }));
 
             self

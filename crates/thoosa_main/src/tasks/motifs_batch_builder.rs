@@ -66,12 +66,11 @@ pub fn make_batch_with(in_tensor: &Tensor, batch_size: i64, cfg: MixupJitterCfg)
 
 /// Samples Beta(alpha, alpha) for `batch_size` entries and returns a 1-D tensor on `device`.
 fn beta_tensor(alpha: f64, batch_size: i64, device: Device) -> TchResult<Tensor> {
-    use rand::thread_rng;
     use rand_distr::{Distribution, Gamma};
 
     assert!(alpha > 0.0, "alpha must be > 0");
     let ga = Gamma::new(alpha, 1.0).expect("valid gamma");
-    let mut rng = thread_rng();
+    let mut rng = rand::rng();
 
     let mut buf = Vec::with_capacity(batch_size as usize);
     for _ in 0..batch_size {

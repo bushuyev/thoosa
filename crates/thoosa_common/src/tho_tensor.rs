@@ -4,20 +4,16 @@ use crate::copy_ctx::CopyCtx;
 use crate::cuda_utils::tensor_mem_size;
 use crate::dims::{AnyDims, Dimensional, Dims};
 use thoosa_shared::{panic_to_err, simple_id};
-use ambassador::delegatable_trait;
 use async_trait::async_trait;
-use mockall::automock;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::sync::Arc;
-use tch::{Device, IndexOp, Kind, Tensor};
+use tch::{Device, Kind, Tensor};
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, Select, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, SimpleId, WithId};
 use torch_sys::IntList;
 use log::{debug, trace};
-use tch::Device::Cpu;
 use thoosa_shared::copy_mode::CpuOrGpu;
 
 impl<D: Dims, Id: Named + Debug + Clone> Dimensional for ThoTensor<D, Id> {
@@ -196,7 +192,7 @@ where
         self.t
             .size()
             .try_into()
-            .map_err(|e| ThoosaError::new("".to_string()))
+            .map_err(|_| ThoosaError::new("".to_string()))
             .unwrap() //TODO
     }
 
@@ -205,7 +201,7 @@ where
     }
 
     fn mem_size(&self) -> u64 {
-        self.size().iter().fold(1u64, | a, v| (a * (*v as u64))) * self.t.kind().elt_size_in_bytes() as u64
+        self.size().iter().fold(1u64, | a, v| a * (*v as u64)) * self.t.kind().elt_size_in_bytes() as u64
     }
 }
 

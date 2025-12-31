@@ -4,14 +4,15 @@ use crate::utils::from;
 use log::{debug, trace};
 use rand::distr::Distribution as RandDistribution;
 use rand::distr::weighted::WeightedIndex;
-use rand::seq::SliceRandom;
+use tch::IndexOp;
 use tch::Kind::Float;
 use tch::kind::{FLOAT_CPU, INT64_CPU};
-use tch::{IndexOp, Tensor};
+use tch::Tensor;
 use thoosa_shared::opt_rng::opt_rnd;
 use thoosa_shared::val::Val;
 
 pub struct CategoricalParzenEstimator {
+    #[allow(dead_code)]
     name: Option<String>,
     top: f32,
     bottom: f32,

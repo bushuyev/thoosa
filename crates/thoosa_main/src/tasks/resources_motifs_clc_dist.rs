@@ -154,7 +154,7 @@ where
                 let _guard = ThoStreamGuard::set(&motifs_stream);
             }
 
-            let ((mask_dists_result), motifs_stream) = with_cuda_stream(device_idx, || {
+            let (mask_dists_result, motifs_stream) = with_cuda_stream(device_idx, || {
                 thoosa_motifs::distance::clc_dist_d2_and_mask(
                     input
                         .stacked_motifs_output

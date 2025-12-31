@@ -1,28 +1,13 @@
-use crate::tho_device::{ThoDevice};
-use crate::dims::{ChannelsData, ChannelsDataFiltered, ChannelsSlicesData, Dims, TCD, TCDF, TCSD};
-use crate::loader::SyncWrapper;
-use crate::tho_tensor::ThoTensor;
+#![allow(non_snake_case, unused_variables, unused_assignments)]
+
 use crate::transforms::filters::*;
-use crate::ws::Workspace;
-use async_trait::async_trait;
-use log::Level::Debug as DebugLevel;
-use log::{debug, log_enabled, warn};
-use parking_lot::{RwLock, RwLockReadGuard};
+use log::debug;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::ops::Deref;
-use std::sync::Arc;
-use tch::Device::Cpu;
-use tch::Kind::Float;
-use tch::{Device, Tensor};
 use thoosa_properties_map::FromHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::ThoosaError;
-use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::run_configs::{RunConfig, RunId};
-use thoosa_shared::traits::WithId;
 use thoosa_shared::val::Val;
 
 //TODO move to find, + nets move out of common
@@ -151,6 +136,7 @@ pub struct MaxDistance {
 }
 
 #[cfg(test)]
+#[allow(unused_imports)]
 mod tests {
     use crate::find_motifs_run_config::{DistanceRunningMeanK, DistanceRunningMeanKRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue, SlicesFilterRangeOrValue};
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;

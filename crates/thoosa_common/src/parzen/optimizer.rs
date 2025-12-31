@@ -1,7 +1,7 @@
 use log::{debug, trace};
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 // use rand_distr::{Uniform, Distribution};
 use crate::parzen::cpe::CategoricalParzenEstimator;
@@ -9,9 +9,7 @@ use crate::parzen::mvpe::MultiVariateParzenEstimator;
 use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
 use tch::{IndexOp, Tensor};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
-use thoosa_shared::opt_rng::opt_rnd;
 use thoosa_shared::val::{NamedVal, Val};
-use thoosa_shared::{RangeOrValue, ThoosaError};
 
 #[derive(Debug, Clone)]
 struct RunResult {
@@ -230,7 +228,6 @@ impl TreeStructuredParzenEstimator {
 mod tree_structured_parzen_estimator_tests {
     use crate::parzen::mvpe::MultiVariateParzenEstimator;
     use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
-    use crate::parzen::optimizer::Val::Real;
     use crate::parzen::optimizer::{
         ConfigurationSpace, ParzenEstimator, TreeStructuredParzenEstimator, Val,
     };
@@ -561,7 +558,7 @@ where
         let mut best_loss = f32::MAX;
         let mut best_config: Option<Vec<Val>> = None;
 
-        for i in (0..self.max_evals) {
+        for i in 0..self.max_evals {
             let eval_config = if i < self.n_init {
                 debug!("TPEOptimizer::optimize: i={i} random sample");
                 self.cs.random_sample()
@@ -710,9 +707,9 @@ mod tpe_optimizer_tests {
         let best_config = opt.optimize();
 
         debug!("best_config={best_config:?}");
-        assert!((300. - <&Val as TryInto<f32>>::try_into((&best_config[0])).unwrap()).abs() < 3.);
-        assert!((300. - <&Val as TryInto<f32>>::try_into((&best_config[1])).unwrap()).abs() < 3.);
-        assert!((300. - <&Val as TryInto<f32>>::try_into((&best_config[2])).unwrap()).abs() < 3.);
+        assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()).abs() < 3.);
+        assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()).abs() < 3.);
+        assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[2]).unwrap()).abs() < 3.);
     }
 
     #[test]
@@ -863,7 +860,7 @@ impl<T: FieldName> From<&ConfigurationSpace<T>> for HashMap<String, Val> {
                 }
                 Hyperparameter::Categorical { name, values } => {
                     for (i, val) in values.iter().enumerate() {
-                        map.insert(format!("{i}_{}", name), val.clone().into());
+                        map.insert(format!("{i}_{}", name), (*val).into());
                     }
                 }
             }
@@ -894,7 +891,7 @@ impl<T: FieldName> ConfigurationSpace<T> {
         self.hyperparameters.len()
     }
 
-    fn iter(&self) -> CsIter<T> {
+    fn iter(&self) -> CsIter<'_, T> {
         CsIter(self.hyperparameters.iter())
     }
 }

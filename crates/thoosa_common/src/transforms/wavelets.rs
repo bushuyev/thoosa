@@ -1,5 +1,6 @@
 use tch::{Device, Kind, Tensor};
 
+#[allow(dead_code)]
 fn generate_morlet_wavelet(center_freq: f64, sample_rate: f64, n_cycles: f64) -> (Tensor, Tensor) {
     let sigma = n_cycles / (2.0 * std::f64::consts::PI * center_freq);
     let half_support = (3.0 * sigma * sample_rate).round() as i64;
@@ -15,6 +16,7 @@ fn generate_morlet_wavelet(center_freq: f64, sample_rate: f64, n_cycles: f64) ->
 }
 
 #[cfg(test)]
+#[allow(unused_imports, unused_variables, dead_code)]
 mod tests {
     use crate::transforms::filters::clc_frequencies;
     use crate::transforms::utils::{complex_conv, generate_signal, sin_t};
@@ -54,7 +56,7 @@ mod tests {
         let input_signal_0 = sin_t(&t, target_freq);
         let input_signal_1 = sin_t(&t, 3. * target_freq);
 
-        let input = (input_signal_0 + input_signal_1);
+        let input = input_signal_0 + input_signal_1;
         let input_freqs = clc_frequencies(&input, samples, sample_rate, 2);
         let input = input.view((1, 1, -1));
 

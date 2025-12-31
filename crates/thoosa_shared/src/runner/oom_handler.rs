@@ -37,12 +37,13 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
     }
 }
 
+#[allow(async_fn_in_trait)]
 pub trait InputContext<'a, R>: Debug + Send + Sync
 where
     R: Stage + 'a,
     // <R as Stage>::In<'a>: Data
 {
-    fn add_partial_output(&mut self, o: R::Out);
+    fn add_partial_output(&mut self, out: R::Out);
     fn all_done(&self) -> bool;
     // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics;
     async fn build_final_output(self) -> Result<R::Out, ThoosaError>;
@@ -61,7 +62,7 @@ pub mod mock_input_context {
 
         }
         impl super::InputContext<'static, MockRunnable> for InputContext{
-            fn add_partial_output(&mut self, o: TestOutput);
+            fn add_partial_output(&mut self, out: TestOutput);
             fn all_done(&self) -> bool;
             // fn input_len(&self) -> &[usize; 1];
             async fn build_final_output(self) -> Result<TestOutput, ThoosaError>;
@@ -781,7 +782,7 @@ pub mod mock_runnable {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use thoosa_shared::traits::WithId;
-    use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use crate::runner::common::runnable::{Stage, SyncStage};
 
     mock! {
         #[derive(Clone, Debug)]

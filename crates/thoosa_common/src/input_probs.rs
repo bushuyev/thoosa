@@ -1,4 +1,4 @@
-use log::{debug, info};
+use log::info;
 use std::collections::HashMap;
 use tch::{Kind, Tensor};
 

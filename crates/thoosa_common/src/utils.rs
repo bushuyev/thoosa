@@ -1,7 +1,4 @@
-use std::cell::RefMut;
-use std::collections::VecDeque;
-
-use std::fmt::{Debug, Display};
+use std::fmt::Display;
 use std::io::Write;
 use std::iter::Map;
 
@@ -9,7 +6,7 @@ use std::ops::Range;
 use std::time::Instant;
 use std::{fs, ptr};
 
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, trace};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
 use plotters::drawing::IntoDrawingArea;
@@ -17,24 +14,20 @@ use plotters::element::PathElement;
 use plotters::prelude::*;
 use rand::prelude::ThreadRng;
 use rand::Rng;
-use parking_lot::lock_api::{RawRwLock, RwLock};
 use std::sync::Arc;
 use tch::display::PrinterOptions;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::nn::{LinearConfig, Optimizer};
 use tch::nn::VarStore;
-use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
-use tch::{nn, Device, Kind, TchError, Tensor};
-use thoosa_shared::{gauss_i, panic_to_err, panic_to_err_async, pulse_in_rand, pulse_v, pulses_in_const, saw, simple_id, MotifKind, ThoosaError};
+use tch::{nn, Device, Kind, Tensor};
+use thoosa_shared::{gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
 use torch_sys::cuda::atc_cuda_device_count;
-use thoosa_shared::traits::{Named, SimpleId};
 use crate::my_tch::{LossFp, ThoModule};
 
-use crate::batches::AsyncDataBatch;
 use crate::builder::SeqBuilder;
-use crate::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
-use futures_util::{FutureExt, StreamExt};
+use crate::dims::{Batch, Dims, MotifProbability, Slice};
+use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
@@ -135,7 +128,7 @@ fn _plot_series<S>(
     w_h: (u32, u32),
     path: &impl AsRef<std::path::Path>,
     points: Option<&Vec<(f32, f32)>>,
-    lanes: Option<&[(i32, i32)]>,
+    _lanes: Option<&[(i32, i32)]>,
 ) -> Result<(), ThoosaError>
 where
     S: Into<ShapeStyle> + Clone,
@@ -551,17 +544,18 @@ pub fn kick_register_cuda_hooks() {
 pub struct DummyListener;
 
 impl TrainListener for DummyListener {
-    fn on_valid_cycle(&mut self, cycle: u32, loss: f32) -> ListenerResponse {
+    fn on_valid_cycle(&mut self, _cycle: u32, _loss: f32) -> ListenerResponse {
         ListenerResponse::Nope
     }
 }
 
 #[cfg(test)]
+#[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
 pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
 
     use crate::utils::{hist_1_dim, mix_x_binary_with_labels, pad_to_2, TrainListener};
-    use clap::{arg, command, Args, Parser, Subcommand};
+    use clap::{Args, Parser, Subcommand};
 
     use log::debug;
     use std::collections::{HashMap, HashSet};
@@ -1521,8 +1515,7 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
 }
 
 use crate::dims::ThoBatch;
-use crate::tho_tensor::ThoTensor;
-use crate::train_nets::{LabelNetParams, MotifNetParams, ThoModuleWithStore};
+use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
 
 pub trait DataBatch<D: Dims> {
     /// returns (inputs, labels)
@@ -1532,7 +1525,7 @@ pub trait DataBatch<D: Dims> {
 
 
 pub trait TrainListener: Send + Sync {
-    fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<ListenerResponse> {
+    fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<'_, ListenerResponse> {
         async {ListenerResponse::Nope}.boxed()
     }
     fn on_valid_cycle(&mut self, cycle: u32, loss: f32) -> ListenerResponse;
@@ -1813,8 +1806,8 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
 
 //TODO check GPT
 pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> Result<(Tensor, Tensor), ThoosaError> {
-    let [ma, na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
-    let [mb, nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
+    let [ma, _na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
+    let [mb, _nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
     // assert_eq!((na, nb), (na, na), "X1 and X0 must have same n");
     // assert_eq!(ma, mb, "X1 and X0 must have same m");
     assert_eq!(x_0.device(), x_1.device(), "A and B must be on the same device");
@@ -1854,7 +1847,7 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
     num_features: u32,
     k: f64,
     device: Device,
-    descr: &str,
+    _descr: &str,
 ) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoosaError> {
     let vs = VarStore::new(device);
 

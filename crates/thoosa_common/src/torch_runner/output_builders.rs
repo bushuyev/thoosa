@@ -7,7 +7,7 @@ use tch::Kind;
 use thoosa_shared::runner::adjusters::splits::OutputBuilder;
 use crate::dims::Dims;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{Named, SimpleId, WithId};
+use thoosa_shared::traits::{Named, WithId};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -89,6 +89,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(unused_imports)]
 mod tests {
     use crate::tho_tensor::ThoTensor;
     use log::debug;

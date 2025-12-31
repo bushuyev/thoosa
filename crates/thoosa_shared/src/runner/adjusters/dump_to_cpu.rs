@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use mockall_double::double;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, SimpleId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr};
 use crate::runner::common::{DropIf, RunCtx};
 #[double]
 use crate::runner::global_ctx::GlobalCtx;

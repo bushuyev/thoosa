@@ -1,9 +1,8 @@
-use std::any::Any;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
-use crate::traits::{CachableIdTr, Named};
+use crate::traits::Named;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ElvVal {

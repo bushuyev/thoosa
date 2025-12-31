@@ -3,7 +3,9 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 #[repr(C)]
-pub struct CudaStreamOpaque;
+pub struct CudaStreamOpaque {
+    _private: [u8; 0],
+}
 pub type CudaStreamPtr = *mut CudaStreamOpaque;
 
 unsafe extern "C" {
