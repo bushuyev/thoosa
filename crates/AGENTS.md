@@ -1,6 +1,9 @@
 # Repository Guidelines
 
-## Never run cargo fmt!
+
+## Important Agent Rules
+- **Never run `cargo fmt` or any other bulk formatter.** Make only the minimal manual edits required for the task at hand.
+- **Do not touch unrelated files or code paths.** If a change is not strictly required to implement the current request, leave it untouched.
 
 ## Project Structure & Module Organization
 - Workspace root with `Cargo.toml` (Rust 2024, nightly toolchain).
@@ -15,8 +18,8 @@
 ## Build, Test, and Development Commands
 - Build workspace: `cargo build`
 - Build a crate: `cargo build -p torch_runner`
-- Run tests (all): `cargo test`
-- Run tests for a crate: `cargo test -p caching_runner_test -- --nocapture`
+- Run tests (all): `cargo nextest run --no-fail-fast`
+- Run tests for a crate: `cargo nextest run -p caching_runner_test -- --nocapture`
 - Lint (if installed): `cargo clippy --all-targets -- -D warnings`
 Notes:
 - Requires nightly toolchain (`rust-toolchain.toml` is pinned). Install via `rustup toolchain install nightly`.
@@ -50,8 +53,8 @@ Notes:
   - Ensure the shell session has torch/CUDA env loaded if needed: `source ./env.sh`.
   - Reinitialize the global context on restart: the code already uses `GlobalCtx::init_devices(N)` in tests; simply rerun the test command.
   - Prefer smaller, focused test runs when iterating:
-    - Single crate: `cargo test -p torch_runner -- --nocapture`
-    - Single test: `cargo test -p torch_runner test_ab_loader_and_classifier_cpu -- --nocapture`
+    - Single crate: `cargo nextest run -p torch_runner -- --nocapture`
+    - Single test: `cargo nextest -p torch_runner test_ab_loader_and_classifier_cpu -- --nocapture`
   - If GPU state feels stale (rare), reload libtorch CUDA once per session (happens implicitly in tests that `dlopen` `libtorch_cuda.so`).
 - Preventive Tips During Heavy Runs:
   - Lower batch sizes or dimensions in stress tests when debugging.
