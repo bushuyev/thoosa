@@ -309,11 +309,11 @@ impl TryFrom<Val> for f64 {
             Val::Int(v) => Ok(v as f64), //TODO
             Val::UInt(v) => v
                 .try_into()
-                .map_err(|e| ThoError::new(format!("e={e:?}"))),
+                .map_err(ThoError::from),
             Val::Real(v) => v
                 .try_into()
-                .map_err(|e| ThoError::new(format!("e={e:?}"))),
-            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+                .map_err(ThoError::from),
+            Val::Str(v) => v.parse().map_err(ThoError::from),
             _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
@@ -326,11 +326,11 @@ impl TryFrom<Val> for i64 {
         match value {
             Val::Int(v) => v
                 .try_into()
-                .map_err(|e| ThoError::new(format!("e={e:?}"))),
+                .map_err(ThoError::from),
             Val::UInt(v) => v
                 .try_into()
-                .map_err(|e| ThoError::new(format!("e={e:?}"))),
-            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+                .map_err(ThoError::from),
+            Val::Str(v) => v.parse().map_err(ThoError::from),
             _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
@@ -343,11 +343,11 @@ impl TryFrom<&Val> for i64 {
         match value {
             Val::Int(v) => (*v)
                 .try_into()
-                .map_err(|e| ThoError::new(format!("e={e:?}"))),
+                .map_err(ThoError::from),
             Val::UInt(v) => (*v)
                 .try_into()
-                .map_err(|e| ThoError::new(format!("e={e:?}"))),
-            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+                .map_err(ThoError::from),
+            Val::Str(v) => v.parse().map_err(ThoError::from),
             _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
@@ -361,11 +361,11 @@ impl TryFrom<Val> for u32 {
             Val::Real(v) => Ok(v as u32), //v.to_u32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
             Val::Int(v) => v
                 .try_into()
-                .map_err(|e| ThoError::new(format!("e={e:?}"))),
+                .map_err(ThoError::from),
             Val::UInt(v) => v
                 .try_into()
-                .map_err(|e| ThoError::new(format!("e={e:?}"))),
-            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+                .map_err(ThoError::from),
+            Val::Str(v) => v.parse().map_err(ThoError::from),
             _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
@@ -379,7 +379,7 @@ impl TryFrom<Val> for f32 {
             Val::Real(v) => Ok(v as f32), //TODO safe
             Val::Int(v) => Ok(v as f32),
             Val::UInt(v) => Ok(v as f32),
-            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            Val::Str(v) => v.parse().map_err(ThoError::from),
             _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
@@ -395,11 +395,11 @@ impl TryFrom<&Val> for f64 {
                 .ok_or_else(|| ThoError::new(format!("can't convert {value:?}"))),
             Val::UInt(v) => (*v)
                 .try_into()
-                .map_err(|e| ThoError::new(format!("e={e:?}"))),
+                .map_err(ThoError::from),
             Val::Real(v) => (*v)
                 .try_into()
-                .map_err(|e| ThoError::new(format!("e={e:?}"))),
-            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+                .map_err(ThoError::from),
+            Val::Str(v) => v.parse().map_err(ThoError::from),
             _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
@@ -415,7 +415,7 @@ impl TryFrom<&Val> for u32 {
                 .to_u32()
                 .ok_or_else(|| ThoError::new(format!("can't convert {value:?}"))),
             Val::UInt(v) => Ok(*v),
-            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            Val::Str(v) => v.parse().map_err(ThoError::from),
             _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
@@ -431,7 +431,7 @@ impl TryFrom<&Val> for i32 {
                 .to_i32()
                 .ok_or_else(|| ThoError::new(format!("can't convert {value:?}"))),
             Val::UInt(v) => Ok(*v as i32),
-            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            Val::Str(v) => v.parse().map_err(ThoError::from),
             _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
@@ -444,7 +444,7 @@ impl TryFrom<&Val> for f32 {
         match value {
             Val::Real(v) => Ok(*v as f32),
             Val::UInt(v) => Ok(*v as f32),
-            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            Val::Str(v) => v.parse().map_err(ThoError::from),
             _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
@@ -458,7 +458,7 @@ impl TryFrom<&Val> for String {
             Val::Str(v) => Ok(v.to_string()), // Return a string slice with the correct lifetime
             v => v
                 .try_into()
-                .map_err(|e| ThoError::new(format!("e={e:?}"))),
+                .map_err(ThoError::from),
         }
     }
 }
@@ -470,7 +470,7 @@ impl TryFrom<Val> for usize {
         match value {
             Val::Int(v) => Ok(v as usize),
             Val::UInt(v) => Ok(v as usize),
-            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            Val::Str(v) => v.parse().map_err(ThoError::from),
             _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }

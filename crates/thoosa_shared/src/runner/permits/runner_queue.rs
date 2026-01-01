@@ -84,11 +84,17 @@ impl Arbiter {
             requester_id: requester_id.clone(),
         })
         .await
-        .map_err(|e| Cause::SomethingElse(format!("send_acquire_rq: e={e:?}")))?;
+        .map_err(|e| Cause::External {
+            type_name: std::any::type_name::<mpsc::error::SendError<Req>>(),
+            source: Arc::new(e),
+        })?;
 
         recv.await.map_err(|e| {
             debug!("Arbiter::send_acquire_rq: e={e:?}, requester_id={requester_id:?}");
-            Cause::SomethingElse(format!("e={e:?}"))
+            Cause::External {
+                type_name: std::any::type_name::<oneshot::error::RecvError>(),
+                source: Arc::new(e),
+            }
         })?
     }
 

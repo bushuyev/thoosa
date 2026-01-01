@@ -907,12 +907,12 @@ mod tests {
             .tmp_path()
             .join(format!("{run_id}_0_slices.zstd"));
         let reader = ChunkedSlicesReader::<SlicesMatch>::new(&slices_path)
-            .map_err(|e| ThoError::new(format!("read slices file: {e}")))?;
+            .map_err(|e| ThoError::from_error(format!("read slices file {slices_path:?}"), e))?;
 
         let mut remaining = expected;
         let mut actual_count = 0usize;
         for chunk in reader {
-            let chunk = chunk.map_err(|e| ThoError::new(format!("read slices chunk: {e}")))?;
+            let chunk = chunk.map_err(|e| ThoError::from_error("read slices chunk", e))?;
             for entry in chunk {
                 actual_count += 1;
                 let key = (entry.0.0, entry.0.1, entry.1.0, entry.1.1);
@@ -1089,8 +1089,14 @@ mod tests {
 
         assert_eq!(observed, expected);
 
-        let produced = produced_outputs.lock()?.clone();
-        let received = received_outputs.lock()?.clone();
+        let produced = produced_outputs
+            .lock()
+            .expect("produced_outputs mutex poisoned")
+            .clone();
+        let received = received_outputs
+            .lock()
+            .expect("received_outputs mutex poisoned")
+            .clone();
 
         let expected_outputs: Vec<TestBatchOutput> = (0..expected.len())
             .map(TestBatchOutput::new)

@@ -128,11 +128,17 @@ pub struct RunAllArgs {
 impl RunAllArgs {
 
     pub fn find_resource_config(&self) -> Result<Simple, ThoError> {
-        Ok(Simple::new(parse_resources(&self.find_resources)?))
+        Ok(Simple::new(
+            parse_resources(&self.find_resources)
+                .map_err(|e| ThoError::from_boxed_error("parse find_resources", e))?,
+        ))
     }
 
     pub fn select_resource_config(&self) -> Result<Simple, ThoError> {
-        Ok(Simple::new(parse_resources(&self.select_resources)?))
+        Ok(Simple::new(
+            parse_resources(&self.select_resources)
+                .map_err(|e| ThoError::from_boxed_error("parse select_resources", e))?,
+        ))
     }
 
     pub fn train_resource_config(&self) -> NetResources<Labeled> {

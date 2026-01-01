@@ -11,7 +11,7 @@ use thoosa_shared::ThoError;
 
 pub fn ogg_to_tensor<P: AsRef<Path> + Debug>(
     file: P,
-) -> Result<Tensor, Box<dyn std::error::Error>> {
+) -> Result<Tensor, ThoError> {
     debug!("ogg_to_tensor: file={file:?}");
 
     let file = File::open(file)?;
@@ -45,7 +45,7 @@ pub fn ogg_to_tensor<P: AsRef<Path> + Debug>(
 }
 
 #[allow(dead_code)]
-pub fn clc_tracks<P: AsRef<Path>>(file: P) -> Result<usize, Box<dyn std::error::Error>> {
+pub fn clc_tracks<P: AsRef<Path>>(file: P) -> Result<usize, ThoError> {
     let file = File::open(file)?;
     let reader = BufReader::new(file);
     let mut pr = PacketReader::new(reader);
@@ -293,14 +293,19 @@ mod tests {
         channels: &Vec<Vec<i16>>,
         sample_rate: u32,
         output_path: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), ThoError> {
         let num_channels = channels.len();
 
         // Validate that all channels have the same length
-        let num_samples = channels.first().ok_or("No channels provided")?.len();
+        let num_samples = channels
+            .first()
+            .ok_or_else(|| ThoError::new("no channels provided"))?
+            .len();
 
         if !channels.iter().all(|ch| ch.len() == num_samples) {
-            return Err("All channels must have the same number of samples".into());
+            return Err(ThoError::new(
+                "all channels must have the same number of samples",
+            ));
         }
 
         // Create temp WAV file
@@ -333,7 +338,7 @@ mod tests {
             .status()?;
 
         if !status.success() {
-            return Err("ffmpeg failed to encode to ogg".into());
+            return Err(ThoError::new("ffmpeg failed to encode to ogg"));
         }
 
         Ok(())

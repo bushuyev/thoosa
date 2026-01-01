@@ -217,7 +217,12 @@ pub async fn copy_d2h_from_ptr(
 
                     Ok(())
 
-                }).await.map_err(|e| Cause::SomethingElse(format!("{:?}", e)))??;
+                })
+                .await
+                .map_err(|e| Cause::External {
+                    type_name: std::any::type_name::<tokio::task::JoinError>(),
+                    source: Arc::new(e),
+                })??;
 
                 tokio::task::spawn_blocking(move || {
                     std::ptr::copy_nonoverlapping(
@@ -225,7 +230,12 @@ pub async fn copy_d2h_from_ptr(
                         dst_off_ptr as *mut u8,
                         c_buf_size,
                     );
-                }).await.map_err(|e| Cause::SomethingElse(format!("{:?}", e)))?;
+                })
+                .await
+                .map_err(|e| Cause::External {
+                    type_name: std::any::type_name::<tokio::task::JoinError>(),
+                    source: Arc::new(e),
+                })?;
 
 
                 drop(buf_stream);

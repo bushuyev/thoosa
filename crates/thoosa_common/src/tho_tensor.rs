@@ -192,7 +192,7 @@ where
         self.t
             .size()
             .try_into()
-            .map_err(|_| ThoError::new("".to_string()))
+            .map_err(|_| ThoError::new("tensor size metrics conversion failed"))
             .unwrap() //TODO
     }
 
