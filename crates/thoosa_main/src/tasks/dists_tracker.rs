@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::{IndexOp, Kind, Tensor};
 use tokio::runtime::Handle;
-use futures::{stream, StreamExt};
+use futures::{stream, StreamExt, TryStreamExt};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::{Bool, Float, Uint8};
 use thoosa_common::bool_iter::BoolTensorIterator;
@@ -179,22 +179,22 @@ impl DistsMask {
         }
     }
 
-    pub fn unpack(self) -> (Tensor, Option<Tensor>) {
+    pub fn unpack(self) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
         debug!("DistsMask::unpack: self.sizes={:?}", self.sizes);
         match &self.sizes {//was packed
             Some(size) => {
-                (
+                Ok((
                     unpack_bits_u8(
                         &self.mask,
                         Some(size.0.iter().fold(1, |mut a, v| {a*=v; a}))
                     )
-                    .to_kind(Bool)
-                    .view(size.0.as_slice()),
+                    .f_to_kind(Bool)?
+                    .f_view(size.0.as_slice())?,
                     self.dists
-                )
+                ))
             },
             None => {
-                (self.mask, self.dists)
+                Ok((self.mask, self.dists))
             }
         }
     }
@@ -218,8 +218,8 @@ impl CrossClcResultMerge for DistsMask {
             return Err(ThoosaError::new("DistsMask merge: pack mismatch"));
         }
 
-        let (mask_left, dists_left) = left.unpack();
-        let (mask_right, dists_right) = right.unpack();
+        let (mask_left, dists_left) = left.unpack()?;
+        let (mask_right, dists_right) = right.unpack()?;
 
         let mask = Tensor::f_concat(&[mask_left, mask_right], 2)?;
 
@@ -348,9 +348,12 @@ where
         let iter_0 = input.iter_0();
         let iter_1 = input.iter_1();
 
-        let (ref mask_cpu, ref dists_cpu)= input.clc_result().unpack();
-        let mask_cpu_flat = mask_cpu.flatten(1, 2);
-        let dists_cpu_flat = dists_cpu.as_ref().map(|d| d.flatten(1, 2));
+        let (mask_cpu, dists_cpu)= input.clc_result().unpack()?;
+        let mask_cpu_flat = mask_cpu.f_flatten(1, 2)?;
+        let dists_cpu_flat = match dists_cpu.as_ref() {
+            Some(d) => Some(d.f_flatten(1, 2)?),
+            None => None,
+        };
 
         tokio::task::block_in_place(|| {
             Handle::current().block_on(async {
@@ -360,10 +363,11 @@ where
                     let mask_cpu_flat = mask_cpu_flat.shallow_clone();
                     let dists_cpu_flat = dists_cpu_flat.as_ref().map(|d| d.shallow_clone());
                     async move {
-                        let mask_cpu_flattened = mask_cpu_flat.i((channel as i64, ..));
-                        let dists_flattened = dists_cpu_flat
-                            .as_ref()
-                            .map(|d| d.i((channel as i64, ..)));
+                        let mask_cpu_flattened = mask_cpu_flat.f_i((channel as i64, ..))?;
+                        let dists_flattened = match dists_cpu_flat.as_ref() {
+                            Some(d) => Some(d.f_i((channel as i64, ..))?),
+                            None => None,
+                        };
 
 
                         debug!("find_motifs_by_euc_dist: dists_flattened.size={:?}",dists_flattened.as_ref().map(|v| v.size()));
@@ -399,12 +403,13 @@ where
                             }
                         }
                         mt.lock().dump();
+                        Ok::<(), ThoosaError>(())
                     }
                 }).buffer_unordered(self.channel_trackers.len()) // <- bound parallelism
-                    .collect::<Vec<()>>()
+                    .try_collect::<Vec<()>>()
                     .await
             })
-        });
+        })?;
 
         Ok(())
     }

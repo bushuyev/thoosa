@@ -411,7 +411,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
                 let motif_width = net.extra().motif_net_params.num_features() as i64;
 
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} c={c} motif_width={motif_width} input.t.size={:?} self.slice_step={}", input.t.size(), self.slice_step);
-                let t = input.t.i((c, ..));
+                let t = input.t.f_i((c, ..))?;
                 let t  = if t.size()[0] >= motif_width {
                     t
                 } else {

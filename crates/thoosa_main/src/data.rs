@@ -49,51 +49,51 @@ pub fn series_to_tensor(s: &Series) -> Result<Tensor, ThoosaError> {
     Ok(match s.dtype() {
         // DataType::UInt8 => {}
         // DataType::UInt16 => {}
-        DataType::UInt32 => Tensor::from_slice(
+        DataType::UInt32 => Tensor::f_from_slice(
             s.u32()?
                 .to_vec()
                 .iter()
                 .map(|v| v.unwrap_or_default() as i32)
                 .collect::<Vec<i32>>()
                 .as_slice(),
-        ),
-        DataType::UInt64 => Tensor::from_slice(
+        )?,
+        DataType::UInt64 => Tensor::f_from_slice(
             s.i64()?
                 .to_vec()
                 .iter()
                 .map(|v| v.unwrap_or_default() as i32)
                 .collect::<Vec<i32>>()
                 .as_slice(),
-        ),
+        )?,
         // DataType::Int8 => {}
         // DataType::Int16 => {}
-        DataType::Int32 => Tensor::from_slice(
+        DataType::Int32 => Tensor::f_from_slice(
             s.u32()?
                 .to_vec()
                 .iter()
                 .map(|v| v.unwrap_or_default() as i32)
                 .collect::<Vec<i32>>()
                 .as_slice(),
-        ),
+        )?,
         // DataType::Int64 => {
         //     // tensors.push(Tensor::from_slice(s.i64()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<i64>>().as_slice()));
         // }
-        DataType::Float32 => Tensor::from_slice(
+        DataType::Float32 => Tensor::f_from_slice(
             s.f32()?
                 .to_vec()
                 .iter()
                 .map(|v| v.unwrap_or_default())
                 .collect::<Vec<f32>>()
                 .as_slice(),
-        ),
-        DataType::Float64 => Tensor::from_slice(
+        )?,
+        DataType::Float64 => Tensor::f_from_slice(
             s.f64()?
                 .to_vec()
                 .iter()
                 .map(|v| v.unwrap_or_default() as f32)
                 .collect::<Vec<f32>>()
                 .as_slice(),
-        ),
+        )?,
         _ => {
             todo!()
         }
@@ -155,13 +155,13 @@ pub fn parquet_to_tensor_by_path(
 ) -> Result<Tensor, ThoosaError> {
     let df = read_parquet_to_df(path)?;
 
-    let tensor = Tensor::vstack(
+    let tensor = Tensor::f_vstack(
         &df.get_columns()
             .into_iter()
-            .map(|s| series_to_tensor(s.as_series().unwrap()).unwrap())
-            .collect::<Vec<Tensor>>(),
-    );
-    Ok(tensor.set_requires_grad(false).to_device(device))
+            .map(|s| series_to_tensor(s.as_series().unwrap()))
+            .collect::<Result<Vec<Tensor>, ThoosaError>>()?,
+    )?;
+    Ok(tensor.f_set_requires_grad(false)?.f_to_device(device)?)
 }
 
 pub fn read_parquet_to_df(path: impl AsRef<Path>) -> Result<DataFrame, ThoosaError> {
@@ -357,4 +357,3 @@ mod data_tests {
         Ok(())
     }
 }
-

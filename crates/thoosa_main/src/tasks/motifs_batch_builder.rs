@@ -36,30 +36,30 @@ pub fn make_batch_with(in_tensor: &Tensor, batch_size: i64, cfg: MixupJitterCfg)
     // Case 1: enough data — sample without replacement.
     if num_records > 2 * batch_size {
         let idx = Tensor::f_randperm(num_records, (Kind::Int64, device))?.f_narrow(0, 0, batch_size)?;
-        return Ok(in_tensor.index_select(0, &idx));
+        return Ok(in_tensor.f_index_select(0, &idx)?);
     }
 
     // Case 2: data paucity — build a batch via sampling with replacement,
     // then mixup (optional) and jitter (optional).
-    let base_idx = Tensor::randint(num_records, &[batch_size], (Kind::Int64, device));
-    let mut out = in_tensor.index_select(0, &base_idx).to_kind(Kind::Float);
+    let base_idx = Tensor::f_randint(num_records, &[batch_size], (Kind::Int64, device))?;
+    let mut out = in_tensor.f_index_select(0, &base_idx)?.f_to_kind(Kind::Float)?;
 
     if cfg.do_mixup {
-        let perm_idx = Tensor::randint(num_records, &[batch_size], (Kind::Int64, device));
-        let partner = in_tensor.index_select(0, &perm_idx).to_kind(Kind::Float);
-        let lam = beta_tensor(cfg.alpha, batch_size, device)?.to_kind(out.kind()); // [B]
-        let w = lam.unsqueeze(1); // [B,1] to broadcast over M
+        let perm_idx = Tensor::f_randint(num_records, &[batch_size], (Kind::Int64, device))?;
+        let partner = in_tensor.f_index_select(0, &perm_idx)?.f_to_kind(Kind::Float)?;
+        let lam = beta_tensor(cfg.alpha, batch_size, device)?.f_to_kind(out.kind())?; // [B]
+        let w = lam.f_unsqueeze(1)?; // [B,1] to broadcast over M
         out = &w * out + (1.0 - &w) * partner;
     }
 
     if cfg.do_jitter && cfg.sigma > 0.0 {
-        let noise = Tensor::randn_like(&out) * cfg.sigma;
+        let noise = out.f_randn_like()? * cfg.sigma;
         out += noise;
     }
 
     // Cast back to the original float kind if needed (avoid integer kinds).
     Ok(match kind {
-        Kind::Float | Kind::BFloat16 | Kind::Half | Kind::Double => out.to_kind(kind),
+        Kind::Float | Kind::BFloat16 | Kind::Half | Kind::Double => out.f_to_kind(kind)?,
         _ => out, // leave as Float
     })
 }
@@ -79,7 +79,7 @@ fn beta_tensor(alpha: f64, batch_size: i64, device: Device) -> TchResult<Tensor>
         let lam = if u + v > 0.0 { u / (u + v) } else { 0.5 };
         buf.push(lam as f32);
     }
-    Ok(Tensor::from_slice(&buf).to_device(device))
+    Ok(Tensor::f_from_slice(&buf)?.f_to_device(device)?)
 }
 
 
