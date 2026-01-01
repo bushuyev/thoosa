@@ -4206,6 +4206,17 @@ impl MockStoreBuilder {
         self
     }
 
+    pub fn with_list_resource_random_in_group<D:IntoIterator<Item=(&'static str, Result<Vec<(Resource, Vec<f32>)>, ThoosaError>)>>(mut self, data:D) -> Self {
+        let map: HashMap<&'static str, Result<Vec<(Resource, Vec<f32>)>, ThoosaError>> = HashMap::from_iter(data.into_iter());
+
+        self.store.expect_list_resource_random_in_group()
+            .returning(move |group| {
+                map.get(group).expect(&format!("no mock data for {group} configured in list_resource_random_in_group")).clone()
+            });
+
+        self
+    }
+
     pub fn with_list_resource_set_resources_by_descr<D:IntoIterator<Item=(&'static str, Result<Vec<Resource>, ThoosaError>)>>(mut self, data:D) -> Self {
         let map :HashMap<&'static str, Result<Vec<Resource>, ThoosaError>> = HashMap::from_iter(data.into_iter());
 
