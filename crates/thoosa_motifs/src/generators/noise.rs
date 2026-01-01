@@ -282,7 +282,14 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
         channels_intervals.push(channel_motif_intervals);
     }
 
-    let t = Tensor::stack(channels_signals.into_iter().map(|data|Tensor::from_slice(data.as_slice())).collect::<Vec<Tensor>>().as_slice(), 0);
+    let t = Tensor::f_stack(
+        channels_signals
+            .into_iter()
+            .map(|data| Tensor::f_from_slice(data.as_slice()))
+            .collect::<Result<Vec<Tensor>, _>>()?
+            .as_slice(),
+        0,
+    )?;
 
     debug!("resource_tensor: t.size={:?} intervals={channels_intervals:?}", t.size());
 

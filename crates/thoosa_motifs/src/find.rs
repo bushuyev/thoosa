@@ -404,7 +404,7 @@ mod motif_find_tests {
             Tensor::from_slice(&[1., 2., 3.]),
         ]);
 
-        let norm = norm_2(&t, 1);
+        let norm = norm_2(&t, 1)?;
 
         assert_eq!(
             Tensor::from_slice(&[1., 1.]),
