@@ -19,6 +19,30 @@ use tch::Tensor;
 use thoosa_shared::ThoError;
 use crate::tho_tensor::ThoTensor;
 
+#[cfg(test)]
+#[derive(Debug)]
+struct ArgminMathError {
+    context: &'static str,
+    source: argmin_math::Error,
+}
+
+#[cfg(test)]
+impl ArgminMathError {
+    fn new(context: &'static str, source: argmin_math::Error) -> Self {
+        Self { context, source }
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Display for ArgminMathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.context, self.source)
+    }
+}
+
+#[cfg(test)]
+impl std::error::Error for ArgminMathError {}
+
 
 impl Clone for ThoTensor {
     fn clone(&self) -> Self {
@@ -243,7 +267,8 @@ where
         MoreThuenteLineSearch::new(), //.with_c(1e-4, 0.9)?, //.with_bounds(1., 10.)?,
         10,
     )
-    .with_tolerance_cost(1e-6)?; //.with_l1_regularization(1.0)?;
+    .with_tolerance_cost(1e-6)
+    .map_err(|e| ArgminMathError::new("lbfgs with_tolerance_cost", e))?; //.with_l1_regularization(1.0)?;
 
     let executor = Executor::new(cost, solver).configure(|state| {
         state
@@ -271,7 +296,7 @@ mod tests {
 
     use thoosa_shared::ThoError;
 
-    use crate::argmin::{ThoTensor, TensorProblem, run_lbfgs};
+    use crate::argmin::{ArgminMathError, ThoTensor, TensorProblem, run_lbfgs};
     use crate::opt::rbf_nll;
 
     #[test]
@@ -324,7 +349,9 @@ mod tests {
 
         let cost = MyProblem {};
 
-        let linesearch = MoreThuenteLineSearch::new().with_c(1e-4, 0.9)?;
+        let linesearch = MoreThuenteLineSearch::new()
+            .with_c(1e-4, 0.9)
+            .map_err(|e| ArgminMathError::new("linesearch with_c", e))?;
         let solver = LBFGS::new(linesearch, 10);
 
         // let solver = BrentOpt::new(-100., 100.);
@@ -426,14 +453,17 @@ mod tests {
         // let solver = GaussNewton::new();
         // let solver = Landweber::new(0.001);
 
-        let linesearch = MoreThuenteLineSearch::new().with_c(1e-4, 0.9)?;
+        let linesearch = MoreThuenteLineSearch::new()
+            .with_c(1e-4, 0.9)
+            .map_err(|e| ArgminMathError::new("linesearch with_c", e))?;
 
         // Set up solver
         let solver = LBFGS::new(linesearch, 7);
 
         let res = Executor::new(cost, solver)
             .configure(|state| state.param(vec![-100., 0.]).max_iters(10).target_cost(0.0))
-            .run()?;
+            .run()
+            .map_err(|e| ArgminMathError::new("linesearch run", e))?;
 
         let best_param =res.state().get_best_param().unwrap();
 

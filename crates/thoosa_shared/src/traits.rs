@@ -424,7 +424,7 @@ impl <const IDX:usize, const SIZE:usize> MonoMetrics<IDX, SIZE> {
             })
             .collect::<Vec<_>>()
             .try_into()
-            .map_err(|e| ThoError::new(format!("can't map metrics to ranges: e={e:?}")))
+            .map_err(|_| ThoError::new("can't map metrics to ranges: length mismatch"))
     }
 
 }

@@ -117,7 +117,8 @@ impl Workspace for FsWorkspace {
     ) -> Result<ResourceStats, ThoError> {
         let path = self.tensors_path.join(format!("{import_id}_{key}.pt"));
         trace!("Workspace:import_tensor {path:?} t.size={:?}", t.size());
-        t.save(path).map_err(|e| ThoError::new(e.to_string()))?;
+        t.save(&path)
+            .map_err(|e| ThoError::from_error(format!("save tensor to {path:?}"), e))?;
 
         Ok(ResourceStats::new(
             t.size().into_iter().map(|v| v as u32).collect::<Vec<_>>(),

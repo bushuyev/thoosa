@@ -490,7 +490,7 @@ mod tests {
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
             |key| {
                 Tensor::load(tensors_path_for_import.join(format!("{}.pt", key)))
-                    .map_err(|e| ThoError::new(e.to_string()))
+                    .map_err(ThoError::from)
             },
             true,
         )?;
