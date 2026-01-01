@@ -16,10 +16,11 @@ use thoosa_shared::ThoosaError;
 
 #[allow(dead_code)]
 pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
-    Ok((z_norm_2(t_0, 1)? - z_norm_2(t_1, 1)?)
-        .pow_tensor_scalar(2)
-        .sum_dim_intlist(dim, true, Kind::Float)
-        .pow_tensor_scalar(0.5))
+    Ok(z_norm_2(t_0, 1)?
+        .f_sub(&z_norm_2(t_1, 1)?)?
+        .f_pow_tensor_scalar(2)?
+        .f_sum_dim_intlist(dim, true, Kind::Float)?
+        .f_pow_tensor_scalar(0.5)?)
 }
 
 pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError> {
@@ -28,7 +29,7 @@ pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError
     //1 -use_mm_for_euclid_dist
     //2 -donot_use_mm_for_euclid_dist
     assert_eq!(slice_0.size()[1], slice_1.size()[1]); //same slice size
-    Ok(Tensor::cdist(slice_0, slice_1, 2.0, 0))
+    Ok(Tensor::f_cdist(slice_0, slice_1, 2.0, 0)?)
 }
 
 //TODO use distance's histogram kurtosis and skew to scale down q_t? If histogram flat - prob. of useful patterns lower
@@ -76,8 +77,11 @@ impl<'a> MaskMaker<'a> {
                     );
                 }
 
-                let prev = prev_mask.unwrap_or(Tensor::ones(dists.size(), (Bool, dists.device())));
-                _ = prev.f_diagonal(0, 1, 2)?.fill_(0);
+                let prev = match prev_mask {
+                    Some(prev) => prev,
+                    None => Tensor::f_ones(dists.size(), (Bool, dists.device()))?,
+                };
+                _ = prev.f_diagonal(0, 1, 2)?.f_fill_(0)?;
 
                 trace!(
                     "MaskMaker::make_mask Diagonal: 2. perv_mask.is_some()={has_prev} prev={prev}"
@@ -86,7 +90,10 @@ impl<'a> MaskMaker<'a> {
                 Ok(prev)
             }
             MaskMaker::Tril => {
-                let prev = prev_mask.unwrap_or(Tensor::ones(dists.size(), (Bool, dists.device())));
+                let prev = match prev_mask {
+                    Some(prev) => prev,
+                    None => Tensor::f_ones(dists.size(), (Bool, dists.device()))?,
+                };
                 prev.f_triu(1).map_err(|e|e.into())
             }
             MaskMaker::Le { v } => {
@@ -99,7 +106,7 @@ impl<'a> MaskMaker<'a> {
                 };
                 Self::apply_prev(&prev_mask, le)
             }
-            MaskMaker::Gt { v } => Self::apply_prev(&prev_mask, dists.gt_tensor(v)),
+            MaskMaker::Gt { v } => Self::apply_prev(&prev_mask, dists.f_gt_tensor(v)?),
             MaskMaker::LocalMin {dim} => {
                 Self::apply_prev(&prev_mask, local_min_mask(&dists, *dim)?)
             },
@@ -163,7 +170,10 @@ pub fn clc_dist_d2_and_mask(
         mask_opt = Some(new_mask);
     }
 
-    let mask = mask_opt.unwrap_or_else(|| Tensor::ones(distances.size(), (Bool, device)));
+    let mask = match mask_opt {
+        Some(mask) => mask,
+        None => Tensor::f_ones(distances.size(), (Bool, device))?,
+    };
 
     Ok((
         mask,
@@ -196,11 +206,11 @@ fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> Resul
         let mut quantiles = Vec::with_capacity((distances_size[0] * distances_size[2]) as usize);
         for channel in 0..distances_size[0] {
             for slice_1 in 0..distances_size[2] {
-                let slice_1_t = distances.i((channel, .., slice_1)).f_masked_select(&pm.i((
+                let slice_1_t = distances.f_i((channel, .., slice_1))?.f_masked_select(&pm.f_i((
                     channel,
                     ..,
                     slice_1,
-                )))?;
+                ))?)?;
                 let q_t = slice_1_t.f_quantile_scalar(q, 0, true, "lower")?;
                 trace!(
                     "quantile_mask: channel={channel} slice_1={slice_1} slice_1_t=\n{slice_1_t} q_t={q_t}"
@@ -208,12 +218,12 @@ fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> Resul
                 quantiles.push(q_t);
             }
         }
-        Tensor::stack(quantiles.as_slice(), 0).view((distances_size[0], 1, distances_size[2]))
+        Tensor::f_stack(quantiles.as_slice(), 0)?.f_view((distances_size[0], 1, distances_size[2]))?
     } else {
         distances
-            .transpose(1, 2)
-            .quantile_scalar(q, 2, true, "lower")
-            .transpose(1, 2)
+            .f_transpose(1, 2)?
+            .f_quantile_scalar(q, 2, true, "lower")?
+            .f_transpose(1, 2)?
     };
 
     // let q_t = distances.quantile_scalar(q, 2, true, "lower");
@@ -224,7 +234,7 @@ fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> Resul
         q_t.size()
     );
 
-    let le = distances.le_tensor(&q_t); //channels x motifs x num_slices
+    let le = distances.f_le_tensor(&q_t)?; //channels x motifs x num_slices
 
     trace!("quantile_mask:  le=\n{le}");
 
@@ -256,7 +266,7 @@ fn local_min_mask(distances: &Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
 
     let last_min = distances
         .f_narrow(dim, distances_size[dim as usize] - 1, 1)?
-        .f_lt_tensor(&distances.narrow(dim, distances_size[dim as usize] - 2, 1))?;
+        .f_lt_tensor(&distances.f_narrow(dim, distances_size[dim as usize] - 2, 1)?)?;
 
     trace!("local_min_mask: last_min=\n{first_min}");
 
@@ -303,24 +313,24 @@ fn mean_mask(
         for channel in 0..distances_size[0] {
             let channel_dists_t =
                 distances
-                    .i((channel, .., ..))
-                    .masked_select(&pm.i((channel, .., ..)));
-            let mean = channel_dists_t.mean(Kind::Float);
+                    .f_i((channel, .., ..))?
+                    .f_masked_select(&pm.f_i((channel, .., ..))?)?;
+            let mean = channel_dists_t.f_mean(Kind::Float)?;
             trace!("mean_mask: channel={channel} channel_dists_t=\n{channel_dists_t} mean={mean}");
             means.push(mean);
             counts.push(channel_dists_t.size()[0])
         }
         (
-            Tensor::f_stack(means.as_slice(), 0)?.view((distances_size[0], 1)),
+            Tensor::f_stack(means.as_slice(), 0)?.f_view((distances_size[0], 1))?,
             Tensor::f_from_slice(counts.as_slice())?
-                .to_device(distances.device())
-                .view((distances_size[0], 1)),
+                .f_to_device(distances.device())?
+                .f_view((distances_size[0], 1))?,
         )
     } else {
         (
-            distances.mean_dim(&[1i64, 2i64][..], false, Kind::Float),
+            distances.f_mean_dim(&[1i64, 2i64][..], false, Kind::Float)?,
             Tensor::f_from_slice(&[distances_size[1] * distances_size[2]])?
-                .to_device(distances.device())
+                .f_to_device(distances.device())?
                 .f_broadcast_to(distances_size[0])?, //  Tensor of size [channels x 1] with values= distances[1] * distances[2] in each channel
         )
     };
@@ -340,8 +350,8 @@ fn mean_mask(
         counts_t.device()
     );
     let (mean_t, counts_t) = (
-        mean_t.to_device(distances.device()),
-        counts_t.to_device(distances.device()),
+        mean_t.f_to_device(distances.device())?,
+        counts_t.f_to_device(distances.device())?,
     );
 
     //TODO update means_acc
@@ -365,12 +375,12 @@ fn mean_mask(
         std::thread::current().name()
     );
 
-    *means_guard = ((means_guard.multiply(&total_samples_guard)
-        + mean_t * counts_t.shallow_clone())
-        / count_t_added); //.to_device(means_device);
+    let weighted = means_guard.f_multiply(&total_samples_guard)?;
+    let mean_scaled = mean_t.f_multiply(&counts_t)?;
+    *means_guard = weighted.f_add(&mean_scaled)?.f_div(&count_t_added)?; //.to_device(means_device);
     debug!("new_total_means: 2.0 means_guard=\n{means_guard}");
 
-    *total_samples_guard += counts_t; //.to_device(means_device);
+    let _ = total_samples_guard.f_add_(&counts_t)?; //.to_device(means_device);
 
     debug!("new_total_means: 2.1 total_samples_guard=\n{total_samples_guard}");
 
@@ -378,7 +388,7 @@ fn mean_mask(
 
     debug!("new_total_means: tensor_0=\n{tensor_0}");
 
-    let tensor_1 = tensor_0.view((-1, 1, 1));
+    let tensor_1 = tensor_0.f_view((-1, 1, 1))?;
     debug!("new_total_means: tensor_1=\n{tensor_1}");
 
     let tensor_2 =  tensor_1.f_broadcast_to(distances_size)?;
@@ -423,7 +433,7 @@ pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoosaE
     let s = d.f_sum_dim_intlist(dim + 2, false, Kind::Float)?;
     drop(d);
 
-    Ok(s.sqrt())
+    Ok(s.f_sqrt()?)
 }
 
 pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
@@ -450,11 +460,11 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
         .f_sum_dim_intlist(1, true, Kind::Float)?;
 
     // Step 3: Compute squared distances matrix D
-    let squared_norms_sum = squared_norms.f_add(&squared_norms.transpose(0, 1))?;
+    let squared_norms_sum = squared_norms.f_add(&squared_norms.f_transpose(0, 1)?)?;
     drop(squared_norms);
 
     // Step 1: Compute the Gram matrix (dot products between vectors)
-    let gram = t.f_mm(&t.transpose(0, 1))?;
+    let gram = t.f_mm(&t.f_transpose(0, 1)?)?;
     let gram = gram.f_add(&gram)?;
 
     let dists_squared: Tensor = squared_norms_sum.f_subtract(&gram)?;
@@ -464,19 +474,19 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
     let dists_squared = dists_squared.f_clamp_min(0.0)?; // Replace negative values with 0
     // Step 4: Extract upper triangle without diagonal
     let triu_indices = Tensor::f_triu_indices(n, n, 1, (Kind::Int64, t.device()))?; // Indices of upper triangle without diagonal
-    let i = triu_indices.get(0);
-    let j = triu_indices.get(1);
+    let i = triu_indices.f_get(0)?;
+    let j = triu_indices.f_get(1)?;
 
     let pairwise_squared_dists = dists_squared
         .f_index_select(0, &i)?
-        .f_gather(1, &j.unsqueeze(1), false)?
+        .f_gather(1, &j.f_unsqueeze(1)?, false)?
         .f_squeeze()?;
     drop(dists_squared);
     drop(i);
     drop(j);
 
     // Step 5: Compute square roots to get Euclidean distances
-    let clc_dist_d2s = pairwise_squared_dists.sqrt();
+    let clc_dist_d2s = pairwise_squared_dists.f_sqrt()?;
     trace!("average_euclidean_distance: pairwise_squared_dists=\n{pairwise_squared_dists}");
     drop(pairwise_squared_dists);
 

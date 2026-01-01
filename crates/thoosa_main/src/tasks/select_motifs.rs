@@ -156,13 +156,13 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         //
         //if a chanel has no motifs then all partial outputs will contain None and corresponding vec in channel_masks will be empty.
 
-        let channel_masks_motif_ids = output.into_iter().fold(
+        let channel_masks_motif_ids = output.into_iter().try_fold(
             (
                 (0..self.channels).map(|c|vec![]).collect::<Vec<Vec<Tensor>>>(),
                 (0..self.channels).map(|c|vec![]).collect::<Vec<Vec<DataId>>>()
             ),
 
-            |mut channel_masks, partial_output|{
+            |mut channel_masks, partial_output| -> Result<_, ThoosaError> {
 
                 debug!("SelectMotifsSavableResultBuilder::build: partial_output={partial_output:?}");
 
@@ -172,7 +172,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
                     debug!("SelectMotifsSavableResultBuilder::build: c={c} mask_op={mask_op:?}");
 
                     if let Some(mask) = mask_op {
-                        let mask_t = mask.0.unpack().0;
+                        let mask_t = mask.0.unpack()?.0;
 
                         debug!("SelectMotifsSavableResultBuilder::build: c={c} mask_t=\n{mask_t}");
 
@@ -183,8 +183,8 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
 
                 resource_ids_sizes.extend(partial_output.resources_iter.resource_ids_sizes);
 
-                channel_masks
-            });
+                Ok(channel_masks)
+            })?;
 
         let channel_masks_dists_ids = channel_masks_motif_ids.0.into_iter().zip(channel_masks_motif_ids.1).map(|channel_masks_motif_ids|{
             debug!("SelectMotifsSavableResultBuilder::build: channel_masks_motif_ids={channel_masks_motif_ids:?}");
@@ -195,7 +195,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
                 Ok(Some(
                     (
                         DistsMask::new(
-                            Tensor::concat(&channel_masks_motif_ids.0, 1), //1 dim - resources
+                            Tensor::f_concat(&channel_masks_motif_ids.0, 1)?, //1 dim - resources
                             None,
                             false,
                             None
@@ -480,7 +480,7 @@ where
                             if let (channel, Some(mask_dists_ids)) = channel_mask_dists_ids {
                                 debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
                                 let mut motif_added_slices_guard = motif_added_slices[channel].write().await;
-                                let (cpu_mask, _) = mask_dists_ids.0.to_cpu().await?.unpack();
+                                let (cpu_mask, _) = mask_dists_ids.0.to_cpu().await?.unpack()?;
 
                                 trace!("SelectMotifsStage::run: channel={channel} cpu_mask=\n{cpu_mask}");
 
@@ -1489,7 +1489,7 @@ pub mod tests {
             match masks_dists_ids {
                 None => {}
                 Some(v) => {
-                    let (mask, _) = v.0.unpack();
+                    let (mask, _) = v.0.unpack()?;
                     debug!("mask=\t{mask}");//TODO check mask - should be concat mask_0  mask_1
                 }
             }

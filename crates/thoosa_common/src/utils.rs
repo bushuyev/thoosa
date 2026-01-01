@@ -430,7 +430,7 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tenso
         for (dim, (&from, &to)) in cur_size.iter().zip(to_size.iter()).enumerate() {
             if from > to {
                 debug!("pad_to: truncating dim {dim} from {from} to {to}");
-                result = result.narrow(dim as i64, 0, to);
+                result = result.f_narrow(dim as i64, 0, to)?;
             }
         }
         cur_size = result.size();
@@ -463,7 +463,7 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tenso
         pad_idx.push(to - from);  // pad on the "right"
     }
 
-    Ok(result.pad(pad_idx.as_slice(), "constant", 0.0))
+    Ok(result.f_pad(pad_idx.as_slice(), "constant", 0.0)?)
 }
 
 pub fn load_tensor(
@@ -471,9 +471,8 @@ pub fn load_tensor(
     tensor_id: &str,
     device: Device,
 ) -> Result<Tensor, ThoosaError> {
-    Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", tensor_id)))
-        .map(|t| t.to_device(device))
-        .map_err(|e| ThoosaError::new(e.to_string()))
+    Ok(Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", tensor_id)))?
+        .f_to_device(device)?)
 }
 
 pub fn clone(from: &Tensor) -> Tensor {
@@ -1423,9 +1422,9 @@ pub fn z_norm(t: &Tensor, dim: i64) -> Tensor {
 }
 
 pub fn z_norm_2(t_0: &Tensor, _dim: i64) -> Result<Tensor, ThoosaError> {
-    let std = t_0.std_dim(1, true, true);
+    let std = t_0.f_std_dim(1, true, true)?;
     //TODO std - 0
-    Ok((t_0 - t_0.mean_dim(1, true, Float)) / std)
+    Ok(t_0.f_sub(&t_0.f_mean_dim(1, true, Float)?)?.f_div(&std)?)
 }
 
 pub fn skewness_kurtosis_1_dim(dists: &Tensor) -> (Tensor, Tensor) {
@@ -1448,9 +1447,9 @@ pub fn skewness_kurtosis_1_dim(dists: &Tensor) -> (Tensor, Tensor) {
 }
 
 pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, ThoosaError> {
-    Ok(norm_2(slice_01, dim)
-        .tensordot(&norm_2(slice_02, dim), [dim], [dim])
-        .diag(0))
+    let norm_01 = norm_2(slice_01, dim)?;
+    let norm_02 = norm_2(slice_02, dim)?;
+    Ok(norm_01.f_tensordot(&norm_02, [dim], [dim])?.f_diag(0)?)
 }
 
 pub fn self_dot(
@@ -1464,20 +1463,21 @@ pub fn self_dot(
     let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0 + d_i), step)?;
     let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1 + d_i), step)?;
 
-    Ok(slice_1.tensordot(&slice_2, [dim], [dim]).diag(0))
+    Ok(slice_1.f_tensordot(&slice_2, [dim], [dim])?.f_diag(0)?)
 }
 
 pub fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
     t.view(dim) / t.dot(&t).sqrt()
 }
 
-pub fn norm_2(t: &Tensor, dim: i64) -> Tensor {
-    t / t
-        .tensordot(&t, dim, dim)
-        .diag(0)
-        .sqrt()
-        .view([1, -1])
-        .transpose(0, 1)
+pub fn norm_2(t: &Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
+    let denom = t
+        .f_tensordot(&t, dim, dim)?
+        .f_diag(0)?
+        .f_sqrt()?
+        .f_view([1, -1])?
+        .f_transpose(0, 1)?;
+    Ok(t.f_div(&denom)?)
 }
 
 pub fn lin_t(n: u32) -> Tensor {

@@ -74,10 +74,10 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
             match self.split_input {
                 None => self.run_layers(t, train),
                 Some((dim, num_features)) => {
-                    let splits = t.as_ref().split(num_features, dim);
+                    let splits = t.as_ref().f_split(num_features, dim)?;
                     debug!("MySequential::tho_forward splits.sizes={:?} num_features={num_features} dim={dim}",splits.iter().map(|t| t.size()).collect::<Vec<_>>());
 
-                    let split_r = Tensor::concat(
+                    let split_r = Tensor::f_concat(
                         splits
                             .into_iter()
                             .enumerate()
@@ -99,9 +99,9 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
                             .collect::<Result<Vec<_>, ThoosaError>>()?
                             .as_slice(),
                         1,
-                    );
+                    )?;
 
-                    let mean_r = split_r.mean_dim(1, false, None).unsqueeze(1);//TODO why mean?
+                    let mean_r = split_r.f_mean_dim(1, false, None)?.f_unsqueeze(1)?;//TODO why mean?
 
                     debug!("MySequential::tho_forward split_r.size()={:?} mean_r.size()={:?}",split_r.size(),mean_r.size());
 
