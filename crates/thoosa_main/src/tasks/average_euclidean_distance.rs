@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::average_euclidean_distance;
-use thoosa_shared::{mono_key, panic_to_err, CopyToDevice, ThoosaError};
+use thoosa_shared::{mono_key, panic_to_err, CopyToDevice, ThoError};
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::Adjustable;
@@ -89,7 +89,7 @@ impl Output for AverageDistanceValue {}
 
 #[async_trait]
 impl CopyToDevice for AverageDistanceValue {
-    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
         Ok(self.clone())
     }
 }
@@ -115,7 +115,7 @@ impl<C> SyncStage for AverageEuclideanDistanceStage<C>
 where
     C: RunCtx + 'static,
 {
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoError> {
         Ok(AverageDistanceValue::new(
             SynKey::new([mono_key!("todo", "todo")]),
             panic_to_err!(average_euclidean_distance(input.data().t_ref()))?
@@ -156,7 +156,7 @@ pub mod mock_average_stage {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{Adjustable, WithId};
     use thoosa_shared::traits::{DataId, MonoMetrics, Named};
-    use thoosa_shared::{mono_key, CopyToDevice, MyError, ThoosaError};
+    use thoosa_shared::{mono_key, CopyToDevice, Cause, ThoError};
     use thoosa_shared::comp_id::SynKey;
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
@@ -178,7 +178,7 @@ pub mod mock_average_stage {
 
 
         impl SyncStage for AverageEuclideanDistanceStage {
-            fn do_run<'f>(self: Arc<Self>, _input: &<Self as Stage>::In<'f>, _ctx: Arc<parking_lot::RwLock<<Self as Stage>::Ctx>>) -> Result<<Self as Stage>::Out, ThoosaError>;
+            fn do_run<'f>(self: Arc<Self>, _input: &<Self as Stage>::In<'f>, _ctx: Arc<parking_lot::RwLock<<Self as Stage>::Ctx>>) -> Result<<Self as Stage>::Out, ThoError>;
         }
 
 
@@ -236,12 +236,12 @@ pub mod mock_average_stage {
                 }
 
                 if self.fail_first && call_idx == 0 {
-                    return Err(MyError::OutOfMemory.into());
+                    return Err(Cause::OutOfMemory.into());
                 }
 
                 if let Some(threshold) = self.fail_while_dim0_gt {
                     if dim_0 > threshold {
-                        return Err(MyError::OutOfMemory.into());
+                        return Err(Cause::OutOfMemory.into());
                     }
                 }
 

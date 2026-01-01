@@ -6,7 +6,7 @@ use parking_lot::RwLock;
 use runnable::Stage;
 use std::fmt::Debug;
 use std::sync::Arc;
-use crate::ThoosaError;
+use crate::ThoError;
 use crate::traits::{Named, WithId};
 
 pub mod cachable;
@@ -32,7 +32,7 @@ pub trait PermitsCtx: Named + Debug + Send + Sync {
 pub trait RunCtx: PermitsCtx {//TODO remove PermitsCtx from RunCtx
     fn device_idx(&self) -> usize;
 
-    fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
+    fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoError>>
     where
         Self: Sized,
     {
@@ -55,7 +55,7 @@ pub mod mock_run_ctx {
     use std::sync::Arc;
     use mockall::predicate::always;
     use thoosa_shared::traits::{Adjustable, Named};
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
 
 
     mock! {
@@ -78,7 +78,7 @@ pub mod mock_run_ctx {
 
         impl RunCtx for RunCtx {
             fn device_idx(&self) -> usize;
-            fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>;
+            fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoError >>;
             fn cache_area(&self) -> u64;
             fn branch(&mut self, new_name:&str)-> Arc<RwLock<Self>>;
         }

@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use crate::{MyError, ThoosaError};
+use crate::{Cause, ThoError};
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
 use crate::traits::{Adjustable, CachableIdTr};
@@ -20,7 +20,7 @@ use crate::runner::adjusters::dump_to_cpu::*;
 pub struct PermitsAdjuster<F, Fut, C>
 where
     F: Fn(NumPermits) -> Fut + Send + Sync,
-    Fut: Future<Output = Result<RunnerPerm, ThoosaError>> + Send,
+    Fut: Future<Output = Result<RunnerPerm, ThoError>> + Send,
     C: Adjustable + RunCtx,
 {
     pub max: NumPermits,
@@ -32,7 +32,7 @@ where
 impl<F, Fut, C> Debug for PermitsAdjuster<F, Fut, C>
 where
     F: Fn(NumPermits) -> Fut + Send + Sync,
-    Fut: Future<Output = Result<RunnerPerm, ThoosaError>> + Send,
+    Fut: Future<Output = Result<RunnerPerm, ThoError>> + Send,
     C: Adjustable + RunCtx,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -46,7 +46,7 @@ where
 impl<F, Fut, C> PermitsAdjuster<F, Fut, C>
 where
     F: Fn(NumPermits) -> Fut + Send + Sync,
-    Fut: Future<Output = Result<RunnerPerm, ThoosaError>> + Send,
+    Fut: Future<Output = Result<RunnerPerm, ThoError>> + Send,
     C: Adjustable + RunCtx,
 {
     pub fn new(
@@ -103,7 +103,7 @@ impl RunCtxContext for PermitsAdjustContextImpl {}
 impl<F, Fut, A, C> Adjuster<C> for PermitsAdjuster<F, Fut, A>
 where
     F: Fn(NumPermits) -> Fut + Send + Sync,
-    Fut: Future<Output = Result<RunnerPerm, ThoosaError>> + Send,
+    Fut: Future<Output = Result<RunnerPerm, ThoError>> + Send,
     A: Adjustable + RunCtx,
     C: PermitsAdjustContext,
 {
@@ -113,7 +113,7 @@ where
         &self,
         adjustable: &<Self as Adjuster<C>>::A,
         adjust_context: &mut C,
-    ) -> Result<<Self as Adjuster<C>>::A, ThoosaError> {
+    ) -> Result<<Self as Adjuster<C>>::A, ThoError> {
         let acquired_permits = adjustable.read().acquired_permits();
         if adjust_context.to_acquire() <= acquired_permits {
             //TODO warn
@@ -135,7 +135,7 @@ where
                 //can't acquire permits,
                 Err(te) => {
                     match te.what() {
-                        MyError::OutOfPermits => {
+                        Cause::OutOfPermits => {
                             debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name} acquired_permits={acquired_permits} Error: {te:?} device_idx={}", adjustable.read().device_idx());
 
                            /* if adjustable.read().device_idx() != 0 {
@@ -203,7 +203,7 @@ mod tests {
     use futures_util::future::BoxFuture;
     use parking_lot::RwLock;
     use std::sync::Arc;
-    use thoosa_shared::MyError;
+    use thoosa_shared::Cause;
     use thoosa_shared::traits::Named;
     use crate::runner::common::PermitsCtx;
 
@@ -243,7 +243,7 @@ mod tests {
             self.device_idx
         }
 
-        fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
+        fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoError>>
         where
             Self: Sized,
         {
@@ -267,7 +267,7 @@ mod tests {
     async fn adjust_handles_out_of_permits() {
         let adjustable = Arc::new(RwLock::new(TestRunCtx::new(0, 0)));
         let adjuster = PermitsAdjuster::<_, _, TestRunCtx>::new(100, 10, |_n| async {
-            Err(MyError::OutOfPermits.into())
+            Err(Cause::OutOfPermits.into())
         });
         let mut ac = ctx("test", 10);
 
@@ -281,15 +281,15 @@ mod tests {
     async fn adjust_propagates_other_errors() {
         let adjustable = Arc::new(RwLock::new(TestRunCtx::new(0, 0)));
         let adjuster = PermitsAdjuster::<_, _, TestRunCtx>::new(100, 10, |_n| async {
-            Err(MyError::SomethingElse("boom".into()).into())
+            Err(Cause::SomethingElse("boom".into()).into())
         });
         let mut ac = ctx("test", 10);
 
         let res = adjuster.adjust(&adjustable, &mut ac).await;
         assert!(matches!(
             res,
-            Err(ThoosaError {
-                what: MyError::SomethingElse(_),
+            Err(ThoError {
+                what: Cause::SomethingElse(_),
                 ..
             })
         ));

@@ -30,7 +30,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::Data;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::find::{FixedFindMotifsConfig, SimpleMotifTracker};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::WithId;
@@ -81,7 +81,7 @@ impl Data for DistsMask {
 
 impl DistsMask {
 
-    pub fn new(mask: Tensor, dists: Option<Tensor>, pack: bool, stream_to_sync: Option<ThoCudaStream>) -> Result<Self, ThoosaError> {
+    pub fn new(mask: Tensor, dists: Option<Tensor>, pack: bool, stream_to_sync: Option<ThoCudaStream>) -> Result<Self, ThoError> {
         debug!("DistsMask::new: mask={mask:?} dists={dists:?}");
 
         assert_eq!(mask.kind(), Bool);
@@ -106,7 +106,7 @@ impl DistsMask {
     }
 
 
-    pub async fn to_cpu(self) -> Result<Self, ThoosaError>  {
+    pub async fn to_cpu(self) -> Result<Self, ThoError>  {
         debug!("DistsMask::to_cpu: self.mask.device={:?}", self.mask.device());
 
         if self.mask.device().eq(&Cpu) {
@@ -131,7 +131,7 @@ impl DistsMask {
         }
     }
 
-    pub async fn to_cpu_with_dists(self) -> Result<Self, ThoosaError>  {
+    pub async fn to_cpu_with_dists(self) -> Result<Self, ThoError>  {
         debug!("DistsMask::to_cpu_with_dists: self.mask.device={:?}", self.mask.device());
 
         if self.mask.device().eq(&Cpu) {
@@ -179,7 +179,7 @@ impl DistsMask {
         }
     }
 
-    pub fn unpack(self) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
+    pub fn unpack(self) -> Result<(Tensor, Option<Tensor>), ThoError> {
         debug!("DistsMask::unpack: self.sizes={:?}", self.sizes);
         match &self.sizes {//was packed
             Some(size) => {
@@ -202,7 +202,7 @@ impl DistsMask {
 }
 
 impl CrossClcResultMerge for DistsMask {
-    fn merge_batch_1(self, other: Self) -> Result<Self, ThoosaError> {
+    fn merge_batch_1(self, other: Self) -> Result<Self, ThoError> {
         let left = self;
         let right = other;
 
@@ -215,7 +215,7 @@ impl CrossClcResultMerge for DistsMask {
 
         let pack = left.sizes.is_some();
         if pack != right.sizes.is_some() {
-            return Err(ThoosaError::new("DistsMask merge: pack mismatch"));
+            return Err(ThoError::new("DistsMask merge: pack mismatch"));
         }
 
         let (mask_left, dists_left) = left.unpack()?;
@@ -226,7 +226,7 @@ impl CrossClcResultMerge for DistsMask {
         let dists = match (dists_left, dists_right) {
             (Some(left), Some(right)) => Some(Tensor::f_concat(&[left, right], 2)?),
             (None, None) => None,
-            _ => return Err(ThoosaError::new("DistsMask merge: dists mismatch")),
+            _ => return Err(ThoError::new("DistsMask merge: dists mismatch")),
         };
 
         Ok(DistsMask::new(mask, dists, pack, None)?)
@@ -341,7 +341,7 @@ where
         self: Arc<Self>,
         input: Self::In<'a>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Self::Out, ThoosaError> {
+    ) -> Result<Self::Out, ThoError> {
 
 
         //TODO clone to resources ref
@@ -403,7 +403,7 @@ where
                             }
                         }
                         mt.lock().dump();
-                        Ok::<(), ThoosaError>(())
+                        Ok::<(), ThoError>(())
                     }
                 }).buffer_unordered(self.channel_trackers.len()) // <- bound parallelism
                     .try_collect::<Vec<()>>()
@@ -417,14 +417,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     #[ctor::ctor]
     pub fn init() {
         thoosa_shared::test_utils::init_test_logging();
     }
 
     #[tokio::test]
-    async fn test_0() -> Result<(), ThoosaError> {
+    async fn test_0() -> Result<(), ThoError> {
         Ok(())
     }
 }

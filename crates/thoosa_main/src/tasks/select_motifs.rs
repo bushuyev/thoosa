@@ -38,7 +38,7 @@ use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{mono_key, ThoosaError};
+use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, DataId, MonoMetrics, WithId};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_store::{IdSlice, Store};
@@ -111,7 +111,7 @@ where
 #[derive(Debug)]
 struct SelectMotifsSavableResultBuilder {
     id:StackedMotifsOutputId,
-    output:Vec<JoinHandle<Result<ClcResourcesMotifsDistOutput, ThoosaError>>>,//TODO TempCache
+    output:Vec<JoinHandle<Result<ClcResourcesMotifsDistOutput, ThoError>>>,//TODO TempCache
     channels:u32,
     step:usize
 }
@@ -139,14 +139,14 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
        }));
     }
 
-    async fn build(self) -> Result<Self::O, ThoosaError> {
+    async fn build(self) -> Result<Self::O, ThoError> {
 
         let mut resource_ids_sizes = vec![];
 
 
         let output:Vec<ClcResourcesMotifsDistOutput> = futures::future::try_join_all(self.output).await?
             .into_iter()
-            .collect::<Result<Vec<_>, ThoosaError>>()?;
+            .collect::<Result<Vec<_>, ThoError>>()?;
 
         // partial output contains masks for
         // motif_c0_0, motif_c0_1... motif_c0_m.
@@ -162,7 +162,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
                 (0..self.channels).map(|c|vec![]).collect::<Vec<Vec<DataId>>>()
             ),
 
-            |mut channel_masks, partial_output| -> Result<_, ThoosaError> {
+            |mut channel_masks, partial_output| -> Result<_, ThoError> {
 
                 debug!("SelectMotifsSavableResultBuilder::build: partial_output={partial_output:?}");
 
@@ -206,7 +206,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
             }
 
         })
-        .collect::<Result<Vec<_>, ThoosaError>>()?;
+        .collect::<Result<Vec<_>, ThoError>>()?;
 
         Ok(ClcResourcesMotifsDistOutput::new(
             self.id.find_motifs_run_id,
@@ -265,16 +265,16 @@ where
         }
     }
 
-    async fn load_stacked_motifs(store:&Arc<RwLock<Box<dyn Store>>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, ctx_for_loader: &Arc<RwLock<C>>, find_motifs_run_ids: &Vec<RunId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoosaError> {
+    async fn load_stacked_motifs(store:&Arc<RwLock<Box<dyn Store>>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, ctx_for_loader: &Arc<RwLock<C>>, find_motifs_run_ids: &Vec<RunId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
         let find_motifs_run_configs = find_motifs_run_ids
             .iter()
-            .map(|find_motifs_run_id| -> Result<_, ThoosaError> {
+            .map(|find_motifs_run_id| -> Result<_, ThoError> {
                 Ok(Arc::new(FindMotifsRunConfig::from_properties_map_with_id(
                     *find_motifs_run_id,
                     &store.read().list_run_config_values(*find_motifs_run_id)?,
                 )?))
             })
-            .collect::<Result<Vec<_>, ThoosaError>>()?;
+            .collect::<Result<Vec<_>, ThoError>>()?;
 
             //for each FindMotifsRunConfigs X SelectMotifsRunConfig
             let stacked_motifs = futures::stream::iter(
@@ -336,14 +336,14 @@ where
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let (device_idx, cache_area, ctx_name) = {
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
         let resources: Vec<Resource> = with_data!(Arc::clone(&ctx), 0, input; |input: &ResourcesConfigInput<Simple>|{//TODO use device_idx instead of 0
-            Ok::<Vec<Resource>, ThoosaError>(input
+            Ok::<Vec<Resource>, ThoError>(input
                 .resources_config()
                 .to_resources(&self.store)?
                 .into_iter()
@@ -518,7 +518,7 @@ where
 
                         info!("SelectMotifsStage::run: 2. find_motifs_run_config={find_motifs_run_config:?}");
 
-                        Ok::<(), ThoosaError>(())
+                        Ok::<(), ThoError>(())
                     }
                 })
                 .buffer_unordered(10)
@@ -543,7 +543,7 @@ where
             }
 
             if Arc::strong_count(&channels_motifs_added_slices) != 1 {
-                return Err(ThoosaError::new(format!("can't unwrap motif_added_slices for {:?}", run_config)))
+                return Err(ThoError::new(format!("can't unwrap motif_added_slices for {:?}", run_config)))
             }
 
             let good_motif_ids = futures::stream::iter(
@@ -580,10 +580,10 @@ where
                                 ML::cache().await.remove(&ML::out_id(&clc_dist.motif_loader, &motif_id));
 
                                 let dist = clc_dist.run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(DataId(*motif_id)), 0)), Arc::clone(&ctx)).await
-                                    .map_err(|e|ThoosaError::new(format!("Got error while running clc_dist for {motif_id}")))?;
+                                    .map_err(|e| ThoError::new(format!("Got error while running clc_dist for {motif_id}")))?;
 
                                 with_data!(ctx, 0/*it's always cpu*/, dist; |dist:&AverageDistanceValue|{
-                                    Ok::<_, ThoosaError>((*motif_id, dist.value() as f64))
+                                    Ok::<_, ThoError>((*motif_id, dist.value() as f64))
                                 })
                             }
                             v => {
@@ -670,7 +670,7 @@ pub mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::{cdt_for_dir, gen_motif, MotifKind, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::{cdt_for_dir, gen_motif, MotifKind, TensorIdSliceIdx, ThoError};
     use thoosa_shared::ResourceType::NotInGroup;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::traits::DataId;
@@ -697,7 +697,7 @@ pub mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_1_resource_1_label_1_channel_1_motif() -> Result<(), ThoosaError> {
+    async fn test_1_resource_1_label_1_channel_1_motif() -> Result<(), ThoError> {
         //TODO this doesn't work
         // let dash_map = Box::leak(Box::new(DashMap::new()));
         // MockMotifLoader::cache_context().expect().times(0..).return_const(&*dash_map);
@@ -779,7 +779,7 @@ pub mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_2_resources_1_label_1_channel_1_motif() -> Result<(), ThoosaError> {
+    async fn test_2_resources_1_label_1_channel_1_motif() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/test_single_label_one_motif");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
@@ -858,7 +858,7 @@ pub mod tests {
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_1_resource_1_label_1_channel_2_motifs() -> Result<(), ThoosaError> {
+    async fn test_1_resource_1_label_1_channel_2_motifs() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/test_single_label_one_motif");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
@@ -962,7 +962,7 @@ pub mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_3_resources_2_labels_3_channels_3_motifs_cuda() -> Result<(), ThoosaError> {
+    async fn test_3_resources_2_labels_3_channels_3_motifs_cuda() -> Result<(), ThoError> {
         log::set_max_level(LevelFilter::Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
@@ -1097,7 +1097,7 @@ pub mod tests {
     }
 
     #[test]
-    fn resource_tensor_supports_multiple_kinds_per_channel() -> Result<(), ThoosaError> {
+    fn resource_tensor_supports_multiple_kinds_per_channel() -> Result<(), ThoError> {
         let (tensor, intervals) = noise::resource_tensor(
             1000,
             &[vec![(1, 50, MotifKind::Pulse), (1, 60, MotifKind::Sin)], vec![(2, 80, MotifKind::Triangle)]], 300,
@@ -1118,7 +1118,7 @@ pub mod tests {
     }
 
     #[test]
-    fn resource_tensor_offsets_channels_when_space_allows() -> Result<(), ThoosaError> {
+    fn resource_tensor_offsets_channels_when_space_allows() -> Result<(), ThoError> {
         let (_, intervals) = noise::resource_tensor(
             1000,
             &[vec![(1, 100, MotifKind::Pulse)], vec![(1, 120, MotifKind::Triangle)]], 300,
@@ -1318,7 +1318,7 @@ pub mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn heavy_test_oom_cuda() -> Result<(), ThoosaError> {
+    async fn heavy_test_oom_cuda() -> Result<(), ThoError> {
         log::set_max_level(LevelFilter::Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
@@ -1417,7 +1417,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_output_builder() -> Result<(), ThoosaError>  {
+    async fn test_output_builder() -> Result<(), ThoError>  {
         GlobalCtx::init_devices(2);
         let num_channels = 3;
         let mut output_builder = Box::new(SelectMotifsSavableResultBuilder::new(StackedMotifsOutputId::new(0,vec![]), num_channels as u32, 50, 0).await);

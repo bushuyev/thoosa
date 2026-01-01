@@ -9,7 +9,7 @@ use tch::{Kind, Tensor};
 use tch::Device::Cpu;
 use tokio_utils::Pool;
 use thoosa_shared::runner::global_ctx::GlobalCtx;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 use crate::tho_device::ThoDevice;
 
 pub struct CopyCtx {
@@ -123,7 +123,7 @@ impl CopyCtx {
         buf_size
     }
 
-    pub async fn move_t(&self, src_t: Tensor, dst_device: usize, kind: Kind) -> Result<Tensor, ThoosaError> {
+    pub async fn move_t(&self, src_t: Tensor, dst_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
         if dst_device == 0 {
             move_d2h(kind, src_t, self.buf_size, &self.bufs_pool).await
         } else {
@@ -131,7 +131,7 @@ impl CopyCtx {
         }
     }
 
-    pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_device: usize, kind: Kind) -> Result<Tensor, ThoosaError> {
+    pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
         if dst_device == 0 {
             copy_d2h(kind, src_t, self.buf_size, &self.bufs_pool).await
         } else {
@@ -145,7 +145,7 @@ impl CopyCtx {
         src_size: &[i64],
         dst_device: usize,
         kind: Kind,
-    ) -> Result<Tensor, ThoosaError> {
+    ) -> Result<Tensor, ThoError> {
         let t = if dst_device == 0 {
             copy_d2h_from_ptr(kind, self.buf_size, &self.bufs_pool, src_ptr, src_size).await
         } else {

@@ -1,7 +1,7 @@
 use std::ops::Deref;
 use log::debug;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use thoosa_shared::{gen_motif, pulse_v, MotifKind, ThoosaError};
+use thoosa_shared::{gen_motif, pulse_v, MotifKind, ThoError};
 use crate::generators::noise::generate_motifs_with_avg_distance;
 
 #[derive(Debug, Clone, Copy)]
@@ -34,7 +34,7 @@ pub fn generate_series_with_motif(
     amp_range: (f32, f32),
     seed: Option<u64>,
     motif_kind: &MotifKind, // "triangle" or "sine"
-) -> Result<(Vec<f32>, Vec<Interval>), ThoosaError> {
+) -> Result<(Vec<f32>, Vec<Interval>), ThoError> {
     let mut rng = seed.map(|seed|StdRng::seed_from_u64(seed)).unwrap_or(StdRng::from_os_rng());
 
     // random-walk background using our own Normal(0, step_sigma)
@@ -59,18 +59,18 @@ pub fn generate_series_with_motif(
     }
 
     let total_motif_space = motif_len.checked_mul(repeats).ok_or_else(|| {
-        ThoosaError::new("motif placement overflows usize")
+        ThoError::new("motif placement overflows usize")
     })?;
     let gaps_between = repeats.saturating_sub(1);
     let total_gap_space = min_gap.checked_mul(gaps_between).ok_or_else(|| {
-        ThoosaError::new("motif gap sizing overflows usize")
+        ThoError::new("motif gap sizing overflows usize")
     })?;
     let required_space = total_motif_space.checked_add(total_gap_space).ok_or_else(|| {
-        ThoosaError::new("motif layout exceeds addressable range")
+        ThoError::new("motif layout exceeds addressable range")
     })?;
 
     if required_space > len {
-        return Err(ThoosaError::new(format!(
+        return Err(ThoError::new(format!(
             "cannot place {repeats} motifs (len={motif_len}) with min_gap={min_gap} into series len={len}"
         )));
     }

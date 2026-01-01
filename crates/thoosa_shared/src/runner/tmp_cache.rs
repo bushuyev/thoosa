@@ -11,7 +11,7 @@ use tokio::runtime::Handle;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use mockall_double::double;
 use crate::applicables_runner::Output;
-use crate::ThoosaError;
+use crate::ThoError;
 use crate::traits::{CachableIdTr, Data, WithId};
 use crate::CopyToDevice;
 use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
@@ -51,7 +51,7 @@ where
         self.map.get(id).map(|reff| Arc::clone(reff.value()))
     }
 
-    pub async fn take_all(mut self, device:usize) -> Result<Vec<D>, ThoosaError> {
+    pub async fn take_all(mut self, device:usize) -> Result<Vec<D>, ThoError> {
         let mut res = vec![];
         for (key, val) in mem::take(&mut self.map).into_iter() {
 
@@ -82,10 +82,10 @@ where
             .collect()
     }
 
-    pub async fn for_each<F, R, FR>(self, mut f: F) -> Result<Vec<R>, ThoosaError>
+    pub async fn for_each<F, R, FR>(self, mut f: F) -> Result<Vec<R>, ThoError>
     where
         F: FnMut(<D as WithId>::ID, Arc<DevicesWrap<D>>) -> FR,
-        FR: Future<Output = Result<R, ThoosaError>> + Send + 'static,
+        FR: Future<Output = Result<R, ThoError>> + Send + 'static,
     {
         let items: Vec<_> = self
             .map
@@ -122,7 +122,7 @@ where
 
     }
 
-    pub async fn purge_gpu(&self, device_idx:usize) -> Result<(), ThoosaError>{
+    pub async fn purge_gpu(&self, device_idx:usize) -> Result<(), ThoError>{
         self.map.purge_gpu(None, device_idx).await
     }
 }
@@ -133,7 +133,7 @@ where
     D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static,
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize) -> Result<(), ThoosaError> {
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize) -> Result<(), ThoError> {
         debug!("TmpCached::purge_gpu: ids_to_keep={ids_to_keep:?} device_idx={device_idx}");
 
         let keys: Vec<<D as WithId>::ID> = self
@@ -194,7 +194,7 @@ mod tests {
     use std::collections::HashMap;
     use std::pin::Pin;
     use thoosa_dummy_data_derive::DummyData;
-    use crate::{CopyToDevice, ThoosaError};
+    use crate::{CopyToDevice, ThoError};
     use crate::applicables_runner::Output;
     use crate::copy_mode::CpuOrGpu;
     use crate::traits::{Data, SimpleId, WithId};
@@ -204,7 +204,7 @@ mod tests {
     use crate::runner::tmp_cache::TmpCached;
 
     #[tokio::test]
-    async fn dummy_data_clone_impl_uses_clone() -> Result<(), ThoosaError> {
+    async fn dummy_data_clone_impl_uses_clone() -> Result<(), ThoError> {
         #[derive(Debug, Clone, DummyData)]
         #[dummy_data(clone)]
         struct Foo(SimpleId);
@@ -227,7 +227,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_tmp_cache() -> Result<(), ThoosaError> {
+    async fn test_tmp_cache() -> Result<(), ThoError> {
 
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
@@ -245,7 +245,7 @@ mod tests {
         }
 
         impl CopyToDevice for TestData {
-            fn copy_to_device<'life0, 'async_trait>(&'life0 self, dst_device: usize) -> Pin<Box<dyn Future<Output=Result<Self, ThoosaError>> + Send + 'async_trait>>
+            fn copy_to_device<'life0, 'async_trait>(&'life0 self, dst_device: usize) -> Pin<Box<dyn Future<Output=Result<Self, ThoError>> + Send + 'async_trait>>
             where
                 Self: Sized,
                 'life0: 'async_trait,

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use thoosa_shared::traits::Adjustable;
 use crate::applicables_runner::{Input, Output};
-use crate::{CopyToDevice, ThoosaError};
+use crate::{CopyToDevice, ThoError};
 use crate::copy_mode::CpuOrGpu;
 use crate::traits::{Data, Select, WithId};
 
@@ -41,7 +41,7 @@ where
     D: Data + CopyToDevice + WithId + Sync,
     E: Debug + Send + Sync,
 {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError>{
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError>{
         Ok(DataWithExtra {
             data: self.data.copy_to_device(dst_device).await?,
             extra: Arc::clone(&self.extra),
@@ -100,7 +100,7 @@ where
 {
     type Output = Self;
 
-    fn subview(&self, selector: Selector) -> Result<Self::Output, ThoosaError> {
+    fn subview(&self, selector: Selector) -> Result<Self::Output, ThoError> {
         Ok(DataWithExtra {
             data: self.data.subview(selector)?,
             extra: self.extra.clone()

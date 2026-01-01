@@ -25,7 +25,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::{mono_key, sample_n_owned, CopyToDevice, ThoosaError};
+use thoosa_shared::{mono_key, sample_n_owned, CopyToDevice, ThoError};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, Named, WithId};
 use thoosa_store::Store;
@@ -100,7 +100,7 @@ impl StackedMotifsOutput {
 
 #[async_trait]
 impl CopyToDevice for StackedMotifsOutput {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         Ok(StackedMotifsOutput {
             id:self.id.clone(),
             motifs: self.motifs.copy_to_device(dst_device).await?,
@@ -199,7 +199,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 
 {
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let (device_idx, cache_area) = {
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area())
@@ -211,7 +211,7 @@ where
         let mut motif_avg_dists = Arc::new(parking_lot::RwLock::new(HashMap::new()));
 
         let find_motifs_run_config = with_data!(Arc::clone(&ctx), 0, input; |input: &StackedMotifsInput|{
-            Ok::<Arc<FindMotifsRunConfig>, ThoosaError>(Arc::clone(&input.find_motifs_run_config))
+            Ok::<Arc<FindMotifsRunConfig>, ThoError>(Arc::clone(&input.find_motifs_run_config))
         })?;
 
         let find_motifs_run_config_id = find_motifs_run_config.id;
@@ -219,7 +219,7 @@ where
 
         if motif_ids.is_empty() {
             warn!("no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}");
-            return Err(ThoosaError::new("no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}"))
+            return Err(ThoError::new("no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}"))
         }
 
 
@@ -253,7 +253,7 @@ where
                     motif_avg_dists.write().insert(DataId(motif_id as u32), avg_motif_dist);
 
 
-                    Ok::<_, ThoosaError>(motif)
+                    Ok::<_, ThoError>(motif)
                 }
             })
             .buffered/*_unordered*/(10)//TODO buffered- to keep motif ids order consistent, try buffer_unordered and then sort?

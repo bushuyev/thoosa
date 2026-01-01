@@ -11,7 +11,7 @@ use log::debug;
 use cached_derive::Cached;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode};
 use thoosa_shared::applicables_runner::*;
-use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::comp_id::SynKey;
 
@@ -140,7 +140,7 @@ where
     B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>
 {
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let input_id = input.id().clone();
         debug!("ABStage::run: input.id={input_id:?} ctx={ctx:?}");
 
@@ -224,7 +224,7 @@ where
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         match &*self {
             StageChainOption::Single(stage) => Arc::clone(stage).run_cached(input, ctx).await,
             StageChainOption::Chained(stage) => Arc::clone(stage).run_cached(input, ctx).await,

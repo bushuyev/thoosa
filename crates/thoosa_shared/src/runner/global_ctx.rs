@@ -11,7 +11,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 use thoosa_shared::traits::CachableIdTr;
-use thoosa_shared::{MyError, ThoosaError};
+use thoosa_shared::{Cause, ThoError};
 use tokio::sync::RwLock as AsyncRwLock;
 
 #[derive(Debug)]
@@ -20,10 +20,10 @@ pub struct CacheAreasKeeper {
 }
 
 impl CacheAreasKeeper {
-    pub fn next_available_cache_area(&mut self) -> Result<u64, ThoosaError> {
+    pub fn next_available_cache_area(&mut self) -> Result<u64, ThoError> {
         let next = first_free_bit(self.cache_areas);
         if next == 0 {
-            return Err(MyError::SomethingElse("no cache areas available".into()).into());
+            return Err(Cause::SomethingElse("no cache areas available".into()).into());
         }
         self.cache_areas |= next;
 
@@ -151,7 +151,7 @@ impl GlobalCtx {
         ordinal: usize,
         num_permits: NumPermits,
         requester_id: Arc<dyn CachableIdTr>,
-    ) -> Result<RunnerPerm, ThoosaError> {
+    ) -> Result<RunnerPerm, ThoError> {
         self.semaphores[ordinal].acquire(num_permits, requester_id).await
     }
 
@@ -159,7 +159,7 @@ impl GlobalCtx {
         &self,
         ordinal: usize,
         requester_id: Arc<dyn CachableIdTr>,
-    ) -> Result<RunnerPerm, ThoosaError> {
+    ) -> Result<RunnerPerm, ThoError> {
 
         let mut num_tries = 0;
         loop {
@@ -173,7 +173,7 @@ impl GlobalCtx {
             }
             num_tries+=1;
             if num_tries > 1000 {//TODO config
-                return Err(ThoosaError::new("Can't get single permit"));
+                return Err(ThoError::new("Can't get single permit"));
             }
         }
     }
@@ -184,7 +184,7 @@ impl GlobalCtx {
         &'a self,
         required_ids: &HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>,
         device_idx: usize,
-    ) -> Result<(), ThoosaError> {
+    ) -> Result<(), ThoError> {
         assert_ne!(device_idx, 0);
         debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?}");
 
@@ -214,7 +214,7 @@ impl GlobalCtx {
         }
     }
 
-    pub fn next_cache_area(&self) -> Result<u64, ThoosaError> {
+    pub fn next_cache_area(&self) -> Result<u64, ThoError> {
         self.caches_areas.write().next_available_cache_area()
     }
 

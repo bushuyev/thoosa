@@ -63,7 +63,7 @@ use thoosa_shared::{mono_key, parse_resources, simple_id, RangeOrValue};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{cdt, cdt_for_dir, ResourceType, ThoosaError};
+use thoosa_shared::{cdt, cdt_for_dir, ResourceType, ThoError};
 use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Runtime;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -127,11 +127,11 @@ pub struct RunAllArgs {
 
 impl RunAllArgs {
 
-    pub fn find_resource_config(&self) -> Result<Simple, ThoosaError> {
+    pub fn find_resource_config(&self) -> Result<Simple, ThoError> {
         Ok(Simple::new(parse_resources(&self.find_resources)?))
     }
 
-    pub fn select_resource_config(&self) -> Result<Simple, ThoosaError> {
+    pub fn select_resource_config(&self) -> Result<Simple, ThoError> {
         Ok(Simple::new(parse_resources(&self.select_resources)?))
     }
 
@@ -196,10 +196,10 @@ pub async fn run_cli<F, R>(
     channels: u32,
     max_input: u32,
     sample_rate: u32,
-) -> Result<(), ThoosaError>
+) -> Result<(), ThoError>
 where
-    F: Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
-    R: Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoosaError> + Sync + Send,
+    F: Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
+    R: Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoError> + Sync + Send,
 {
     if log::log_enabled!(log::Level::Trace) {
         reset_print_options();
@@ -858,10 +858,10 @@ pub fn import_resources<F, R>(
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
     insert_label: bool,
-) -> Result<Vec<ResourceId>, ThoosaError>
+) -> Result<Vec<ResourceId>, ThoError>
 where
-    F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
-    R: Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send,
+    F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
+    R: Fn(String) -> Result<Tensor, ThoError> + Sync + Send,
 {
     let store_guard = store.write();
 
@@ -943,7 +943,7 @@ async fn run_plot_motif_slices(
     loader: &Arc<RawTensorLoader<RunCtx2>>,
     plot_motif_slices_params: &PlotMotifSlicesArgs,
     device: &Device,
-) -> Result<(), ThoosaError> {
+) -> Result<(), ThoError> {
     let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa")));
 
     let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtx2>, RunCtx2>::new(
@@ -1053,7 +1053,7 @@ async fn plot_motif(
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<RunCtx2>, RunCtx2>>,
     clc_dist: Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<RunCtx2>, RunCtx2>, AverageEuclideanDistanceStage<RunCtx2>, RunCtx2>>,
     select_motif_run_ids: Option<Vec<RunId>>,
-) -> Result<(), ThoosaError> {
+) -> Result<(), ThoError> {
     let cache_area = ctx.read().cache_area();
     let num_devices = GlobalCtx::global().device_count();
     let select_motif_run_ids_sfx = select_motif_run_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
@@ -1107,7 +1107,7 @@ pub fn run_opt_step<RC, RCRV, CC, R, ST>(
     loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
     _descr: &str,
-) -> Result<Vec<RunId>, ThoosaError>
+) -> Result<Vec<RunId>, ThoError>
 where
     ST: FnOnce(
         Option<&Vec<RunId>>,
@@ -1123,7 +1123,7 @@ where
         &Arc<RwLock<Box<dyn Store>>>,
         &Arc<RwLock<LoadRunner<Tensor>>>,
         Vec<Device>,
-    ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>, //TODO remove Option & Vec
+    ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoError>, //TODO remove Option & Vec
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>> + ToHashmap,
     RCRV: OptRunConfigSource,
     R: ResourcesConfig,
@@ -1171,7 +1171,7 @@ pub fn run_all_grid_step<RC, RCRV, R, FC, ST>(
     devices: Vec<Device>,
     _descr: &str,
     presave: bool,
-) -> Result<Vec<RunId>, ThoosaError>
+) -> Result<Vec<RunId>, ThoError>
 where
     ST: FnOnce(
         Option<&Vec<RunId>>,
@@ -1182,7 +1182,7 @@ where
         &Arc<RwLock<Box<dyn Store>>>,
         &Arc<RwLock<LoadRunner<Tensor>>>,
         Vec<Device>,
-    ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>,
+    ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoError>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
         + thoosa_properties_map::ToHashmap,
@@ -1246,7 +1246,7 @@ pub async fn run_grid</*ResConf, */RCRV, F, RC, ST, CtxF>(
     presave: bool,
     f: F,
     ctx_f: CtxF,
-) -> Result<Vec<RunId>, ThoosaError>
+) -> Result<Vec<RunId>, ThoError>
 where
     F: FnOnce(Vec<RC>) -> Arc<ST>,//TODO return Result
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
@@ -1296,14 +1296,14 @@ pub async fn run_opt</*ResConf, */RCRV, F, RC, ST, CtxF>(
     presave: bool,
     init_stage: F,
     ctx_f: CtxF,
-) -> Result<Vec<RunId>, ThoosaError>
+) -> Result<Vec<RunId>, ThoError>
 where
     F: AsyncFnOnce(OptRunConfigs<
         Vec<NamedVal<<RCRV as OptRunConfigSource>::P>>,
         Vec<NamedRange<<RCRV as OptRunConfigSource>::P>>,
         Vec<Hyperparameter<<RCRV as OptRunConfigSource>::P>>,
         <RCRV as OptRunConfigSource>::P,
-    >) -> Result<Arc<ST>, ThoosaError>,
+    >) -> Result<Arc<ST>, ThoError>,
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
     + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
@@ -1392,7 +1392,7 @@ mod cli_tests {
     use thoosa_shared::test_utils::set_panic_hook;
     use thoosa_shared::{
         cdt, cdt_for_dir, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp,
-        sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoosaError,
+        sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoError,
     };
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
 
@@ -1404,7 +1404,7 @@ mod cli_tests {
     fn init_test_store(
         mut store: &Arc<RwLock<Box<dyn Store>>>,
         tensors_per_label: i32,
-    ) -> Result<Vec<ResourceId>, ThoosaError> {
+    ) -> Result<Vec<ResourceId>, ThoError> {
         let store_guard = store.write();
         let mut mutex_guard = store_guard.conn().lock();
         let t = mutex_guard.transaction()?;
@@ -1449,7 +1449,7 @@ mod cli_tests {
         Ok(resources)
     }
 
-    fn plot_t(t_0: &Tensor, label: &str) -> Result<(), ThoosaError> {
+    fn plot_t(t_0: &Tensor, label: &str) -> Result<(), ThoError> {
         plot_series(
             (0..1)
                 .into_iter()
@@ -1545,7 +1545,7 @@ mod cli_tests {
 
 
     #[test]
-    fn test_import_resources() -> Result<(), ThoosaError> {
+    fn test_import_resources() -> Result<(), ThoError> {
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = Arc::new(RwLock::new(FsWorkspace::new(

@@ -1,7 +1,7 @@
 use crate::tho_tensor::{ThoTensor};
 use async_trait::async_trait;
 use std::fmt::Debug;
-use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::traits::{Metrics, MonoMetrics, Named, SimpleId};
 
 pub trait Dims: Send + Sync + Clone + Debug {
@@ -118,7 +118,7 @@ pub struct AnySub {}
 
 #[async_trait]
 impl CopyToDevice for AnySub {
-    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
         todo!()
     }
 }

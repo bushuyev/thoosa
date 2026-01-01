@@ -21,7 +21,7 @@ use tch::nn::{LinearConfig, Optimizer};
 use tch::nn::VarStore;
 use tch::Kind::Float;
 use tch::{nn, Device, Kind, Tensor};
-use thoosa_shared::{gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
+use thoosa_shared::{gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoError};
 use torch_sys::cuda::atc_cuda_device_count;
 use crate::my_tch::{LossFp, ThoModule};
 
@@ -88,7 +88,7 @@ pub fn plot_series<S>(
     caption: &str,
     w_h: (u32, u32),
     path: &impl AsRef<std::path::Path>,
-) -> Result<(), ThoosaError>
+) -> Result<(), ThoError>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -101,7 +101,7 @@ pub fn plot_series_with_points<S>(
     w_h: (u32, u32),
     path: &impl AsRef<std::path::Path>,
     points: &Vec<(f32, f32)>,
-) -> Result<(), ThoosaError>
+) -> Result<(), ThoError>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -114,7 +114,7 @@ pub fn plot_series_with_lanes<S>(
     w_h: (u32, u32),
     path: &impl AsRef<std::path::Path>,
     lanes: &[(i32, i32)],
-) -> Result<(), ThoosaError>
+) -> Result<(), ThoError>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -129,7 +129,7 @@ fn _plot_series<S>(
     path: &impl AsRef<std::path::Path>,
     points: Option<&Vec<(f32, f32)>>,
     _lanes: Option<&[(i32, i32)]>,
-) -> Result<(), ThoosaError>
+) -> Result<(), ThoError>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -249,7 +249,7 @@ pub fn draw_function_plot(
     xy: &[(f32, f32)],
     bands: &[(f32, f32)],
     title: &str,
-) -> Result<(), ThoosaError> {
+) -> Result<(), ThoError> {
     let (width, height) = w_h;
 
     // ----- Determine ranges (include bands in X range) -----
@@ -377,11 +377,11 @@ pub fn vec_f64_from(t: &Tensor) -> Vec<f64> {
     from::<Vec<f64>>(&t.reshape(-1))
 }
 
-pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoosaError> {
+pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoError> {
     debug!("pad_to: input.size={:?}, to_size{:?}",input.size(),to_size);
 
     if input.size().len() != to_size.len() {
-        ThoosaError::new(format!(
+        ThoError::new(format!(
             "dimensions don't match: {:?} {:?}",
             input.size(),
             to_size
@@ -408,14 +408,14 @@ pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoosaError> {
         })
         .collect::<Vec<i64>>();
 
-    input.f_pad(pad_idx.as_slice(), "constant", 0.).map_err(|e|ThoosaError::new(e.to_string()))
+    input.f_pad(pad_idx.as_slice(), "constant", 0.).map_err(|e| ThoError::new(e.to_string()))
 }
 
-pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tensor, ThoosaError> {
+pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tensor, ThoError> {
     debug!("pad_to: input.size={:?}, to_size={:?}", input.size(), to_size);
 
     if input.size().len() != to_size.len() {
-        return Err(ThoosaError::new(format!(
+        return Err(ThoError::new(format!(
             "dimensions don't match: {:?} vs {:?}",
             input.size(),
             to_size
@@ -438,7 +438,7 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tenso
         // in pure pad mode treat from > to as an error.
         for (dim, (&from, &to)) in cur_size.iter().zip(to_size.iter()).enumerate() {
             if from > to {
-                return Err(ThoosaError::new(format!(
+                return Err(ThoError::new(format!(
                     "from {from} > to {to} at dim {dim}"
                 )));
             }
@@ -455,7 +455,7 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tenso
     for (i, (&from, &to)) in from_rev.iter().zip(to_rev.iter()).enumerate() {
         if from > to {
             // should not happen if truncate == true and the above logic ran.
-            return Err(ThoosaError::new(format!(
+            return Err(ThoError::new(format!(
                 "after truncation: from {from} > to {to} at reversed dim {i}"
             )));
         }
@@ -470,7 +470,7 @@ pub fn load_tensor(
     base_path: &str,
     tensor_id: &str,
     device: Device,
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
     Ok(Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", tensor_id)))?
         .f_to_device(device)?)
 }
@@ -577,7 +577,7 @@ pub mod tests {
 
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedVal, Val};
-    use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ThoosaError};
+    use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ThoError};
 
     use thoosa_shared::run_configs::RunId;
 
@@ -613,7 +613,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_pad_to() -> Result<(), ThoosaError> {
+    fn test_pad_to() -> Result<(), ThoError> {
         let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.])]);
 
         assert_eq!(
@@ -638,7 +638,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_pad_to_truncate_and_pad() -> Result<(), ThoosaError> {
+    fn test_pad_to_truncate_and_pad() -> Result<(), ThoError> {
         let t = Tensor::vstack(&[
             Tensor::from_slice(&[1., 2., 3.]),
             Tensor::from_slice(&[4., 5., 6.]),
@@ -658,7 +658,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_pad_to_same() -> Result<(), ThoosaError> {
+    fn test_pad_to_same() -> Result<(), ThoError> {
         let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.])]);
 
         assert_eq!(
@@ -670,7 +670,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_pad_to_one_dim() -> Result<(), ThoosaError> {
+    fn test_pad_to_one_dim() -> Result<(), ThoError> {
         let t = Tensor::ones([1, 3], (Float, Cpu));
 
         assert_eq!(
@@ -685,7 +685,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_save_and_load() -> Result<(), ThoosaError> {
+    fn test_save_and_load() -> Result<(), ThoError> {
         let base_path = format!("/tmp/test_test_save_and_load/{}", cdt_for_dir());
         fs::create_dir_all(&base_path)?;
 
@@ -873,7 +873,7 @@ pub mod tests {
             vs: &VarStore,
             run_config: &TrainLabelsRunConfig,
             ls: &mut dyn TrainListener,
-        ) -> Result<(f32, TestNodeParams), ThoosaError> {
+        ) -> Result<(f32, TestNodeParams), ThoError> {
             debug!("test_train_label: run_config={:?}", run_config);
 
             Ok((0.1, TestNodeParams { layers: 0 }))
@@ -1371,7 +1371,7 @@ pub mod tests {
     }
 
     #[test]
-    fn mix_basic_shapes_and_labels() -> Result<(), ThoosaError> {
+    fn mix_basic_shapes_and_labels() -> Result<(), ThoError> {
         let m = 4i64;
         let n = 3i64;
 
@@ -1421,7 +1421,7 @@ pub fn z_norm(t: &Tensor, dim: i64) -> Tensor {
     z_t
 }
 
-pub fn z_norm_2(t_0: &Tensor, _dim: i64) -> Result<Tensor, ThoosaError> {
+pub fn z_norm_2(t_0: &Tensor, _dim: i64) -> Result<Tensor, ThoError> {
     let std = t_0.f_std_dim(1, true, true)?;
     //TODO std - 0
     Ok(t_0.f_sub(&t_0.f_mean_dim(1, true, Float)?)?.f_div(&std)?)
@@ -1446,7 +1446,7 @@ pub fn skewness_kurtosis_1_dim(dists: &Tensor) -> (Tensor, Tensor) {
     (skewness, kurtosis)
 }
 
-pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, ThoosaError> {
+pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, ThoError> {
     let norm_01 = norm_2(slice_01, dim)?;
     let norm_02 = norm_2(slice_02, dim)?;
     Ok(norm_01.f_tensordot(&norm_02, [dim], [dim])?.f_diag(0)?)
@@ -1459,7 +1459,7 @@ pub fn self_dot(
     dim: i64,
     step: i64,
     d_i: i64,
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
     let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0 + d_i), step)?;
     let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1 + d_i), step)?;
 
@@ -1470,7 +1470,7 @@ pub fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
     t.view(dim) / t.dot(&t).sqrt()
 }
 
-pub fn norm_2(t: &Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
+pub fn norm_2(t: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
     let denom = t
         .f_tensordot(&t, dim, dim)?
         .f_diag(0)?
@@ -1546,7 +1546,7 @@ pub fn train<F, DI: Dims, DO: Dims>(
     mut opt: Optimizer,
     x_f: F,
     mut listener: Option<&mut dyn TrainListener>,
-) -> Result<f32, ThoosaError>
+) -> Result<f32, ThoError>
 where
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI>,
 {
@@ -1609,7 +1609,7 @@ where
                 last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
                 debug!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
 
-                Ok::<_, ThoosaError>(listener.as_mut().map(|l|l.on_valid_cycle(idx as u32, valid_loss_f32)))
+                Ok::<_, ThoError>(listener.as_mut().map(|l|l.on_valid_cycle(idx as u32, valid_loss_f32)))
 
             })?.take() {
                 match rs {
@@ -1805,7 +1805,7 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
 }
 
 //TODO check GPT
-pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> Result<(Tensor, Tensor), ThoosaError> {
+pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> Result<(Tensor, Tensor), ThoError> {
     let [ma, _na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
     let [mb, _nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
     // assert_eq!((na, nb), (na, na), "X1 and X0 must have same n");
@@ -1848,7 +1848,7 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
     k: f64,
     device: Device,
     _descr: &str,
-) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoosaError> {
+) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
     let vs = VarStore::new(device);
 
 

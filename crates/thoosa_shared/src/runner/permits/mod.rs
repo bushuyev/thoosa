@@ -3,7 +3,7 @@ use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 use log::trace;
-use crate::ThoosaError;
+use crate::ThoError;
 use crate::traits::CachableIdTr;
 use tokio::sync::{Notify, OwnedSemaphorePermit, mpsc};
 
@@ -36,7 +36,7 @@ pub trait PermitSource: Debug + Send + Sync {
         &self,
         num_permits: NumPermits,
         out_id: std::sync::Arc<dyn CachableIdTr>,
-    ) -> Result<RunnerPerm, ThoosaError>;
+    ) -> Result<RunnerPerm, ThoError>;
 }
 
 pub type NumPermits = u8;

@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use mockall_double::double;
-use thoosa_shared::{MyError, ThoosaError};
+use thoosa_shared::{Cause, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr};
 use crate::runner::common::{DropIf, RunCtx};
 #[double]
@@ -82,7 +82,7 @@ where
         &self,
         adjustable: &<Self as Adjuster<C>>::A,
         adjust_context: &mut C,
-    ) -> Result<<Self as Adjuster<C>>::A, ThoosaError> {
+    ) -> Result<<Self as Adjuster<C>>::A, ThoError> {
 
 
         let (device_idx, acquired_permits,  ctx_name)  = {
@@ -109,9 +109,9 @@ where
                 Err(e) => {
                     debug!("DumpToCpu::adjust: can't acquire {acquired_permits} permits, got {e:?}");
                     adjustable.write().drop_permits(DropIf::Always);
-                    return Err(ThoosaError::new_with_error(
+                    return Err(ThoError::new_with_error(
                         "DumpToCpu::adjust: can't acquire MAX_PERMITS",
-                        MyError::AdjusterFailed,
+                        Cause::AdjusterFailed,
                     ));
                 }
             }

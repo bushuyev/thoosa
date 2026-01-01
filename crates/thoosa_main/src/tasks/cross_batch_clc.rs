@@ -21,7 +21,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, WithId};
-use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoosaError};
+use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 
@@ -109,9 +109,9 @@ where
         _permits_ctx: Arc<parking_lot::RwLock<P>>,
         _trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<Rt, ThoosaError>
+    ) -> Result<Rt, ThoError>
     where
-        for<'f> F: FnOnce(&Self::O<'f>) -> Result<Rt, ThoosaError> + Send,
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<Rt, ThoError> + Send,
         P: PermitsCtx,
     {
         do_run(self)
@@ -129,9 +129,9 @@ where
         selector: CrossInputBatch1Selector,
         _trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<Rt, ThoosaError>
+    ) -> Result<Rt, ThoError>
     where
-        for<'f> F: FnOnce(&Self::O<'f>) -> Result<Rt, ThoosaError>,
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<Rt, ThoError>,
         P: PermitsCtx,
     {
         let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
@@ -154,7 +154,7 @@ where
 }
 
 pub trait CrossClcResultMerge: Debug + Send + Sync {
-    fn merge_batch_1(self, other: Self) -> Result<Self, ThoosaError>
+    fn merge_batch_1(self, other: Self) -> Result<Self, ThoError>
     where
         Self: Sized;
 }
@@ -190,7 +190,7 @@ impl UnfoldParams {
 
 pub struct CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoError>,
     C: RunCtx + 'static,
 {
     batch_clc_fn: F,
@@ -201,7 +201,7 @@ where
 
 impl<F, R, CUC, C> Debug for CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoError>,
     C: RunCtx + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -212,7 +212,7 @@ where
 
 impl<F, R, CUC, C> CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoError>,
     C: RunCtx + 'static,
 {
     pub fn new(batch_clc: F, cross_batch_ctx: CUC, unfold_params: UnfoldParams) -> Self {
@@ -227,7 +227,7 @@ where
 
 impl<F, R, CUC, C> Adjustable for CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError> + Send + Sync,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoError> + Send + Sync,
     CUC: Send + Sync,
     R: Debug,
     C: RunCtx + 'static,
@@ -236,7 +236,7 @@ where
 
 impl<F, R, CUC, C> OutId for CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoError>,
     R: Debug,
     C: RunCtx + 'static,
 {
@@ -312,7 +312,7 @@ impl<R: Debug> Output for CrossUnfoldClcOutput<R> {}
 
 impl<F, R, CUC, C> Stage for CrossUnfoldClc<F, R, CUC, C>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoError>,
     R: Debug,
     C: RunCtx + 'static,
 {
@@ -325,14 +325,14 @@ where
 
 impl<F, R, CUC, C> SyncStage for CrossUnfoldClc<F, R, CUC, C>//CUC Cross Unfold Context
 where
-    for<'a> F: Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoosaError> + 'a,
+    for<'a> F: Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &Arc<RwLock<C>>) -> Result<R, ThoError> + 'a,
     R: Debug + Output + Input + Send + 'static,
     for<'a> CUC: 'a,
     C: RunCtx + 'static,
 {
 
 
-    fn do_run<'s>(self: Arc<Self>, input: &Self::In<'s>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    fn do_run<'s>(self: Arc<Self>, input: &Self::In<'s>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoError>
     where
         Self: Sized
     {
@@ -381,7 +381,7 @@ where
 }
 
 
-pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoosaError> {
+pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoError> {
     assert!(!input.is_empty(), "unfold_and_cat: input is empty");
 
     let mut batch_0_sizes = vec![];
@@ -402,7 +402,7 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params
             batch_0_sizes.push(unfolded.size()[1]); //number of blocks
             Ok(unfolded)
         })
-        .collect::<Result<Vec<_>, ThoosaError>>()?;
+        .collect::<Result<Vec<_>, ThoError>>()?;
 
     if batch_0_tensors.is_empty() {
         return Err("batch 0 is empty".into());
@@ -430,14 +430,14 @@ mod tests {
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use thoosa_common::utils::lin_t;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_shared::resource::Resource;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
 
     #[test]
-    fn test_cross_batch_clc() -> Result<(), ThoosaError> {
+    fn test_cross_batch_clc() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }

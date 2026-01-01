@@ -1,5 +1,5 @@
 use crate::hyperparameter::{FieldName, Hyperparameter};
-use crate::{RangeOrValue, ThoosaError, round_to_digits};
+use crate::{RangeOrValue, ThoError, round_to_digits};
 use num_traits::ToPrimitive;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -302,187 +302,187 @@ impl<T: FieldName> TryFrom<&Hyperparameter<T>> for NamedVal<T> {
 }
 
 impl TryFrom<Val> for f64 {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
-    fn try_from(value: Val) -> Result<f64, ThoosaError> {
+    fn try_from(value: Val) -> Result<f64, ThoError> {
         match value {
             Val::Int(v) => Ok(v as f64), //TODO
             Val::UInt(v) => v
                 .try_into()
-                .map_err(|e| ThoosaError::new(format!("e={e:?}"))),
+                .map_err(|e| ThoError::new(format!("e={e:?}"))),
             Val::Real(v) => v
                 .try_into()
-                .map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            Val::Str(v) => v.parse().map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            _ => Err(ThoosaError::new(format!("can't convert {value:?}"))),
+                .map_err(|e| ThoError::new(format!("e={e:?}"))),
+            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
 }
 
 impl TryFrom<Val> for i64 {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
-    fn try_from(value: Val) -> Result<i64, ThoosaError> {
+    fn try_from(value: Val) -> Result<i64, ThoError> {
         match value {
             Val::Int(v) => v
                 .try_into()
-                .map_err(|e| ThoosaError::new(format!("e={e:?}"))),
+                .map_err(|e| ThoError::new(format!("e={e:?}"))),
             Val::UInt(v) => v
                 .try_into()
-                .map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            Val::Str(v) => v.parse().map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            _ => Err(ThoosaError::new(format!("can't convert {value:?}"))),
+                .map_err(|e| ThoError::new(format!("e={e:?}"))),
+            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
 }
 
 impl TryFrom<&Val> for i64 {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
-    fn try_from(value: &Val) -> Result<i64, ThoosaError> {
+    fn try_from(value: &Val) -> Result<i64, ThoError> {
         match value {
             Val::Int(v) => (*v)
                 .try_into()
-                .map_err(|e| ThoosaError::new(format!("e={e:?}"))),
+                .map_err(|e| ThoError::new(format!("e={e:?}"))),
             Val::UInt(v) => (*v)
                 .try_into()
-                .map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            Val::Str(v) => v.parse().map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            _ => Err(ThoosaError::new(format!("can't convert {value:?}"))),
+                .map_err(|e| ThoError::new(format!("e={e:?}"))),
+            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
 }
 
 impl TryFrom<Val> for u32 {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
-    fn try_from(value: Val) -> Result<u32, ThoosaError> {
+    fn try_from(value: Val) -> Result<u32, ThoError> {
         match value {
             Val::Real(v) => Ok(v as u32), //v.to_u32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
             Val::Int(v) => v
                 .try_into()
-                .map_err(|e| ThoosaError::new(format!("e={e:?}"))),
+                .map_err(|e| ThoError::new(format!("e={e:?}"))),
             Val::UInt(v) => v
                 .try_into()
-                .map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            Val::Str(v) => v.parse().map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            _ => Err(ThoosaError::new(format!("can't convert {value:?}"))),
+                .map_err(|e| ThoError::new(format!("e={e:?}"))),
+            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
 }
 
 impl TryFrom<Val> for f32 {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
-    fn try_from(value: Val) -> Result<f32, ThoosaError> {
+    fn try_from(value: Val) -> Result<f32, ThoError> {
         match value {
             Val::Real(v) => Ok(v as f32), //TODO safe
             Val::Int(v) => Ok(v as f32),
             Val::UInt(v) => Ok(v as f32),
-            Val::Str(v) => v.parse().map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            _ => Err(ThoosaError::new(format!("can't convert {value:?}"))),
+            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
 }
 
 impl TryFrom<&Val> for f64 {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
-    fn try_from(value: &Val) -> Result<f64, ThoosaError> {
+    fn try_from(value: &Val) -> Result<f64, ThoError> {
         match value {
             Val::Int(v) => (*v)
                 .to_f64()
-                .ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
+                .ok_or_else(|| ThoError::new(format!("can't convert {value:?}"))),
             Val::UInt(v) => (*v)
                 .try_into()
-                .map_err(|e| ThoosaError::new(format!("e={e:?}"))),
+                .map_err(|e| ThoError::new(format!("e={e:?}"))),
             Val::Real(v) => (*v)
                 .try_into()
-                .map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            Val::Str(v) => v.parse().map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            _ => Err(ThoosaError::new(format!("can't convert {value:?}"))),
+                .map_err(|e| ThoError::new(format!("e={e:?}"))),
+            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
 }
 
 impl TryFrom<&Val> for u32 {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
-    fn try_from(value: &Val) -> Result<u32, ThoosaError> {
+    fn try_from(value: &Val) -> Result<u32, ThoError> {
         match value {
             Val::Real(v) => Ok(*v as u32), //TODO v.to_u32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
             Val::Int(v) => (*v)
                 .to_u32()
-                .ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
+                .ok_or_else(|| ThoError::new(format!("can't convert {value:?}"))),
             Val::UInt(v) => Ok(*v),
-            Val::Str(v) => v.parse().map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            _ => Err(ThoosaError::new(format!("can't convert {value:?}"))),
+            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
 }
 
 impl TryFrom<&Val> for i32 {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
-    fn try_from(value: &Val) -> Result<i32, ThoosaError> {
+    fn try_from(value: &Val) -> Result<i32, ThoError> {
         match value {
             Val::Real(v) => Ok(*v as i32), //TODO v.to_u32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
             Val::Int(v) => (*v)
                 .to_i32()
-                .ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
+                .ok_or_else(|| ThoError::new(format!("can't convert {value:?}"))),
             Val::UInt(v) => Ok(*v as i32),
-            Val::Str(v) => v.parse().map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            _ => Err(ThoosaError::new(format!("can't convert {value:?}"))),
+            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
 }
 
 impl TryFrom<&Val> for f32 {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
-    fn try_from(value: &Val) -> Result<f32, ThoosaError> {
+    fn try_from(value: &Val) -> Result<f32, ThoError> {
         match value {
             Val::Real(v) => Ok(*v as f32),
             Val::UInt(v) => Ok(*v as f32),
-            Val::Str(v) => v.parse().map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            _ => Err(ThoosaError::new(format!("can't convert {value:?}"))),
+            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
 }
 
 impl TryFrom<&Val> for String {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
-    fn try_from(value: &Val) -> Result<String, ThoosaError> {
+    fn try_from(value: &Val) -> Result<String, ThoError> {
         match value {
             Val::Str(v) => Ok(v.to_string()), // Return a string slice with the correct lifetime
             v => v
                 .try_into()
-                .map_err(|e| ThoosaError::new(format!("e={e:?}"))),
+                .map_err(|e| ThoError::new(format!("e={e:?}"))),
         }
     }
 }
 
 impl TryFrom<Val> for usize {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
-    fn try_from(value: Val) -> Result<usize, ThoosaError> {
+    fn try_from(value: Val) -> Result<usize, ThoError> {
         match value {
             Val::Int(v) => Ok(v as usize),
             Val::UInt(v) => Ok(v as usize),
-            Val::Str(v) => v.parse().map_err(|e| ThoosaError::new(format!("e={e:?}"))),
-            _ => Err(ThoosaError::new(format!("can't convert {value:?}"))),
+            Val::Str(v) => v.parse().map_err(|e| ThoError::new(format!("e={e:?}"))),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
 }
 
 impl TryFrom<&Val> for bool {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
     fn try_from(value: &Val) -> Result<Self, Self::Error> {
         match value {
             Val::Bool(val) => Ok(*val),
-            _ => Err(ThoosaError::new(format!("can't convert {value:?}"))),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
         }
     }
 }
@@ -583,7 +583,7 @@ impl From<bool> for Val {
 }
 
 impl<T: FieldName> TryFrom<&NamedVal<T>> for f64 {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
     fn try_from(value: &NamedVal<T>) -> Result<Self, Self::Error> {
         value.val.clone().try_into()
@@ -591,7 +591,7 @@ impl<T: FieldName> TryFrom<&NamedVal<T>> for f64 {
 }
 
 impl<T: FieldName> TryFrom<&NamedVal<T>> for f32 {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
     fn try_from(value: &NamedVal<T>) -> Result<Self, Self::Error> {
         value.val.clone().try_into()
@@ -599,7 +599,7 @@ impl<T: FieldName> TryFrom<&NamedVal<T>> for f32 {
 }
 
 impl<T: FieldName> TryFrom<&NamedVal<T>> for u32 {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
     fn try_from(value: &NamedVal<T>) -> Result<Self, Self::Error> {
         value.val.clone().try_into()

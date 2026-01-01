@@ -16,7 +16,7 @@ use tch::nn::{self, VarStore};
 use tch::{Device, Tensor};
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{ThoosaError, cdt_for_dir, recurse_files, mono_key};
+use thoosa_shared::{ThoError, cdt_for_dir, recurse_files, mono_key};
 
 #[derive(Debug)]
 pub struct FsWorkspace {
@@ -42,7 +42,7 @@ impl FsWorkspace {
         channels: u32,
         max_input: u32,
         sample_rate: u32,
-    ) -> Result<Box<dyn Workspace>, ThoosaError> {
+    ) -> Result<Box<dyn Workspace>, ThoError> {
         let base_path = base_path.into();
         fs::create_dir_all(&base_path)?;
 
@@ -114,10 +114,10 @@ impl Workspace for FsWorkspace {
         t: Tensor,
         import_id: u32,
         key: &str,
-    ) -> Result<ResourceStats, ThoosaError> {
+    ) -> Result<ResourceStats, ThoError> {
         let path = self.tensors_path.join(format!("{import_id}_{key}.pt"));
         trace!("Workspace:import_tensor {path:?} t.size={:?}", t.size());
-        t.save(path).map_err(|e| ThoosaError::new(e.to_string()))?;
+        t.save(path).map_err(|e| ThoError::new(e.to_string()))?;
 
         Ok(ResourceStats::new(
             t.size().into_iter().map(|v| v as u32).collect::<Vec<_>>(),
@@ -171,7 +171,7 @@ impl Workspace for FsWorkspace {
         run_id: RunId,
         vs: &VarStore,
         params: &FinalNetParams,
-    ) -> Result<(), ThoosaError> {
+    ) -> Result<(), ThoError> {
         debug!(
             "save_final_model: run_id={run_id}  params={params:?} final_models_path={:?}",
             self.final_nets_path
@@ -195,7 +195,7 @@ impl Workspace for FsWorkspace {
         motif_id: &dyn Display,
         vs: &VarStore,
         params: &MotifNetParams,
-    ) -> Result<(), ThoosaError> {
+    ) -> Result<(), ThoError> {
         let channel_models = self.motifs_nets_path.join(format!("{}", channel));
         fs::create_dir_all(&channel_models)?;
 
@@ -219,7 +219,7 @@ impl Workspace for FsWorkspace {
         channel: u32,
         motif_id: u32,
         device: &'a Device,
-    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>, ThoosaError> {
+    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>, ThoError> {
         debug!("load_motif_nets: channel={channel} motif_id={motif_id}");
 
         let channel_motif_models_paths = self.motif_models(channel, motif_id)?;
@@ -255,7 +255,7 @@ impl Workspace for FsWorkspace {
                 ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
             )>,
         >,
-        ThoosaError,
+        ThoError,
     > {
         let label_models_paths = self.label_models()?;
 
@@ -313,7 +313,7 @@ impl Workspace for FsWorkspace {
         &self,
         channel: u32,
         motif_id: u32,
-    ) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError> {
+    ) -> Result<Vec<(PathBuf, PathBuf)>, ThoError> {
         let motif_prefix = format!("{}_", motif_id);
 
         recurse_files(&self.motifs_nets_path.join(channel.to_string()), &|path| {
@@ -339,7 +339,7 @@ impl Workspace for FsWorkspace {
         label: &dyn Display,
         vs: &VarStore,
         params: &LabelNetParams,
-    ) -> Result<PathBuf, ThoosaError> {
+    ) -> Result<PathBuf, ThoError> {
         let label_models_path = self.labels_nets_path.join(format!("{}", label));
 
         fs::create_dir_all(&label_models_path)?;
@@ -359,7 +359,7 @@ impl Workspace for FsWorkspace {
     }
 
     /// returns vec of (safetensors_path, json_path)
-    fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError> {
+    fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoError> {
         recurse_files(&self.labels_nets_path, &|path| {
             debug!("label_models:  path={path:?}");
             path.extension().map(|v| v.eq("safetensors")).unwrap_or(false)
@@ -378,7 +378,7 @@ impl Workspace for FsWorkspace {
     }
 
     /// returns (safetensors_path, json_path)
-    fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoosaError> {
+    fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoError> {
         let safetensors_path = self.final_nets_path.join(format!("{id}.safetensors"));
         let json_path = self.final_nets_path.join(format!("{id}.json"));
 
@@ -399,7 +399,7 @@ impl Workspace for FsWorkspace {
         self.max_input
     }
 
-    fn clc_records(&self, _resource_ids: &Vec<String>) -> Result<i64, ThoosaError> {
+    fn clc_records(&self, _resource_ids: &Vec<String>) -> Result<i64, ThoError> {
         debug!(
             "FsWorkspace::clc_records: self.tensors_path={:?}",
             self.tensors_path
@@ -450,7 +450,7 @@ pub trait Workspace: Sync + Send + Debug {
         t: Tensor,
         import_id: u32,
         key: &'a str,
-    ) -> Result<ResourceStats, ThoosaError>;
+    ) -> Result<ResourceStats, ThoError>;
     fn base_path_as_str(&self) -> String;
     fn base_path(&self) -> &PathBuf;
     fn store_path(&self) -> &PathBuf;
@@ -469,7 +469,7 @@ pub trait Workspace: Sync + Send + Debug {
         run_id: RunId,
         vs: &VarStore,
         params: &FinalNetParams,
-    ) -> Result<(), ThoosaError>;
+    ) -> Result<(), ThoError>;
     fn save_motif_net(
         &self,
         channel: &dyn Display,
@@ -477,14 +477,14 @@ pub trait Workspace: Sync + Send + Debug {
         motif_id: &dyn Display,
         vs: &VarStore,
         params: &MotifNetParams,
-    ) -> Result<(), ThoosaError>;
+    ) -> Result<(), ThoError>;
 
     fn load_motif_nets<'a>(
         &self,
         channel: u32,
         motif_id: u32,
         device: &'a Device,
-    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>, ThoosaError>;
+    ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>, ThoError>;
     fn load_label_nets<'a>(
         &self,
         train_label_nodes_run_ids: Option<&'a [RunId]>,
@@ -498,7 +498,7 @@ pub trait Workspace: Sync + Send + Debug {
                 ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
             )>,
         >,
-        ThoosaError,
+        ThoError,
     >; //TODO remove
     /**
     returns Vec<safetensors_path, config jsonpath>
@@ -507,21 +507,21 @@ pub trait Workspace: Sync + Send + Debug {
         &self,
         channel: u32,
         motif_id: u32,
-    ) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError>;
+    ) -> Result<Vec<(PathBuf, PathBuf)>, ThoError>;
     fn save_label_model(
         &self,
         label_node_run_id: u32,
         label: &dyn Display,
         vs: &VarStore,
         params: &LabelNetParams,
-    ) -> Result<PathBuf, ThoosaError>;
-    fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError>;
-    fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoosaError>;
+    ) -> Result<PathBuf, ThoError>;
+    fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoError>;
+    fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoError>;
 
     fn channels(&self) -> u32;
     fn sample_rate(&self) -> u32;
     fn max_input(&self) -> u32;
-    fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError>;
+    fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoError>;
 }
 
 pub fn mock_ws_simp(
@@ -643,7 +643,7 @@ mod tests {
     use std::path::Path;
     use tch::Device::Cpu;
     use tch::nn::VarStore;
-    use thoosa_shared::{ThoosaError, cdt_for_dir};
+    use thoosa_shared::{ThoError, cdt_for_dir};
 
     #[ctor::ctor]
     fn init() {
@@ -651,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn test_motifs() -> Result<(), ThoosaError> {
+    fn test_motifs() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
@@ -682,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn test_labels() -> Result<(), ThoosaError> {
+    fn test_labels() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 

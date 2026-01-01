@@ -35,7 +35,7 @@ mod tests {
     use thoosa_shared::{simple_id, CopyToDevice};
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{CachableIdTr, Metrics, Named, SimpleId, WithId};
-    use thoosa_shared::{MyError, ThoosaError};
+    use thoosa_shared::{Cause, ThoError};
     use thoosa_shared::copy_mode::CpuOnly;
     use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
     use thoosa_shared::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
@@ -114,7 +114,7 @@ mod tests {
         fn device_idx(&self) -> usize {
             self.device_idx
         }
-        fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
+        fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoError>>
         where
             Self: Sized,
         {
@@ -155,7 +155,7 @@ mod tests {
 
     #[async_trait]
     impl CopyToDevice for FileInput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
             Ok(self.clone())
         }
     }
@@ -202,7 +202,7 @@ mod tests {
     impl Select<ABRange> for ThoTensor<ABData, SimpleId> {
         type Output = ThoTensor<ABData, SimpleId>;
 
-        fn subview(&self, selector: ABRange) -> Result<Self::Output, ThoosaError> {
+        fn subview(&self, selector: ABRange) -> Result<Self::Output, ThoError> {
             use std::cmp::min;
             let size = ABMetrics::from(self.t_ref().size());
             let d0 = selector.range.start.dim_0..min(size.dim_0, selector.range.end.dim_0);
@@ -356,7 +356,7 @@ mod tests {
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             // Features derived from file name only (no label knowledge): even index => +1, odd => -1.
             let idx = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(0.0) as i64;
             let base = if idx % 2 == 0 { 1.0 } else { -1.0 };
@@ -465,23 +465,23 @@ mod tests {
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             // Look up the files and labels by input id
             let id_key = format!("{}", input.id());
             let files = registry()
                 .get(&id_key)
-                .ok_or_else(|| MyError::SomethingElse("file list not found".into()))?;
+                .ok_or_else(|| Cause::SomethingElse("file list not found".into()))?;
 
             // Ensure at least 2 files are present
             if files.is_empty() {
-                return Err(MyError::SomethingElse("empty file list".into()).into());
+                return Err(Cause::SomethingElse("empty file list".into()).into());
             }
             if files.len() < 2 {
-                return Err(MyError::SomethingElse("need at least 2 files".into()).into());
+                return Err(Cause::SomethingElse("need at least 2 files".into()).into());
             }
 
             if self.batch_size == 0 {
-                return Err(MyError::SomethingElse("batch_size must be >= 1".into()).into());
+                return Err(Cause::SomethingElse("batch_size must be >= 1".into()).into());
             }
 
             // Deterministic RNG seeded by input id for stable caching
@@ -543,7 +543,7 @@ mod tests {
                 let ax_id = SimpleId::from(format!("ax_{}", input.id()));
                 let first = data
                     .first()
-                    .ok_or_else(|| MyError::SomethingElse("no tensors".into()))?;
+                    .ok_or_else(|| Cause::SomethingElse("no tensors".into()))?;
 
                 // Use first tensor as the callable host; pass the rest as params
                 first.run_inner_with_params(
@@ -695,7 +695,7 @@ mod tests {
             self: Arc<Self>,
             input: &Self::In<'a>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError>
+        ) -> Result<Self::Out, ThoError>
         where
             Self: Sized,
         {
@@ -716,21 +716,21 @@ mod tests {
                                 MemLimit(m) => {
                                     if t.size()[0] > *m as i64 {
                                         debug!("Err(MyError::OutOfMemory) MemLimit");
-                                        return Err(MyError::OutOfMemory.into());
+                                        return Err(Cause::OutOfMemory.into());
                                     }
                                 }
                                 MinPermits(min_permits) => {
                                     let acquired_permits = ctx_clone.read().acquired_permits();
                                     if acquired_permits < *min_permits {
                                         debug!("Err(MyError::OutOfMemory) MinPermits: acquired_permits={acquired_permits}");
-                                        return Err(MyError::OutOfMemory.into());
+                                        return Err(Cause::OutOfMemory.into());
                                     }
                                 }
                                 DumpedToCpu => {
                                     let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx_clone.read().device_idx());
                                     if !is_all_on_cpu {
                                         debug!("Err(MyError::OutOfMemory) DumpedToCpu");
-                                        return Err(MyError::OutOfMemory.into());
+                                        return Err(Cause::OutOfMemory.into());
                                     }
                                 }
                                 Never => {}
@@ -769,7 +769,7 @@ mod tests {
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let (device_idx, cache_area) = {
                 let guard = ctx.read();
                 (guard.device_idx(), guard.cache_area())
@@ -814,7 +814,7 @@ mod tests {
 
     #[async_trait]
     impl CopyToDevice for FileListInput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
             Ok(Self {
                 files: self.files.clone(),
                 id: self.id.clone(),
@@ -884,7 +884,7 @@ mod tests {
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
                 .run_cached(Arc::clone(&input), Arc::clone(&ctx))
@@ -964,7 +964,7 @@ mod tests {
     // ---------------- Test ----------------
 
     #[tokio::test]
-    async fn test_ab_loader_and_classifier_cpu() -> Result<(), ThoosaError> {
+    async fn test_ab_loader_and_classifier_cpu() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1017,7 +1017,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ab_loader_and_classifier_cpu_many_files() -> Result<(), ThoosaError> {
+    async fn test_ab_loader_and_classifier_cpu_many_files() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1070,7 +1070,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_classifier_oom_permits_escalates() -> Result<(), ThoosaError> {
+    async fn test_classifier_oom_permits_escalates() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cpu.so").expect("no libtorch_cpu.so");
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");

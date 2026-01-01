@@ -4,7 +4,7 @@ use parking_lot::RwLock;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
-use thoosa_shared::{ResourceType, ThoosaError};
+use thoosa_shared::{ResourceType, ThoError};
 use thoosa_store::Store;
 
 
@@ -29,7 +29,7 @@ impl ResourcesConfig for Simple {
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
         store: &Arc<RwLock<Box<S>>>,
-    ) -> Result<Vec<Resource>, ThoosaError> {
+    ) -> Result<Vec<Resource>, ThoError> {
         Ok(match self.resources() {
             ResourceType::List(list) => store
                 .read()
@@ -62,16 +62,16 @@ impl ResourcesConfig for Simple {
             })
     }
 
-    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> {
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoError> {
         if let ResourceType::List(list) = self.resources() {
             if list.is_empty() {
-                return Err(ThoosaError::new("resource list should not be empty"));
+                return Err(ThoError::new("resource list should not be empty"));
             }
         }
 
         let resources = self.to_resources(store)?;
         if resources.is_empty() {
-            Err(ThoosaError::new(format!(
+            Err(ThoError::new(format!(
                 "resource config {self:?} resolved to no resources"
             )))
         } else {
@@ -89,11 +89,11 @@ impl ResourcesConfig for Empty {
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
         _store: &Arc<RwLock<Box<S>>>,
-    ) -> Result<Self::R, ThoosaError> {
+    ) -> Result<Self::R, ThoError> {
         Ok(())
     }
 
-    fn check<S: ResourceStore + ?Sized>(&self, _store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> {
+    fn check<S: ResourceStore + ?Sized>(&self, _store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoError> {
         Ok(())
     }
 }
@@ -122,7 +122,7 @@ impl ResourcesConfig for Labeled {
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
         store: &Arc<RwLock<Box<S>>>,
-    ) -> Result<Vec<(String, Vec<Resource>)>, ThoosaError> {
+    ) -> Result<Vec<(String, Vec<Resource>)>, ThoError> {
         let store_guard = store.read();
 
         store_guard
@@ -136,17 +136,17 @@ impl ResourcesConfig for Labeled {
             .collect()
     }
 
-    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> {
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoError> {
         let labeled_resources = self.to_resources(store)?;
         if labeled_resources.is_empty() {
-            return Err(ThoosaError::new(format!(
+            return Err(ThoError::new(format!(
                 "resource config {self:?} resolved to no labeled resource sets"
             )));
         }
 
         for (label, resources) in &labeled_resources {
             if resources.is_empty() {
-                return Err(ThoosaError::new(format!(
+                return Err(ThoError::new(format!(
                     "label {label} in resource config {self:?} has no resources"
                 )));
             }
@@ -180,7 +180,7 @@ impl ResourcesConfig for Logits {
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
         store: &Arc<RwLock<Box<S>>>,
-    ) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError> {
+    ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError> {
         store
             .read()
             .list_resource_random_in_group(&self.group)?
@@ -198,12 +198,12 @@ impl ResourcesConfig for Logits {
             .collect()
     }
 
-    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> {
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoError> {
         
         if store
             .read()
             .list_resource_random_in_group(&self.group)?.is_empty() {
-            Err(ThoosaError::new(format!(
+            Err(ThoError::new(format!(
                 "resource config {self:?} resolved to no logits resources"
             )))
         } else {
@@ -240,7 +240,7 @@ impl<RC: ResourcesConfig> ResourcesConfig for NetResources<RC> {
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
         store: &Arc<RwLock<Box<S>>>,
-    ) -> Result<(RC::R, RC::R), ThoosaError> {
+    ) -> Result<(RC::R, RC::R), ThoError> {
         self.train_resources.to_resources(store).and_then(|train| {
             self.valid_resources
                 .to_resources(store)
@@ -248,7 +248,7 @@ impl<RC: ResourcesConfig> ResourcesConfig for NetResources<RC> {
         })
     }
 
-    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> {
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoError> {
         self.train_resources.check(store)?;
         self.valid_resources.check(store)?;
         Ok(())
@@ -267,7 +267,7 @@ pub trait SavableResult: Sync + Send + Debug {
         &mut self,//TODO consume
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    ) -> Result<u32, ThoosaError>;
+    ) -> Result<u32, ThoError>;
 }
 
 #[derive(Debug)]
@@ -288,7 +288,7 @@ impl SavableResult for DummySavableOptResult {
         &mut self,
         _store: &Arc<RwLock<Box<dyn Store>>>,
         _ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    ) -> Result<u32, ThoosaError> {
+    ) -> Result<u32, ThoError> {
         Ok(0)
     }
 }

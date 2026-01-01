@@ -16,13 +16,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::atomic::Ordering::Relaxed;
 use crate::CopyToDevice;
-use crate::MyError;
+use crate::Cause;
 use tokio::sync::{Notify, RwLockReadGuard};
 use crate::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
 use crate::traits::{Data, Select};
 use crate::runner::common::{OutId, PermitsCtx, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage};
-use crate::ThoosaError;
+use crate::ThoError;
 use crate::traits::WithId;
 
 #[async_trait]
@@ -34,7 +34,7 @@ where
 {
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
-        Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>,
+        Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoError>>>,
     >
     where
         Self: Sized,
@@ -44,7 +44,7 @@ where
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     where
         Self: Sized + OutId,
         for<'a> <Self as Stage>::In<'a>: Send + Sync,
@@ -97,7 +97,7 @@ where
         keys: Vec<<Self::Out as WithId>::ID>,
         cache_area: u64,
         device_idx: usize,
-    ) -> Result<(), ThoosaError>
+    ) -> Result<(), ThoError>
     where
         Self: Sized + OutId,
         Self::Out: Data + Sync + Send,
@@ -149,21 +149,21 @@ where
     async fn load_from_any_device_(
         wrap:&DevicesWrap<O>,
         to_device_idx: usize,
-    ) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError>
+    ) -> Result<impl Deref<Target = O> + Debug + Send, ThoError>
     where
         Self:Sized;
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoosaError>>
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         Self:Sized,
-        F: FnOnce(&O) -> Result<R, ThoosaError> + Send + 'a,
+        F: FnOnce(&O) -> Result<R, ThoError> + Send + 'a,
         P:PermitsCtx + 'a;
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         Self:Sized,
         O: Select<S, Output=O>,
-        for <'f> F: FnOnce(&O) -> Result<R, ThoosaError>,
+        for <'f> F: FnOnce(&O) -> Result<R, ThoError>,
         S:Debug + Clone + 'static,
         P:PermitsCtx;
 
@@ -172,8 +172,8 @@ where
         to_device_idx: usize,
         permits_ctx: Arc<parking_lot::RwLock<P>>,
         selector: S,
-        do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>,
-    ) -> Result<R, ThoosaError>
+        do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoError>,
+    ) -> Result<R, ThoError>
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
@@ -181,7 +181,7 @@ where
         P:PermitsCtx,
         Self:Sized;
 
-    fn dump_to_cpu(wrap:&DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoosaError>> + std::marker::Send
+    fn dump_to_cpu(wrap:&DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + std::marker::Send
         where Self:Sized;
 
 
@@ -189,7 +189,7 @@ where
         where Self:Sized;
     fn is_on_cpu_since(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool
         where Self:Sized;
-    async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoosaError>
+    async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoError>
         where Self:Sized;
 
     async fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> bool
@@ -219,7 +219,7 @@ where
         }
     }
 
-    async fn load_from_any_device_(wrap: &DevicesWrap<O>, _to_device_idx: usize) -> Result<impl Deref<Target=O> + Debug + Send, ThoosaError>
+    async fn load_from_any_device_(wrap: &DevicesWrap<O>, _to_device_idx: usize) -> Result<impl Deref<Target=O> + Debug + Send, ThoError>
     where
         Self: Sized
     {
@@ -232,13 +232,13 @@ where
             ))
         } else {
 
-            Err(MyError::NotFound.into())
+            Err(Cause::NotFound.into())
         }
     }
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, _permits_ctx: Arc<RwLock<P>>, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoosaError>>
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, _permits_ctx: Arc<RwLock<P>>, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
-            for<'f> F: FnOnce(&O) -> Result<R, ThoosaError> + Send + 'a,
+            for<'f> F: FnOnce(&O) -> Result<R, ThoError> + Send + 'a,
             P: PermitsCtx + 'a
     {
         Box::pin(async move {
@@ -252,10 +252,10 @@ where
         })
     }
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, _permits_ctx: Arc<RwLock<P>>, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, _permits_ctx: Arc<RwLock<P>>, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         O: Select<S, Output=O>,
-        for<'f> F: FnOnce(&O) -> Result<R, ThoosaError>,
+        for<'f> F: FnOnce(&O) -> Result<R, ThoError>,
         S:Debug + Clone + 'static,
         P: PermitsCtx
     {
@@ -268,7 +268,7 @@ where
         }
     }
 
-    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, _permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>) -> Result<R, ThoosaError>
+    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, _permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoError>) -> Result<R, ThoError>
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
@@ -286,7 +286,7 @@ where
     }
 
 
-    fn dump_to_cpu(_wrap: &DevicesWrap<O>, _device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoosaError>> + std::marker::Send
+    fn dump_to_cpu(_wrap: &DevicesWrap<O>, _device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + std::marker::Send
     where
         Self: Sized
     {
@@ -310,7 +310,7 @@ where
         true
     }
 
-    async fn take_data(wrap: DevicesWrap<O>, _to_device_idx: usize) -> Result<O, ThoosaError>
+    async fn take_data(wrap: DevicesWrap<O>, _to_device_idx: usize) -> Result<O, ThoError>
     where
         Self: Sized
     {
@@ -376,7 +376,7 @@ where
         }
     }
 
-    async fn load_from_any_device_(wrap: &DevicesWrap<O>, to_device_idx: usize) -> Result<impl Deref<Target=O> + Debug + Send, ThoosaError>
+    async fn load_from_any_device_(wrap: &DevicesWrap<O>, to_device_idx: usize) -> Result<impl Deref<Target=O> + Debug + Send, ThoError>
     where
         Self: Sized
     {
@@ -408,13 +408,13 @@ where
                     return wrap.copy_and_get(source_device_idx, to_device_idx).await;
                 }
             }
-            Err(MyError::NotFound.into())
+            Err(Cause::NotFound.into())
         }
     }
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoosaError>>
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
-        F: FnOnce(&O) -> Result<R, ThoosaError> + Send + 'a,
+        F: FnOnce(&O) -> Result<R, ThoError> + Send + 'a,
         P: PermitsCtx + 'a
     {
         Box::pin(async move {
@@ -434,10 +434,10 @@ where
         })
     }
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         O: Select<S, Output=O>,
-        for<'f> F: FnOnce(&O) -> Result<R, ThoosaError>,
+        for<'f> F: FnOnce(&O) -> Result<R, ThoError>,
         S:Debug + Clone + 'static,
         P: PermitsCtx
     {
@@ -482,10 +482,10 @@ where
             }
         }
 
-        Err(MyError::NotFound.into())
+        Err(Cause::NotFound.into())
     }
 
-    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>) -> Result<R, ThoosaError>
+    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoError>) -> Result<R, ThoError>
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
@@ -527,12 +527,12 @@ where
             }
         }
 
-        Err(MyError::NotFound.into())
+        Err(Cause::NotFound.into())
     }
 
 
 
-    fn dump_to_cpu(wrap: &DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoosaError>> + std::marker::Send
+    fn dump_to_cpu(wrap: &DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + std::marker::Send
     where
         Self: Sized
     {
@@ -588,7 +588,7 @@ where
         r
     }
 
-    async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoosaError>
+    async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoError>
     where
         Self: Sized
     {
@@ -735,7 +735,7 @@ where
         O::M::size(self)
     }
 
-    pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoosaError> {
+    pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoError> {
         O::M::dump_to_cpu(self, device_idx).await
     }
 
@@ -744,8 +744,8 @@ where
         to_device_idx: usize,
         permits_ctx: Arc<parking_lot::RwLock<P>>,
         selector: S,
-        do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>,
-    ) -> Result<R, ThoosaError>
+        do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoError>,
+    ) -> Result<R, ThoError>
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
@@ -762,14 +762,14 @@ where
     pub async fn take_data(
         self,
         to_device_idx: usize,
-    ) -> Result<O, ThoosaError> {
+    ) -> Result<O, ThoError> {
         O::M::take_data(self, to_device_idx).await
     }
 
     pub async fn load_from_any_device_(
         &self,
         to_device_idx: usize,
-    ) -> Result<impl Deref<Target = O> + Debug + Send, ThoosaError> {
+    ) -> Result<impl Deref<Target = O> + Debug + Send, ThoError> {
         O::M::load_from_any_device_(self, to_device_idx).await
     }
 
@@ -795,7 +795,7 @@ where
     }
 
 
-    pub async fn clone_from_cpu(&self) -> Result<O, ThoosaError>
+    pub async fn clone_from_cpu(&self) -> Result<O, ThoError>
     where O: Clone {
         Ok(self.cached_data[0].read().await.clone().expect("no data in cpu"))
     }
@@ -804,9 +804,9 @@ where
 
     fn do_run_trace_ref<R>(
         trace_ctx: Option<&'static str>,
-        do_run: impl FnOnce(&O) -> Result<R, ThoosaError>,
+        do_run: impl FnOnce(&O) -> Result<R, ThoError>,
         data: &O,
-    ) -> Result<R, ThoosaError> {
+    ) -> Result<R, ThoError> {
         if trace_ctx.is_none() {
             do_run(data)
         } else {
@@ -816,9 +816,9 @@ where
 
     fn do_run_trace_owned<T, R>(
         trace_ctx: Option<&'static str>,
-        do_run: impl FnOnce(&T) -> Result<R, ThoosaError>,
+        do_run: impl FnOnce(&T) -> Result<R, ThoError>,
         data: T,
-    ) -> Result<R, ThoosaError>
+    ) -> Result<R, ThoError>
     where
         T: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
     {
@@ -836,7 +836,7 @@ where
         dst_idx: usize,
         src: Option<&O>,
         do_return: bool,
-    ) -> Result<Option<RwLockReadGuard<'_, O>>, ThoosaError> {
+    ) -> Result<Option<RwLockReadGuard<'_, O>>, ThoError> {
         debug!("DevicesWrap::ensure_copied: self.id={:?} src_idx={src_idx} dst_idx={dst_idx} do_return={do_return} src={src:?}", self.id);
 
         loop {
@@ -931,7 +931,7 @@ where
         &self,
         src_idx: usize,
         dst_idx: usize,
-    ) -> Result<RwLockReadGuard<'_, O>, ThoosaError> {
+    ) -> Result<RwLockReadGuard<'_, O>, ThoError> {
         self.ensure_copied(src_idx, dst_idx, None, true)
             .await
             .map(|v| v.expect("no value returned"))
@@ -953,9 +953,9 @@ pub trait WithDataRef: WithId + Debug {
         permits_ctx: Arc<parking_lot::RwLock<P>>,
         trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<R, ThoosaError>
+    ) -> Result<R, ThoError>
     where
-       for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError> + Send,
+       for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError> + Send,
         P:PermitsCtx;
 
 
@@ -984,9 +984,9 @@ where
         selector: S,
         trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<R, ThoosaError> where
+    ) -> Result<R, ThoError> where
      // Self::O<'o>: Select<S, Output = Self::O<'o>>,
-     for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+     for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError>,
      P:PermitsCtx;
 }
 
@@ -997,9 +997,9 @@ where
 {
     type O<'o> = O;
 
-    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
-            for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError> + Send,
+            for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError> + Send,
             P:PermitsCtx
     {
         O::M::with_data_ref(self, to_device_idx, permits_ctx, trace_ctx, do_run).await
@@ -1026,10 +1026,10 @@ where
     O: Select<S, Output=O> + Data + WithId + Send + Sync + CopyToDevice,
     O::M: DevicesWrapCopyMode<O>,
 {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
-        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError>,
         P:PermitsCtx
     {
         O::M::with_selected_data_ref(self, to_device_idx, permits_ctx, selector, trace_ctx, do_run).await
@@ -1052,7 +1052,7 @@ mod tests {
     use crate::runner::test_utils::MockDataWithId;
 
     #[tokio::test]
-    async fn test_cache_area() -> Result<(), ThoosaError> {
+    async fn test_cache_area() -> Result<(), ThoError> {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
@@ -1129,7 +1129,7 @@ mod tests {
 
 
     #[tokio::test]
-    async fn test_dump_to_cpu() -> Result<(), ThoosaError> {
+    async fn test_dump_to_cpu() -> Result<(), ThoError> {
 
         let global_ctx = MockGlobalCtx::global_context();
         global_ctx.expect().returning(|| {
@@ -1160,7 +1160,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_with_data() -> Result<(), ThoosaError> {
+    async fn test_with_data() -> Result<(), ThoError> {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
@@ -1191,13 +1191,13 @@ mod tests {
                 assert!(first.iter().all(|item| *item.device() == 1));
                 assert_eq!(second.len(), 2);
                 assert!(second.iter().all(|item| *item.device() == 1));
-                Ok::<(), ThoosaError>(())
+                Ok::<(), ThoError>(())
         })?;
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_with_data_single_val() -> Result<(), ThoosaError> {
+    async fn test_with_data_single_val() -> Result<(), ThoError> {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(
@@ -1211,7 +1211,7 @@ mod tests {
         with_data!(Arc::clone(&permits_ctx), 1, wrap_a;
             |a: &MockDataWithId|{
                 assert_eq!(a.device(), &1);
-                Ok::<(), ThoosaError>(())
+                Ok::<(), ThoError>(())
         })?;
         Ok(())
     }

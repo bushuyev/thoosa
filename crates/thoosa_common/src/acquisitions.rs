@@ -81,7 +81,7 @@ mod tests {
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
 
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
 
     use crate::acquisitions::expected_improvement;
     use crate::argmin::{TensorProblem, run_lbfgs};
@@ -90,7 +90,7 @@ mod tests {
     use crate::utils::{from, plot_series_with_points, sin3_pow2, vec_f32_from};
 
     #[test]
-    fn test_expected_improvement() -> Result<(), ThoosaError> {
+    fn test_expected_improvement() -> Result<(), ThoError> {
         let n = 100i64;
 
         let (y_train_full, x_t, _x) = sin3_pow2(n, -1., 2., Some(0.002));

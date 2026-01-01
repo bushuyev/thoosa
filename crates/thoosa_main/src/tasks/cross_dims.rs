@@ -3,7 +3,7 @@ use std::ops::Range;
 use log::{debug, trace};
 use tch::{IndexOp, Tensor};
 use thoosa_common::dims::{AnyMetrics, Batch, Dims};
-use thoosa_shared::{mono_key, ThoosaError};
+use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{Adjustable, DataId, Select};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
@@ -26,7 +26,7 @@ pub struct ChannelsDataVec {
 impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey> {
     type Output = ThoTensor<ChannelsData2, SynKey>;
 
-    fn subview(&self, selector: ChannelsDataVec) -> Result<Self::Output, ThoosaError> {
+    fn subview(&self, selector: ChannelsDataVec) -> Result<Self::Output, ThoError> {
         let ChannelsDataVec { ranges } = selector;
         let size: MonoMetrics<1, 2> = self
             .size()
@@ -62,7 +62,7 @@ pub struct ChannelsData2Selector(pub Range<MonoMetrics<1, 2>>);
 impl Select<ChannelsData2Selector> for ThoTensor<ChannelsData2, SynKey> {
     type Output = ThoTensor<ChannelsData2, SynKey>;
 
-    fn subview(&self, selector: ChannelsData2Selector) -> Result<Self::Output, ThoosaError> {
+    fn subview(&self, selector: ChannelsData2Selector) -> Result<Self::Output, ThoError> {
         let size: MonoMetrics<1, 2> = self.size().try_into()?;
 
         let mut ranges = MonoMetrics::<1, 2>::map_to_ranges(&selector.0.start, &selector.0.end)?;
@@ -95,7 +95,7 @@ pub struct BatchChannelsData2Selector(pub Range<MonoMetrics<0, 3>>);
 impl Select<BatchChannelsData2Selector> for ThoTensor<Batch<ChannelsData2>, SynKey> {
     type Output = ThoTensor<Batch<ChannelsData2>, SynKey>;
 
-    fn subview(&self, selector: BatchChannelsData2Selector) -> Result<Self::Output, ThoosaError> {
+    fn subview(&self, selector: BatchChannelsData2Selector) -> Result<Self::Output, ThoError> {
         todo!()
     }
 }

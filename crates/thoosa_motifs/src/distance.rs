@@ -12,10 +12,10 @@ use tch::Kind::Bool;
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::{IndexOp, TchError, Tensor};
 use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm_2};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 
 #[allow(dead_code)]
-pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
+pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
     Ok(z_norm_2(t_0, 1)?
         .f_sub(&z_norm_2(t_1, 1)?)?
         .f_pow_tensor_scalar(2)?
@@ -23,7 +23,7 @@ pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> Result<Te
         .f_pow_tensor_scalar(0.5)?)
 }
 
-pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError> {
+pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoError> {
     //https://github.com/pytorch/pytorch/blob/96487d0d1f638ae9c665dcd3d4b79e7e2a976f59/aten/src/ATen/native/cuda/DistanceKernel.cu#L188
     //0 -use_mm_for_euclid_dist_if_necessary
     //1 -use_mm_for_euclid_dist
@@ -56,7 +56,7 @@ pub enum MaskMaker<'a> {
 }
 
 impl<'a> MaskMaker<'a> {
-    pub fn make_mask(&mut self, prev_mask: Option<Tensor>, dists: &Tensor) -> Result<Tensor, ThoosaError> {
+    pub fn make_mask(&mut self, prev_mask: Option<Tensor>, dists: &Tensor) -> Result<Tensor, ThoError> {
         debug!("make_mask: prev_mask={prev_mask:?} dists={dists:?} self={self:?}");
 
         match self {
@@ -121,7 +121,7 @@ impl<'a> MaskMaker<'a> {
         }
     }
 
-    fn apply_prev(perv_mask: &Option<Tensor>, mask: Tensor) -> Result<Tensor, ThoosaError> {
+    fn apply_prev(perv_mask: &Option<Tensor>, mask: Tensor) -> Result<Tensor, ThoError> {
         trace!("apply_prev: perv_mask={perv_mask:?} mask=\n{mask}");
         match perv_mask {
             None => Ok(mask),
@@ -145,7 +145,7 @@ pub fn clc_dist_d2_and_mask(
     t_1: Tensor,
     with_distances: bool,
     mask_makers: &mut [MaskMaker],
-) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
+) -> Result<(Tensor, Option<Tensor>), ThoError> {
     let device = t_0.device();
 
     if t_0.size()[1] < 2 /*|| t_1.size()[1] < 2 TODO - when calculating distances between slices and motifs there can be single motif?*/ {
@@ -182,7 +182,7 @@ pub fn clc_dist_d2_and_mask(
 }
 
 /// distances - [channels x slices 0 x slices 1]
-fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> Result<Tensor, ThoosaError> {
+fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> Result<Tensor, ThoError> {
     let distances_size = distances.size();
 
     trace!("quantile_mask: after pre_mask distances=\n{distances}");
@@ -244,7 +244,7 @@ fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> Resul
 ///
 /// * distances - [channels x slices 0 x slices 1]
 /// * returns - Bool tensor of same size with true for local minimums for  slice 1 along slices 0.
-fn local_min_mask(distances: &Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
+fn local_min_mask(distances: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
     debug!("local_min_mask: distances.size={:?} dim={dim}", distances.size());
     trace!("local_min_mask: distances=\n{distances}");
     let distances_size = distances.size();
@@ -300,7 +300,7 @@ fn mean_mask(
     pre_mask: Option<&Tensor>,
     means_acc: &Mutex<Tensor>,
     total_samples: &Mutex<Tensor>,
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
     let distances_size = distances.size();
 
     debug!("mean_mask: k={k} distances={distances:?} pre_mask={pre_mask:?} means_acc={means_acc:?} total_samples={total_samples:?}");
@@ -411,7 +411,7 @@ fn mean_mask(
     Ok(le)
 }
 
-pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
+pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoError> {
     let t_0 = t_0.f_unsqueeze(dim + 1)?; // channels x num_slices x 1 x slice_len
     let t_1 = t_1.f_unsqueeze(dim)?; // channels x 1 x num_slices x slice_len
 
@@ -450,7 +450,7 @@ pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
     Tensor::stack(&tensors_vec, 0)
 }
 
-pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
+pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoError> {
     let n = t.size()[0];
     debug!("average_euclidean_distance: n={n}");
 
@@ -535,7 +535,7 @@ mod distance_tests {
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::colors_iter::DistinctColorIter;
     use thoosa_shared::{
-        ThoosaError, comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp,
+        ThoError, comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp,
         sin_v,
     };
 
@@ -545,7 +545,7 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_z_normalized_euclidean() -> Result<(), ThoosaError> {
+    fn test_z_normalized_euclidean() -> Result<(), ThoError> {
         let d = z_normalized_euclidean(
             &Tensor::vstack(&[
                 Tensor::from_slice(&[1., 0., 1., 0., 1.]),
@@ -579,7 +579,7 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_clc_dist_d2_0() -> Result<(), ThoosaError> {
+    fn test_clc_dist_d2_0() -> Result<(), ThoError> {
         let tensor_0 = Tensor::from_slice(&[0.0, 1.0, 2., 3.]).view((1, -1));
         let tensor_1 = Tensor::from_slice(&[0.0, 1.0, 2., 3.]).view((1, -1));
 
@@ -1603,7 +1603,7 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_average_euclidean_distance() -> Result<(), ThoosaError> {
+    fn test_average_euclidean_distance() -> Result<(), ThoError> {
         let d = [1., 2., 3., 4., 5., 6., 7., 8., 9.];
         let ab = _dist_3(&d[0..3], &d[3..6]);
         let ac = _dist_3(&d[0..3], &d[6..9]);
@@ -1657,7 +1657,7 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_mask_maker_local_min() -> Result<(), ThoosaError> {
+    fn test_mask_maker_local_min() -> Result<(), ThoError> {
         // reset_print_options();
         // set_max_level(Trace);
 
