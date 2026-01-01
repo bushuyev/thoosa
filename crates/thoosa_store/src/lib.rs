@@ -4138,6 +4138,21 @@ impl MockStoreBuilder {
         self
     }
 
+    pub fn with_list_output_run_ids<R:Into<HashMap<RunId, Result<Vec<RunId>, ThoosaError>>>>(
+        mut self,
+        results: R,
+    ) -> Self {
+        let map = results.into();
+        self.store.expect_list_output_run_ids().returning(
+            move |input_run_id| {
+                map.get(&input_run_id)
+                    .cloned()
+                    .expect(&format!("mock is not configured to return output run ids for run id {input_run_id}"))
+            },
+        );
+        self
+    }
+
     pub fn with_list_resources_by_file_stems(
         mut self,
         expected_stems: Vec<String>,
