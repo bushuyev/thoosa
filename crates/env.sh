@@ -1,2 +1,7 @@
-#LD_PRELOAD=/home/bu/dvl/torch/src/pytorch/pytorch-2.7.1-debug-dsa-install/lib/libtorch_cuda.so:/home/bu/dvl/torch/src/pytorch/pytorch-2.7.1-debug-dsa-install/lib/libtorch_cpu.so:/home/bu/dvl/torch/src/pytorch/pytorch-2.7.1-debug-dsa-install/lib/libc10.so
-export LD_PRELOAD=/home/bu/dvl/torch/libtorch-2.7.1/lib/libtorch_cuda.so:/home/bu/dvl/torch/libtorch-2.7.1/lib/libtorch_cpu.so:/home/bu/dvl/torch/libtorch-2.7.1/lib/libc10.so
+if [ -z "${LIBTORCH:-}" ]; then
+    LIBTORCH=$(awk -F'"' '/^LIBTORCH=/{print $2}' "$(dirname "$0")/.cargo/config.toml")
+fi
+LIBTORCH="${LIBTORCH%/}"
+
+#LD_PRELOAD="${LIBTORCH}/lib/libtorch_cuda.so:${LIBTORCH}/lib/libtorch_cpu.so:${LIBTORCH}/lib/libc10.so"
+export LD_PRELOAD="${LIBTORCH}/lib/libtorch_cuda.so:${LIBTORCH}/lib/libtorch_cpu.so:${LIBTORCH}/lib/libc10.so"

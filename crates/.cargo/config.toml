@@ -3,11 +3,11 @@ target = "x86_64-unknown-linux-gnu"
 target-dir = "target"
 rustflags = [
     "-C", "link-arg=-Wl,--no-as-needed", "--cfg", "tokio_unstable",
-#    "-C", "link-arg=-Wl,-rpath,/home/bu/dvl/torch/libtorch-2.7.1/",
+#    "-C", "link-arg=-Wl,-rpath,$LIBTORCH",
     "-Zhigher-ranked-assumptions"
 ]
 
 [env]
 LIBTORCH_BYPASS_VERSION_CHECK="1"
 LIBTORCH="/home/bu/dvl/torch/libtorch-2.7.1/"
-#LD_PRELOAD="/home/bu/dvl/torch/libtorch-2.7.1/lib/libtorch_cpu.so:/home/bu/dvl/torch/libtorch-2.7.1/lib/libtorch_cuda.so"
+#LD_PRELOAD="$LIBTORCH/lib/libtorch_cpu.so:$LIBTORCH/lib/libtorch_cuda.so"
