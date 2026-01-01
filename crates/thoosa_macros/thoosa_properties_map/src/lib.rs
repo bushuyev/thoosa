@@ -11,7 +11,7 @@ pub trait FromHashmap {
     fn from_properties_map(
         parent: Option<String>,
         properties: &HashMap<String, thoosa_shared::val::Val>,
-    ) -> Result<Self, thoosa_shared::ThoosaError>
+    ) -> Result<Self, thoosa_shared::ThoError>
     where
         Self: Sized;
 }

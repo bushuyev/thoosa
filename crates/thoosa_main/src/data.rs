@@ -12,7 +12,7 @@ use polars::prelude::{LazyFrame, NamedFrom, ScanArgsParquet, Series};
 use tch::{Device, IndexOp, Tensor};
 
 use thoosa_common::utils::{from, load_tensor};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_store::Store;
 
@@ -28,7 +28,7 @@ pub trait Splitter {
 
     fn split_to(&self, v: &Self::Type) -> Set;
 
-    fn init(&self, df: LazyFrame) -> Result<LazyFrame, ThoosaError> {
+    fn init(&self, df: LazyFrame) -> Result<LazyFrame, ThoError> {
         Ok(df.clone())
     }
 }
@@ -45,7 +45,7 @@ impl<E> Splitter for AllTrainSplitter<E> {
     }
 }
 
-pub fn series_to_tensor(s: &Series) -> Result<Tensor, ThoosaError> {
+pub fn series_to_tensor(s: &Series) -> Result<Tensor, ThoError> {
     Ok(match s.dtype() {
         // DataType::UInt8 => {}
         // DataType::UInt16 => {}
@@ -152,19 +152,19 @@ pub fn load_to_logits_tensors(
 pub fn parquet_to_tensor_by_path(
     path: impl AsRef<Path>,
     device: Device,
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
     let df = read_parquet_to_df(path)?;
 
     let tensor = Tensor::f_vstack(
         &df.get_columns()
             .into_iter()
             .map(|s| series_to_tensor(s.as_series().unwrap()))
-            .collect::<Result<Vec<Tensor>, ThoosaError>>()?,
+            .collect::<Result<Vec<Tensor>, ThoError>>()?,
     )?;
     Ok(tensor.f_set_requires_grad(false)?.f_to_device(device)?)
 }
 
-pub fn read_parquet_to_df(path: impl AsRef<Path>) -> Result<DataFrame, ThoosaError> {
+pub fn read_parquet_to_df(path: impl AsRef<Path>) -> Result<DataFrame, ThoError> {
     let scan_conf = ScanArgsParquet::default();
 
     let df = LazyFrame::scan_parquet(
@@ -175,7 +175,7 @@ pub fn read_parquet_to_df(path: impl AsRef<Path>) -> Result<DataFrame, ThoosaErr
     Ok(df.collect()?)
 }
 
-pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, ThoosaError> {
+pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, ThoError> {
     let mut scan_conf = ScanArgsParquet::default();
     scan_conf.cache = false;
 
@@ -264,7 +264,7 @@ mod data_tests {
     use tch::Kind::Float;
     use tch::{Device, IndexOp, Kind, Tensor};
     use thoosa_shared::test_utils::init_test_logging;
-    use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::{TensorIdSliceIdx, ThoError};
 
     #[ctor::ctor]
     fn init() {
@@ -273,7 +273,7 @@ mod data_tests {
 
 
     #[test]
-    pub fn test_split_frame_by_offsets() -> Result<(), ThoosaError> {
+    pub fn test_split_frame_by_offsets() -> Result<(), ThoError> {
         let df = df!(
             "col1"  => (0..10).map(|i| i as f64).collect::<Vec<f64>>(),
             "col2"  => (0..10).map(|i| i as f64 * 10.).collect::<Vec<f64>>(),
@@ -311,7 +311,7 @@ mod data_tests {
     }
 
     #[test]
-    fn test_save_tensor() -> Result<(), ThoosaError> {
+    fn test_save_tensor() -> Result<(), ThoError> {
         let t = Tensor::randn([3, 6], (Float, Cpu));
 
         let path = "/tmp/sub.csv";

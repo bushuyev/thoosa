@@ -137,7 +137,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::nn::*;
     use tch::{Device, IndexOp, Kind, Tensor};
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_shared::test_utils::are_close;
 
     #[ctor::ctor]
@@ -146,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn test_band_pass_filter() -> Result<(), ThoosaError> {
+    fn test_band_pass_filter() -> Result<(), ThoError> {
         let samples = 16000;
         let sample_rate = 16000.0;
         let kernel_size = 101;
@@ -200,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn test_band_pass_filter_mult_channels() -> Result<(), ThoosaError> {
+    fn test_band_pass_filter_mult_channels() -> Result<(), ThoError> {
         let samples = 16000;
         let sample_rate = 16000.0;
         let kernel_size = 101;

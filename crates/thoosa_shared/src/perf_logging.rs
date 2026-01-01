@@ -11,7 +11,7 @@ use tracing_subscriber::{fmt, fmt::{format::Writer, time::FormatTime}, layer::Su
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
-use crate::ThoosaError;
+use crate::ThoError;
 
 #[derive(Clone)]
 pub struct SimplelogLikeEvent<T> {
@@ -113,7 +113,7 @@ where
 }
 
 /// Perf-only tracing to stdout, but formatted like your simplelog lines.
-pub fn maybe_init_perf_tracing_stdout_simplelog_like(perf_filter: &str, perf_file: PathBuf) -> Result<bool, ThoosaError> {
+pub fn maybe_init_perf_tracing_stdout_simplelog_like(perf_filter: &str, perf_file: PathBuf) -> Result<bool, ThoError> {
     if perf_filter.trim() == "off" {
         return Ok(false);
     }
@@ -137,7 +137,7 @@ pub fn maybe_init_perf_tracing_stdout_simplelog_like(perf_filter: &str, perf_fil
         .with(PerfLayer::new())
         .try_init()
         .map(|_|true)
-        .map_err(|e|ThoosaError::new(e.to_string()))
+        .map_err(|e| ThoError::new(e.to_string()))
 }
 
 

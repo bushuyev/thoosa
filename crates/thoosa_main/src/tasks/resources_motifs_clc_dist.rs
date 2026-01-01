@@ -22,7 +22,7 @@ use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Select, WithId};
-use thoosa_shared::{mono_key, ThoosaError};
+use thoosa_shared::{mono_key, ThoError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
 use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
@@ -102,7 +102,7 @@ where
         self: Arc<Self>,
         input: &Self::In<'f>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Self::Out, ThoosaError> {
+    ) -> Result<Self::Out, ThoError> {
         debug!("ClcResourcesMotifsDist::do_run: input={input:?}");
 
         let device_idx = ctx.read().device_idx();
@@ -120,7 +120,7 @@ where
         #[cfg(test)]
         if self.fail_if_size_bigger_than.map(|v| v < batch_1_t.size()[1] as usize).unwrap_or(false) {
             debug!("ClcResourcesMotifsDist::do_run: triggering OOM: v={:?} batch_1_t.size()[1]={}", self.fail_if_size_bigger_than, batch_1_t.size()[1]);
-            return Err(ThoosaError::oom());
+            return Err(ThoError::oom());
         }
 
         let resource_ids_sizes = input
@@ -206,7 +206,7 @@ where
                         )))
                     }
                 })
-                .collect::<Result<Vec<_>, ThoosaError>>()?
+                .collect::<Result<Vec<_>, ThoError>>()?
         };
 
         Ok(ClcResourcesMotifsDistOutput::new(
@@ -270,9 +270,9 @@ impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
 impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     type O<'o> = ClcResourcesMotifsDistInput<'o>;
 
-    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
-        F: for <'f> FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+        F: for <'f> FnOnce(&Self::O<'f>) -> Result<R, ThoError>,
         P:PermitsCtx
     {
         let t_1_batch= self.batch.clone();
@@ -315,10 +315,10 @@ impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapperSelector {}
 
 
 impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         P:PermitsCtx,
-        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>
+        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError>
     {
 
         debug!("ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref: selector={selector:?}");

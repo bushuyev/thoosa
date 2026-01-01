@@ -16,7 +16,7 @@ use log::debug;
 use tch::Tensor;
 
 #[cfg(test)]
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 use crate::tho_tensor::ThoTensor;
 
 
@@ -234,7 +234,7 @@ pub fn run_lbfgs<F>(
         LBFGS<MoreThuenteLineSearch<ThoTensor, ThoTensor, f64>, ThoTensor, ThoTensor, f64>,
         IterState<ThoTensor, ThoTensor, (), (), (), f64>,
     >,
-    ThoosaError,
+    ThoError,
 >
 where
     F: Fn(&ThoTensor) -> Tensor,
@@ -269,13 +269,13 @@ mod tests {
     use tch::Device::Cpu;
     use tch::Tensor;
 
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
 
     use crate::argmin::{ThoTensor, TensorProblem, run_lbfgs};
     use crate::opt::rbf_nll;
 
     #[test]
-    fn test_min_x2() -> Result<(), ThoosaError> {
+    fn test_min_x2() -> Result<(), ThoError> {
         struct MyProblem {}
 
         impl CostFunction for MyProblem {
@@ -360,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn test_min_rbf() -> Result<(), ThoosaError> {
+    fn test_min_rbf() -> Result<(), ThoError> {
         let res = run_lbfgs(
             TensorProblem::new(|theta| {
                 rbf_nll(
@@ -390,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn test_linesearch() -> Result<(), ThoosaError> {
+    fn test_linesearch() -> Result<(), ThoError> {
         struct MyProblem {}
 
         impl CostFunction for MyProblem {
@@ -446,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn test_grad() -> Result<(), ThoosaError>{
+    fn test_grad() -> Result<(), ThoError>{
         let p_1 = ThoTensor::new((), Tensor::from_slice(&[10.]).set_requires_grad(true))?;
 
         let t2 = ThoTensor::new((), p_1.pow_tensor_scalar(2))?;

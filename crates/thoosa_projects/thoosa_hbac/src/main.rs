@@ -85,7 +85,7 @@ mod tests {
     use tch::Kind::Float;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{IndexOp, Kind, Tensor};
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
 
     use thoosa_common::loader::SyncWrapper;
 

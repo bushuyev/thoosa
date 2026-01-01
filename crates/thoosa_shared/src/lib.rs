@@ -137,29 +137,28 @@ impl Display for TensorIdSliceIdx {
 }
 
 #[derive(Debug, Clone)]
-pub enum MyError {
+pub enum Cause {
     OutOfMemory,
     OutOfPermits,
     AdjusterFailed,
-    UnsupportedDegadeLevel,
+    UnsupportedDegradeLevel,
     SomethingElse(String),
     NotFound,
     NotReady,
 }
 
-// #[derive(Error, Debug)]
-pub struct ThoosaError {
+pub struct ThoError {
     //TODO enum
     msg: String,
     #[allow(dead_code)]
     backtrace: Backtrace,
     is_oom: bool,
-    pub what: MyError,
+    pub what: Cause,
 }
 
-impl Clone for ThoosaError {
+impl Clone for ThoError {
     fn clone(&self) -> Self {
-        ThoosaError {
+        ThoError {
             msg: self.msg.clone(),
             is_oom: self.is_oom,
             backtrace: Backtrace::capture(),
@@ -168,14 +167,14 @@ impl Clone for ThoosaError {
     }
 }
 
-unsafe impl Send for ThoosaError {}
+unsafe impl Send for ThoError {}
 
-impl ThoosaError {
+impl ThoError {
     pub fn new(msg: impl Into<String> + Display) -> Self {
-        Self::new_with_error(msg, MyError::SomethingElse("TOOD".to_string()))
+        Self::new_with_error(msg, Cause::SomethingElse("TOOD".to_string()))
     }
 
-    pub fn new_with_error(msg: impl Into<String> + Display, what: MyError) -> Self {
+    pub fn new_with_error(msg: impl Into<String> + Display, what: Cause) -> Self {
         trace!("ThoosaError::new: msg={}", msg);
         let backtrace = Backtrace::capture();
 
@@ -197,7 +196,7 @@ impl ThoosaError {
             msg: "oom".into(),
             backtrace,
             is_oom: true,
-            what: MyError::OutOfMemory,
+            what: Cause::OutOfMemory,
         }
     }
 
@@ -205,13 +204,13 @@ impl ThoosaError {
         self.is_oom
     }
 
-    pub fn what(&self) -> &MyError {
+    pub fn what(&self) -> &Cause {
         &self.what
     }
 }
 
 //TODO https://github.com/rust-lang/rust/issues/65280
-impl Debug for ThoosaError {
+impl Debug for ThoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug_struct = f.debug_struct("ThoosaError");
         let mut x = debug_struct.field("msg", &self.msg);
@@ -225,16 +224,16 @@ impl Debug for ThoosaError {
     }
 }
 
-impl From<MyError> for ThoosaError {
-    fn from(value: MyError) -> Self {
+impl From<Cause> for ThoError {
+    fn from(value: Cause) -> Self {
         match value {
-            MyError::OutOfMemory => Self::oom(),
+            Cause::OutOfMemory => Self::oom(),
             e => Self::new_with_error(format!("e={e:?}"), e),
         }
     }
 }
 
-impl<D> From<D> for ThoosaError
+impl<D> From<D> for ThoError
 where
     D: Display,
 {
@@ -243,9 +242,9 @@ where
         let msg = value.to_string();
 
         if msg.contains("out of memory") || msg.contains("can't allocate memory") {
-            ThoosaError::oom()
+            ThoError::oom()
         } else {
-            ThoosaError::new(msg)
+            ThoError::new(msg)
         }
     }
 }
@@ -828,17 +827,17 @@ impl<V> RangeOrValue<V>
 where
     V: Clone + 'static,
 {
-    pub fn expect_value(&self) -> Result<&V, ThoosaError> {
+    pub fn expect_value(&self) -> Result<&V, ThoError> {
         match self {
-            RangeOrValue::Range { .. } => Err(ThoosaError::new("expected value")),
+            RangeOrValue::Range { .. } => Err(ThoError::new("expected value")),
             RangeOrValue::Value(v) => Ok(v),
         }
     }
 
-    pub fn expect_range(&self) -> Result<&Range<V>, ThoosaError> {
+    pub fn expect_range(&self) -> Result<&Range<V>, ThoError> {
         match self {
             RangeOrValue::Range { range, step: _ } => Ok(range),
-            RangeOrValue::Value(_v) => Err(ThoosaError::new("expected range")),
+            RangeOrValue::Value(_v) => Err(ThoError::new("expected range")),
         }
     }
 }
@@ -998,9 +997,9 @@ pub fn clc_step(input_n: u32, motif_width: u32, slices_num: u32) -> (u32, u32) {
     (step, pad)
 }
 
-pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, ThoosaError> {
+pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, ThoError> {
     let re: Regex = Regex::new(r#"\((?<id>\d+),\s"(?<kind>\w+)"\)"#)
-        .map_err(|e| ThoosaError::new(e.to_string()))?; //TODO const, error
+        .map_err(|e| ThoError::new(e.to_string()))?; //TODO const, error
     Ok(re
         .captures_iter(descr)
         .map(|caps| {
@@ -1056,7 +1055,7 @@ where
 
 fn parse_range_str(
     range: &str,
-) -> Result<((String, u8), (String, u8), Option<(String, u8)>), ThoosaError> {
+) -> Result<((String, u8), (String, u8), Option<(String, u8)>), ThoError> {
     lazy_static!{
         static ref RANGE_RE:Regex = Regex::new(r"^(?P<from>-?\d+(\.(?P<from_d>\d+))?)\.{2}(?P<to>-?\d+(\.(?P<to_d>\d+))?)(:(?P<step>-?\d+(\.(?P<step_d>\d+))?))?$").unwrap();
     }
@@ -1091,7 +1090,7 @@ fn parse_range_str(
                 step_i.map(|step| (step, step_d)),
             ))
         })
-        .unwrap_or_else(|| Err(ThoosaError::new(format!("can't parse range {range}"))))
+        .unwrap_or_else(|| Err(ThoError::new(format!("can't parse range {range}"))))
 }
 
 pub fn make_combos<V: Clone>(iters: impl Iterator<Item = impl Iterator<Item = V>>) -> Vec<Vec<V>> {
@@ -1240,7 +1239,7 @@ mod shared_tests {
     use crate::{
         add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
         make_combos, parse_range_str, snake_to_camel, test_utils, RangeOrValue,
-        ResourceType, ThoosaError,
+        ResourceType, ThoError,
     };
     use clap::{Args, Parser};
     use log::debug;
@@ -1378,7 +1377,7 @@ mod shared_tests {
     }
 
     #[test]
-    fn test_parse_corr_labels() -> Result<(), ThoosaError> {
+    fn test_parse_corr_labels() -> Result<(), ThoError> {
         assert_eq!(
             vec![
                 (1, "seizure_vote".into()),
@@ -1397,7 +1396,7 @@ mod shared_tests {
     }
 
     #[test]
-    fn test_parse_range_or_value_range() -> Result<(), ThoosaError> {
+    fn test_parse_range_or_value_range() -> Result<(), ThoError> {
         use crate::parse_range_or_value;
 
         #[derive(Debug, Parser, Clone, PartialEq)]
@@ -1411,7 +1410,7 @@ mod shared_tests {
 
         let params =
             TestParams::try_parse_from(vec!["", "--step=1.1..2.2", "--window=1..2"].into_iter())
-                .map_err(|e| ThoosaError::new(e.to_string()))?; //TODO error
+                .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
 
         assert_eq!(
             TestParams {
@@ -1431,7 +1430,7 @@ mod shared_tests {
     }
 
     #[test]
-    fn test_resources_param() -> Result<(), ThoosaError> {
+    fn test_resources_param() -> Result<(), ThoError> {
         use crate::parse_resources;
 
         #[derive(Debug, Parser, Clone, PartialEq)]
@@ -1442,18 +1441,18 @@ mod shared_tests {
 
         let params =
             TestParams::try_parse_from(vec!["", "--resources=list:aaa,bbb,ccc"].into_iter())
-                .map_err(|e| ThoosaError::new(e.to_string()))?; //TODO error
+                .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
 
         assert_eq!(
             ResourceType::List(vec!["aaa".into(), "bbb".into(), "ccc".into()]),
             params.resources
         );
         let params = TestParams::try_parse_from(vec!["", "--resources=set:aaa"].into_iter())
-            .map_err(|e| ThoosaError::new(e.to_string()))?; //TODO error
+            .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
         assert_eq!(ResourceType::Set("aaa".into()), params.resources);
 
         let params = TestParams::try_parse_from(vec!["", "--resources=group:bbb"].into_iter())
-            .map_err(|e| ThoosaError::new(e.to_string()))?; //TODO error
+            .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
         assert_eq!(ResourceType::Group("bbb".into()), params.resources);
 
         Ok(())
@@ -1461,7 +1460,7 @@ mod shared_tests {
 
     //TODO when deserialized by serde range with step requires number of decimals - 1.01..2.2:0.1*,1*
     #[test]
-    fn test_parse_range_or_value_range_with_step() -> Result<(), ThoosaError> {
+    fn test_parse_range_or_value_range_with_step() -> Result<(), ThoError> {
         use crate::parse_range_or_value;
 
         #[derive(Debug, Parser, Clone, PartialEq)]
@@ -1476,7 +1475,7 @@ mod shared_tests {
         let params = TestParams::try_parse_from(
             vec!["", "--step=-1.01..2.2:0.1", "--window=-20..20:2"].into_iter(),
         )
-        .map_err(|e| ThoosaError::new(e.to_string()))?; //TODO error
+        .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
 
         assert_eq!(
             TestParams {
@@ -1509,7 +1508,7 @@ mod shared_tests {
     }
 
     #[test]
-    fn test_parse_range_or_value_value() -> Result<(), ThoosaError> {
+    fn test_parse_range_or_value_value() -> Result<(), ThoError> {
         use crate::parse_range_or_value;
 
         #[derive(Debug, Parser, Clone, PartialEq)]
@@ -1522,7 +1521,7 @@ mod shared_tests {
         }
 
         let params = TestParams::try_parse_from(vec!["", "--step=1.1", "--window=10"].into_iter())
-            .map_err(|e| ThoosaError::new(e.to_string()))?; //TODO error
+            .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
 
         assert_eq!(
             TestParams {
@@ -1536,7 +1535,7 @@ mod shared_tests {
     }
 
     #[test]
-    fn test_parser_regex_str() -> Result<(), ThoosaError> {
+    fn test_parser_regex_str() -> Result<(), ThoError> {
         let ((from, from_d_len), (to, to_d_len), step) = parse_range_str("1.22..333.4444")?;
 
         assert_eq!("1.22".to_string(), from);
@@ -1825,7 +1824,7 @@ pub fn replace_extension<'a>(path: &'a PathBuf, new_extension: &'a str) -> (&'a 
 #[delegatable_trait]
 #[automock]
 pub trait CopyToDevice {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> where Self:Sized;
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> where Self:Sized;
 }
 
 
@@ -1845,7 +1844,7 @@ macro_rules! panic_to_err_async {
                     },
                     Err(err) => {
                         log::debug!("panic_to_err_async: err: {err:?}");
-                        Err(thoosa_shared::ThoosaError::from(err))
+                        Err(thoosa_shared::ThoError::from(err))
                     }
                 }
             },
@@ -1853,16 +1852,16 @@ macro_rules! panic_to_err_async {
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
                     log::debug!("panic_to_err_async: String: {msg}");
-                    Err(thoosa_shared::ThoosaError::from(msg))
+                    Err(thoosa_shared::ThoError::from(msg))
                 //TODO
                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
                 //     Err(*thoosa_error)
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("panic_to_err_async: str: {msg}");
-                    Err(thoosa_shared::ThoosaError::from(*msg))
+                    Err(thoosa_shared::ThoError::from(*msg))
                 } else {
                     log::debug!("panic_to_err_async: unknown: {e:?}");
-                    Err(thoosa_shared::ThoosaError::from(format!("{e:?}")))
+                    Err(thoosa_shared::ThoError::from(format!("{e:?}")))
                 }
             }
         }
@@ -1876,22 +1875,22 @@ macro_rules! panic_to_err {
             //no panic
             Ok(inner_result) => match inner_result {
                 Ok(val) => Ok(val),
-                Err(err) => Err(ThoosaError::from(err)),
+                Err(err) => Err(ThoError::from(err)),
             },
             //panic
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
                     log::debug!("thoosa_err String: {msg}");
-                    Err(ThoosaError::from(msg))
+                    Err(ThoError::from(msg))
                 //TODO
                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
                 //     Err(*thoosa_error)
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("thoosa_err str: {msg}");
-                    Err(ThoosaError::from(*msg))
+                    Err(ThoError::from(*msg))
                 } else {
                     log::debug!("thoosa_err unknown: {e:?}");
-                    Err(ThoosaError::from(format!("{e:?}")))
+                    Err(ThoError::from(format!("{e:?}")))
                 }
             }
         }

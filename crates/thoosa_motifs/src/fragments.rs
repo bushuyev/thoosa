@@ -30,7 +30,7 @@ use thoosa_shared::panic_to_err;
 use thoosa_common::utils::*;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::TensorIdSliceIdx;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::run_configs::{RunId};
 use thoosa_shared::*;
@@ -179,7 +179,7 @@ mod motifs_tests {
     use thoosa_shared::TensorIdSliceIdx;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::{Resource, ResourceId};
-    use thoosa_shared::{ThoosaError, cdt_for_dir};
+    use thoosa_shared::{ThoError, cdt_for_dir};
 
     #[ctor::ctor]
     fn init() {

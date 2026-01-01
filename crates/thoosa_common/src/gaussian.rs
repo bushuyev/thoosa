@@ -8,7 +8,7 @@ use tch::Tensor;
 use tch::kind::FLOAT_CPU;
 
 #[cfg(test)]
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 #[cfg(test)]
 use crate::opt::cholesky_with_jitter;
 
@@ -113,7 +113,7 @@ where
     }
 
     #[allow(dead_code)]
-    pub fn predict(&self, x_s: &Tensor) -> Result<Tensor, ThoosaError> {
+    pub fn predict(&self, x_s: &Tensor) -> Result<Tensor, ThoError> {
         let (mu_s, cov_s) = self.mean_and_cov(x_s);
 
         let chol = cholesky_with_jitter(&cov_s.nan_to_num(0., None, None)).unwrap();
@@ -159,7 +159,7 @@ where
         &self,
         x_train: &Tensor,
         y_train: &Tensor,
-    ) -> Result<GaussianProcessFit<'_, F>, ThoosaError> {
+    ) -> Result<GaussianProcessFit<'_, F>, ThoError> {
         debug!("fit: x_train={}", x_train);
         debug!("fit: y_train={}", y_train);
         let k = (self.kernel)(&x_train, &x_train);

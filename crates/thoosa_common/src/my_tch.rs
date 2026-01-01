@@ -11,7 +11,7 @@ use tch::nn::{
     BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, ModuleT, Path, batch_norm1d,
 };
 
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 use crate::builder::Node;
 // use crate::{data, utils};
@@ -41,7 +41,7 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
         }
     }
 
-    fn run_layers(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn run_layers(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}",t.as_ref().size(),t.device_idx(),self.layers[0]);
 
         let output_t = self.layers[0].tho_forward(&t.as_ref().into(), train)?;
@@ -67,7 +67,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
         }
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         if self.layers.is_empty() {
             Ok(t.shallow_clone())
         } else {
@@ -93,10 +93,10 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
                                     //TODO ok skipping?
                                     debug!("MySequential::tho_forward skipping i={i} split.size={:?}",split.size());
 
-                                    Err(ThoosaError::new(format!("Unexpected split size: {:?} dim={dim}",split.size())))
+                                    Err(ThoError::new(format!("Unexpected split size: {:?} dim={dim}", split.size())))
                                 }
                             })
-                            .collect::<Result<Vec<_>, ThoosaError>>()?
+                            .collect::<Result<Vec<_>, ThoError>>()?
                             .as_slice(),
                         1,
                     )?;
@@ -114,8 +114,8 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
 
 pub struct MyParallel<DI: Dims, DO: Dims> {
     layers: Vec<Box<dyn ThoModule<DI, DO>>>,
-    split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
-    join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
+    split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
+    join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
 }
 
 impl<DI: Dims, DO: Dims> Debug for MyParallel<DI, DO> {
@@ -127,8 +127,8 @@ impl<DI: Dims, DO: Dims> Debug for MyParallel<DI, DO> {
 impl<DI: Dims, DO: Dims> MyParallel<DI, DO> {
     pub fn new(
         layers: Vec<Box<dyn ThoModule<DI, DO>>>,
-        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
     ) -> Self {
         assert!(layers.len() > 0, "layers len == 0");
 
@@ -147,14 +147,14 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyParallel<DI, DO> {
         }
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MyParallel::forward: xs={:?}", t.size());
         let t = (self.join)(
             (self.split)(t.as_ref())?
                 .into_iter()
                 .zip(self.layers.iter())
                 .map(|(t, net)| net.tho_forward(&t.into(), train).map(|v|v.as_ref().shallow_clone()))
-                .collect::<Result<Vec<Tensor>, ThoosaError>>()?,
+                .collect::<Result<Vec<Tensor>, ThoError>>()?,
         )?;
 
         debug!("MyParallel::forward: t={:?}", t.size());
@@ -165,8 +165,8 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyParallel<DI, DO> {
 /////
 pub struct Split1<DI: Dims, DO: Dims> {
     layer: Box<dyn ThoModule<DI, DO>>,
-    split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
-    join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
+    split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
+    join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
 }
 
 impl<DI: Dims, DO: Dims> Debug for Split1<DI, DO> {
@@ -178,8 +178,8 @@ impl<DI: Dims, DO: Dims> Debug for Split1<DI, DO> {
 impl<DI: Dims, DO: Dims> Split1<DI, DO> {
     pub fn new(
         layer: Box<dyn ThoModule<DI, DO>>,
-        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
     ) -> Self {
 
         Self {
@@ -195,13 +195,13 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for Split1<DI, DO> {
        self.layer.debug()
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MyParallel::forward: xs={:?}", t.size());
         let t = (self.join)(
             (self.split)(t.as_ref())?
                 .into_iter()
                 .map(|split_t| self.layer.tho_forward(&split_t.into(), train).map(|v|v.as_ref().shallow_clone()))
-                .collect::<Result<Vec<Tensor>, ThoosaError>>()?,
+                .collect::<Result<Vec<Tensor>, ThoError>>()?,
         )?;
 
         debug!("MyParallel::forward: t={:?}", t.size());
@@ -244,7 +244,7 @@ impl MyMaxPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(t.as_ref()
             .f_max_pool1d(
                 self.kernel_size,
@@ -269,7 +269,7 @@ impl AdaptiveMaxPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(t.as_ref()
             .f_adaptive_avg_pool1d(self.output_size as i64)?
             .into())
@@ -294,7 +294,7 @@ impl MyBatchNorm1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyBatchNorm1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(self.batch_norm.forward_t(t.as_ref(), train).into())
     }
 }
@@ -314,13 +314,13 @@ impl<ND> MyConv<ND> {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 1]> {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
     }
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 2]> {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
     }
 }
@@ -350,7 +350,7 @@ impl MyAvgPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAvgPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(t.as_ref()
             .f_avg_pool1d(
                 self.kernel_size,
@@ -370,14 +370,14 @@ pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send {
         0
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError>;
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError>;
 }
 
 // unsafe impl <DI:Dims, DO:Dims>  Send for ThoModuleWithStore<DI, DO>{}
 // unsafe impl <DI:Dims, DO:Dims>  Sync for ThoModuleWithStore<DI, DO>{}
 
-pub type Fp = fn(&Tensor) -> Result<Tensor, ThoosaError>;
-pub type LossFp = fn(&Tensor, &Tensor) -> Result<Tensor, ThoosaError>;
+pub type Fp = fn(&Tensor) -> Result<Tensor, ThoError>;
+pub type LossFp = fn(&Tensor, &Tensor) -> Result<Tensor, ThoError>;
 
 pub struct MyFuncModule {
     func: Fp,
@@ -396,20 +396,20 @@ impl MyFuncModule {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyFuncModule {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         (self.func)(t.as_ref()).map(|t|t.into())
     }
 }
 
 pub struct MyClosureModule {
-    func: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoosaError>>>,
+    func: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoError>>>,
 }
 
 unsafe impl Send for MyClosureModule {}
 unsafe impl Sync for MyClosureModule {}
 
 impl MyClosureModule {
-    pub fn new(func: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoosaError>>>) -> Self {
+    pub fn new(func: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoError>>>) -> Self {
         Self { func }
     }
 }
@@ -421,7 +421,7 @@ impl Debug for MyClosureModule {
 }
 
 impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyClosureModule {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         (self.func)(t.as_ref()).map(|v|v.into())
     }
 }
@@ -449,7 +449,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLin
         );
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         #[cfg(debug_assertions)]
         {
             debug!("Module for MyLinear::forward: descr={}", self.descr);
@@ -476,7 +476,7 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims, DO: Dims>(
     out_dim: i64,
     c: LinearConfig,
     #[cfg(debug_assertions)] descr: String,
-) -> Result<MyLinear<DI, DO>, ThoosaError> {
+) -> Result<MyLinear<DI, DO>, ThoError> {
     assert!(in_dim > 0);
     assert!(out_dim > 0);
 
@@ -584,7 +584,7 @@ mod tch_tests {
 
     use tch::nn::{BatchNormConfig, ConvConfig, OptimizerConfig, VarStore};
 
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_shared::*;
 
     use crate::builder::SeqBuilder;
@@ -621,7 +621,7 @@ mod tch_tests {
     }
 
     #[test]
-    pub fn test_split_seq() -> Result<(), ThoosaError> {
+    pub fn test_split_seq() -> Result<(), ThoError> {
         // unsafe {
         //     let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         // }
@@ -683,7 +683,7 @@ mod tch_tests {
     }
 
     #[test]
-    pub fn test_save_load_net() -> Result<(), ThoosaError> {
+    pub fn test_save_load_net() -> Result<(), ThoError> {
         set_max_level(Info);
         let mut vs_0 = VarStore::new(Cpu);
 
@@ -773,7 +773,7 @@ mod tch_tests {
     fn test_net(
         vs: &VarStore,
         num_features: u32,
-    ) -> Result<Box<dyn ThoModule<Batch<AnyDims>, AnyDims>>, ThoosaError> {
+    ) -> Result<Box<dyn ThoModule<Batch<AnyDims>, AnyDims>>, ThoError> {
         SeqBuilder::new(num_features, None)
             .batch_norm(BatchNormConfig::default())
             .closure(
@@ -872,7 +872,7 @@ mod tch_tests {
 
     #[allow(dead_code)]
     #[test]
-    pub fn test_save_load() -> Result<(), ThoosaError> {
+    pub fn test_save_load() -> Result<(), ThoError> {
         let vs_0 = VarStore::new(Cpu);
 
         let node = test_node();

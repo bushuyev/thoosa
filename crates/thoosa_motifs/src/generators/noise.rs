@@ -1,7 +1,7 @@
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tch::Tensor;
-use thoosa_shared::{MotifKind, ThoosaError};
+use thoosa_shared::{MotifKind, ThoError};
 use crate::generators::non_overlapping::Interval;
 
 fn z_norm(x: &mut [f32]) {
@@ -118,7 +118,7 @@ pub fn generate_motifs_with_avg_distance(
 
 ///channels_motif_kinds -  channels x [(how many times motif should appear in the sequence, motif length , MotifKind)]
 ///returns Tensor [channels x resource_len] + channels[ motifs[ intervals[Interval] ] ]
-pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, usize, MotifKind)>], gap: usize) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoosaError> {
+pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, usize, MotifKind)>], gap: usize) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use rand::seq::SliceRandom;
     use log::debug;
@@ -193,14 +193,14 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
         }
 
         let total_motif_space = channel_kinds.iter().try_fold(0usize, |acc, (repeats, motif_len, _)| {
-            let motif_space = motif_len.checked_mul(*repeats).ok_or_else(|| ThoosaError::new("motif length overflow"))?;
-            acc.checked_add(motif_space).ok_or_else(|| ThoosaError::new("motif placement overflows usize"))
+            let motif_space = motif_len.checked_mul(*repeats).ok_or_else(|| ThoError::new("motif length overflow"))?;
+            acc.checked_add(motif_space).ok_or_else(|| ThoError::new("motif placement overflows usize"))
         })?;
-        let total_gap_space = gap.checked_mul(total_repeats.saturating_sub(1)).ok_or_else(|| ThoosaError::new("motif gap sizing overflows usize"))?;
-        let required_space = total_motif_space.checked_add(total_gap_space).ok_or_else(|| ThoosaError::new("motif layout exceeds addressable range"))?;
+        let total_gap_space = gap.checked_mul(total_repeats.saturating_sub(1)).ok_or_else(|| ThoError::new("motif gap sizing overflows usize"))?;
+        let required_space = total_motif_space.checked_add(total_gap_space).ok_or_else(|| ThoError::new("motif layout exceeds addressable range"))?;
 
         if required_space > resource_len {
-            return Err(ThoosaError::new(format!(
+            return Err(ThoError::new(format!(
                 "cannot place {total_repeats} motifs with min_gap={gap} into series len={resource_len}"
             )));
         }
@@ -221,7 +221,7 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
         let segment_offsets = distribute_slack(&mut rng, total_repeats + 1, slack);
         let mut current = start_bound
             .checked_add(segment_offsets.get(0).copied().unwrap_or(0))
-            .ok_or_else(|| ThoosaError::new(format!(
+            .ok_or_else(|| ThoError::new(format!(
                 "motif placement exceeds resource length for channel {channel_idx}"
             )))?;
         let mut channel_motif_intervals = Vec::with_capacity(channel_kinds.len());
@@ -245,11 +245,11 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
 
             for motif in motifs.into_iter().take(*repeats) {
                 let start = current;
-                let end = start.checked_add(*motif_len).ok_or_else(|| ThoosaError::new(format!(
+                let end = start.checked_add(*motif_len).ok_or_else(|| ThoError::new(format!(
                     "motif placement exceeds resource length for channel {channel_idx}"
                 )))?;
                 if end > end_bound {
-                    return Err(ThoosaError::new(format!(
+                    return Err(ThoError::new(format!(
                         "motif placement exceeds resource length for channel {channel_idx}"
                     )));
                 }
@@ -263,8 +263,8 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
                 current = end;
                 if placed < total_repeats {
                     let extra_gap = segment_offsets.get(placed).copied().unwrap_or(0);
-                    let spacing = gap.checked_add(extra_gap).ok_or_else(|| ThoosaError::new("motif gap sizing overflows usize"))?;
-                    current = current.checked_add(spacing).ok_or_else(|| ThoosaError::new(format!(
+                    let spacing = gap.checked_add(extra_gap).ok_or_else(|| ThoError::new("motif gap sizing overflows usize"))?;
+                    current = current.checked_add(spacing).ok_or_else(|| ThoError::new(format!(
                         "motif placement exceeds resource length for channel {channel_idx}"
                     )))?;
                 }

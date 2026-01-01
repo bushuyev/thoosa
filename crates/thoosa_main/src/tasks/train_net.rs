@@ -38,7 +38,7 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{panic_to_err, ThoosaError};
+use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::comp_id::SynKey;
 
 fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
@@ -121,11 +121,11 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
-    BF:Fn(&RC)->BoxFuture<Result<B, ThoosaError>> +  Send + Sync + 'static,
+    BF:Fn(&RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
-    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
-    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
+    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
+    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
@@ -147,11 +147,11 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
-    BF:Fn(&RC)->BoxFuture<Result<B, ThoosaError>> +  Send + Sync + 'static,
+    BF:Fn(&RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
-    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
-    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
+    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
+    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
@@ -166,11 +166,11 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
-    BF:Fn(&RC)->BoxFuture<Result<B, ThoosaError>> +  Send + Sync + 'static,
+    BF:Fn(&RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
-    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
-    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
+    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
+    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
@@ -185,7 +185,7 @@ where
         device_idx: usize,
         vs: &VarStore,
         run_config: RC,
-    ) -> BoxFuture<'static, Result<(f32, NP), ThoosaError>> {
+    ) -> BoxFuture<'static, Result<(f32, NP), ThoError>> {
 
         let (node, params) = match (self.net)(&run_config, vs) {
             Ok(v) => v,
@@ -293,7 +293,7 @@ where
                             last_valid_loss[(idx % last_valid_loss.len() as u32) as usize] = valid_loss_f32;
                             debug!("train: last_valid_loss={last_valid_loss:?}  valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
 
-                            Ok::<_, ThoosaError>(())
+                            Ok::<_, ThoError>(())
                         })?;
                     }
 
@@ -313,11 +313,11 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims, DY: Dims,
     B:AsyncDataBatch<DX, DY>,
-    BF:Fn(&RC)->BoxFuture<Result<B, ThoosaError>> +  Send + Sync + 'static,
+    BF:Fn(&RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
-    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
-    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
+    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
+    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
@@ -333,18 +333,18 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
-    BF:Fn(&RC)->BoxFuture<Result<B, ThoosaError>> +  Send + Sync + 'static,
+    BF:Fn(&RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
-    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoosaError> +  Send + Sync + 'static,
-    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoosaError> +  Send + Sync + 'static,
+    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
+    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainNet::run"))]
-    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> + Send {
+    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
         let run_config_source = Arc::clone(&self.run_config_source);
         let device_idx = ctx.read().device_idx();
 
@@ -437,7 +437,7 @@ impl<DI: Dims, DO: Dims> Data for TrainStepInput<DI, DO> {
 
 #[async_trait]
 impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError>
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError>
     where
         Self: Sized,
     {
@@ -452,9 +452,9 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
 impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
     type O<'o> = TrainStepInput<DI, DO>;
 
-    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
-        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError> + Send,
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError> + Send,
         P: PermitsCtx,
     {
         let _ = permits_ctx;
@@ -479,9 +479,9 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 }
 
 impl<DI: Dims, DO: Dims> WithSelectDataRef<()> for TrainStepInput<DI, DO> {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoosaError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
-        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoosaError>,
+        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError>,
         P: PermitsCtx,
     {
         let _ = permits_ctx;
@@ -542,7 +542,7 @@ where
         &self.device
     }
 
-    fn forward(&self, x_t: &ThoBatch<DI>, train: bool) -> Result<ThoBatch<DO>, ThoosaError> {
+    fn forward(&self, x_t: &ThoBatch<DI>, train: bool) -> Result<ThoBatch<DO>, ThoError> {
         let net = self.net.lock();
         net.tho_forward(x_t, train)
     }
@@ -580,7 +580,7 @@ where
     C: RunCtx,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
+    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoError> {
         let _ = ctx;
         let x_t_0 = input.x();
         let expected_y = input.expected_y();
@@ -619,7 +619,7 @@ where
 
             panic_to_err!({
                 opt.backward_step(&loss);
-                Ok::<_, ThoosaError>(())//TODO make panic_to_err to handle void functions
+                Ok::<_, ThoError>(())//TODO make panic_to_err to handle void functions
             })?;
 
 
@@ -677,7 +677,7 @@ mod tests {
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
-    use thoosa_shared::{RangeOrValue, ThoosaError};
+    use thoosa_shared::{RangeOrValue, ThoError};
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::traits::MonoMetrics;
     use crate::tasks::train_net::{TrainNet, TrainNetInput};
@@ -702,7 +702,7 @@ mod tests {
         t
     }
 
-    fn mock_loss_fn(pred: &Tensor, target: &Tensor) -> Result<Tensor, ThoosaError> {
+    fn mock_loss_fn(pred: &Tensor, target: &Tensor) -> Result<Tensor, ThoError> {
         LOSS_FN_CALLS.fetch_add(1, Ordering::SeqCst);
         Ok(pred.f_sub(target)?.pow_tensor_scalar(2.).mean(tch::Kind::Float))
     }
@@ -713,7 +713,7 @@ mod tests {
         (x.into(), y.into())
     }
 
-    fn make_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, ThoBatch<DummyY>), ThoosaError>> {
+    fn make_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, ThoBatch<DummyY>), ThoError>> {
         let (x, y) = make_batch();
         stream::iter(vec![Ok((x, y))]).boxed()
     }
@@ -736,7 +736,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_train_net() -> Result<(), ThoosaError> {
+    async fn test_train_net() -> Result<(), ThoError> {
         X_F_CALLS.store(0, Ordering::SeqCst);
         LOSS_FN_CALLS.store(0, Ordering::SeqCst);
 
@@ -769,7 +769,7 @@ mod tests {
             AdamW::default()
                 .amsgrad(true)
                 .build(&vs, 0.001)
-                .map_err(ThoosaError::from)
+                .map_err(ThoError::from)
         };
         let cycles_count = 10u32;
         let cycles = move |_rc: &DummyRunConfig| cycles_count;

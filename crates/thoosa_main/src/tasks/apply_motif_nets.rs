@@ -34,7 +34,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{mono_key, ThoosaError};
+use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_shared::comp_id::{SynKey, MonoKey};
 use thoosa_store::Store;
@@ -79,7 +79,7 @@ where
         stage_ctx:Arc<parking_lot::RwLock<R>>,
         #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>
-    ) -> Result<Self, ThoosaError>
+    ) -> Result<Self, ThoError>
     where
         R:RunCtx + MotifsCtx + Adjustable + 'static
     {
@@ -140,7 +140,7 @@ where
                 motif_width.insert(v.extra().motif_net_params.num_features);
                 slice_step.insert(v.extra().motif_net_params.stride);
 
-                Ok::<_, ThoosaError>(())
+                Ok::<_, ThoError>(())
             })?;
         };
         assert_eq!(motif_width.len(), 1);//TODO  group motif nets by width. all motifs should be of same width so that tensors can be batched for label training
@@ -192,7 +192,7 @@ where
 {
 
     // #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNets::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
         let (device_idx, cache_area, ctx_name) = {
             let guard = ctx.read();
@@ -389,7 +389,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
-    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> + Send {
+    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
 
 
         let net_wrapper = Arc::clone(&self.net_wrapper);
@@ -403,7 +403,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
                  #[cfg(test)]
                 if self.fail_if_size_bigger_than.map(|v| v < input.size()[1] as usize).unwrap_or(false) {
                     debug!("AsyncStage for ApplyMotifNet::run, triggering OOM: motif_id={motif_id} input.size={:?} self.fail_if_size_bigger_than={:?}", input.size(), self.fail_if_size_bigger_than);
-                    return Err(ThoosaError::oom());
+                    return Err(ThoError::oom());
                 }
 
                 let c = net.extra().channel() as i64;
@@ -464,7 +464,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
     descr: &str,
     pattern:&Tensor,
     stride: i64,
-) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoosaError> {
+) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
     assert_eq!(pattern.size().len(), 1, "template must be 1-D");
     let l = pattern.size()[0];
 
@@ -571,7 +571,7 @@ pub(crate) mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
-    use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoError};
     use thoosa_shared::perf_logging::PERF;
     use thoosa_shared::traits::{Named, SimpleId};
     use thoosa_shared::comp_id::SynKey;
@@ -584,33 +584,33 @@ pub(crate) mod tests {
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_apply_motif_nets_3_channels_2_motifs_without_oom() -> Result<(), ThoosaError> {
+    async fn test_apply_motif_nets_3_channels_2_motifs_without_oom() -> Result<(), ThoError> {
         test_apply_motif_nets_3_channels_2_motifs(None, 4000, 2).await?;
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_apply_motif_nets_3_channels_2_motifs_without_oom_uneven() -> Result<(), ThoosaError> {
+    async fn test_apply_motif_nets_3_channels_2_motifs_without_oom_uneven() -> Result<(), ThoError> {
         test_apply_motif_nets_3_channels_2_motifs(None, 4321, 2).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_apply_motif_nets_3_channels_2_motifs_step_1_with_oom() -> Result<(), ThoosaError> {
+    async fn test_apply_motif_nets_3_channels_2_motifs_step_1_with_oom() -> Result<(), ThoError> {
         test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 1).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_apply_motif_nets_3_channels_2_motifs_step_2_with_oom() -> Result<(), ThoosaError> {
+    async fn test_apply_motif_nets_3_channels_2_motifs_step_2_with_oom() -> Result<(), ThoError> {
         test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 2).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_apply_motif_nets_3_channels_2_motifs_with_oom_uneven() -> Result<(), ThoosaError> {
+    async fn test_apply_motif_nets_3_channels_2_motifs_with_oom_uneven() -> Result<(), ThoError> {
         test_apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 2).await
     }
 
-    async fn test_apply_motif_nets_3_channels_2_motifs(trigger_oom_len: Option<usize>, input_n_0: usize, step: u32) -> Result<(), ThoosaError> {
+    async fn test_apply_motif_nets_3_channels_2_motifs(trigger_oom_len: Option<usize>, input_n_0: usize, step: u32) -> Result<(), ThoError> {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         log::set_max_level(Debug);
         reset_print_options();
@@ -716,24 +716,24 @@ pub(crate) mod tests {
             assert_close(triangle_interval_starts_in_resources_a as f64, step as f64 * triangle_matches_idx.double_value(&[0]), step as f64 * 3.);
             assert_close(sin_interval_starts_in_resources_a as f64, step as f64 * sin_matches_idx.double_value(&[0]), step as f64 * 3.);
 
-            Ok::<_, ThoosaError>(())
+            Ok::<_, ThoError>(())
         })?;
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_apply_motif_single_net_1_channel_1_motif_without_oom() -> Result<(), ThoosaError> {
+    async fn test_apply_motif_single_net_1_channel_1_motif_without_oom() -> Result<(), ThoError> {
         test_apply_motif_single_net_1_channel_1_motif(None, 4000, 3).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_apply_motif_single_net_1_channel_1_motif_with_oom() -> Result<(), ThoosaError> {
+    async fn test_apply_motif_single_net_1_channel_1_motif_with_oom() -> Result<(), ThoError> {
         test_apply_motif_single_net_1_channel_1_motif(Some(1000), 4000, 3).await
     }
 
 
-    async fn test_apply_motif_single_net_1_channel_1_motif(trigger_oom_len: Option<usize>, input_n_0: usize, step: u32) -> Result<(), ThoosaError> {
+    async fn test_apply_motif_single_net_1_channel_1_motif(trigger_oom_len: Option<usize>, input_n_0: usize, step: u32) -> Result<(), ThoError> {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         log::set_max_level(Debug);
         reset_print_options();
@@ -819,14 +819,14 @@ pub(crate) mod tests {
 
             assert_close(pulse_interval_starts_in_resources_a as f64, step as f64 * pulse_matches_idx.double_value(&[0]), step as f64 * 3.);
 
-            Ok::<_, ThoosaError>(())
+            Ok::<_, ThoError>(())
         })?;
 
         Ok(())
     }
 
     #[test]
-    fn test_test_net() -> Result<(), ThoosaError> {
+    fn test_test_net() -> Result<(), ThoError> {
         let motif_t = motifs_tensor(100, 3, MotifKind::Pulse);
         let (resource_a_t, resource_a_intervals) = resource_tensor(2000, &[vec![(3, 100, MotifKind::Pulse)]], 200)?;
 

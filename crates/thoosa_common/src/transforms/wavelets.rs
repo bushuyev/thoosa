@@ -29,7 +29,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::nn::*;
     use tch::{Device, IndexOp, Kind, Tensor};
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_shared::test_utils::are_close;
 
     #[ctor::ctor]
@@ -38,7 +38,7 @@ mod tests {
     }
 
     // #[test]
-    fn test_morlet_wavelet() -> Result<(), ThoosaError> {
+    fn test_morlet_wavelet() -> Result<(), ThoError> {
         let sample_rate = 1000.0; // Hz
         let duration_secs = 2.0;
         let samples = (duration_secs * sample_rate) as i64;

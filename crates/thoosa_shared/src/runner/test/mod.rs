@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use mockall_double::double;
-use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
 use tokio::task::JoinSet;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
@@ -93,7 +93,7 @@ where
         input: Arc<W>,
         ctx: Arc<RwLock<<R as Stage>::Ctx>>,
         required_ids: &'z HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
-    ) -> Result<<R as Stage>::Out, ThoosaError>
+    ) -> Result<<R as Stage>::Out, ThoError>
     where
         for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
         W:WithId<ID=<R::In<'z> as WithId>::ID>,
@@ -247,7 +247,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
     device_idx: usize,
     ctx_fac: F,
     check: CF,
-) -> Result<(), ThoosaError>
+) -> Result<(), ThoError>
 where
     R: Cached + OutId + Send + Sync + 'static,
     for<'a> <R as Stage>::In<'a>: Data + CopyToDevice + WithId+ Send + Sync,
@@ -307,14 +307,14 @@ where
 
                 debug!("run_mul_task_invocations: task {idx}: all done");
 
-                Ok::<(), ThoosaError>(())
+                Ok::<(), ThoError>(())
             }
         })
         .collect::<JoinSet<_>>()
         .join_all()
         .await
         .into_iter()
-        .collect::<Result<(), ThoosaError>>();
+        .collect::<Result<(), ThoError>>();
 
     debug!("r={r:?} res_cnt={res_cnt:?}");
     assert!(r.is_ok());
@@ -348,7 +348,7 @@ pub(crate) mod fixtures {
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{Data, Named, Select, SimpleId, WithId};
-    use thoosa_shared::{ThoosaError};
+    use thoosa_shared::{ThoError};
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
     use crate::runner::common::{OutId, RunCtx, ambassador_impl_PermitsCtx, PermitsCtx, DropIf};
     use crate::runner::common::cachable::{Cached, DevicesWrap};
@@ -457,7 +457,7 @@ pub(crate) mod fixtures {
             self.device_idx
         }
 
-        fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
+        fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoError>>
         where
             Self: Sized,
         {
@@ -520,7 +520,7 @@ pub(crate) mod fixtures {
     impl Select<std::ops::Range<<DLoadedTensor as Data>::Metrics>> for DLoadedTensor {
         type Output = DLoadedTensor;
 
-        fn subview(&self, selector: Range<<DLoadedTensor as Data>::Metrics>) -> Result<Self::Output, ThoosaError> {
+        fn subview(&self, selector: Range<<DLoadedTensor as Data>::Metrics>) -> Result<Self::Output, ThoError> {
             Ok(DLoadedTensor {
                 id: self.id.clone(),
                 data: DummyTensor(self.data.0[selector.start as usize..min(self.data.0.len(), selector.end as usize)].to_vec()),
@@ -556,7 +556,7 @@ pub(crate) mod fixtures {
 
     #[async_trait]
     impl CopyToDevice for DLoadedTensor {
-        async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+        async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
             Ok(DLoadedTensor {
                 id: self.id.clone(),
                 data: self.data.copy_to_device(dst_device).await?,
@@ -588,7 +588,7 @@ pub(crate) mod fixtures {
             self: Arc<Self>,
             input: Arc<DevicesWrap<DLoaderInput>>,
             ctx: Arc<RwLock<DummyRunCtx>>,
-        ) -> Result<Arc<DevicesWrap<DLoadedTensor>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<DLoadedTensor>>, ThoError> {
             let key = self.out_id(WithId::id(input.as_ref()));
             let (cache_area, device_idx) = {
                 let guard = ctx.read();
@@ -654,7 +654,7 @@ pub(crate) mod fixtures {
 
     #[async_trait]
     impl CopyToDevice for DLoaderInput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
            Ok(self.clone())
         }
     }
@@ -695,7 +695,7 @@ pub(crate) mod fixtures {
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             self.run_count.fetch_add(1, Relaxed);
 
             let k = parse_numeric_part(WithId::id(input.as_ref()).0)
@@ -744,7 +744,7 @@ mod tests {
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::traits::{Data, Named, SimpleId, WithId};
-    use thoosa_shared::{MyError, ThoosaError};
+    use thoosa_shared::{Cause, ThoError};
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::{OutId, RunCtx, PermitsCtx};
     use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
@@ -781,7 +781,7 @@ mod tests {
     impl Cached for DummyLoader {
         async fn cache() -> &'static DashMap<
             <<Self as Stage>::Out as WithId>::ID,
-            Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>,
+            Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoError>>>,
         >
         where
             Self: Sized,
@@ -790,14 +790,14 @@ mod tests {
             let ptr_ref = DUMMY_LOADER_CACHE_PTR.get_or_init(|| {
                 let map: &'static DashMap<
                     <<Self as Stage>::Out as WithId>::ID,
-                    Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>,
+                    Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoError>>>,
                 > = Box::leak(Box::new(Default::default()));
                 map as *const _ as usize
             });
 
             let map: &'static DashMap<
                 <<Self as Stage>::Out as WithId>::ID,
-                Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>,
+                Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoError>>>,
             > = unsafe { &*((*ptr_ref) as *const _) };
 
             let cache_name: &'static str = "LoadedTensorId";
@@ -846,7 +846,7 @@ mod tests {
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             self.run_count.fetch_add(1, Relaxed);
 
             let k = parse_numeric_part(WithId::id(input.as_ref()).0)
@@ -904,7 +904,7 @@ mod tests {
 
     impl SyncStage for DMulTask {
 
-        fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
+        fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoError> {
             // tokio::time::sleep(tokio::time::Duration::from_millis(random_range(0..10))).await;
 
             let deive_idx = ctx.read().device_idx();
@@ -913,7 +913,7 @@ mod tests {
                 FailUntil::MemLimit(mem_limit) => {
                     let _device_idx = deive_idx;
                     if input.data.0.len() > mem_limit as usize {
-                        return Err(MyError::OutOfMemory.into());
+                        return Err(Cause::OutOfMemory.into());
                     }
                 }
                 FailUntil::MinPermits(min_permits) => {
@@ -921,7 +921,7 @@ mod tests {
                     debug!("MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}");
 
                     if acquired_permits < min_permits {
-                        return Err(MyError::OutOfMemory.into());
+                        return Err(Cause::OutOfMemory.into());
                     }
                 }
 
@@ -930,7 +930,7 @@ mod tests {
                     debug!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}",ctx.read().name(),ctx.read().device_idx());
 
                     if !is_all_on_cpu {
-                        return Err(MyError::OutOfMemory.into());
+                        return Err(Cause::OutOfMemory.into());
                     }
                 }
                 FailUntil::Never => {}
@@ -986,7 +986,7 @@ mod tests {
 
     #[async_trait]
     impl CopyToDevice for DMulTaskOutput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
             Ok(DMulTaskOutput {
                 id: self.id.clone(),
                 data: self.data.clone(),
@@ -1016,7 +1016,7 @@ mod tests {
             self.partial_output.push(o);
         }
 
-        async fn build(self) -> Result<Self::O, ThoosaError> {
+        async fn build(self) -> Result<Self::O, ThoError> {
             Ok(DMulTaskOutput {
                 id: self.id.clone(),
 
@@ -1090,7 +1090,7 @@ mod tests {
     impl AsyncStage for DLoadAndMulTask {
 
 
-        async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+        async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, Arc::clone(&ctx))
                 .await?;
@@ -1128,7 +1128,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_dummy() -> Result<(), ThoosaError> {
+    async fn test_load_dummy() -> Result<(), ThoError> {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| {
             Box::leak(Box::new(mock_global_ctx::build_default()))
@@ -1204,7 +1204,7 @@ mod tests {
     }
 
     //TODO  #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_no_oom_dummy() -> Result<(), ThoosaError> {
+    async fn test_load_and_mul_no_oom_dummy() -> Result<(), ThoError> {
         let _global_ctx = GlobalCtx::init_devices(2);
 
         let _device_idx = 0;
@@ -1264,7 +1264,7 @@ mod tests {
     }
 
         //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-        async fn test_load_and_mul_oom_till_min_permits_dummy() -> Result<(), ThoosaError> {
+        async fn test_load_and_mul_oom_till_min_permits_dummy() -> Result<(), ThoError> {
             let _global_ctx = GlobalCtx::init_devices(3);
 
             let device_idx = 1;
@@ -1296,7 +1296,7 @@ mod tests {
         }
 
         //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-        async fn test_load_and_mul_oom_compete_for_permits_dummy() -> Result<(), ThoosaError> {
+        async fn test_load_and_mul_oom_compete_for_permits_dummy() -> Result<(), ThoError> {
             let _global_ctx = GlobalCtx::init_devices(2);
 
             let device_idx = 1;
@@ -1327,11 +1327,11 @@ mod tests {
             )
             .await?;
 
-            Ok::<_, ThoosaError>(())
+            Ok::<_, ThoError>(())
         }
 
         //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-        async fn test_load_and_mul_oom_splits_dummy() -> Result<(), ThoosaError> {
+        async fn test_load_and_mul_oom_splits_dummy() -> Result<(), ThoError> {
             let _global_ctx = GlobalCtx::init_devices(2);
 
             let device_idx = 1;
@@ -1365,11 +1365,11 @@ mod tests {
             )
             .await?;
 
-            Ok::<_, ThoosaError>(())
+            Ok::<_, ThoError>(())
         }
 
         //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-        async fn test_load_and_mul_oom_till_dump_all_to_cpu_dummy() -> Result<(), ThoosaError> {
+        async fn test_load_and_mul_oom_till_dump_all_to_cpu_dummy() -> Result<(), ThoError> {
             // let _ = *TELEMETRY;
 
             let _global_ctx = GlobalCtx::init_devices(2);
@@ -1411,10 +1411,10 @@ mod tests_no_global_ctx_mock{
     use crate::runner::common::RunCtx;
     use crate::runner::global_ctx::{GlobalCtx, MockGlobalCtx};
     use crate::runner::test::fixtures::{DLoaderInput, DummyLoader, DummyRunCtx};
-    use crate::ThoosaError;
+    use crate::ThoError;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_cache_areas() -> Result<(), ThoosaError> {
+    async fn test_cache_areas() -> Result<(), ThoError> {
         let global_ctx = GlobalCtx::init_devices(2);
         let mock_ctx = MockGlobalCtx::global_context();
         mock_ctx.expect().returning(|| {

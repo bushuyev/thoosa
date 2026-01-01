@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use log::{error, info, trace, debug};
 use thoosa_shared::traits::CachableIdTr;
-use thoosa_shared::{MyError, ThoosaError};
+use thoosa_shared::{Cause, ThoError};
 use tokio::sync::{Notify, Semaphore, TryAcquireError, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use crate::runner::permits::{DropSignal, NumPermits, PermitSource, RunnerPerm};
@@ -28,7 +28,7 @@ pub struct Arbiter {
 #[derive(Debug)]
 struct Req {
     needed: NumPermits,
-    reply: oneshot::Sender<Result<RunnerPerm, ThoosaError>>,
+    reply: oneshot::Sender<Result<RunnerPerm, ThoError>>,
     requester_id: Arc<dyn CachableIdTr>,
 }
 
@@ -66,7 +66,7 @@ impl Arbiter {
         &self,
         mut needed: NumPermits,
         requester_id: Arc<dyn CachableIdTr>,
-    ) -> Result<RunnerPerm, ThoosaError> {
+    ) -> Result<RunnerPerm, ThoError> {
         // Clamp to capacity to avoid unfulfillable requests.
         if needed as usize > self.capacity as usize {
             needed = self.capacity;
@@ -76,7 +76,7 @@ impl Arbiter {
         let tx = self
             .tx
             .as_ref()
-            .ok_or_else(|| MyError::SomethingElse("acquire_rq 0".to_string()))?;
+            .ok_or_else(|| Cause::SomethingElse("acquire_rq 0".to_string()))?;
 
         tx.send(Req {
             needed,
@@ -84,11 +84,11 @@ impl Arbiter {
             requester_id: requester_id.clone(),
         })
         .await
-        .map_err(|e| MyError::SomethingElse(format!("send_acquire_rq: e={e:?}")))?;
+        .map_err(|e| Cause::SomethingElse(format!("send_acquire_rq: e={e:?}")))?;
 
         recv.await.map_err(|e| {
             debug!("Arbiter::send_acquire_rq: e={e:?}, requester_id={requester_id:?}");
-            MyError::SomethingElse(format!("e={e:?}"))
+            Cause::SomethingElse(format!("e={e:?}"))
         })?
     }
 
@@ -134,7 +134,7 @@ impl Arbiter {
 
                     while let Some(Req { reply, .. }) = q.pop_front() {
                         let _ =
-                            reply.send(Err(MyError::SomethingElse("arbiter closed".into()).into()));
+                            reply.send(Err(Cause::SomethingElse("arbiter closed".into()).into()));
                     }
                     break;
                 }
@@ -178,7 +178,7 @@ impl Arbiter {
                                 }
                             } else {
                                 debug!("Arbiter::spawn: sending super OutOfPermits reply to {:?}", rq.requester_id);
-                                match rq.reply.send(Err(MyError::OutOfPermits.into())){
+                                match rq.reply.send(Err(Cause::OutOfPermits.into())){
                                     Ok(_) => {
                                         trace!("");
                                     }
@@ -228,7 +228,7 @@ impl Arbiter {
                                         let Req { reply, requester_id, .. } = q.pop_front().unwrap();
                                         debug!("Arbiter::spawn: sending OutOfPermits reply to {:?}", requester_id);
 
-                                        let _ = reply.send(Err(MyError::OutOfPermits.into()));
+                                        let _ = reply.send(Err(Cause::OutOfPermits.into()));
                                         let c = fail_counts.entry(requester_id.clone()).or_insert(0);
                                         *c += 1;
                                         if *c >= SUPERTASK_FAIL_THRESHOLD {
@@ -245,7 +245,7 @@ impl Arbiter {
                                     let Req { reply, .. } = q.pop_front().unwrap();
                                     let _ = reply
                                         .send(
-                                            Err(MyError::SomethingElse("semaphore closed".into()).into()),
+                                            Err(Cause::SomethingElse("semaphore closed".into()).into()),
                                         );
                                 }
                             }
@@ -264,7 +264,7 @@ impl Arbiter {
                                 if rq.requester_id.eq(&req.requester_id) {
                                     debug!("Arbiter::spawn loop: rq.requester_id={:?} is in the loop ", rq.requester_id);
                                     rq.needed = req.needed;
-                                    req.reply.send(Err(MyError::OutOfPermits.into())).expect("send back failed");
+                                    req.reply.send(Err(Cause::OutOfPermits.into())).expect("send back failed");
                                     break 'done;
                                 }
                             }
@@ -351,7 +351,7 @@ impl PermitSource for Arbiter {
         &self,
         n: NumPermits,
         requester_id: Arc<dyn CachableIdTr>,
-    ) -> Result<RunnerPerm, ThoosaError> {
+    ) -> Result<RunnerPerm, ThoError> {
         self.send_acquire_rq(n, requester_id).await
     }
 }
@@ -420,7 +420,7 @@ mod tests {
                     let permit = match arb.send_acquire_rq(need, id.clone()).await {
                         Ok(v) => v,
                         Err(e) => match e.what() {
-                            MyError::OutOfPermits => {
+                            Cause::OutOfPermits => {
                                 task.current_perms = 0;
                                 continue;
                             }
@@ -521,8 +521,8 @@ mod tests {
             .await;
         assert!(matches!(
             res,
-            Err(ThoosaError {
-                what: MyError::SomethingElse(_),
+            Err(ThoError {
+                what: Cause::SomethingElse(_),
                 ..
             })
         ));

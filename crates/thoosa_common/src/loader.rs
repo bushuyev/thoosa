@@ -752,7 +752,7 @@ mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{Device, Tensor};
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_shared::resource::{Resource, ResourceId};
 
     #[ctor::ctor]
@@ -827,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn test_loader_basic() -> Result<(), ThoosaError> {
+    fn test_loader_basic() -> Result<(), ThoError> {
         set_max_level(LevelFilter::Debug);
 
         struct MyFuture {
@@ -902,7 +902,7 @@ mod tests {
     }
 
     // #[test]
-    fn test_loader() -> Result<(), ThoosaError> {
+    fn test_loader() -> Result<(), ThoError> {
         set_max_level(LevelFilter::Debug);
         use super::*;
         use futures::future::FutureExt;

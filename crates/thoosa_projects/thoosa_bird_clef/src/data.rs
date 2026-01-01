@@ -7,7 +7,7 @@ use std::fs::{File, read_dir};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use tch::Tensor;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 
 pub fn ogg_to_tensor<P: AsRef<Path> + Debug>(
     file: P,
@@ -66,7 +66,7 @@ pub fn clc_tracks<P: AsRef<Path>>(file: P) -> Result<usize, Box<dyn std::error::
 
 pub fn labeled_resourses<P: Into<PathBuf>>(
     _path: P,
-) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError> {
+) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError> {
     /*let df_csv = CsvReadOptions::default()
         .with_ignore_errors(true)
         .with_has_header(true)
@@ -119,7 +119,7 @@ pub fn labeled_resourses<P: Into<PathBuf>>(
     Ok(map)
 }
 
-pub fn resource_to_tensor(source_path: &dyn AsRef<Path>, key: &str) -> Result<Tensor, ThoosaError> {
+pub fn resource_to_tensor(source_path: &dyn AsRef<Path>, key: &str) -> Result<Tensor, ThoError> {
     Ok(ogg_to_tensor(
         source_path
             .as_ref()
@@ -162,7 +162,7 @@ mod tests {
     use thoosa_motifs::find::{SelectMotifsParams, plot_resource};
     use thoosa_shared::resource::{Resource, ResourceStore};
     use thoosa_shared::test_utils::{are_close, init_test_logging, set_panic_hook};
-    use thoosa_shared::{ResourceType, ThoosaError, cdt_for_dir, recurse_files};
+    use thoosa_shared::{ResourceType, ThoError, cdt_for_dir, recurse_files};
     use thoosa_store::SqlStore;
 
     #[ctor::ctor]
@@ -171,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_read_oog() -> Result<(), ThoosaError> {
+    pub fn test_read_oog() -> Result<(), ThoError> {
         use lewton::inside_ogg::OggStreamReader;
         use std::fs::File;
         use std::io::BufReader;
@@ -215,7 +215,7 @@ mod tests {
     }
 
     // #[test]
-    pub fn test_all() -> Result<(), ThoosaError> {
+    pub fn test_all() -> Result<(), ThoError> {
         let files = recurse_files(&"/home/bu/dvl/data/kaggle/BirdCLEF_2025/", &|path| {
             path.extension().map(|v| v.eq("ogg")).unwrap_or(false)
         })?;
@@ -240,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ogg_to_tensor() -> Result<(), ThoosaError> {
+    fn test_ogg_to_tensor() -> Result<(), ThoError> {
         let base = Path::new("/tmp").join(cdt_for_dir());
         fs::create_dir_all(&base)?; //TODO util
 
@@ -340,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn test_labeled_resourses() -> Result<(), ThoosaError> {
+    fn test_labeled_resourses() -> Result<(), ThoError> {
         let resourses = labeled_resourses("test_data/")?;
 
         assert_eq!(28564, resourses.len());
@@ -349,7 +349,7 @@ mod tests {
     }
 
     // #[test]
-    fn test_plot_resource() -> Result<(), ThoosaError> {
+    fn test_plot_resource() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             "/tmp/ws_test_clef",
             1,

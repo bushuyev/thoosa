@@ -34,7 +34,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::{mono_key, CopyToDevice, ThoosaError};
+use thoosa_shared::{mono_key, CopyToDevice, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
@@ -154,14 +154,14 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
 {
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let (device_idx, cache_area, ctx_name) = {
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area(), guard.name())
         };
 
         let (select_motifs_run_ids, opt_config) = with_data!(Arc::clone(&ctx), 0, input; |input: &TrainMotifNetInput| {
-            Ok::<(Vec<RunId>, Arc<OptConfig>), ThoosaError>((input.select_motifs_run_id.clone(), input.opt_config.clone()))
+            Ok::<(Vec<RunId>, Arc<OptConfig>), ThoError>((input.select_motifs_run_id.clone(), input.opt_config.clone()))
         })?;
 
         let channels = self.ws.read().channels();
@@ -221,7 +221,7 @@ where
 
                 //TODO move to DevicesWrap::cpu_only
                 let motif_width = with_data!(ctx, 0, motif_1; |motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
-                    Ok::<_, ThoosaError>(motif.extra().window)
+                    Ok::<_, ThoError>(motif.extra().window)
                 })?;
 
                 let train_net = Arc::new(TrainNet::new(
@@ -309,7 +309,7 @@ impl DataWithLabels {
 #[async_trait]
 impl CopyToDevice for DataWithLabels {
 
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         Ok(DataWithLabels {
             slices: self.slices.copy_to_device(dst_device).await?,
             labels: self.labels.copy_to_device(dst_device).await?,
@@ -356,7 +356,7 @@ where
     C: RunCtx,
 {
 
-    pub async fn new(motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>, random_slices:Arc<DevicesWrap<ThoTensor<MotifSlices, DataId>>>, batch_size:i64, device_idx:usize, cache_area:u64, ctx: Arc<RwLock<C>>) -> Result<Self, ThoosaError> {
+    pub async fn new(motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>, random_slices:Arc<DevicesWrap<ThoTensor<MotifSlices, DataId>>>, batch_size:i64, device_idx:usize, cache_area:u64, ctx: Arc<RwLock<C>>) -> Result<Self, ThoError> {
         debug!("TrainMotifNet::run: motif={motif:?}");
 
 
@@ -377,7 +377,7 @@ where
             let train_motifs = ThoTensor::new(SynKey::new([mono_key!("train_motifs", "split")]), train_motifs)?;
             let valid_motifs = ThoTensor::new(SynKey::new([mono_key!("valid_motifs", "split")]), valid_motifs)?;
 
-            Ok::<_, ThoosaError>(Self {
+            Ok::<_, ThoError>(Self {
 
                 train_motifs:  Arc::new(DevicesWrap::wrap(train_motifs, cache_area)),
                 valid_motifs: Arc::new(DevicesWrap::wrap(valid_motifs, cache_area)),
@@ -390,7 +390,7 @@ where
         })
     }
 
-    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>) -> Result<(ThoBatch<Slice>, Tensor), ThoosaError> {
+    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
 
         static COUNTER:AtomicU32 = AtomicU32::new(0);
 
@@ -421,7 +421,7 @@ where
             debug!("MotifsBatch::train_batch: motifs={:?} random={:?}", motifs.device(), random.device());
             debug!("MotifsBatch::train_batch: x={:?} y={:?}", x.device(), y.device());
 
-            Ok::<_, ThoosaError>((x.into(), y))
+            Ok::<_, ThoError>((x.into(), y))
         })
     }
 }
@@ -431,7 +431,7 @@ impl<C> AsyncDataBatch<Slice, MotifProbability> for MotifsBatch<C>
 where
     C: RunCtx,
 {
-    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, ThoBatch<MotifProbability>), ThoosaError>> {
+    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, ThoBatch<MotifProbability>), ThoError>> {
         futures_util::stream::once( self.make_batch(Arc::clone(&self.train_motifs)))//TODO this corresponds to number of resources in label training , replace with configurable val?
         .map(|fut_res|{
             fut_res.map(|v|{
@@ -441,7 +441,7 @@ where
         .boxed()
     }
 
-    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, ThoBatch<MotifProbability>), ThoosaError>> {
+    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, ThoBatch<MotifProbability>), ThoError>> {
         futures_util::stream::once( self.make_batch(Arc::clone(&self.valid_motifs)))
             .map(|fut_res|{
                 fut_res.map(|v|{
@@ -476,7 +476,7 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
-    use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoError};
     use thoosa_shared::traits::Named;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
@@ -487,7 +487,7 @@ mod tests {
     use crate::tasks::train_motif_nets::{TrainMotifNets, TrainMotifNetInput};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_train_motif_nets() -> Result<(), ThoosaError> {
+    async fn test_train_motif_nets() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
@@ -515,7 +515,7 @@ mod tests {
             //0 channel - the only motif
             a.1.extend(intervals[0][0].iter().map(|interval|TensorIdSliceIdx(r.id(), interval.start as u32)));
 
-            Ok::<_, ThoosaError>(a)
+            Ok::<_, ThoError>(a)
         })?;
 
 
@@ -598,7 +598,7 @@ mod tests {
 
             assert!(r.train_motif_nets_results[0].loss < 0.2);
 
-            Ok::<_, ThoosaError>(())
+            Ok::<_, ThoError>(())
         })?;
 
         Ok(())

@@ -9,7 +9,7 @@ use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
 use std::sync::Arc;
 use log::debug;
 use crate::applicables_runner::Input;
-use crate::{CopyToDevice, ThoosaError};
+use crate::{CopyToDevice, ThoError};
 use uuid::Uuid;
 use async_trait::async_trait;
 use parking_lot::RwLock;
@@ -408,7 +408,7 @@ impl <const IDX:usize, const SIZE:usize> MonoMetrics<IDX, SIZE> {
     {
         self.dims[DIM]
     }
-    pub fn map_to_ranges(start:&Self, end:&Self) ->Result<[Range<i64>; SIZE], ThoosaError> {
+    pub fn map_to_ranges(start:&Self, end:&Self) ->Result<[Range<i64>; SIZE], ThoError> {
 
         start.dims
             .iter()
@@ -424,7 +424,7 @@ impl <const IDX:usize, const SIZE:usize> MonoMetrics<IDX, SIZE> {
             })
             .collect::<Vec<_>>()
             .try_into()
-            .map_err(|e|ThoosaError::new(format!("can't map metrics to ranges: e={e:?}")))
+            .map_err(|e| ThoError::new(format!("can't map metrics to ranges: e={e:?}")))
     }
 
 }
@@ -487,7 +487,7 @@ impl<const IDX:usize, const SIZE:usize> AddAssign<MonoMetrics<IDX, SIZE>> for Mo
 }
 
 impl <const IDX:usize, const SIZE:usize> TryFrom<Vec<i64>> for MonoMetrics<IDX, SIZE> {
-    type Error = ThoosaError;
+    type Error = ThoError;
 
     fn try_from(value: Vec<i64>) -> Result<Self, Self::Error> {
         assert!(SIZE > 0);
@@ -629,7 +629,7 @@ impl Data for (){
 
 #[async_trait]
 impl CopyToDevice for MockData {
-    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
         Ok(MockData::new())
     }
 }
@@ -638,7 +638,7 @@ impl CopyToDevice for MockData {
 pub trait Select<S> {
     type Output; //: CopyToDevice;
 
-    fn subview(&self, selector: S) -> Result<Self::Output, ThoosaError>;
+    fn subview(&self, selector: S) -> Result<Self::Output, ThoError>;
 }
 
 pub trait Adjustable: Send + Sync {}

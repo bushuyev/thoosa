@@ -1,4 +1,4 @@
-use crate::ThoosaError;
+use crate::ThoError;
 use crate::applicables_runner::Input;
 use crate::traits::{Named, WithId};
 use log::trace;
@@ -15,35 +15,35 @@ pub trait ResourceStore {
     fn list_resources_by_file_stems<'a>(
         &self,
         file_stems: &'a [&'a str],
-    ) -> Result<Vec<Resource>, ThoosaError>;
+    ) -> Result<Vec<Resource>, ThoError>;
 
     fn list_resource_set_resources_by_descr(
         &self,
         descr: &str,
-    ) -> Result<Vec<Resource>, ThoosaError>;
+    ) -> Result<Vec<Resource>, ThoError>;
 
     fn list_resource_set_group_sets(
         &self,
         group_descr: &str,
-    ) -> Result<Vec<(usize, String)>, ThoosaError>;
+    ) -> Result<Vec<(usize, String)>, ThoError>;
 
     fn list_group_labeled_resources_sets(
         &self,
         group_decr: &str,
-    ) -> Result<Vec<(String, String)>, ThoosaError>;
+    ) -> Result<Vec<(String, String)>, ThoError>;
 
-    fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoosaError>;
+    fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoError>;
 
     fn list_resource_random_in_group(
         &self,
         group_descr: &str,
-    ) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError>;
+    ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError>;
 
     fn list_resources_not_in_group(
         &self,
         group_descr: &str,
         limit: u32,
-    ) -> Result<Vec<Resource>, ThoosaError>;
+    ) -> Result<Vec<Resource>, ThoError>;
 
 
 }
@@ -175,9 +175,9 @@ pub trait ResourcesConfig {
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
         store: &Arc<RwLock<Box<S>>>,
-    ) -> Result<Self::R, ThoosaError>;
+    ) -> Result<Self::R, ThoError>;
 
-    fn check<S: ResourceStore + ?Sized>(&self, _store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoosaError> {
-        Err(ThoosaError::new("resource config check is not implemented"))
+    fn check<S: ResourceStore + ?Sized>(&self, _store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoError> {
+        Err(ThoError::new("resource config check is not implemented"))
     }
 }

@@ -19,7 +19,7 @@ use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{mono_key, ThoosaError};
+use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
@@ -50,7 +50,7 @@ where
         store: &Arc<RwLock<Box<dyn Store>>>,
         select_motifs_run_ids: Vec<RunId>,
         stage_ctx: Arc<RwLock<R>>,
-    ) -> Result<Self, ThoosaError>
+    ) -> Result<Self, ThoError>
     where
         R: RunCtx + MotifsCtx + Adjustable + 'static,
     {
@@ -95,7 +95,7 @@ where
         let mut label_net_run_ids = label_net_run_ids.into_iter().collect::<Vec<_>>();
         label_net_run_ids.sort();
         if label_net_run_ids.is_empty() {
-            return Err(ThoosaError::new("ApplyLabelNets::new: no label nets found"));
+            return Err(ThoError::new("ApplyLabelNets::new: no label nets found"));
         }
 
         let label_nets = ws.read().load_label_nets(
@@ -113,7 +113,7 @@ where
 
         label_nets.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         if label_nets.is_empty() {
-            return Err(ThoosaError::new("ApplyLabelNets::new: no label nets loaded"));
+            return Err(ThoError::new("ApplyLabelNets::new: no label nets loaded"));
         }
 
         let apply_label_nets = label_nets
@@ -171,7 +171,7 @@ where
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let (device_idx, cache_area) = {
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area())
@@ -274,7 +274,7 @@ where
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> + Send {
+    ) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
         let net_wrapper = Arc::clone(&self.net_wrapper);
         let (device_idx, cache_area) = {
             let guard = ctx.read();
@@ -325,7 +325,7 @@ mod tests {
     use thoosa_shared::runner::common::mock_run_ctx;
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
-    use thoosa_shared::{mono_key, ThoosaError};
+    use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
@@ -409,7 +409,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_apply_label_nets_orders_and_values() -> Result<(), ThoosaError> {
+    async fn test_apply_label_nets_orders_and_values() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
 
         let select_motifs_run_id = 10;
@@ -479,7 +479,7 @@ mod tests {
             assert_close(vals[0], 0.3, 1e-4);
             assert_close(vals[1], 0.6, 1e-4);
             assert_close(vals[2], 1.5, 1e-4);
-            Ok::<_, ThoosaError>(())
+            Ok::<_, ThoError>(())
         })?;
 
         Ok(())

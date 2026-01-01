@@ -16,7 +16,7 @@ use thoosa_common::dims::{Batch, ChannelsData};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::DataBatch;
 use thoosa_main::data::{AllTrainSplitter, Set, Splitter, parquet_to_tensor_by_path};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 
 #[allow(dead_code)]
@@ -44,7 +44,7 @@ impl Splitter for ByPatientIdSplitter {
         if eeg.set == 1 { Set::Valid } else { Set::Train }
     }
 
-    fn init(&self, df: LazyFrame) -> Result<LazyFrame, ThoosaError> {
+    fn init(&self, df: LazyFrame) -> Result<LazyFrame, ThoError> {
         let mut df_sorted = df
             .clone()
             .group_by(["patient_id"])
@@ -101,7 +101,7 @@ pub fn parquet_to_tensor(
     base_path: &str,
     resource_id: &str,
     device: Device,
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
     let path = format!("{}/train_eegs/{}.parquet", base_path, resource_id);
 
     parquet_to_tensor_by_path(path, device)
@@ -110,7 +110,7 @@ pub fn parquet_to_tensor(
 pub fn labeled_resourses(
     base: impl AsRef<Path>,
     file: impl AsRef<Path>,
-) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError> {
+) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError> {
     let path = base.as_ref().join(file);
     let eeg_path = path.clone().parent().unwrap().to_path_buf();
     let df = LazyCsvReader::new(path).finish()?.with_streaming(true);
@@ -207,7 +207,7 @@ pub fn labeled_resourses(
 
 // #[test] TODO
 #[allow(dead_code)]
-pub fn eegs_to_tensors() -> Result<(), ThoosaError> {
+pub fn eegs_to_tensors() -> Result<(), ThoError> {
     // for f in fs::read_dir("/media/bu/KINGSTON/gpd_fragments/3/1")? {
     //     let entry = f?;
     //
@@ -444,7 +444,7 @@ pub struct EEGs {
 
 #[allow(dead_code)]
 impl EEGs {
-    pub fn good_eegs(base_path: &str) -> Result<Series, ThoosaError> {
+    pub fn good_eegs(base_path: &str) -> Result<Series, ThoError> {
         let good_eegs_filter = Self::good_eegs_filter(base_path)?;
 
         Ok(good_eegs_filter
@@ -459,7 +459,7 @@ impl EEGs {
         base_path: &str,
         kind: &str,
         limit: Option<usize>,
-    ) -> Result<Series, ThoosaError> {
+    ) -> Result<Series, ThoError> {
         let good_eegs_filter = Self::good_eegs_filter(base_path)?;
 
         let eeg_id_series = good_eegs_filter
@@ -488,7 +488,7 @@ impl EEGs {
         })
     }
 
-    fn good_eegs_filter(base_path: &str) -> Result<LazyFrame, ThoosaError> {
+    fn good_eegs_filter(base_path: &str) -> Result<LazyFrame, ThoError> {
         Ok(LazyCsvReader::new(format!("{}/train.csv", base_path))
             .finish()?
             .with_streaming(true)
@@ -522,14 +522,14 @@ impl EEGs {
             ))
     }
 
-    pub fn load_all_eegs(base_path: &str) -> Result<Box<EEGs>, ThoosaError> {
+    pub fn load_all_eegs(base_path: &str) -> Result<Box<EEGs>, ThoError> {
         EEGs::load_eegs::<_>(base_path, None, None::<AllTrainSplitter<EEG>>)
     }
     pub fn load_eegs<S>(
         base_path: &str,
         filter: Option<Expr>,
         splitter: Option<S>,
-    ) -> Result<Box<EEGs>, ThoosaError>
+    ) -> Result<Box<EEGs>, ThoError>
     where
         S: Splitter<Type = EEG>,
     {
@@ -701,7 +701,7 @@ impl EEGs {
         }))
     }
 
-    pub fn group_by_eeg_id(filter: Option<Expr>, df: LazyFrame) -> Result<DataFrame, ThoosaError> {
+    pub fn group_by_eeg_id(filter: Option<Expr>, df: LazyFrame) -> Result<DataFrame, ThoError> {
         Ok(df
             .clone()
             // .collect()?
@@ -841,7 +841,7 @@ mod tests {
     use thoosa_motifs::find::{SelectMotifsParams};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::test_utils::init_test_logging;
-    use thoosa_shared::{ThoosaError, cdt_for_dir};
+    use thoosa_shared::{ThoError, cdt_for_dir};
     use thoosa_store::SqlStore;
 
     #[ctor::ctor]
@@ -851,7 +851,7 @@ mod tests {
 
 
     // #[test]
-    pub fn test_fetch_similarities() -> Result<(), ThoosaError> {
+    pub fn test_fetch_similarities() -> Result<(), ThoError> {
         // let good_eegs = EEGs::good_eegs("../../data")?;
         let df = LazyCsvReader::new("../../../data/train.csv")
             .finish()?
@@ -926,7 +926,7 @@ mod tests {
 
     #[allow(dead_code)]
     // #[test] TODO to utils
-    pub fn test_load_eegs() -> Result<(), ThoosaError> {
+    pub fn test_load_eegs() -> Result<(), ThoError> {
         debug!("test_load_eegs");
         std::io::stdout().flush()?;
 
@@ -999,7 +999,7 @@ mod tests {
     }
 
     #[test]
-    fn test_import_resources() -> Result<(), ThoosaError> {
+    fn test_import_resources() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 1000, 1000)));
 

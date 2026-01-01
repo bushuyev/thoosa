@@ -6,7 +6,7 @@ use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
 use crate::my_tch::{Fp, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule, my_linear, AdaptiveMaxPool1d, Split1};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 use crate::tho_tensor::ThoTensor;
 
@@ -42,13 +42,13 @@ pub enum Node {
     },
     Par {
         elts: Vec<Node>,
-        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
     },
     Split1 {
         node: Box<Node>,
-        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
     },
     Conv1d {
         path:&'static str,
@@ -92,7 +92,7 @@ pub enum Node {
         padding: u32,
     },
     Closure {
-        cl: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoosaError>>>
+        cl: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoError>>>
     },
 }
 
@@ -130,7 +130,7 @@ impl Node {
     pub fn build_tch_module<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
         self,
         vs: &nn::Path,
-    ) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> {
+    ) -> Result<Box<dyn ThoModule<DI, DO>>, ThoError> {
         Ok(match self {
             Node::Seq { elts, split_input } => {
                 let layers: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>> =
@@ -139,7 +139,7 @@ impl Node {
                         |mut kids: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>, (i, node)| {
                             kids.push(node.build_tch_module(&(vs / format!("seq_{i}")))?);
 
-                            Ok::<Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>, ThoosaError>(kids)
+                            Ok::<Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>, ThoError>(kids)
                         },
                     )?;
 
@@ -152,7 +152,7 @@ impl Node {
                         Vec::new(),
                         |mut kids: Vec<Box<dyn ThoModule<DI, DO>>>, (i, node)| {
                             kids.push(node.build_tch_module(&(vs / format!("split_{i}")))?);
-                            Ok::<Vec<Box<dyn ThoModule<DI, DO>>>, ThoosaError>(kids)
+                            Ok::<Vec<Box<dyn ThoModule<DI, DO>>>, ThoError>(kids)
                         },
                     )?;
 
@@ -291,8 +291,8 @@ impl SeqBuilder {
     pub fn split(
         &mut self,
         elts: Vec<Node>,
-        split: Box<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
-        join: Box<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
+        split: Box<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
+        join: Box<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
     ) -> &mut Self {
         self.elts.push(Node::Par {
             elts,
@@ -306,8 +306,8 @@ impl SeqBuilder {
     pub fn split1(
         &mut self,
         node: Node,
-        split: Box<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoosaError> + Send + Sync>,
-        join: Box<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoosaError> + Send + Sync>,
+        split: Box<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
+        join: Box<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
     ) -> &mut Self {
         self.elts.push(Node::Split1 {
             node: Box::new(node),
@@ -520,7 +520,7 @@ impl SeqBuilder {
 
     pub fn closure(
         &mut self,
-        cl: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoosaError>>>,
+        cl: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoError>>>,
         num_features: Option<u32>,
     ) -> &mut Self {
         self.elts.push(Node::Closure { cl });

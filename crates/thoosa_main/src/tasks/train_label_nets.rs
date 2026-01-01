@@ -32,7 +32,7 @@ use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train_2
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::{mono_key, shuffle_and_chunk_with_rng, CopyToDevice, ThoosaError};
+use thoosa_shared::{mono_key, shuffle_and_chunk_with_rng, CopyToDevice, ThoError};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::copy_mode::CpuOnly;
@@ -82,7 +82,7 @@ pub async fn new_train_label_nets_with_ml<L, C, R>(
     store: &Arc<RwLock<Box<dyn Store>>>,
     stage_ctx:Arc<parking_lot::RwLock<R>>,
     opt_config:Arc<OptConfig>
-) -> Result<TrainLabelNets<L, ABStage<L, ApplyMotifNets<C>, C>, C>, ThoosaError>
+) -> Result<TrainLabelNets<L, ABStage<L, ApplyMotifNets<C>, C>, C>, ThoError>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -129,7 +129,7 @@ where
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
         opt_config:Arc<OptConfig>
-    ) -> Result<Self, ThoosaError>
+    ) -> Result<Self, ThoError>
     {
         Ok(Self {
             run_configs: Arc::new(run_configs),
@@ -159,7 +159,7 @@ impl TrainLabelNetsInput {
 
 #[async_trait]
 impl CopyToDevice for TrainLabelNetsInput {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> where Self:Sized {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> where Self:Sized {
         todo!()
     }
 }
@@ -213,7 +213,7 @@ impl SavableResult for TrainLabelNetsOutput {
         todo!()
     }
 
-    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
        for result in &mut self.results {
 
            result.save(store, ws)?;
@@ -247,7 +247,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainLabelNets::run"))]
-    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> + Send {
+    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
         let (device_idx, cache_area, ctx_name) = {
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area(), guard.name())
@@ -267,7 +267,7 @@ where
 
 
             let (train_labels_resource_keys, valid_label_resource_keys) = with_data!(ctx, 0, input; |input:&ResourcesConfigInput<NetResources<Labeled>>|{
-                Ok::<_, ThoosaError>(input.resources_config().to_resources(&self.store)?)
+                Ok::<_, ThoError>(input.resources_config().to_resources(&self.store)?)
             })?;
 
             let (labels_tain_and_valid_sets, labels_others_train_valid_resources) = Self::build_resource_maps(train_labels_resource_keys, valid_label_resource_keys);
@@ -337,11 +337,11 @@ where
 
                                                let x_1 = Tensor::f_stack(&x_1.into_iter().map(|v|{
                                                    Ok(pad_to_2(v.t_ref(), &[channels, max_input], true)?.copy())//TODO
-                                               }).collect::<Result<Vec<_>, ThoosaError>>()?, 0)?;
+                                               }).collect::<Result<Vec<_>, ThoError >>()?, 0)?;
 
                                                let x_0 = Tensor::f_stack(&x_0.into_iter().map(|v|{
                                                    Ok(pad_to_2(v.t_ref(), &[channels, max_input], true)?.copy())
-                                               }).collect::<Result<Vec<_>, ThoosaError>>()?, 0)?;
+                                               }).collect::<Result<Vec<_>, ThoError >>()?, 0)?;
 
                                                mix_x_binary_with_labels(&x_1, &x_0)
                                            })?;
@@ -400,7 +400,7 @@ where
                     let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), cache_area)), Arc::clone(&train_label_ctx)).await?).unwrap().take_data(0).await?;
 
                     debug!("train_label_net: label={label_} result={result:?}");
-                    Ok::<_, ThoosaError>(
+                    Ok::<_, ThoError>(
                         TrainLabelNetsRunConfigResult::new(
                             select_motifs_run_ids,//TODO
                             label_,
@@ -501,7 +501,7 @@ type BuildBatchFn<LD:Dims+ 'static, X:Dims+ 'static, Y:Dims+ 'static, C> = Box<d
     Vec<Arc<DevicesWrap<ThoTensor<LD, SynKey>>>>,
     Vec<Arc<DevicesWrap<ThoTensor<LD, SynKey>>>>, Arc<RwLock<C>>
 
-) -> BoxFuture<'static, Result<(ThoBatch<X>, ThoBatch<Y>), ThoosaError>> + Send + Sync>;
+) -> BoxFuture<'static, Result<(ThoBatch<X>, ThoBatch<Y>), ThoError>> + Send + Sync>;
 
 // #[derive(Debug)]
 struct ResourcesBatch<L, C, LD, X, Y>
@@ -591,7 +591,7 @@ where
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
-    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, ThoBatch<Y>), ThoosaError>> {
+    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, ThoBatch<Y>), ThoError>> {
         //TODO if self.batch_size > train_len?
         let batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
 
@@ -608,7 +608,7 @@ where
         )
     }
 
-    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, ThoBatch<Y>), ThoosaError>> {
+    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, ThoBatch<Y>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
@@ -633,7 +633,7 @@ where
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
-    fn build_batch_stream<'a>(build_batch_fn:&'a BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: Arc<RwLock<C>>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<X>, ThoBatch<Y>), ThoosaError>> {
+    fn build_batch_stream<'a>(build_batch_fn:&'a BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: Arc<RwLock<C>>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<X>, ThoBatch<Y>), ThoError>> {
 
         futures_util::stream::iter(resource_indexes_for_batches)
             .map(move |batch_keys| {
@@ -721,7 +721,7 @@ mod tests {
     use thoosa_motifs::generators::noise::resource_tensor;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
-    use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoError};
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_shared::traits::Named;
@@ -743,7 +743,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_train_label_net_3x3() -> Result<(), ThoosaError>
+    async fn test_train_label_net_3x3() -> Result<(), ThoError>
     {
 
         let mut rand = rng();
@@ -839,7 +839,7 @@ mod tests {
             a.0.insert(r_c.clone(), t);
 
 
-            Ok::<_, ThoosaError>(a)
+            Ok::<_, ThoError>(a)
         })?;
 
 
@@ -950,7 +950,7 @@ mod tests {
             assert!(out.results[0].loss < 0.5);
             assert!(out.results[1].loss < 0.5);
             assert!(out.results[2].loss < 0.5);
-            Ok::<_, ThoosaError>(())
+            Ok::<_, ThoError>(())
         })?;
 
 
@@ -960,7 +960,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_resources_batch() -> Result<(), ThoosaError> {
+    async fn test_resources_batch() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
 
         let resources_1_train = Arc::new(vec![

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::{os_thread_id, panic_to_err_async};
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
-use thoosa_shared::{MyError, ThoosaError};
+use thoosa_shared::{Cause, ThoError};
 
 #[async_trait]
 pub trait Adjuster<AC>: Debug + Send + Sync {
@@ -30,7 +30,7 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
         &self,
         adjustable: &Self::A,
         adjust_context: &mut AC,
-    ) -> Result<Self::A, ThoosaError>;
+    ) -> Result<Self::A, ThoError>;
 
     fn degrade(&self, _adjust_context: &mut AC) -> bool {
         false
@@ -46,7 +46,7 @@ where
     fn add_partial_output(&mut self, out: R::Out);
     fn all_done(&self) -> bool;
     // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics;
-    async fn build_final_output(self) -> Result<R::Out, ThoosaError>;
+    async fn build_final_output(self) -> Result<R::Out, ThoError>;
 }
 
 #[cfg(test)]
@@ -54,7 +54,7 @@ pub mod mock_input_context {
     use thoosa_shared::runner::oom_handler::mock_runnable::MockRunnable;
     use thoosa_shared::runner::oom_handler::test_types::TestOutput;
     use mockall::mock;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
 
     mock! {
         #[derive(Debug)]
@@ -65,7 +65,7 @@ pub mod mock_input_context {
             fn add_partial_output(&mut self, out: TestOutput);
             fn all_done(&self) -> bool;
             // fn input_len(&self) -> &[usize; 1];
-            async fn build_final_output(self) -> Result<TestOutput, ThoosaError>;
+            async fn build_final_output(self) -> Result<TestOutput, ThoError>;
         }
     }
 
@@ -200,8 +200,8 @@ where
         self.0.is_some()
     }
 
-    async fn build_final_output(self) -> Result<R::Out, ThoosaError> {
-        self.0.ok_or(ThoosaError::new("no final output"))
+    async fn build_final_output(self) -> Result<R::Out, ThoError> {
+        self.0.ok_or(ThoError::new("no final output"))
     }
 }
 
@@ -265,7 +265,7 @@ where
         input: Arc<W>,
         run_context: Arc<RwLock<R::Ctx>>,
         contexts: Contexts<'a, R, IC, RC, RCC>,
-    ) -> Result<R::Out, ThoosaError>
+    ) -> Result<R::Out, ThoError>
     where
         W: WithSelectDataRef<S>,
         W: WithId<ID = <R::In<'z> as WithId>::ID>,
@@ -362,7 +362,7 @@ where
         input: Arc<DevicesWrap<<R as Stage>::In<'static>>>,
         run_context: Arc<RwLock<R::Ctx>>,
         contexts: Contexts<'a, R, IC, RC, RCC>,
-    ) -> Result<R::Out, ThoosaError> {
+    ) -> Result<R::Out, ThoError> {
         run_with_runner(
             &self.adjusters,
             Arc::clone(task),
@@ -406,7 +406,7 @@ where
                     Err(e) => {
                         debug!("AsyncOOMHandler::run: input_id={input_id:?} try_unwrap failed: {e:?}");
 
-                        Err(MyError::SomethingElse("AsyncOOMHandler: output is still shared".into()).into())
+                        Err(Cause::SomethingElse("AsyncOOMHandler: output is still shared".into()).into())
                     },
                 }
             },
@@ -422,7 +422,7 @@ async fn run_with_runner<'a, 'z, R, IC, RC, RCC, S, W, Run, Fut>(
     run_context: Arc<RwLock<R::Ctx>>,
     mut contexts: Contexts<'a, R, IC, RC, RCC>,
     runner: Run,
-) -> Result<R::Out, ThoosaError>
+) -> Result<R::Out, ThoError>
 where
     R: Adjustable + OutId + Stage + 'a,
     R::Ctx: Adjustable,
@@ -435,7 +435,7 @@ where
     W: WithSelectDataRef<S>,
     W: WithId<ID = <R::In<'z> as WithId>::ID>,
     Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, Arc<RwLock<R::Ctx>>) -> Fut + Copy,
-    Fut: Future<Output = Result<R::Out, ThoosaError>>,
+    Fut: Future<Output = Result<R::Out, ThoError>>,
 {
         let (device_idx, ctx_name) = {
             let guard = run_context.read();
@@ -469,7 +469,7 @@ where
         ) {
             Err(te) => {
                 match te.what() {
-                    MyError::OutOfMemory => {
+                    Cause::OutOfMemory => {
                         debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  oom 0", os_thread_id());
 
                         let mut task_adjusted = None::<Arc<R>>;
@@ -541,7 +541,7 @@ where
                                     debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjuster error te={te:?}", os_thread_id());
 
                                     match te.what() {
-                                        MyError::OutOfMemory | MyError::AdjusterFailed => {
+                                        Cause::OutOfMemory | Cause::AdjusterFailed => {
                                             info!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                             if !adjuster.degrade(&mut contexts) {
@@ -616,7 +616,7 @@ where
                                         run_context.write().drop_permits(DropIf::IfNotMax); //TODO config? - not needed for runner_semaphore
 
                                         match te.what() {
-                                            MyError::OutOfMemory | MyError::AdjusterFailed => {
+                                            Cause::OutOfMemory | Cause::AdjusterFailed => {
                                                 info!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                 if !adjuster.degrade(&mut contexts) {
@@ -654,7 +654,7 @@ where
                 debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  all failed: input.mem_size={:?}", os_thread_id(), input.mem_size());
                 trace!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} all failed: task={task:?} input={input:?}", os_thread_id());
 
-                Err(MyError::SomethingElse(format!("all failed: task={task:?}")).into())
+                Err(Cause::SomethingElse(format!("all failed: task={task:?}")).into())
             }
             Ok(o) => {
                 debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} done without oom ", os_thread_id());
@@ -699,7 +699,7 @@ pub mod test_types {
     impl Select<std::ops::Range<[usize;1]>> for TestInput {
         type Output = TestInput;
 
-        fn subview(&self, selector: std::ops::Range<[usize; 1]>) -> Result<Self::Output, ThoosaError> {
+        fn subview(&self, selector: std::ops::Range<[usize; 1]>) -> Result<Self::Output, ThoError> {
             Ok(TestInput {
                 id: self.id.clone(),
                 data: DummyTensor(self.data.0[selector.start[0]..selector.end[0]].to_vec())//.0[selector.start..selector.end])
@@ -727,7 +727,7 @@ pub mod test_types {
 
     #[async_trait]
     impl CopyToDevice for TestInput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
             Ok(TestInput {
                 id: self.id.clone(),
                 data: DummyTensor(self.data.0.clone()),
@@ -793,14 +793,14 @@ pub mod test_types {
 
     #[async_trait]
     impl CopyToDevice for TestData {
-        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
             Ok(*self)
         }
     }
 
     #[async_trait]
     impl CopyToDevice for TestOutput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
             Ok(TestOutput {
                 id: self.id.clone(),
                 v: self.v.clone(),
@@ -840,7 +840,7 @@ pub mod mock_runnable {
         }
 
         impl SyncStage for Runnable {
-            fn do_run<'f>(self: Arc<Self>, _input: &<Self as Stage>::In<'f>, _ctx: Arc<parking_lot::RwLock<<Self as Stage>::Ctx>>) -> Result<<Self as Stage>::Out, ThoosaError>;
+            fn do_run<'f>(self: Arc<Self>, _input: &<Self as Stage>::In<'f>, _ctx: Arc<parking_lot::RwLock<<Self as Stage>::Ctx>>) -> Result<<Self as Stage>::Out, ThoError>;
         }
 
     }
@@ -858,7 +858,7 @@ pub mod mock_runnable {
 
     pub fn build<I>(results: I) -> (MockRunnable, Arc<AtomicUsize>)
     where
-        I: IntoIterator<Item = Result<TestOutput, ThoosaError>>,
+        I: IntoIterator<Item = Result<TestOutput, ThoError>>,
     {
         let mut task = MockRunnable::new();
         let calls = Arc::new(AtomicUsize::new(0));
@@ -901,7 +901,7 @@ pub mod mock_input_adjuster {
         #[async_trait]
         impl Adjuster<super::mock_input_context::MockInputContext> for InputAdjuster {
             type A = std::ops::Range<<TestInput as Data>::Metrics>;
-            async fn adjust(&self, adjustable: &<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, adjust_context: &mut super::mock_input_context::MockInputContext) -> Result<<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, ThoosaError>;
+            async fn adjust(&self, adjustable: &<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, adjust_context: &mut super::mock_input_context::MockInputContext) -> Result<<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, ThoError>;
             fn degrade(&self, adjust_context: &mut super::mock_input_context::MockInputContext) -> bool;
         }
     }
@@ -939,7 +939,7 @@ pub mod mock_task_adjuster {
         #[async_trait]
         impl Adjuster<MockRunnableContext> for TaskAdjuster {
             type A = MockRunnable;
-            async fn adjust(&self, adjustable: &<Self as Adjuster<MockRunnableContext>>::A, adjust_context: &mut MockRunnableContext) -> Result<<Self as Adjuster<MockRunnableContext>>::A, ThoosaError>;
+            async fn adjust(&self, adjustable: &<Self as Adjuster<MockRunnableContext>>::A, adjust_context: &mut MockRunnableContext) -> Result<<Self as Adjuster<MockRunnableContext>>::A, ThoError>;
             fn degrade(&self, adjust_context: &mut MockRunnableContext) -> bool;
         }
     }
@@ -977,7 +977,7 @@ pub mod mock_context_adjuster {
         #[async_trait]
         impl Adjuster<MockRunCtxContext> for ContextAdjuster {
             type A = Arc<RwLock<MockRunCtx>>;
-            async fn adjust(&self, adjustable: &<Self as Adjuster<MockRunCtxContext>>::A, adjust_context: &mut MockRunCtxContext) -> Result<<Self as Adjuster<MockRunCtxContext>>::A, ThoosaError>;
+            async fn adjust(&self, adjustable: &<Self as Adjuster<MockRunCtxContext>>::A, adjust_context: &mut MockRunCtxContext) -> Result<<Self as Adjuster<MockRunCtxContext>>::A, ThoError>;
             fn degrade(&self, adjust_context: &mut MockRunCtxContext) -> bool;
         }
     }
@@ -1017,18 +1017,18 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use async_trait::async_trait;
-    use thoosa_shared::{MyError, ThoosaError};
+    use thoosa_shared::{Cause, ThoError};
     use thoosa_shared::traits::{Adjustable, WithId};
     use super::{Adjuster, InputContext};
     type Selector = Range<[usize; 1]>;
 
     #[derive(Debug)]
     struct AsyncTestTask {
-        results: Arc<Mutex<VecDeque<Result<TestOutput, ThoosaError>>>>,
+        results: Arc<Mutex<VecDeque<Result<TestOutput, ThoError>>>>,
     }
 
     impl AsyncTestTask {
-        fn new(results: VecDeque<Result<TestOutput, ThoosaError>>) -> Self {
+        fn new(results: VecDeque<Result<TestOutput, ThoError>>) -> Self {
             Self {
                 results: Arc::new(Mutex::new(results)),
             }
@@ -1048,13 +1048,13 @@ mod tests {
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
             _ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let next = self
                 .results
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or_else(|| Err(MyError::SomethingElse("no more results".into()).into()));
+                .unwrap_or_else(|| Err(Cause::SomethingElse("no more results".into()).into()));
 
             match next {
                 Ok(o) => Ok(Arc::new(DevicesWrap::wrap(o, input.cache_areas()))),
@@ -1086,9 +1086,9 @@ mod tests {
             true
         }
 
-        async fn build_final_output(self) -> Result<TestOutput, ThoosaError> {
+        async fn build_final_output(self) -> Result<TestOutput, ThoError> {
             self.outputs.into_iter().next().ok_or_else(|| {
-                ThoosaError::new("no output in AsyncInputCtx")
+                ThoError::new("no output in AsyncInputCtx")
             })
         }
     }
@@ -1118,12 +1118,12 @@ mod tests {
         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
 
         let (init_task, init_calls) = mock_runnable([
-            Err(ThoosaError::from(MyError::OutOfMemory)), //no adjusters
-            Err(ThoosaError::from(MyError::OutOfMemory)), //input adjuster
+            Err(ThoError::from(Cause::OutOfMemory)), //no adjusters
+            Err(ThoError::from(Cause::OutOfMemory)), //input adjuster
         ]);
 
         let (adjusted_task, adjusted_calls) = mock_runnable([
-            Err(ThoosaError::from(MyError::OutOfMemory)), //task adjuster
+            Err(ThoError::from(Cause::OutOfMemory)), //task adjuster
             Ok(TestOutput::new(111.)),                    //ctx adjuster
         ]);
 
@@ -1181,7 +1181,7 @@ mod tests {
             )) as &'static global_ctx::MockGlobalCtx
         });
 
-        let (init_task, init_calls) = mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
+        let (init_task, init_calls) = mock_runnable([Err(ThoError::from(Cause::OutOfMemory))]);
         let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
         let (task_adj, task_adj_calls) = mock_task_adjuster([final_task]);
         let oom_handler: OOMHandler<'_, 'static, _, _, _, _, Selector> = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj))], None);
@@ -1225,7 +1225,7 @@ mod tests {
         });
 
         let (task, task_calls) = mock_runnable([
-            Err(ThoosaError::from(MyError::OutOfMemory)),
+            Err(ThoError::from(Cause::OutOfMemory)),
             Ok(TestOutput::new(10.)),
         ]);
         let (input_adj, input_calls) = mock_input_adjuster([[0]..[1]]);
@@ -1268,7 +1268,7 @@ mod tests {
         });
 
         let (task, task_calls) = mock_runnable([
-            Err(ThoosaError::from(MyError::OutOfMemory)),
+            Err(ThoError::from(Cause::OutOfMemory)),
             Ok(TestOutput::new(10.)),
         ]);
         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
@@ -1313,7 +1313,7 @@ mod tests {
         });
 
         let results = VecDeque::from([
-            Err(ThoosaError::from(MyError::OutOfMemory)),
+            Err(ThoError::from(Cause::OutOfMemory)),
             Ok(TestOutput::new(7.)),
         ]);
         let async_task = Arc::new(AsyncTestTask::new(results));
@@ -1331,7 +1331,7 @@ mod tests {
                 &self,
                 adjustable: &<Self as Adjuster<AsyncInputCtx>>::A,
                 _adjust_context: &mut AsyncInputCtx,
-            ) -> Result<<Self as Adjuster<AsyncInputCtx>>::A, ThoosaError> {
+            ) -> Result<<Self as Adjuster<AsyncInputCtx>>::A, ThoError> {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 Ok(adjustable.clone())
             }
@@ -1383,13 +1383,13 @@ mod tests {
         });
 
         let (init_task1, init_calls1) =
-            mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
+            mock_runnable([Err(ThoError::from(Cause::OutOfMemory))]);
         let (final_task1, final_calls1) = mock_runnable([Ok(TestOutput::new(5.))]);
 
         let (task_adj1, task_adj_calls1) = mock_task_adjuster([final_task1]);
 
         let (init_task2, init_calls2) =
-            mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
+            mock_runnable([Err(ThoError::from(Cause::OutOfMemory))]);
         let (final_task2, final_calls2) = mock_runnable([Ok(TestOutput::new(7.))]);
 
         let (task_adj2, task_adj_calls2) = mock_task_adjuster([final_task2]);
@@ -1437,8 +1437,8 @@ mod tests {
                 super::MockRunCtxContext::new(),
             ),
         );
-        let r1: Result<TestOutput, ThoosaError> = h1.await;
-        let r2: Result<TestOutput, ThoosaError> = h2.await;
+        let r1: Result<TestOutput, ThoError> = h1.await;
+        let r2: Result<TestOutput, ThoError> = h2.await;
         assert_eq!(5., r1.unwrap().v.0);
         assert_eq!(7., r2.unwrap().v.0);
 
