@@ -2,7 +2,7 @@
 use std::ops::Range;
 use async_trait::async_trait;
 use log::debug;
-use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::{CopyToDevice, ThoError};
 #[cfg(test)]
 use thoosa_shared::copy_mode::CpuOrGpu;
 #[cfg(test)]
@@ -19,7 +19,7 @@ impl From<Vec<f32>> for DummyTensor {
 
 #[async_trait]
 impl CopyToDevice for DummyTensor {
-    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoosaError> {
+    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
         Ok(self.clone())
     }
 }
@@ -96,7 +96,7 @@ impl MockDataWithId {
 impl Select<std::ops::Range<[usize; 1]>> for MockDataWithId {
     type Output = MockDataWithId;
 
-    fn subview(&self, selector: Range<[usize; 1]>) -> Result<Self::Output, ThoosaError> {
+    fn subview(&self, selector: Range<[usize; 1]>) -> Result<Self::Output, ThoError> {
         let mut data = MockData::new();
         let len = selector.end[0].saturating_sub(selector.start[0]);
         data.expect_size().return_const([len]);
@@ -129,7 +129,7 @@ impl Data for MockDataWithId {
 #[cfg(test)]
 #[async_trait]
 impl CopyToDevice for MockDataWithId {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         Ok(MockDataWithId::for_device_and_id(dst_device, self.id().0))
     }
 }

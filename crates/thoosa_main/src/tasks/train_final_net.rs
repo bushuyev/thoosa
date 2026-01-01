@@ -29,7 +29,7 @@ use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{mono_key, shuffle_and_chunk_with_rng, ThoosaError};
+use thoosa_shared::{mono_key, shuffle_and_chunk_with_rng, ThoError};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
@@ -71,7 +71,7 @@ pub async fn new_train_final_net_with_ml<L, C, R>(
     store: &Arc<RwLock<Box<dyn Store>>>,
     stage_ctx: Arc<RwLock<R>>,
     opt_config: Arc<OptConfig>,
-) -> Result<TrainFinalNet<L, ABStage<L, ApplyLabelNets<C>, C>, C>, ThoosaError>
+) -> Result<TrainFinalNet<L, ABStage<L, ApplyLabelNets<C>, C>, C>, ThoError>
 where
     L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -114,7 +114,7 @@ where
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
         opt_config: Arc<OptConfig>,
-    ) -> Result<Self, ThoosaError> {
+    ) -> Result<Self, ThoError> {
         let label_net_run_ids = {
             let mut store_guard = store.write();
             let mut run_ids = HashSet::new();
@@ -126,7 +126,7 @@ where
             run_ids
         };
         if label_net_run_ids.is_empty() {
-            return Err(ThoosaError::new("TrainFinalNet::new: no label nets found"));
+            return Err(ThoError::new("TrainFinalNet::new: no label nets found"));
         }
 
         Ok(Self {
@@ -175,7 +175,7 @@ impl SavableResult for TrainFinalNetOutput {
         &mut self,
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    ) -> Result<u32, ThoosaError> {
+    ) -> Result<u32, ThoError> {
         self.result.save(store, ws)
     }
 }
@@ -202,7 +202,7 @@ where
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>> + Send {
+    ) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
         let (device_idx, cache_area) = {
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area())
@@ -219,20 +219,20 @@ where
 
         async move {
             let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) = with_data!(ctx, 0, input; |input:&ResourcesConfigInput<NetResources<Logits>>|{
-                Ok::<_, ThoosaError>(input.resources_config().to_resources(&store)?)
+                Ok::<_, ThoError>(input.resources_config().to_resources(&store)?)
             })?;
 
             let labels_len = train_resources
                 .first()
-                .ok_or_else(|| ThoosaError::new("TrainFinalNet::run: no train resources"))?
+                .ok_or_else(|| ThoError::new("TrainFinalNet::run: no train resources"))?
                 .1
                 .len();
             if labels_len == 0 {
-                return Err(ThoosaError::new("TrainFinalNet::run: empty label vector"));
+                return Err(ThoError::new("TrainFinalNet::run: empty label vector"));
             }
             for (_res, labels) in train_resources.iter().chain(valid_resources.iter()) {
                 if labels.len() != labels_len {
-                    return Err(ThoosaError::new("TrainFinalNet::run: inconsistent label vector sizes"));
+                    return Err(ThoError::new("TrainFinalNet::run: inconsistent label vector sizes"));
                 }
             }
 
@@ -325,15 +325,15 @@ where
         valid_resources: Arc<Vec<(Resource, Vec<f32>)>>,
         labels_len: usize,
         ctx: Arc<RwLock<C>>,
-    ) -> Result<Self, ThoosaError> {
+    ) -> Result<Self, ThoError> {
         if train_resources.is_empty() || valid_resources.is_empty() {
-            return Err(ThoosaError::new("LogitsResourcesBatch::new: empty resources"));
+            return Err(ThoError::new("LogitsResourcesBatch::new: empty resources"));
         }
         if batch_size == 0 {
-            return Err(ThoosaError::new("LogitsResourcesBatch::new: batch size is 0"));
+            return Err(ThoError::new("LogitsResourcesBatch::new: batch size is 0"));
         }
         if batch_size as usize > train_resources.len() || batch_size as usize > valid_resources.len() {
-            return Err(ThoosaError::new("LogitsResourcesBatch::new: batch size exceeds resources"));
+            return Err(ThoError::new("LogitsResourcesBatch::new: batch size exceeds resources"));
         }
         Ok(Self {
             batch_size,
@@ -351,7 +351,7 @@ where
         resources: Arc<Vec<(Resource, Vec<f32>)>>,
         batch_size: u32,
         labels_len: usize,
-    ) -> BoxStream<'a, Result<(ThoBatch<LabelProbability>, ThoBatch<LabelsProbabilities>), ThoosaError>> {
+    ) -> BoxStream<'a, Result<(ThoBatch<LabelProbability>, ThoBatch<LabelsProbabilities>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(resources.len(), batch_size, &mut rand::rng());
 
         futures_util::stream::iter(batches)
@@ -370,7 +370,7 @@ where
                                 let out = Arc::clone(&loader)
                                     .run_cached(Arc::new(DevicesWrap::wrap(resource, 0)), ctx_for_loader)
                                     .await?;
-                                Ok::<_, ThoosaError>((out, labels))
+                                Ok::<_, ThoError>((out, labels))
                             }
                         })
                         .buffered(10)
@@ -398,7 +398,7 @@ where
                             labels.iter()
                                 .map(|labels| {
                                     if labels.len() != labels_len {
-                                        return Err(ThoosaError::new("LogitsResourcesBatch::build: bad label size"));
+                                        return Err(ThoError::new("LogitsResourcesBatch::build: bad label size"));
                                     }
                                     let t = Tensor::f_from_slice(labels.as_slice())?;
                                     Ok(t.f_to_device(device)?)
@@ -407,7 +407,7 @@ where
                                 .as_slice(),
                             0,
                         )?;
-                        Ok::<_, ThoosaError>((x.into(), y.into()))
+                        Ok::<_, ThoError>((x.into(), y.into()))
                     })
                 }
             })
@@ -422,7 +422,7 @@ where
     L: for<'i> Cached<In<'i>=Resource, Out=ThoTensor<LabelProbability, SynKey>, Ctx=C> + OutId + 'static,
     C: RunCtx + 'static,
 {
-    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, ThoBatch<LabelsProbabilities>), ThoosaError>> {
+    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, ThoBatch<LabelsProbabilities>), ThoError>> {
         Self::build_batch_stream(
             Arc::clone(&self.loader),
             Arc::clone(&self.ctx),
@@ -432,7 +432,7 @@ where
         )
     }
 
-    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, ThoBatch<LabelsProbabilities>), ThoosaError>> {
+    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, ThoBatch<LabelsProbabilities>), ThoError>> {
         Self::build_batch_stream(
             Arc::clone(&self.loader),
             Arc::clone(&self.ctx),
@@ -468,7 +468,7 @@ mod tests {
     use thoosa_shared::run_configs::OptRunConfigs;
     use thoosa_shared::val::Val;
     use thoosa_shared::val::NamedVal;
-    use thoosa_shared::{mono_key, ThoosaError};
+    use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_store::MockStoreBuilder;
     use crate::tasks::apply_motif_nets::motif_test_net_;
@@ -519,7 +519,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_train_final_net_smoke() -> Result<(), ThoosaError> {
+    async fn test_train_final_net_smoke() -> Result<(), ThoError> {
         reset_print_options();
         GlobalCtx::init_devices(2);
 

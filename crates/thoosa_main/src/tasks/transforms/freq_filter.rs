@@ -14,7 +14,7 @@ use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_common::find_motifs_run_config::InputFilter;
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft};
-use thoosa_shared::{mono_key, ThoosaError};
+use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{CachableIdTr, WithId};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -42,7 +42,7 @@ impl<C> FreqFilter<C>
 where
     C: RunCtx + 'static,
 {
-    pub fn new(filter_config: &InputFilter) -> Result<Self, ThoosaError> {
+    pub fn new(filter_config: &InputFilter) -> Result<Self, ThoError> {
         let band_pass_tensor = match filter_config {
             InputFilter::Conv1(_) => {
                 None//TODO
@@ -103,7 +103,7 @@ where
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
         let (device_idx, cache_area) = {
             let guard = ctx.read();
@@ -167,7 +167,7 @@ mod tests {
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::InputFilter;
     use thoosa_common::transforms::filters::BandPassFilterParams;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
@@ -175,7 +175,7 @@ mod tests {
     use crate::tasks::transforms::freq_filter::FreqFilter;
 
     #[tokio::test]
-    async fn test_freq_fultder() ->Result<(),ThoosaError> {
+    async fn test_freq_fultder() ->Result<(), ThoError> {
         GlobalCtx::init_devices(2);
         let filter_config = InputFilter::BandPassFilter(BandPassFilterParams{
             low_hz: 0.0,

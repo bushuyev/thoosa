@@ -12,7 +12,7 @@ use tch::Device;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::Dims;
-use thoosa_shared::{mono_key, ThoosaError};
+use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Named, WithId};
@@ -22,7 +22,7 @@ use thoosa_with_data::with_data;
 // use crate::tasks::stages_seq::StagesSeq;
 
 type LoadFn =
-    dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoosaError> + Sync + Send;
+    dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoError> + Sync + Send;
 
 #[derive(cached_derive::Cached)]
 #[cache_name = "LoadedTensorId"]
@@ -67,7 +67,7 @@ where
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let cache_area = ctx.read().cache_area();
 
         let num_devices = GlobalCtx::global().device_count();
@@ -75,7 +75,7 @@ where
 
         with_data!(Arc::clone(&ctx), 0, input; |resource: &Resource| {
             let tensor = (self.loader_fn)(resource, &self.device)?;
-            Ok::<Arc<DevicesWrap<Self::Out>>, ThoosaError>(Arc::new(DevicesWrap::wrap(
+            Ok::<Arc<DevicesWrap<Self::Out>>, ThoError>(Arc::new(DevicesWrap::wrap(
                 tensor,
                 cache_area,
             )))
@@ -105,7 +105,7 @@ where
 {
     pub fn new<F>(loader_fn: F, device: ThoDevice) -> Self
     where
-        F: Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoosaError>
+        F: Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoError>
             + Sync
             + Send
             + 'static,
@@ -129,7 +129,7 @@ pub(crate) mod mock_tensor_loader {
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
     use thoosa_shared::runner::common::{MockRunCtx, OutId};
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::Named;
     use thoosa_shared::comp_id::SynKey;
@@ -162,12 +162,12 @@ pub(crate) mod mock_tensor_loader {
         #[async_trait]
         impl Cached for TensorLoader {
 
-            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey >>>, ThoosaError>>>>;
+            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey >>>, ThoError >>>>;
             async fn run_cached(
                     self: Arc<Self>,
                     input: Arc<DevicesWrap<<MockTensorLoader as Stage>::In<'static>>>,
                     ctx: Arc<RwLock<<MockTensorLoader as Stage>::Ctx>>,
-                ) -> Result<Arc<DevicesWrap<<MockTensorLoader as Stage>::Out>>, ThoosaError>;
+                ) -> Result<Arc<DevicesWrap<<MockTensorLoader as Stage>::Out>>, ThoError>;
         }
     }
 
@@ -229,14 +229,14 @@ mod tests {
     use tch::{Device, Tensor};
     use crate::tasks::cross_dims::ChannelsData2;
     use thoosa_common::tho_device::ThoDevice;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_common::tho_tensor::ThoTensor;
 
     #[tokio::test]
-    async fn test_load() -> Result<(), ThoosaError> {
+    async fn test_load() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
 
         let mut data = vec![0f32; 16];
@@ -258,7 +258,7 @@ mod tests {
         let loaded = loader
             .run_cached(Arc::new(DevicesWrap::wrap(Resource::new(0, 0, "aaa", 20), 0)), Arc::clone(&ctx))
             .await
-            .map_err(|e| ThoosaError::new("zzz"))?;
+            .map_err(|e| ThoError::new("zzz"))?;
 
         let result = loaded
             .with_data_ref(0,

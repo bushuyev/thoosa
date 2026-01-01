@@ -33,7 +33,7 @@ use tch::Device::Cpu;
 use tch::Kind::Float;
 use tch::{nn, Device, IndexOp, Tensor};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -161,7 +161,7 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
         &mut self,
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    ) -> Result<u32, ThoosaError> {
+    ) -> Result<u32, ThoError> {
         let run_config_id = store.write().save_run_config(
             Some(&self.select_motifs_for_label_run_ids),
             &TrainLabelNetsRunConfig::type_name(),
@@ -223,7 +223,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         &mut self,
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    ) -> Result<u32, ThoosaError> {
+    ) -> Result<u32, ThoError> {
         let run_config_id = store.write().save_run_config(
             Some(&self.train_label_nodes_run_ids),
             &TrainFinalNetRunConfig::type_name(),
@@ -241,7 +241,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         Ok(run_config_id)
     }
 }
-type ModuleFactory<DI, DO> = dyn Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError>;
+type ModuleFactory<DI, DO> = dyn Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoError>;
 
 pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Send> {
     id:SynKey,
@@ -290,7 +290,7 @@ unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO>
     for ThoModuleWithStore<DI, DO>
 {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoosaError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         self.module.tho_forward(t, train)
     }
 }
@@ -315,9 +315,9 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         }
     }
 
-    pub fn load<F>(id: SynKey, builder: F, model: PathBuf, device: Device) -> Result<Self, ThoosaError>
+    pub fn load<F>(id: SynKey, builder: F, model: PathBuf, device: Device) -> Result<Self, ThoError>
     where
-        F: Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> + Send + Sync + 'static,
+        F: Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoError> + Send + Sync + 'static,
     {
         let builder: Arc<ModuleFactory<DI, DO>> = Arc::new(builder);
         let mut vs = VarStore::new(device);
@@ -357,7 +357,7 @@ where
 DI: Dims + Send + 'static,
 DO: Dims + Send + 'static {
 
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoosaError> {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
 
         debug!("ThoModuleWithStore::copy_to_device: has module_factory={}", self.module_factory.is_some());
 
@@ -405,7 +405,7 @@ pub fn load_final_model(
         FinalNetParams,
         ThoModuleWithStore<Batch<LabelProbability>, Batch<LabelsProbabilities>>,
     ),
-    ThoosaError,
+    ThoError,
 > {
     let (model_path, params_path) = ws.read().final_model(run_id)?;
     debug!("load_final_model: params_path={model_path:?} run_id={run_id}");
@@ -553,9 +553,9 @@ impl MotifNetParams {
         )
     }
 
-    pub fn from_file(path: &PathBuf) -> Result<Self, ThoosaError> {
+    pub fn from_file(path: &PathBuf) -> Result<Self, ThoError> {
         serde_json5::from_str::<MotifNetParams>(fs::read_to_string(&path)?.as_str()).map_err(
-            |serde_err| ThoosaError::new(format!("err={}, path={path:?}", serde_err.to_string())),
+            |serde_err| ThoError::new(format!("err={}, path={path:?}", serde_err.to_string())),
         )
     }
 
@@ -730,9 +730,9 @@ impl LabelNetParams {
         }
     }
 
-    pub fn from_file(path: &PathBuf) -> Result<Self, ThoosaError> {
+    pub fn from_file(path: &PathBuf) -> Result<Self, ThoError> {
         serde_json5::from_str::<LabelNetParams>(fs::read_to_string(&path)?.as_str())
-            .map_err(|serde_err| ThoosaError::new(serde_err.to_string()))
+            .map_err(|serde_err| ThoError::new(serde_err.to_string()))
     }
 
     pub fn label_net(&self) -> Node {
@@ -994,7 +994,7 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
                     };
 
                     Ok(t)
-                }).collect::<Result<Vec<Tensor>, ThoosaError>>()?)
+                }).collect::<Result<Vec<Tensor>, ThoError>>()?)
             }),
             Box::new(move |res: Vec<Tensor>| {
                 debug!("any_len_label_node: res={res:?}");
@@ -1093,9 +1093,9 @@ impl FinalNetParams {
         }
     }
 
-    pub fn from_file(path: &PathBuf) -> Result<Self, ThoosaError> {
+    pub fn from_file(path: &PathBuf) -> Result<Self, ThoError> {
         serde_json5::from_str::<FinalNetParams>(fs::read_to_string(&path)?.as_str())
-            .map_err(|serde_err| ThoosaError::new(serde_err.to_string()))
+            .map_err(|serde_err| ThoError::new(serde_err.to_string()))
     }
 }
 
@@ -1238,7 +1238,7 @@ impl SavableResult for TrainMotifsNetsResult {
         0.0
     }
 
-    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
         for r in self.train_motif_nets_results.iter_mut() {
             r.save(store, ws)?;
         }
@@ -1279,7 +1279,7 @@ impl SavableResult for TrainMotifsNetResult {
         &mut self,
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    ) -> Result<u32, ThoosaError> {
+    ) -> Result<u32, ThoError> {
         //TODO save loss to choose model
         debug!("TrainMotifsNetsRunConfigResult::save: self={:?}", self);
 
@@ -1309,7 +1309,7 @@ pub async fn opt_train_2<P, R, F, N: Debug + Default>(
     run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
     device: Device,
     descr: &str,
-) -> Result<(VarStore, N, R, f32), ThoosaError>
+) -> Result<(VarStore, N, R, f32), ThoError>
 where
     P: FieldName,
     R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone,
@@ -1317,7 +1317,7 @@ where
             &VarStore,
             R,
             &'a mut (dyn TrainListener + 'b),
-        ) -> Result<(f32, N), ThoosaError>
+        ) -> Result<(f32, N), ThoError>
         + Clone,
 {
     let const_vals = run_config_source
@@ -1392,7 +1392,7 @@ where
     Arc::into_inner(min_var_store)
         .unwrap()
         .into_inner()
-        .ok_or_else(|| ThoosaError::new("opt was not run"))
+        .ok_or_else(|| ThoError::new("opt was not run"))
 }
 
 pub fn opt_train<P, R, F, N: Debug + Default>(
@@ -1406,11 +1406,11 @@ pub fn opt_train<P, R, F, N: Debug + Default>(
     >,
     device: Device,
     descr: &str,
-) -> Result<(VarStore, N, R, f32), ThoosaError>
+) -> Result<(VarStore, N, R, f32), ThoError>
 where
     P: FieldName,
     R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>>,
-    F: FnMut(&VarStore, &R, &mut dyn TrainListener) -> Result<(f32, N), ThoosaError>,
+    F: FnMut(&VarStore, &R, &mut dyn TrainListener) -> Result<(f32, N), ThoError>,
 {
     let const_vals = run_config_source.grid_run_config_source().const_params();
     let mut min_loss = f32::MAX;
@@ -1461,7 +1461,7 @@ where
         // min_var_store.ok_or_else(||ThoosaError::new("opt was not run"))
     });
 
-    min_var_store.ok_or_else(|| ThoosaError::new("opt was not run"))
+    min_var_store.ok_or_else(|| ThoError::new("opt was not run"))
 }
 
 pub fn slices_in_all_resources<ResourceId>(slices: Vec<(ResourceId, Vec<Tensor>)>) -> Vec<Tensor> {
@@ -1764,7 +1764,7 @@ impl InferArgs {
     }
 }
 
-pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
+pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoError> {
     Ok(t_1
         .flatten(0, (t_1.size().len() - 1) as i64)
         .iter::<f64>()?
@@ -1828,7 +1828,7 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
     k: f64,
     device: Device,
     descr: &str,
-) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> {
+) -> Result<Box<dyn ThoModule<DI, DO>>, ThoError> {
     let vs = VarStore::new(device);
 
     SeqBuilder::new(num_features, None)
@@ -1922,7 +1922,7 @@ mod train_tests {
     use thoosa_shared::run_configs::{OptRunConfigs, RunId};
     use thoosa_shared::test_utils::set_panic_hook;
     use thoosa_shared::val::Val;
-    use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, slices_len, CopyToDevice, ThoosaError};
+    use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, slices_len, CopyToDevice, ThoError};
     use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
     use torch_sys::at_autocast_clear_cache;
     use thoosa_shared::traits::SimpleId;
@@ -1933,7 +1933,7 @@ mod train_tests {
     }
 
     #[test]
-    fn test_class_tensors_data_batch() -> Result<(), ThoosaError> {
+    fn test_class_tensors_data_batch() -> Result<(), ThoError> {
         let mut batch: TensorsDataBatch<AnyDims> = TensorsDataBatch::new(
             vec![
                 vec![
@@ -1999,7 +1999,7 @@ mod train_tests {
 
 
     #[test]
-    fn test_test_net() -> Result<(), ThoosaError> {
+    fn test_test_net() -> Result<(), ThoError> {
         let t_0 = lin_test_tensor(1000, 5);
         debug!("t_0.size={:?}", t_0.size());
 
@@ -2042,7 +2042,7 @@ mod train_tests {
     }
 
     #[tokio::test]
-    async fn test_save_load_label_model_fixed_num_slices() -> Result<(), ThoosaError> {
+    async fn test_save_load_label_model_fixed_num_slices() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_dir={test_dir:?}");
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000, 32000)?));
@@ -2095,7 +2095,7 @@ mod train_tests {
 
 
     #[test]
-    fn test_save_load_label_model_max_padding() -> Result<(), ThoosaError> {
+    fn test_save_load_label_model_max_padding() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_dir={test_dir:?}");
         let channels = 3;
@@ -2386,7 +2386,7 @@ mod train_tests {
         max_batch_size: u32,
         motif_node_params_run_id: RunId,
         window: u32,
-    ) -> Result<(), ThoosaError> {
+    ) -> Result<(), ThoError> {
         // fs::create_dir_all(models_path)?;
 
         // fs::write(models_path.join("motif_model.json"), serde_json5::to_string(&MotifNodeParams::new(window))?)?;
@@ -2487,7 +2487,7 @@ mod train_tests {
         fs::write(&input_path.join(name), "lalalal").unwrap();
     }
 
-    fn save_test_final_model(models_path: &PathBuf, features: u32) -> Result<(), ThoosaError> {
+    fn save_test_final_model(models_path: &PathBuf, features: u32) -> Result<(), ThoError> {
         fs::create_dir_all(models_path.clone())?;
 
         let mut vs_0 = VarStore::new(Cpu);
@@ -2513,7 +2513,7 @@ mod train_tests {
         max_motif_nets: u32,
         max_motif_batches: u32,
         motif_batch_size: u32,
-    ) -> Result<(), ThoosaError> {
+    ) -> Result<(), ThoError> {
         let label_node_params = LabelNetParams::new(
             channels,
             max_motif_nets,
@@ -2546,7 +2546,7 @@ mod train_tests {
         motif_id: u32,
         window: u32,
         motif_node_params_run_id: RunId,
-    ) -> Result<(), ThoosaError> {
+    ) -> Result<(), ThoError> {
         let mut vs_0 = VarStore::new(Cpu);
         let _test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> =
             train_nets::motif_node(&MotifNetParams::new(window, 1, 100))
@@ -2582,7 +2582,7 @@ mod train_tests {
     }
 
     #[test]
-    fn test_is_nonzero() -> Result<(), ThoosaError> {
+    fn test_is_nonzero() -> Result<(), ThoError> {
         assert!(super::is_nonzero(&Tensor::from_slice(&[0., 1., 0.]))?);
         assert!(super::is_nonzero(&Tensor::stack(
             &[

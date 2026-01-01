@@ -10,7 +10,7 @@ use thoosa_shared::runner::common::cachable::Cached;
 use thoosa_shared::traits::Adjustable;
 use thoosa_shared::runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::resource::Resource;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 use thoosa_shared::traits::Named;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::torch_runner::TorchPermsCtx;
@@ -57,7 +57,7 @@ impl RunCtx for RunCtx2 {
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RunCtx2::purge_gpu_caches"))]
-    fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
+    fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoError>>
     where
         Self: Sized
     {

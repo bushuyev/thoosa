@@ -29,7 +29,7 @@ use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::distance::MaskMaker::{Le, LeRunningMean, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
-use thoosa_shared::{mono_key, ThoosaError};
+use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
@@ -61,7 +61,7 @@ where
     cross_loader: Arc<CrossLoader<
             RC,
         L,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
             DistsTracker<C>,
             DistsMask,
             C,
@@ -79,12 +79,12 @@ where
         cross_loader: Arc<CrossLoader<
             RC,
             L,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
             DistsTracker<C>,
             DistsMask,
             C,
         >>
-    ) -> Result<Self, ThoosaError> {
+    ) -> Result<Self, ThoError> {
         Ok(Self {
             run_config: Arc::new(run_config),
             cross_loader
@@ -133,7 +133,7 @@ where
         run_configs: Vec<FindMotifsRunConfig>,
         fixed_config: FixedFindMotifsConfig,
         device: ThoDevice, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
-    ) -> Result<Self, ThoosaError> {
+    ) -> Result<Self, ThoError> {
         // let band_filter = Arc::new(FreqFilter::new());
         debug!("FindMotifsStage::new: fixed_config={fixed_config:?}");
 
@@ -146,7 +146,7 @@ where
                 let filter = run_config.slices_filter.clone();
 
                 let cross_unfold_clc: CrossUnfoldClc<
-                    Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoosaError> + Send + Sync>,
+                    Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoError> + Send + Sync>,
                     DistsMask,
                     MeanDistsCtx,
                     C,
@@ -249,7 +249,7 @@ where
                     )),
                 )?)
             })
-            .collect::<Result<Vec<_>, ThoosaError>>()?;
+            .collect::<Result<Vec<_>, ThoError>>()?;
 
         Ok(Self {
             run_config_stages: cross_loaders,
@@ -286,9 +286,9 @@ where
         self: Arc<Self>,
         input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
-        let mut js: JoinSet<Result<Arc<DevicesWrap<()>>, ThoosaError>> = JoinSet::new();//TODO to stream + spawn
+        let mut js: JoinSet<Result<Arc<DevicesWrap<()>>, ThoError>> = JoinSet::new();//TODO to stream + spawn
 
         debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
         for stage in self.run_config_stages.iter() {
@@ -317,7 +317,7 @@ where
 }
 
 
-pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig) -> Result<Arc<LoaderStageChoice<L, C>>, ThoosaError>
+pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>
@@ -376,7 +376,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::data_with_extra::DataWithExtra;
-    use thoosa_shared::{cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoosaError};
+    use thoosa_shared::{cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoError};
     use thoosa_store::SqlStore;
     use thoosa_common::tho_tensor::ThoTensor;
     use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
@@ -392,7 +392,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn test_find_motifs() -> Result<(), ThoosaError> {
+    async fn test_find_motifs() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -490,7 +490,7 @@ mod tests {
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
             |key| {
                 Tensor::load(tensors_path_for_import.join(format!("{}.pt", key)))
-                    .map_err(|e| ThoosaError::new(e.to_string()))
+                    .map_err(|e| ThoError::new(e.to_string()))
             },
             true,
         )?;

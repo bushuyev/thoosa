@@ -7,7 +7,7 @@ use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
 use log::debug;
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
-use thoosa_shared::{MyError, ThoosaError};
+use thoosa_shared::{Cause, ThoError};
 use tokio::task::JoinSet;
 use tokio_utils::Pool;
 use thoosa_shims::context::ThoCudaContext;
@@ -21,7 +21,7 @@ pub struct PinnedHostBuffer {
 
 
 impl PinnedHostBuffer {
-    pub fn new(len: usize) -> Result<Self, ThoosaError> {
+    pub fn new(len: usize) -> Result<Self, ThoError> {
         use cudarc::driver::sys::CUresult::CUDA_SUCCESS;
 
         let mut raw: *mut c_void = std::ptr::null_mut();
@@ -31,7 +31,7 @@ impl PinnedHostBuffer {
         };
 
         if res != CUDA_SUCCESS as i32 {
-            return Err(MyError::SomethingElse(format!(
+            return Err(Cause::SomethingElse(format!(
                 "cuMemHostAlloc failed with {res:?} (len={len})"
             ))
             .into());
@@ -128,7 +128,7 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
     src_t: &R,
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
 
     assert!(src_t.as_ref().device().ne(&Device::Cpu));
 
@@ -144,7 +144,7 @@ pub async fn move_d2h(
     src_t: Tensor,
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
 
     assert!(src_t.as_ref().device().ne(&Device::Cpu));
 
@@ -164,7 +164,7 @@ pub async fn copy_d2h_from_ptr(
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
     src_ptr: usize,
     src_size: &[i64],
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
     let tensor_mem_size = tensor_mem_size(init_type, &src_size);
 
     debug!("copy_d2h: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size_bytes}",src_size);
@@ -210,14 +210,14 @@ pub async fn copy_d2h_from_ptr(
                     );
                     let r: sys::CUresult = std::mem::transmute(raw);
                     if r != sys::CUresult::CUDA_SUCCESS {
-                        return Err::<(), MyError>(MyError::SomethingElse(format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")).into());
+                        return Err::<(), Cause>(Cause::SomethingElse(format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")).into());
                     }
 
                     stream.synchronize();
 
                     Ok(())
 
-                }).await.map_err(|e|MyError::SomethingElse(format!("{:?}", e)))??;
+                }).await.map_err(|e| Cause::SomethingElse(format!("{:?}", e)))??;
 
                 tokio::task::spawn_blocking(move || {
                     std::ptr::copy_nonoverlapping(
@@ -225,18 +225,18 @@ pub async fn copy_d2h_from_ptr(
                         dst_off_ptr as *mut u8,
                         c_buf_size,
                     );
-                }).await.map_err(|e|MyError::SomethingElse(format!("{:?}", e)))?;
+                }).await.map_err(|e| Cause::SomethingElse(format!("{:?}", e)))?;
 
 
                 drop(buf_stream);
                 Ok(())
             }
         })
-        .collect::<JoinSet<Result<(), MyError>>>()
+        .collect::<JoinSet<Result<(), Cause>>>()
         .join_all()
         .await
         .into_iter()
-        .collect::<Result<(), MyError>>()?;
+        .collect::<Result<(), Cause>>()?;
     }
     Ok(dst_t)
 }
@@ -248,7 +248,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
     dst_device_idx: usize,
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
     assert!(src_t.as_ref().device().eq(&Cpu));
     assert!(dst_device_idx > 0);
 
@@ -273,7 +273,7 @@ pub async fn move_h2d(
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
     dst_device_idx: usize,
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
     assert!(src_t.as_ref().device().eq(&Cpu));
     assert!(dst_device_idx > 0);
 
@@ -302,7 +302,7 @@ pub async fn copy_h2d_from_ptr(
     dst_device_idx: usize,
     src_ptr: usize,
     size: &[i64],
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
     let tensor_mem_size = tensor_mem_size(init_type, &size);
     debug!("copy_h2d_from_ptr: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",size);
 
@@ -395,7 +395,7 @@ pub async fn copy_h2d_from_ptr(
 }
 
 //TODO OOM handling
-pub fn pack_bits_bool(b: &Tensor) -> Result<Tensor, ThoosaError> {
+pub fn pack_bits_bool(b: &Tensor) -> Result<Tensor, ThoError> {
     assert_eq!(b.kind(), Kind::Bool, "pack_bits_bool expects Bool");
     let dev = b.device();
 
@@ -497,7 +497,7 @@ mod tests {
     use tch::Kind::{Float, Int64, Uint8};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{Kind, Tensor};
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use tokio::task::JoinSet;
     use tokio::time::Instant;
     use tokio_utils::Pool;
@@ -578,7 +578,7 @@ mod tests {
                     ctx,
                 )
             })
-            .collect::<JoinSet<Result<(), ThoosaError>>>()
+            .collect::<JoinSet<Result<(), ThoError>>>()
             .join_all()
             .await;
 
@@ -603,7 +603,7 @@ mod tests {
         d2h_time: Arc<AtomicU64>,
         h2d_time: Arc<AtomicU64>,
         ctx: &CopyCtx,
-    ) ->Result<(), ThoosaError>{
+    ) ->Result<(), ThoError>{
         let dim_0 = random_range(0.5 * input_n as f64..1.5 * input_n as f64) as i64;
         // println!("run_copy_: dim_0={dim_0} dim_1={dim_1}");
         let mut src_t = Tensor::rand([dim_0, dim_1], (Float, Cpu));
@@ -635,7 +635,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn test_small_one_copy_types() ->Result<(), ThoosaError>{
+    async fn test_small_one_copy_types() ->Result<(), ThoError>{
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -700,7 +700,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn heavy_one_copy_types() -> Result<(), ThoosaError>{
+    async fn heavy_one_copy_types() -> Result<(), ThoError>{
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -804,7 +804,7 @@ mod tests {
     }
 
     // #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn compare_unfold() -> Result<(), ThoosaError> {
+    async fn compare_unfold() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -856,7 +856,7 @@ mod tests {
     }
     
     #[test]
-    fn roundtrip_pack_unpack() -> Result<(), ThoosaError> {
+    fn roundtrip_pack_unpack() -> Result<(), ThoError> {
         use tch::{Device, Kind, Tensor};
 
         // try CPU; switch to Device::Cuda(0) if you want to test on GPU
@@ -880,7 +880,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_pack_unpack_copy() -> Result<(), ThoosaError>{
+    async fn roundtrip_pack_unpack_copy() -> Result<(), ThoError>{
         use tch::{Device, Kind, Tensor};
 
         unsafe {

@@ -18,7 +18,7 @@ use thoosa_common::dims::Dims;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoosaError};
+use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
 use thoosa_shared::traits::{CachableIdTr, Data, DataId, Select, WithId};
 use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -163,7 +163,7 @@ where
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
@@ -173,7 +173,7 @@ where
         };
 
         let motif_id = with_data!(Arc::clone(&ctx), 0, input; |input: &MotifLoaderInput| {
-            Ok::<DataId, ThoosaError>(input.motif_id.clone())
+            Ok::<DataId, ThoError>(input.motif_id.clone())
         })?;
 
         let motif_id_value = motif_id.clone().0;
@@ -260,7 +260,7 @@ where
         self: Arc<Self>,
         input: Arc<DevicesWrap<SlicesLoaderInput>>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     where
             for<'a> Self::In<'a>: Send + Sync,
     {
@@ -269,7 +269,7 @@ where
             (guard.device_idx(), guard.cache_area())
         };
         let (motif_id, limit) = with_data!(Arc::clone(&ctx), 0, input; |input: &SlicesLoaderInput| {
-            Ok::<(DataId, u32), ThoosaError>((input.motif_id.clone(), input.limit))
+            Ok::<(DataId, u32), ThoError>((input.motif_id.clone(), input.limit))
         })?;
 
         let (channel, find_motifs_run_id) = self.store.read().get_motif_meta(*motif_id)?;
@@ -297,7 +297,7 @@ where
     }
 }
 
-async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &Arc<RwLock<C>>, find_motifs_run_id: u32, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, channel: i64, device_idx: usize, cache_area: u64) -> Result<( u32, ThoTensor<MotifSlices, DataId>), ThoosaError>
+async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &Arc<RwLock<C>>, find_motifs_run_id: u32, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, channel: i64, device_idx: usize, cache_area: u64) -> Result<( u32, ThoTensor<MotifSlices, DataId>), ThoError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
@@ -457,7 +457,7 @@ pub mod mock_motif_loader {
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use thoosa_shared::runner::common::{MockRunCtx, OutId, RunCtx};
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_shared::traits::{DataId, Named};
     use thoosa_shared::traits::WithId;
     use thoosa_common::tho_tensor::ThoTensor;
@@ -492,12 +492,12 @@ pub mod mock_motif_loader {
         #[async_trait]
         impl Cached for MotifLoader {
 
-            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>, ThoosaError>>>>;
+            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>, ThoError >>>>;
             async fn run_cached(
                 self: Arc<Self>,
                 input: Arc<DevicesWrap<<MockMotifLoader as Stage>::In<'static>>>,
                 ctx: Arc<RwLock<<MockMotifLoader as Stage>::Ctx>>,
-            ) -> Result<Arc<DevicesWrap<<MockMotifLoader as Stage>::Out>>, ThoosaError>;
+            ) -> Result<Arc<DevicesWrap<<MockMotifLoader as Stage>::Out>>, ThoError>;
         }
     }
 
@@ -559,7 +559,7 @@ mod tests {
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::utils::lin_t;
     use thoosa_properties_map::ToHashmap;
-    use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::DataId;
     use thoosa_shared::data_with_extra::DataWithExtra;
@@ -572,7 +572,7 @@ mod tests {
     use thoosa_motifs::distance::average_euclidean_distance;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_load_motifs() -> Result<(), ThoosaError> {
+    async fn test_load_motifs() -> Result<(), ThoError> {
         set_max_level(Trace);
         GlobalCtx::init_devices(2);
 
@@ -635,7 +635,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_load_random_slices() -> Result<(), ThoosaError> {
+    async fn test_load_random_slices() -> Result<(), ThoError> {
         set_max_level(Trace);
         GlobalCtx::init_devices(2);
 

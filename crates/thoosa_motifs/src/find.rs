@@ -35,7 +35,7 @@ use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_common::utils::*;
 use thoosa_shared::{CopyToDevice, TensorIdSliceIdx};
 use thoosa_shared::val::Val;
-use thoosa_shared::{RangeOrValue, ResourceType, ThoosaError, make_combos};
+use thoosa_shared::{RangeOrValue, ResourceType, ThoError, make_combos};
 use thoosa_shared::{avg_hist, parse_key_val};
 use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store};
 use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
@@ -155,7 +155,7 @@ impl SavableResult for FindMotifsSavableResult {
         &mut self,
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    ) -> Result<u32, ThoosaError> {
+    ) -> Result<u32, ThoError> {
         Ok(0)
     }
 }
@@ -234,7 +234,7 @@ impl<'a> SimpleMotifTracker<'a> {
         }
     }
 
-    pub fn build_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<(), ThoosaError> {
+    pub fn build_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<(), ThoError> {
         self.dumper.load_slices_into_groups(store, self.max_slices_counts)
     }
 
@@ -319,7 +319,7 @@ impl SavableResult for SelectMotifsSavableResult {
         &mut self,
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    ) -> Result<u32, ThoosaError> {
+    ) -> Result<u32, ThoError> {
         for (run_config, good_motif_ids_rates) in &self.run_config {
             store
                 .write()
@@ -393,7 +393,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_norm() -> Result<(), ThoosaError> {
+    fn test_norm() -> Result<(), ThoError> {
         let t = Tensor::from_slice(&[1., 2., 3.]);
         let norm = norm(&t, &[-1]);
 
@@ -415,7 +415,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_self_dot() -> Result<(), ThoosaError> {
+    fn test_self_dot() -> Result<(), ThoError> {
         let t1 = Tensor::from_slice2(&[
             &[1., 2., 3., 4., 5., 6., 7., 8., 9.],
             &[10., 20., 30., 40., 50., 60., 70., 80., 90.],
@@ -446,7 +446,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_self_dot_norm() -> Result<(), ThoosaError> {
+    fn test_self_dot_norm() -> Result<(), ThoError> {
         let t1 = Tensor::from_slice2(&[
             &[1., 2., 3., 4., 5., 6., 7., 8., 9.],
             &[10., 20., 30., 40., 50., 60., 70., 80., 90.],
@@ -482,7 +482,7 @@ mod motif_find_tests {
             i_1: i64,
             m: i64,
             dim: i64,
-        ) -> Result<(Tensor, Tensor), ThoosaError> {
+        ) -> Result<(Tensor, Tensor), ThoError> {
             Ok((
                 self.tensors[0].f_slice(dim, Some(i_0), Some(i_0 + m), 1)?,
                 self.tensors[0].f_slice(dim, Some(i_1), Some(i_1 + m), 1)?,
@@ -504,7 +504,7 @@ mod motif_find_tests {
     }
 
     impl<'a> MotifTrackerStore for DummyDumper<'a> {
-        fn save_slices(&mut self, motifs: Vec<SlicesMatch>) -> Result<(), ThoosaError> {
+        fn save_slices(&mut self, motifs: Vec<SlicesMatch>) -> Result<(), ThoError> {
             self.motifs
                 .extend(motifs.into_iter().collect::<Vec<SlicesMatch>>());
 
@@ -515,7 +515,7 @@ mod motif_find_tests {
             &mut self,
             store: &Arc<RwLock<Box<dyn Store>>>,
             max_slices_counts: Option<u32>,
-        ) -> Result<(), ThoosaError> {
+        ) -> Result<(), ThoError> {
             todo!()
         }
 
@@ -533,7 +533,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    pub fn test_simple_motif_tracker() -> Result<(), ThoosaError> {
+    pub fn test_simple_motif_tracker() -> Result<(), ThoError> {
         let mut motifs = vec![];
         {
             DummyDumper::new(&mut motifs);
@@ -592,7 +592,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    pub fn test_simple_motif_tracker_with_tensorssource() -> Result<(), ThoosaError> {
+    pub fn test_simple_motif_tracker_with_tensorssource() -> Result<(), ThoError> {
         let n = 1_000i64;
 
         let (sig_0_1, sig_0_2) = two_sigs(1_000);
@@ -764,7 +764,7 @@ pub fn plot_resource(
     resource_config: Simple,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
-) -> Result<(), ThoosaError> {
+) -> Result<(), ThoError> {
     let tensors_path = ws.read().tensors_path().clone();
     let channel = 0; //TODO
 

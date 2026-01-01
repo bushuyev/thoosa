@@ -21,7 +21,7 @@ use tch::Tensor;
 use thoosa_common::dims::{AnyMetrics, AnySub, ChannelsData, ChannelsSlicesData, Dims};
 use thoosa_common::runs::Simple;
 use thoosa_motifs::find::FindMotifsSavableResult;
-use thoosa_shared::{simple_id, ThoosaError};
+use thoosa_shared::{simple_id, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
@@ -62,11 +62,11 @@ where
         self.partials.push(o);
     }
 
-    async fn build(self) -> Result<Self::O, ThoosaError> {
+    async fn build(self) -> Result<Self::O, ThoError> {
         let mut iter = self.partials.into_iter();
         let first = iter
             .next()
-            .ok_or_else(|| ThoosaError::new("CrossUnfoldClcOutputBuilder: no partial outputs"))?;
+            .ok_or_else(|| ThoError::new("CrossUnfoldClcOutputBuilder: no partial outputs"))?;
         let iter_0 = first.iter_0();
         let iter_1 = first.iter_1();
 
@@ -200,7 +200,7 @@ pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync> {
 }
 
 impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
-    pub(crate) fn check(self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<Self, ThoosaError> {
+    pub(crate) fn check(self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<Self, ThoError> {
         self.resources_config.check(store)?;
 
         Ok(self)
@@ -267,7 +267,7 @@ where
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
         ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         // let chunk_size = self.chunk_size;
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
         let device_idx = ctx.read().device_idx();
@@ -390,7 +390,7 @@ where
                             ),
                         )
                         .await?;
-                        Ok::<_, ThoosaError>(out)
+                        Ok::<_, ThoError>(out)
                     }
                 )?;
 
@@ -431,7 +431,7 @@ pub(crate) mod mock_cross_loader_clc {
     use std::fmt::Debug;
     use std::marker::PhantomData;
     use std::sync::Arc;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{Adjustable, WithId};
@@ -439,7 +439,7 @@ pub(crate) mod mock_cross_loader_clc {
     type RunBatchFn<Out, C> = dyn for<'a> Fn(
         &CrossInput<'a, Arc<Resource>>,
         Arc<RwLock<C>>,
-    ) -> Result<CrossUnfoldClcOutput<Out>, ThoosaError>
+    ) -> Result<CrossUnfoldClcOutput<Out>, ThoError>
     + Send
     + Sync
     + 'static;
@@ -499,7 +499,7 @@ pub(crate) mod mock_cross_loader_clc {
             self: Arc<Self>,
             input: &Self::In<'s>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError>
+        ) -> Result<Self::Out, ThoError>
         where
             Self: Sized,
         {
@@ -527,7 +527,7 @@ pub(crate) mod mock_cross_loader_clc {
             F: for<'a> Fn(
                 &CrossInput<'a, Arc<Resource>>,
                 Arc<RwLock<C>>,
-            ) -> Result<CrossUnfoldClcOutput<Out>, ThoosaError>
+            ) -> Result<CrossUnfoldClcOutput<Out>, ThoError>
             + Send
             + Sync
             + 'static,
@@ -567,7 +567,7 @@ pub(crate) mod mock_cross_loader_receiver {
     use parking_lot::RwLock;
     use std::fmt::Debug;
     use std::sync::Arc;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_shared::applicables_runner::{Input, Output};
 
     mock! {
@@ -594,7 +594,7 @@ pub(crate) mod mock_cross_loader_receiver {
             In: Input + Output + Send + Debug + 'static,
             C: RunCtx + 'static,
         {
-            fn consume<'s>(self: Arc<Self>, out: <Self as Stage>::In<'s>, ctx: Arc<RwLock<<Self as Stage>::Ctx>>) -> Result<<Self as Stage>::Out, ThoosaError>;
+            fn consume<'s>(self: Arc<Self>, out: <Self as Stage>::In<'s>, ctx: Arc<RwLock<<Self as Stage>::Ctx>>) -> Result<<Self as Stage>::Out, ThoError>;
         }
     }
 
@@ -614,7 +614,7 @@ pub(crate) mod mock_cross_loader_receiver {
     {
         pub fn with_receive_fn<F>(mut self, f: F) -> Self
         where
-            F: Fn(In, Arc<RwLock<C>>) -> Result<(), ThoosaError> + Send + Sync + 'static,
+            F: Fn(In, Arc<RwLock<C>>) -> Result<(), ThoError> + Send + Sync + 'static,
         {
             let receive_fn = Arc::new(f);
             self.mock
@@ -676,7 +676,7 @@ mod tests {
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::{Resource, ResourceStats};
-    use thoosa_shared::{cdt_for_dir, ResourceType, ThoosaError};
+    use thoosa_shared::{cdt_for_dir, ResourceType, ThoError};
     use thoosa_shared::mono_key;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_store::fs_store::ChunkedSlicesReader;
@@ -724,7 +724,7 @@ mod tests {
     impl Output for TestBatchOutput {}
 
     impl CrossClcResultMerge for TestBatchOutput {
-        fn merge_batch_1(self, _other: Self) -> Result<Self, ThoosaError> {
+        fn merge_batch_1(self, _other: Self) -> Result<Self, ThoError> {
             Ok(self)
         }
     }
@@ -734,16 +734,16 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_cross_clc_without_oom() -> Result<(), ThoosaError> {
+    async fn test_cross_clc_without_oom() -> Result<(), ThoError> {
         test_cross_clc(None, 20).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_cross_clc_with_oom() -> Result<(), ThoosaError> {
+    async fn test_cross_clc_with_oom() -> Result<(), ThoError> {
         test_cross_clc(Some(20), 40).await
     }
 
-    async fn test_cross_clc(oom_limit: Option<i64>, chunk_size: usize) -> Result<(), ThoosaError> {
+    async fn test_cross_clc(oom_limit: Option<i64>, chunk_size: usize) -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
 
         let tensor_len = 10usize;
@@ -823,7 +823,7 @@ mod tests {
                             "test_cross_clc: triggering OOM: batch_1_len={batch_1_len} limit={limit}"
                         );
                         oom_triggered_cloned.store(true, Ordering::SeqCst);
-                        return Err(ThoosaError::oom());
+                        return Err(ThoError::oom());
                     }
                 }
                 let sum_0 = t_0.f_sum_dim_intlist(2, false, Kind::Float)?;
@@ -907,12 +907,12 @@ mod tests {
             .tmp_path()
             .join(format!("{run_id}_0_slices.zstd"));
         let reader = ChunkedSlicesReader::<SlicesMatch>::new(&slices_path)
-            .map_err(|e| ThoosaError::new(format!("read slices file: {e}")))?;
+            .map_err(|e| ThoError::new(format!("read slices file: {e}")))?;
 
         let mut remaining = expected;
         let mut actual_count = 0usize;
         for chunk in reader {
-            let chunk = chunk.map_err(|e| ThoosaError::new(format!("read slices chunk: {e}")))?;
+            let chunk = chunk.map_err(|e| ThoError::new(format!("read slices chunk: {e}")))?;
             for entry in chunk {
                 actual_count += 1;
                 let key = (entry.0.0, entry.0.1, entry.1.0, entry.1.1);
@@ -936,7 +936,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_cross_loader() -> Result<(), ThoosaError> {
+    async fn test_cross_loader() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
 
         let resource_a: Resource = (1, 1, "resource_a", 2).into();

@@ -3,7 +3,7 @@ use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
 
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 
 #[allow(dead_code)]
 fn kernel_cdist(t_0: &Tensor, t_1: &Tensor, l: f64, sigma: f64) -> Tensor {
@@ -36,7 +36,7 @@ fn posterior(
     l: &Tensor,
     sigma_f: &Tensor,
     sigma_y: f64,
-) -> Result<(Tensor, Tensor), ThoosaError> {
+) -> Result<(Tensor, Tensor), ThoError> {
     // let k = kernel(&x_train, &x_train, l, sigma_f);
     // let l = Tensor::from_slice(&[l]).totype(Float);
     // let sigma_f = Tensor::from_slice(&[sigma_f]).totype(Float);
@@ -91,7 +91,7 @@ pub fn rbf_nll(
     y_train: &Tensor,
     theta: &Tensor,
     noise: f64,
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
     debug!(
         "rbf_nll: theta.device={:?} theta.requires_grad={:?}",
         theta.device(),
@@ -169,7 +169,7 @@ fn cholesky_rec(
     jitter: f64,
     e: i32,
     e_step: i32,
-) -> Result<Tensor, ThoosaError> {
+) -> Result<Tensor, ThoError> {
     match t.f_linalg_cholesky(false) {
         Ok(l) => Ok(l),
         Err(err) => {
@@ -185,13 +185,13 @@ fn cholesky_rec(
                     e_step,
                 )
             } else {
-                Err(ThoosaError::new(format!("can't do cholesky: {:?}", err)))
+                Err(ThoError::new(format!("can't do cholesky: {:?}", err)))
             }
         }
     }
 }
 
-pub fn cholesky_with_jitter(t: &Tensor) -> Result<Tensor, ThoosaError> {
+pub fn cholesky_with_jitter(t: &Tensor) -> Result<Tensor, ThoError> {
     cholesky_rec(t, 10, std::f64::EPSILON, 0, 2)
 }
 
@@ -242,7 +242,7 @@ mod opt_tests {
     }
 
     #[test]
-    fn test_rbf() -> Result<(), ThoosaError> {
+    fn test_rbf() -> Result<(), ThoError> {
         let x_train = Tensor::from_slice(&[1., 2., 3., 4.]).view((-1, 1));
 
         let k = kernel_rbf(
@@ -266,7 +266,7 @@ mod opt_tests {
     //FROM sklearn.gaussian_process kernels.RBF()
 
     #[test]
-    fn test_rbf_sim() -> Result<(), ThoosaError> {
+    fn test_rbf_sim() -> Result<(), ThoError> {
         let x_train = Tensor::from_slice(&[-1.11111111, 1.11111111]).view((-1, 1));
         let k = kernel_rbf(
             &x_train,
@@ -306,7 +306,7 @@ mod opt_tests {
     }
 
     #[test]
-    fn test_rbf_10() -> Result<(), ThoosaError> {
+    fn test_rbf_10() -> Result<(), ThoError> {
         let x_train = Tensor::from_slice(&[-4., -3., -2., -1., 0.]).view((-1, 1));
 
         let k = super::kernel_rbf(
@@ -330,7 +330,7 @@ mod opt_tests {
     }
 
     #[test]
-    fn test_rbf_chol_rand() -> Result<(), ThoosaError> {
+    fn test_rbf_chol_rand() -> Result<(), ThoError> {
         let n = 1000;
         let x_train = Tensor::rand([n, 1], FLOAT_CPU);
         let k = super::kernel_cdist(&x_train, &x_train, 0.0, 0.0);
@@ -343,7 +343,7 @@ mod opt_tests {
     }
 
     #[test]
-    fn test_posterior_ch_mult() -> Result<(), ThoosaError> {
+    fn test_posterior_ch_mult() -> Result<(), ThoError> {
         let x_train = Tensor::from_slice(&[1., 40., 2., 30., 3., 20., 4., 10.]).view((-1, 2));
 
         let y_train = Tensor::from_slice(&[2., 20., 2., 20.]).view((1, -1));
@@ -379,7 +379,7 @@ mod opt_tests {
     }
 
     #[test]
-    fn test_posterior() -> Result<(), ThoosaError> {
+    fn test_posterior() -> Result<(), ThoError> {
         let x_train = Tensor::from_slice(&[1., 2., 3., 4.]).view((-1, 1));
         let y_train = Tensor::from_slice(&[2., 20., 2., 20.]).view((1, -1));
 
@@ -412,7 +412,7 @@ mod opt_tests {
     }
 
     #[test]
-    fn test_rbf_nll() -> Result<(), ThoosaError> {
+    fn test_rbf_nll() -> Result<(), ThoError> {
         let x_train = Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1));
 
         let y_train = Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.])
@@ -456,7 +456,7 @@ mod opt_tests {
     }
 
     #[test]
-    fn test_nll_brent() -> Result<(), ThoosaError> {
+    fn test_nll_brent() -> Result<(), ThoError> {
         let x_train = Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1));
 
         let y_train = Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.])
@@ -500,7 +500,7 @@ mod opt_tests {
 
     //stack if first point is min
     #[test]
-    fn test_opt_1d_with_ei() -> Result<(), ThoosaError> {
+    fn test_opt_1d_with_ei() -> Result<(), ThoError> {
         let n = 100i64;
 
         let (y_train_full, x_t, x) = sin3_pow2(n, -2., 2., Some(0.02));
@@ -593,7 +593,7 @@ mod opt_tests {
     }
 
     #[test]
-    fn test_opt_1d() -> Result<(), ThoosaError> {
+    fn test_opt_1d() -> Result<(), ThoError> {
         let n = 100i64;
 
         let x = (0..n)

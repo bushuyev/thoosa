@@ -6,7 +6,7 @@ use log::debug;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, Data, Metrics};
 use crate::runner::common::runnable::Stage;
 
@@ -70,7 +70,7 @@ where
         &self,
         _adjustable: &A,
         adjust_context: &mut AC,
-    ) -> Result<A, ThoosaError> {
+    ) -> Result<A, ThoError> {
 
         let split_start = adjust_context.done_to();
 
@@ -146,7 +146,7 @@ where
     }
 
 
-    async fn build_final_output(self) -> Result<R::Out, ThoosaError> {
+    async fn build_final_output(self) -> Result<R::Out, ThoError> {
         self.output_builder.build().await
     }
 }
@@ -204,7 +204,7 @@ where
 pub trait OutputBuilder: Debug + Send + Sync {
     type O;
     fn add_partial_output(&mut self, o: Self::O);
-    async fn build(self) -> Result<Self::O, ThoosaError>;
+    async fn build(self) -> Result<Self::O, ThoError>;
 }
 
 #[cfg(test)]

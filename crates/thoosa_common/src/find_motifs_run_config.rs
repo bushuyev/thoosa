@@ -43,7 +43,7 @@ impl FindMotifsRunConfig {
     pub fn from_properties_map_with_id(
         id: RunId,
         properties: &HashMap<String, Val>,
-    ) -> Result<FindMotifsRunConfig, thoosa_shared::ThoosaError> {
+    ) -> Result<FindMotifsRunConfig, thoosa_shared::ThoError> {
         let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map(None, properties)?;
 
         debug!("FindMotifsRunConfig::from_properties_map_with_id: find_motifs_run_config={find_motifs_run_config:?}");

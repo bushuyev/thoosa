@@ -13,7 +13,7 @@ use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{ThoosaError, group_slices};
+use thoosa_shared::{ThoError, group_slices};
 use zstd::stream::write::Encoder;
 
 const FILE_MAGIC: [u8; 8] = *b"THOSCHNK";
@@ -116,7 +116,7 @@ impl Debug for FileMotifTrackerStore {
 }
 
 impl FileMotifTrackerStore {
-    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: RunId, channel: u32) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
+    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: RunId, channel: u32) -> Result<Box<dyn MotifTrackerStore>, ThoError> {
         let file_path = path.as_ref().join(format!("{run_id}_{channel}_slices.zstd").as_str());
 
         let file = std::fs::OpenOptions::new().create(true).read(true).write(true).open(&file_path)?;
@@ -135,7 +135,7 @@ impl FileMotifTrackerStore {
 }
 
 impl MotifTrackerStore for FileMotifTrackerStore {
-    fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> Result<(), ThoosaError> {
+    fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> Result<(), ThoError> {
         trace!("MotifTrackerStore::save_slices: slices_pairs.len()={}", slices_pairs.len());
 
         self.writer.write_items(&slices_pairs)?;
@@ -144,7 +144,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         Ok(())
     }
 
-    fn load_slices_into_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError> {
+    fn load_slices_into_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoError> {
         debug!("MotifTrackerStore::load_slices_into_groups: max_slices_counts={max_slices_counts:?}");
 
         self.writer.shutdown()?;
@@ -276,10 +276,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use thoosa_shared::test_utils::init_test_logging;
-    use thoosa_shared::{TensorIdSliceIdx, ThoosaError, cdt_for_dir, group_slices};
+    use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir, group_slices};
 
     #[test]
-    fn test_single_part() -> Result<(), ThoosaError> {
+    fn test_single_part() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn test_two_motifs() -> Result<(), ThoosaError> {
+    fn test_two_motifs() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
@@ -359,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn test_single_part_with_resources() -> Result<(), ThoosaError> {
+    fn test_single_part_with_resources() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
@@ -400,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn test_two_parts() -> Result<(), ThoosaError> {
+    fn test_two_parts() -> Result<(), ThoError> {
         // log::set_max_level(Trace);
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
@@ -439,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_matches() -> Result<(), ThoosaError> {
+    fn test_no_matches() -> Result<(), ThoError> {
         // log::set_max_level(Trace);
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");

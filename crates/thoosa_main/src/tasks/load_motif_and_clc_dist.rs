@@ -25,7 +25,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Select, WithId};
-use thoosa_shared::{mono_key, ThoosaError};
+use thoosa_shared::{mono_key, ThoError};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::comp_id::SynKey;
@@ -177,7 +177,7 @@ where
             Ctx = C,
         > + Adjustable + OutId + Sync + Send + 'static,
 {
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     {
         let out_id = self.out_id(input.id());
 
@@ -227,7 +227,7 @@ impl Adjustable for MotifSlicesSelector {}
 impl Select<MotifSlicesSelector> for ThoTensor<MotifSlices, DataId> {
     type Output = ThoTensor<MotifSlices, DataId>;
 
-    fn subview(&self, selector: MotifSlicesSelector) -> Result<Self::Output, ThoosaError> {
+    fn subview(&self, selector: MotifSlicesSelector) -> Result<Self::Output, ThoError> {
         let size: MonoMetrics<0, 2> = self.size().try_into()?;
 
         let ranges = MonoMetrics::<0, 2>::map_to_ranges(&selector.slices.start, &selector.slices.end)?;
@@ -258,7 +258,7 @@ impl OutputBuilder for DistOutputBuilder {
         self.values.push(o.value());
     }
 
-    async fn build(self) -> Result<Self::O, ThoosaError> {
+    async fn build(self) -> Result<Self::O, ThoError> {
         debug!("DistOutputBuilder::build: self.values={:?}", self.values);
 
         Ok(AverageDistanceValue::new(self.id.clone(), if self.values.is_empty() { 0.0 } else { self.values.iter().sum::<f32>() / self.values.len() as f32 }))
@@ -277,12 +277,12 @@ mod tests {
     use parking_lot::{Mutex, RwLock};
     use std::sync::Arc;
     use tch::Tensor;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_shared::traits::{DataId, WithId};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_load_and_clc_average_euclidean_distance() -> Result<(), ThoosaError> {
+    async fn test_load_and_clc_average_euclidean_distance() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
 
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));

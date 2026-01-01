@@ -6,7 +6,7 @@ use tch::Device;
 use tch::Kind;
 use thoosa_shared::runner::adjusters::splits::OutputBuilder;
 use crate::dims::Dims;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Named, WithId};
 
 #[allow(dead_code)]
@@ -83,7 +83,7 @@ where
         self.added_partial_output_len += partial_size[self.dim as usize];
     }
 
-    async fn build(self: Self) -> Result<Self::O, ThoosaError> {
+    async fn build(self: Self) -> Result<Self::O, ThoError> {
         Ok(self.output)
     }
 }
@@ -98,7 +98,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use thoosa_shared::runner::adjusters::splits::OutputBuilder;
     use crate::dims::{AnyMetrics, AnySub, Dims};
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use thoosa_shared::traits::SimpleId;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 
@@ -109,7 +109,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_append() -> Result<(), ThoosaError>{
+    async fn test_append() -> Result<(), ThoError>{
         let mut builder: Box<SingleDimTensorOutputBuilder<SimpleId, TestDims>> = Box::new(
             SingleDimTensorOutputBuilder::new("test".into(), 0, &[10], FLOAT_CPU, BuildAs::Append),
         );
@@ -134,7 +134,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sum() -> Result<(), ThoosaError>{
+    async fn test_sum() -> Result<(), ThoError>{
         let mut builder: Box<SingleDimTensorOutputBuilder<SimpleId, TestDims>> = Box::new(
             SingleDimTensorOutputBuilder::new("test".into(), 0, &[3], FLOAT_CPU, BuildAs::Sum),
         );

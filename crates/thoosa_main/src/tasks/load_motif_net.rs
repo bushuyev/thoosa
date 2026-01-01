@@ -16,7 +16,7 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{mono_key, simple_id, ThoosaError};
+use thoosa_shared::{mono_key, simple_id, ThoError};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::comp_id::SynKey;
 use crate::tasks::run_ctx_2::MotifsCtx;
@@ -120,7 +120,7 @@ impl <C> AsyncStage for LoadMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
 {
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoosaError> {
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let (device_idx, cache_area) = {
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area())
@@ -132,7 +132,7 @@ where
         debug!("LoadMotifNet::run: motif_nets={motif_nets:?}");
 
         let (params, module) = motif_nets
-            .pop().ok_or_else(||ThoosaError::new(format!("no nets for input={input:?}")))?;//TODO select best net or select with run config
+            .pop().ok_or_else(|| ThoError::new(format!("no nets for input={input:?}")))?;//TODO select best net or select with run config
 
         Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, MotifNetMeta::new(input.motif_id, input.channel, params)), cache_area)))
     }
@@ -158,13 +158,13 @@ mod tests {
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::utils;
     use thoosa_common::ws::WsMockBuilder;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::ThoError;
     use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput};
 
 
 
     #[tokio::test]
-    async fn test_0() -> Result<(), ThoosaError>{
+    async fn test_0() -> Result<(), ThoError>{
 
         GlobalCtx::init_devices(2);
 
