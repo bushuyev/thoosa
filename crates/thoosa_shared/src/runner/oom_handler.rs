@@ -464,10 +464,13 @@ where
 
         let mut input_select_adjusted: Option<S> = None;
 
+    
         match panic_to_err_async!(
             runner(Arc::clone(&task), Arc::clone(&input), None, device_idx, Arc::clone(&run_context)).await
         ) {
             Err(te) => {
+                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  te={te:?}", os_thread_id());
+
                 match te.what() {
                     Cause::OutOfMemory => {
                         debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  oom 0", os_thread_id());

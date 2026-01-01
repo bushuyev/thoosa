@@ -122,7 +122,8 @@ where
             .dump_all_to_cpu(ids_to_exclude, device_idx)
             .await?;
 
-        adjustable.write().drop_permits(DropIf::Always);
+        *adjust_context.dump_to_cpu_retry_count_mut() = 10001;//TODO to force false from degrade and proceed to next adjuster
+        // adjustable.write().drop_permits(DropIf::Always);
 
         debug!("DumpToCpu::adjust done: is_all_on_cpu={}",GlobalCtx::global().is_all_on_cpu(device_idx));
 
