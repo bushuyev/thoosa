@@ -3,7 +3,9 @@ use cmake::Config;
 use std::path::PathBuf;
 
 fn main() {
-    let libtorch = "/home/bu/dvl/torch/libtorch-2.7.1";
+    let libtorch = env::var("LIBTORCH")
+        .expect("LIBTORCH must be set (see .cargo/config.toml)");
+    let libtorch = libtorch.trim_end_matches('/');
     let cuda_root = "/usr/local/cuda";
 
     let dst = Config::new("src-cpp")
@@ -45,6 +47,7 @@ fn main() {
     println!("cargo:rustc-link-lib=dylib=torch_cpu");
     println!("cargo:rustc-link-lib=dylib=torch");
     println!("cargo:rustc-link-lib=dylib=c10_cuda");
+    println!("cargo:rerun-if-env-changed=LIBTORCH");
 
     println!("cargo:rerun-if-changed=src-cpp/stream.cpp");
     println!("cargo:rerun-if-changed=src-cpp/memcpy.cpp");
