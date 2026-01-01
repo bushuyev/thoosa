@@ -17,6 +17,7 @@ pub mod resources_motifs_clc_dist;
 pub mod train_motif_nets;
 pub mod motifs_batch_builder;
 pub mod apply_motif_nets;
+pub mod apply_label_nets;
 pub mod load_motif_net;
 pub mod train_label_nets;
 pub mod train_net;
