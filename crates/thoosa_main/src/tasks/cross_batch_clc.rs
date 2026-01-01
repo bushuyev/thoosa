@@ -114,6 +114,7 @@ where
         for<'f> F: FnOnce(&Self::O<'f>) -> Result<Rt, ThoError> + Send,
         P: PermitsCtx,
     {
+        debug!("CrossInput::with_data_ref: do_run");
         do_run(self)
     }
 }
@@ -205,7 +206,7 @@ where
     C: RunCtx + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CrossBatchClc").finish()
+        f.debug_struct("CrossUnfoldClc").field("unfold_params", &self.unfold_params).finish()
     }
 }
 
@@ -365,7 +366,7 @@ where
         debug!("resource_ids_sizes={resource_ids_sizes_0:?}");
 
         debug!(
-            "CrossBatchClc::do_run:  batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?} mem_0={} mem_1={}",
+            "CrossUnfoldClc::do_run:  batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?} mem_0={} mem_1={}",
             tensor_mem_size(&batch_0_t),
             tensor_mem_size(&batch_1_t)
         );
@@ -397,7 +398,7 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params
                 unfold_params.size,
                 unfold_params.step,
             )?;
-            debug!("CrossUnfoldClc::do_run: 0. t.size={:?} self.unfold_params={:?} unfolded.size()={:?}", t.size(), unfold_params, unfolded.size());
+            debug!("CrossUnfoldClc::do_run: 0.  t.id={:?} t.size={:?} self.unfold_params={:?} unfolded.size()={:?}", t.id(), t.size(), unfold_params, unfolded.size());
 
             batch_0_sizes.push(unfolded.size()[1]); //number of blocks
             Ok(unfolded)

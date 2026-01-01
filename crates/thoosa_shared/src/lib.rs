@@ -1937,6 +1937,8 @@ macro_rules! panic_to_err_async {
     ($expr:expr) => {{
         let x = std::panic::catch_unwind(core::panic::AssertUnwindSafe(async || $expr));
 
+        log::debug!("panic_to_err_async");
+
         match x {
             //no panic
             Ok(inner_result) => {
@@ -1956,9 +1958,7 @@ macro_rules! panic_to_err_async {
                 if let Some(msg) = e.downcast_ref::<String>() {
                     log::debug!("panic_to_err_async: String: {msg}");
                     Err(thoosa_shared::ThoError::new(msg.as_str()))
-                //TODO
-                // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
-                //     Err(*thoosa_error)
+
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("panic_to_err_async: str: {msg}");
                     Err(thoosa_shared::ThoError::new(*msg))

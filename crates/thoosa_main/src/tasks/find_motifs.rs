@@ -184,18 +184,20 @@ where
                         }
 
                         //copy to device is done on streams created in CopyCtx and used in DistsMask::new_async. Should wait for calculation stream to finish.
+                        debug!("FindMotifsStage::new, batch_clc: t_0.size={:?}, t_1.size={:?}", t_0.size(), t_1.size());
 
-
-                        let ((mask, dists), motifs_stream) = with_cuda_stream(device_idx, ||{
+                        let (clc_dist_d2_and_mask_result, motifs_stream) = with_cuda_stream(device_idx, ||{
                             thoosa_motifs::distance::clc_dist_d2_and_mask(
                                 t_0.shallow_clone(),
                                 t_1.shallow_clone(),
                                 fixed_config.keep_slice_matches,//if true dists are returned + slices are stored in sqlite
                                 &mut mask_makers,
-                            ).unwrap()
+                            )
                         });
 
-                        debug!("CrossBatchClc::do_run:  dists={dists:?}");
+                        let (mask, dists) = clc_dist_d2_and_mask_result?;
+
+                        debug!("FindMotifsStage::new, batch_clc:  dists={dists:?}");
                         if device_idx > 0 {
                             Ok(DistsMask::new(mask, dists, true, motifs_stream)?)
                         } else {
