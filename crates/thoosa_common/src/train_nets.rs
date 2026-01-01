@@ -555,7 +555,7 @@ impl MotifNetParams {
 
     pub fn from_file(path: &PathBuf) -> Result<Self, ThoError> {
         serde_json5::from_str::<MotifNetParams>(fs::read_to_string(&path)?.as_str()).map_err(
-            |serde_err| ThoError::new(format!("err={}, path={path:?}", serde_err.to_string())),
+            |serde_err| ThoError::from_error(format!("read motif net params from {path:?}"), serde_err),
         )
     }
 
@@ -732,7 +732,9 @@ impl LabelNetParams {
 
     pub fn from_file(path: &PathBuf) -> Result<Self, ThoError> {
         serde_json5::from_str::<LabelNetParams>(fs::read_to_string(&path)?.as_str())
-            .map_err(|serde_err| ThoError::new(serde_err.to_string()))
+            .map_err(|serde_err| {
+                ThoError::from_error(format!("read label net params from {path:?}"), serde_err)
+            })
     }
 
     pub fn label_net(&self) -> Node {
@@ -1095,7 +1097,9 @@ impl FinalNetParams {
 
     pub fn from_file(path: &PathBuf) -> Result<Self, ThoError> {
         serde_json5::from_str::<FinalNetParams>(fs::read_to_string(&path)?.as_str())
-            .map_err(|serde_err| ThoError::new(serde_err.to_string()))
+            .map_err(|serde_err| {
+                ThoError::from_error(format!("read final net params from {path:?}"), serde_err)
+            })
     }
 }
 

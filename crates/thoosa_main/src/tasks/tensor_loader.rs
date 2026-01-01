@@ -258,7 +258,7 @@ mod tests {
         let loaded = loader
             .run_cached(Arc::new(DevicesWrap::wrap(Resource::new(0, 0, "aaa", 20), 0)), Arc::clone(&ctx))
             .await
-            .map_err(|e| ThoError::new("zzz"))?;
+            ?;
 
         let result = loaded
             .with_data_ref(0,

@@ -137,7 +137,7 @@ pub fn maybe_init_perf_tracing_stdout_simplelog_like(perf_filter: &str, perf_fil
         .with(PerfLayer::new())
         .try_init()
         .map(|_|true)
-        .map_err(|e| ThoError::new(e.to_string()))
+        .map_err(|e| ThoError::from_error("init perf tracing subscriber", e))
 }
 
 

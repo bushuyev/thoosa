@@ -674,7 +674,7 @@ impl Store for SqlStore {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard
             .transaction()
-            .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
+            .map_err(|e| ThoError::from_error("start sqlite transaction", e))?; //TODO error
 
         t.execute(
             "INSERT INTO run_configs (type, descr) VALUES (?, ?)",
@@ -2130,7 +2130,7 @@ impl Store for SqlStore {
                             assert!(ord == i as i64);
                             key
                         })
-                        .map_err(|e| ThoError::new(e.to_string()))
+                        .map_err(ThoError::from)
                 })
                 .collect::<Result<Vec<String>, ThoError>>();
 

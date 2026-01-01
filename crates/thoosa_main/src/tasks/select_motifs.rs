@@ -353,7 +353,9 @@ where
         debug!("SelectMotifsStage::run: resources={resources:?}");
         if resources.is_empty() {
             warn!("SelectMotifsStage::run: no labels resources");
-            return Err(format!("No resources found in  {input:?}").into())
+            return Err(ThoError::new(format!(
+                "no resources found in {input:?}"
+            )))
         }
 
         let num_channels = self.ws.read().channels() as usize;
@@ -579,8 +581,19 @@ where
                                 #[cfg(not(debug_assertions))]
                                 ML::cache().await.remove(&ML::out_id(&clc_dist.motif_loader, &motif_id));
 
-                                let dist = clc_dist.run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(DataId(*motif_id)), 0)), Arc::clone(&ctx)).await
-                                    .map_err(|e| ThoError::new(format!("Got error while running clc_dist for {motif_id}")))?;
+                                let dist = clc_dist
+                                    .run(
+                                        Arc::new(DevicesWrap::wrap(
+                                            MotifLoaderInput::all_slices(DataId(*motif_id)),
+                                            0,
+                                        )),
+                                        Arc::clone(&ctx),
+                                    )
+                                    .await
+                                    .map_err(|e| {
+                                        error!("run clc_dist for motif_id={motif_id} failed: {e:?}");
+                                        e
+                                    })?;
 
                                 with_data!(ctx, 0/*it's always cpu*/, dist; |dist:&AverageDistanceValue|{
                                     Ok::<_, ThoError>((*motif_id, dist.value() as f64))

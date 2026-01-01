@@ -29,6 +29,7 @@ use std::hash::Hash;
 use std::ops::{Mul, Range};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::{fmt, fs};
 use async_trait::async_trait;
@@ -142,6 +143,15 @@ pub enum Cause {
     OutOfPermits,
     AdjusterFailed,
     UnsupportedDegradeLevel,
+    ExpectedValue,
+    ExpectedRange,
+    InvalidRange { range: String },
+    RegexParse(regex::Error),
+    CliParse(Arc<clap::Error>),
+    External {
+        type_name: &'static str,
+        source: Arc<dyn Error + Send + Sync>,
+    },
     SomethingElse(String),
     NotFound,
     NotReady,
@@ -155,6 +165,8 @@ pub struct ThoError {
     is_oom: bool,
     pub what: Cause,
 }
+
+pub type ThoosaError = ThoError;
 
 impl Clone for ThoError {
     fn clone(&self) -> Self {
@@ -171,18 +183,20 @@ unsafe impl Send for ThoError {}
 
 impl ThoError {
     pub fn new(msg: impl Into<String> + Display) -> Self {
-        Self::new_with_error(msg, Cause::SomethingElse("TOOD".to_string()))
+        let msg = msg.into();
+        Self::new_with_error(msg.clone(), Cause::SomethingElse(msg))
     }
 
     pub fn new_with_error(msg: impl Into<String> + Display, what: Cause) -> Self {
         trace!("ThoosaError::new: msg={}", msg);
         let backtrace = Backtrace::capture();
+        let is_oom = matches!(&what, Cause::OutOfMemory);
 
         debug!("{}", backtrace.to_string());
         Self {
             msg: msg.into(),
             backtrace,
-            is_oom: false,
+            is_oom,
             what,
         }
     }
@@ -206,6 +220,42 @@ impl ThoError {
 
     pub fn what(&self) -> &Cause {
         &self.what
+    }
+
+    pub fn from_error<E>(msg: impl Into<String> + Display, err: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        let err_msg = err.to_string();
+        if err_msg.contains("out of memory") || err_msg.contains("can't allocate memory") {
+            ThoError::new_with_error(msg, Cause::OutOfMemory)
+        } else {
+            ThoError::new_with_error(
+                msg,
+                Cause::External {
+                    type_name: std::any::type_name::<E>(),
+                    source: Arc::new(err),
+                },
+            )
+        }
+    }
+
+    pub fn from_boxed_error(
+        msg: impl Into<String> + Display,
+        err: Box<dyn Error + Send + Sync + 'static>,
+    ) -> Self {
+        let err_msg = err.to_string();
+        if err_msg.contains("out of memory") || err_msg.contains("can't allocate memory") {
+            ThoError::new_with_error(msg, Cause::OutOfMemory)
+        } else {
+            ThoError::new_with_error(
+                msg,
+                Cause::External {
+                    type_name: std::any::type_name_of_val(err.as_ref()),
+                    source: Arc::from(err),
+                },
+            )
+        }
     }
 }
 
@@ -233,21 +283,28 @@ impl From<Cause> for ThoError {
     }
 }
 
-impl<D> From<D> for ThoError
+impl<E> From<E> for ThoError
 where
-    D: Display,
+    E: Error + Send + Sync + 'static,
 {
-    fn from(value: D) -> Self {
+    fn from(value: E) -> Self {
         debug!("ThoosaError::from: value={}", value);
         let msg = value.to_string();
 
         if msg.contains("out of memory") || msg.contains("can't allocate memory") {
             ThoError::oom()
         } else {
-            ThoError::new(msg)
+            ThoError::new_with_error(
+                msg,
+                Cause::External {
+                    type_name: std::any::type_name::<E>(),
+                    source: Arc::new(value),
+                },
+            )
         }
     }
 }
+
 
 #[derive(Debug, Eq, Hash, PartialEq, Clone)]
 pub struct MotifSlice {
@@ -829,7 +886,10 @@ where
 {
     pub fn expect_value(&self) -> Result<&V, ThoError> {
         match self {
-            RangeOrValue::Range { .. } => Err(ThoError::new("expected value")),
+            RangeOrValue::Range { .. } => Err(ThoError::new_with_error(
+                "expected RangeOrValue::Value, got Range",
+                Cause::ExpectedValue,
+            )),
             RangeOrValue::Value(v) => Ok(v),
         }
     }
@@ -837,7 +897,10 @@ where
     pub fn expect_range(&self) -> Result<&Range<V>, ThoError> {
         match self {
             RangeOrValue::Range { range, step: _ } => Ok(range),
-            RangeOrValue::Value(_v) => Err(ThoError::new("expected range")),
+            RangeOrValue::Value(_v) => Err(ThoError::new_with_error(
+                "expected RangeOrValue::Range, got Value",
+                Cause::ExpectedRange,
+            )),
         }
     }
 }
@@ -999,7 +1062,9 @@ pub fn clc_step(input_n: u32, motif_width: u32, slices_num: u32) -> (u32, u32) {
 
 pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, ThoError> {
     let re: Regex = Regex::new(r#"\((?<id>\d+),\s"(?<kind>\w+)"\)"#)
-        .map_err(|e| ThoError::new(e.to_string()))?; //TODO const, error
+        .map_err(|e| {
+            ThoError::new_with_error("compile corr labels regex", Cause::RegexParse(e))
+        })?; //TODO const, error
     Ok(re
         .captures_iter(descr)
         .map(|caps| {
@@ -1090,7 +1155,14 @@ fn parse_range_str(
                 step_i.map(|step| (step, step_d)),
             ))
         })
-        .unwrap_or_else(|| Err(ThoError::new(format!("can't parse range {range}"))))
+        .unwrap_or_else(|| {
+            Err(ThoError::new_with_error(
+                format!("can't parse range {range}"),
+                Cause::InvalidRange {
+                    range: range.to_string(),
+                },
+            ))
+        })
 }
 
 pub fn make_combos<V: Clone>(iters: impl Iterator<Item = impl Iterator<Item = V>>) -> Vec<Vec<V>> {
@@ -1239,8 +1311,9 @@ mod shared_tests {
     use crate::{
         add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
         make_combos, parse_range_str, snake_to_camel, test_utils, RangeOrValue,
-        ResourceType, ThoError,
+        Cause, ResourceType, ThoError,
     };
+    use std::sync::Arc;
     use clap::{Args, Parser};
     use log::debug;
     use std::collections::HashSet;
@@ -1410,7 +1483,12 @@ mod shared_tests {
 
         let params =
             TestParams::try_parse_from(vec!["", "--step=1.1..2.2", "--window=1..2"].into_iter())
-                .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
+                .map_err(|e| {
+                    ThoError::new_with_error(
+                        "parse range-or-value args",
+                        Cause::CliParse(Arc::new(e)),
+                    )
+                })?; //TODO error
 
         assert_eq!(
             TestParams {
@@ -1441,18 +1519,33 @@ mod shared_tests {
 
         let params =
             TestParams::try_parse_from(vec!["", "--resources=list:aaa,bbb,ccc"].into_iter())
-                .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
+                .map_err(|e| {
+                    ThoError::new_with_error(
+                        "parse resources args (list)",
+                        Cause::CliParse(Arc::new(e)),
+                    )
+                })?; //TODO error
 
         assert_eq!(
             ResourceType::List(vec!["aaa".into(), "bbb".into(), "ccc".into()]),
             params.resources
         );
         let params = TestParams::try_parse_from(vec!["", "--resources=set:aaa"].into_iter())
-            .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
+            .map_err(|e| {
+                ThoError::new_with_error(
+                    "parse resources args (set)",
+                    Cause::CliParse(Arc::new(e)),
+                )
+            })?; //TODO error
         assert_eq!(ResourceType::Set("aaa".into()), params.resources);
 
         let params = TestParams::try_parse_from(vec!["", "--resources=group:bbb"].into_iter())
-            .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
+            .map_err(|e| {
+                ThoError::new_with_error(
+                    "parse resources args (group)",
+                    Cause::CliParse(Arc::new(e)),
+                )
+            })?; //TODO error
         assert_eq!(ResourceType::Group("bbb".into()), params.resources);
 
         Ok(())
@@ -1475,7 +1568,12 @@ mod shared_tests {
         let params = TestParams::try_parse_from(
             vec!["", "--step=-1.01..2.2:0.1", "--window=-20..20:2"].into_iter(),
         )
-        .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
+        .map_err(|e| {
+            ThoError::new_with_error(
+                "parse range-or-value args with step",
+                Cause::CliParse(Arc::new(e)),
+            )
+        })?; //TODO error
 
         assert_eq!(
             TestParams {
@@ -1521,7 +1619,12 @@ mod shared_tests {
         }
 
         let params = TestParams::try_parse_from(vec!["", "--step=1.1", "--window=10"].into_iter())
-            .map_err(|e| ThoError::new(e.to_string()))?; //TODO error
+            .map_err(|e| {
+                ThoError::new_with_error(
+                    "parse range-or-value args (value)",
+                    Cause::CliParse(Arc::new(e)),
+                )
+            })?; //TODO error
 
         assert_eq!(
             TestParams {
@@ -1852,16 +1955,16 @@ macro_rules! panic_to_err_async {
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
                     log::debug!("panic_to_err_async: String: {msg}");
-                    Err(thoosa_shared::ThoError::from(msg))
+                    Err(thoosa_shared::ThoError::new(msg.as_str()))
                 //TODO
                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
                 //     Err(*thoosa_error)
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("panic_to_err_async: str: {msg}");
-                    Err(thoosa_shared::ThoError::from(*msg))
+                    Err(thoosa_shared::ThoError::new(*msg))
                 } else {
                     log::debug!("panic_to_err_async: unknown: {e:?}");
-                    Err(thoosa_shared::ThoError::from(format!("{e:?}")))
+                    Err(thoosa_shared::ThoError::new(format!("{e:?}")))
                 }
             }
         }
@@ -1881,16 +1984,16 @@ macro_rules! panic_to_err {
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
                     log::debug!("thoosa_err String: {msg}");
-                    Err(ThoError::from(msg))
+                    Err(ThoError::new(msg.as_str()))
                 //TODO
                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
                 //     Err(*thoosa_error)
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("thoosa_err str: {msg}");
-                    Err(ThoError::from(*msg))
+                    Err(ThoError::new(*msg))
                 } else {
                     log::debug!("thoosa_err unknown: {e:?}");
-                    Err(ThoError::from(format!("{e:?}")))
+                    Err(ThoError::new(format!("{e:?}")))
                 }
             }
         }

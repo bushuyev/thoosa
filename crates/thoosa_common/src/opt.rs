@@ -185,7 +185,7 @@ fn cholesky_rec(
                     e_step,
                 )
             } else {
-                Err(ThoError::new(format!("can't do cholesky: {:?}", err)))
+                Err(ThoError::from_error("can't do cholesky", err))
             }
         }
     }
@@ -228,6 +228,26 @@ mod opt_tests {
     use crate::utils::from;
     use crate::utils::lin_t;
     use crate::utils::{plot_series, plot_series_with_points, sin3_pow2, vec_f32_from};
+
+    #[derive(Debug)]
+    struct ArgminCoreError {
+        context: &'static str,
+        source: Error,
+    }
+
+    impl ArgminCoreError {
+        fn new(context: &'static str, source: Error) -> Self {
+            Self { context, source }
+        }
+    }
+
+    impl std::fmt::Display for ArgminCoreError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}: {}", self.context, self.source)
+        }
+    }
+
+    impl std::error::Error for ArgminCoreError {}
 
     #[allow(dead_code)]
     fn sig_1_norm(_norm: Normal, _rng: ThreadRng, n: i64) -> Tensor {
@@ -491,7 +511,8 @@ mod opt_tests {
 
         let res = Executor::new(cost, solver)
             .configure(|state| state.param(-100.).max_iters(10).target_cost(0.0))
-            .run()?;
+            .run()
+            .map_err(|e| ArgminCoreError::new("brent run", e))?;
 
         debug!("res={:?}", res.state().get_best_param().unwrap());
 
