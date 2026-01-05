@@ -1,3 +1,4 @@
+#[cfg(debug_assertions)]
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};

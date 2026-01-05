@@ -2517,7 +2517,8 @@ impl SqlStore {
         t: &Transaction,
     ) -> Result<Vec<Resource>, ThoError> {
         let set_resources = {
-            let mut stmt = t.prepare("SELECT rs.id, rs.import_id, rs.key, rs.length FROM resource_resources_set rrs LEFT JOIN resources rs ON rs.id=rrs.resource_id WHERE rrs.set_id=?")?;
+            // because the running-mean mask (LeRunningMean) is order-sensitive, any non-deterministic resource ordering (or random selection) changes which pairs pass the mask, ORDER BY id is to fix it.
+            let mut stmt = t.prepare("SELECT rs.id as id, rs.import_id, rs.key, rs.length FROM resource_resources_set rrs LEFT JOIN resources rs ON rs.id=rrs.resource_id WHERE rrs.set_id=? ORDER BY id")?;
 
             let vec = stmt
                 .query_map([set_id], |row| {
@@ -2862,7 +2863,7 @@ pub struct SlicesMatch(pub TensorIdSliceIdx, pub TensorIdSliceIdx, pub f32);
 
 pub trait MotifTrackerStore: Debug + Send + Sync {
     fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> Result<(), ThoError>;
-    fn load_slices_into_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoError>;
+    fn load_slices_into_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<usize, ThoError>;
 
     fn run_id(&self) -> RunId;
     fn channel(&self) -> u32;
@@ -2922,7 +2923,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         &mut self,
         store: &Arc<RwLock<Box<dyn Store>>>,
         max_slices_counts: Option<u32>,
-    ) -> Result<(), ThoError> {
+    ) -> Result<usize, ThoError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -2956,12 +2957,16 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         };
         t.commit()?;
 
+        let groups_by_slices_count = filter_groups_by_slices_count(max_slices_counts, groups);
+        let groups_len = groups_by_slices_count.len();
         store.write().save_groups_as_motifs_with_slices_matches(
             self.run_id,
             self.channel as i64,
-            filter_groups_by_slices_count(max_slices_counts, groups),
+            groups_by_slices_count,
             &self.path,
-        )
+        )?;
+
+        Ok(groups_len)
     }
 
     fn run_id(&self) -> RunId {

@@ -82,7 +82,7 @@ pub fn maybe_init_perf_tracing_stdout(perf_filter: &str) -> bool {
 
     tracing_subscriber::registry()
         .with(layer)
-        .with(PerfLayer::new())
+        // .with(PerfLayer::new())
         .try_init()
         .is_ok()
 }

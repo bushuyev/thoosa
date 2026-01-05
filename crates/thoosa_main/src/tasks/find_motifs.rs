@@ -1,6 +1,6 @@
 use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
 use crate::tasks::cross_loader::{
-    CrossLoader, ResourcesConfigInput,
+    CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
 };
 use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
@@ -243,10 +243,11 @@ where
                         |receiver| {
                             let dists_tracker = Arc::clone(receiver);
                             async move {
-                                dists_tracker.build_groups().await;
+                                dists_tracker.build_groups().await
                             }
                             .boxed()
                         },
+                        CrossUnfoldClcOutputMergeMode::CpuMerge,
                         step as u32,
                     )),
                 )?)
@@ -284,6 +285,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="FindMotifsStage::run"))]
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>,
@@ -562,7 +564,7 @@ mod tests {
                         &store,
                         Arc::clone(&loader),
                         run_configs,
-                        FixedFindMotifsConfig::new(None, 2, false, None),
+                        FixedFindMotifsConfig::new(2, false, None),
                         ThoDevice::from(1),
                     )
                     .expect("FindMotifsStage::new failed in test"),

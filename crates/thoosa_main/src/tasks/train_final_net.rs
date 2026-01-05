@@ -373,7 +373,7 @@ where
                                 Ok::<_, ThoError>((out, labels))
                             }
                         })
-                        .buffered(10)
+                        .buffered(crate::buffer_limits::LOGITS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT)
                         .try_collect::<Vec<_>>()
                         .await?
                         .into_iter()
@@ -411,7 +411,7 @@ where
                     })
                 }
             })
-            .buffer_unordered(10)
+            .buffer_unordered(crate::buffer_limits::LOGITS_RESOURCES_BATCH_STREAM_BUFFER_UNORDERED_LIMIT)
             .boxed()
     }
 }

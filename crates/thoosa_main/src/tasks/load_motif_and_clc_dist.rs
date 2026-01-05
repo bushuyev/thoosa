@@ -177,6 +177,7 @@ where
             Ctx = C,
         > + Adjustable + OutId + Sync + Send + 'static,
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifAndClcDistanceStage::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     {
         let out_id = self.out_id(input.id());
@@ -253,7 +254,7 @@ impl DistOutputBuilder {
 impl OutputBuilder for DistOutputBuilder {
     type O = AverageDistanceValue;
 
-    fn add_partial_output(&mut self, o: Self::O) {
+    async fn add_partial_output(&mut self, o: Self::O) {
         debug!("DistOutputBuilder::add_partial_output: o={o:?}");
         self.values.push(o.value());
     }

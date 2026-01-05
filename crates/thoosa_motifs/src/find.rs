@@ -102,9 +102,6 @@ impl FindMotifsArgs {
 
 #[derive(Debug, Args, Clone)]
 pub struct FixedFindMotifsConfig {
-    //TODO rename to Args
-    #[arg(long)]
-    pub min_tracker_step: Option<usize>, //TODO usize
 
     #[arg(long, default_value_t = 10_000)]
     pub max_chunk_size: u32, //max number of entries in butched tensors
@@ -118,13 +115,11 @@ pub struct FixedFindMotifsConfig {
 
 impl FixedFindMotifsConfig {
     pub fn new(
-        min_tracker_step: Option<usize>,
         max_chunk_size: u32,
         keep_slice_matches: bool,
         max_slices_k: Option<f32>,
     ) -> Self {
         Self {
-            min_tracker_step,
             max_chunk_size,
             keep_slice_matches,
             max_slices_k,
@@ -177,50 +172,30 @@ pub struct SimpleMotifTracker<'a> {
     last: Option<SlicesMatch>,
     motifs: Vec<SlicesMatch>,                //i_0, match_0, match_1, dist
     dumper: Box<dyn MotifTrackerStore + 'a>, //lifetime is for DummyDumper
-    min_step: Option<usize>,                 //TODO remove, all filtering is in gpu
     max_slices_counts: Option<u32>,
 }
 
 impl<'a> SimpleMotifTracker<'a> {
     pub fn new(
         dumper: Box<dyn MotifTrackerStore + 'a>,
-        min_step: Option<usize>,
         max_slices_counts: Option<u32>,
     ) -> SimpleMotifTracker {
         Self {
             last: None,
-            motifs: vec![],
+            motifs: Vec::with_capacity(10_000_000),//TODO config + merge Vec::with_capacity + dump when capacity reached from origin/codex/fractional_splitter_async_consume
             dumper,
-            min_step,
             max_slices_counts,
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpleMotifTracker::track"))]
     pub fn track(&mut self, i_0: TensorIdSliceIdx, i_1: TensorIdSliceIdx, dist: f32) {
         trace!("SimpMotifTracker::track: i_0={i_0:?} i_1={i_1:?} dist={dist}");
 
-        match self.min_step {
-            None => {
-                self.motifs.push(SlicesMatch(i_0, i_1, dist));
-            }
-
-            Some(min_step) => {
-                let last = self.last.take();
-                if let Some(last) = last {
-                    //TODO
-                    if last.2 <= dist &&
-                        last.0.0 == i_0.0 && last.1.0 == i_1.0 && //still same chunks
-                        (i_0.1 - last.0.1  > min_step as u32 || i_1.1 - last.1.1  > min_step as u32)
-                    {
-                        //i_. .1 < last.1.1 if next tensor
-                        self.motifs.push(last);
-                    }
-                }
-                self.last.replace(SlicesMatch(i_0, i_1, dist));
-            }
-        }
+        self.motifs.push(SlicesMatch(i_0, i_1, dist))
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpleMotifTracker::dump"))]
     pub fn dump(&mut self) {
         debug!("SimpMotifTracker::dump: self.motifs={}", self.motifs.len());
         if let Some(last) = self.last.take() {
@@ -234,7 +209,7 @@ impl<'a> SimpleMotifTracker<'a> {
         }
     }
 
-    pub fn build_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<(), ThoError> {
+    pub fn build_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<usize, ThoError> {
         self.dumper.load_slices_into_groups(store, self.max_slices_counts)
     }
 
@@ -515,7 +490,7 @@ mod motif_find_tests {
             &mut self,
             store: &Arc<RwLock<Box<dyn Store>>>,
             max_slices_counts: Option<u32>,
-        ) -> Result<(), ThoError> {
+        ) -> Result<usize, ThoError> {
             todo!()
         }
 
@@ -539,7 +514,6 @@ mod motif_find_tests {
             DummyDumper::new(&mut motifs);
             let mut mt = super::SimpleMotifTracker::new(
                 Box::new(DummyDumper::new(&mut motifs)),
-                None,
                 Some(100),
             );
 
@@ -563,30 +537,6 @@ mod motif_find_tests {
             motifs[2]
         );
 
-        let mut motifs = vec![];
-        {
-            let mut mt = super::SimpleMotifTracker::new(
-                Box::new(DummyDumper::new(&mut motifs)),
-                Some(10),
-                Some(100),
-            );
-
-            mt.track(TensorIdSliceIdx(0, 10), TensorIdSliceIdx(1, 10), 1.0);
-            mt.track(TensorIdSliceIdx(0, 20), TensorIdSliceIdx(1, 20), 1.0);
-            mt.track(TensorIdSliceIdx(0, 31), TensorIdSliceIdx(1, 30), 1.0);
-
-            mt.dump();
-        }
-
-        assert_eq!(motifs.len(), 2);
-        assert_eq!(
-            SlicesMatch(TensorIdSliceIdx(0, 20), TensorIdSliceIdx(1, 20), 1.0),
-            motifs[0]
-        );
-        assert_eq!(
-            SlicesMatch(TensorIdSliceIdx(0, 31), TensorIdSliceIdx(1, 30), 1.0),
-            motifs[1]
-        );
 
         Ok(())
     }
@@ -616,7 +566,6 @@ mod motif_find_tests {
         let mut motifs = vec![];
         let mut mt = super::SimpleMotifTracker::new(
             Box::new(DummyDumper::new(&mut motifs)),
-            None,
             Some(100),
         );
 

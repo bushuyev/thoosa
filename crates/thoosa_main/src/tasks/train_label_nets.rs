@@ -414,7 +414,7 @@ where
                 }
 
             })
-                .buffer_unordered(10)//TODO config
+                .buffer_unordered(crate::buffer_limits::TRAIN_LABEL_NETS_RUN_BUFFER_UNORDERED_LIMIT)
                 .try_collect::<Vec<_>>().await?;
 
             Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(SynKey::new([mono_key!("", "empty")]), results), cache_area)))
@@ -668,7 +668,7 @@ where
                             }
 
                         })
-                        .buffered(10)//TODO config
+                        .buffered(crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT)//TODO config
                         .try_collect::<Vec<_>>()
                         .await?
                         .into_iter()
@@ -681,7 +681,7 @@ where
                     build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).await
                 }
             })
-            .buffer_unordered(10)//TODO config
+            .buffer_unordered(crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_STREAM_BUFFER_UNORDERED_LIMIT)//TODO config
             .boxed()
     }
 

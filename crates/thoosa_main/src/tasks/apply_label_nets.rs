@@ -167,6 +167,7 @@ impl<C> AsyncStage for ApplyLabelNets<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNets::run"))]
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
@@ -192,7 +193,7 @@ where
 
                 async move { apply_label_net.run(motif_probs, apply_label_net_ctx).await }
             })
-            .buffered(10)
+            .buffered(crate::buffer_limits::APPLY_LABEL_NETS_RUN_BUFFERED_LIMIT)
             .try_collect::<Vec<_>>()
             .await?;
 

@@ -115,6 +115,7 @@ impl<C> SyncStage for AverageEuclideanDistanceStage<C>
 where
     C: RunCtx + 'static,
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="AverageEuclideanDistanceStage::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoError> {
         Ok(AverageDistanceValue::new(
             SynKey::new([mono_key!("todo", "todo")]),

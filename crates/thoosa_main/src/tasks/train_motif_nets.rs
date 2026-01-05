@@ -154,6 +154,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainMotifNets::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let (device_idx, cache_area, ctx_name) = {
             let guard = ctx.read();
@@ -275,7 +276,7 @@ where
             }
 
         })
-        .buffer_unordered(10)//TODO config
+        .buffer_unordered(crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT)
         .filter_map(|join_res| async move {
             match join_res {
                 Ok(opt_i) => Some(opt_i),

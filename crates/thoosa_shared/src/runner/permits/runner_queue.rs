@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use dashmap::DashMap;
 use log::{error, info, trace, debug};
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{Cause, ThoError};
@@ -20,7 +21,11 @@ pub struct Arbiter {
     capacity: NumPermits,
     worker: Option<JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
-    granted_counts_len: Arc<AtomicUsize>,//TODO remove?
+
+    // #[cfg(debug_assertions)] TODO
+    granted_counts: Arc<DashMap<Arc<dyn CachableIdTr>, usize>>,
+    // #[cfg(debug_assertions)] TODO
+    granted_counts_len: Arc<AtomicUsize>,
     #[allow(dead_code)]
     device_idx: usize
 }
@@ -41,11 +46,13 @@ impl Arbiter {
         let notify = Arc::new(Notify::new());
         let shutdown = Arc::new(AtomicBool::new(false));
         let granted_counts_len = Arc::new(AtomicUsize::new(0));
+        let granted_counts: Arc<DashMap<Arc<dyn CachableIdTr>, usize>> = Arc::new(DashMap::new());
 
         let worker = Self::spawn(
             Arc::clone(&sem),
             Arc::clone(&notify),
             Arc::clone(&shutdown),
+            Arc::clone(&granted_counts),
             Arc::clone(&granted_counts_len),
             rx,
             device_idx,
@@ -57,6 +64,7 @@ impl Arbiter {
             capacity,
             worker: Some(worker),
             shutdown,
+            granted_counts,
             granted_counts_len,
             device_idx
         }
@@ -115,6 +123,7 @@ impl Arbiter {
         sem: Arc<Semaphore>,
         notify: Arc<Notify>,
         shutdown: Arc<AtomicBool>,
+        granted_counts: Arc<DashMap<Arc<dyn CachableIdTr>, usize>>,
         granted_counts_len: Arc<AtomicUsize>,
         mut rx: mpsc::Receiver<Req>,
         device_idx: usize,
@@ -126,7 +135,7 @@ impl Arbiter {
             // Track repeated OutOfPermits per requester_id to trigger escalation.
             let mut fail_counts: HashMap<Arc<dyn CachableIdTr>, u32> = HashMap::new();
             // Track permits granted per requester until dropped.
-            let mut granted_counts: HashMap<Arc<dyn CachableIdTr>, usize> = HashMap::new();
+
             // When set, only this requester_id may receive permits; others get OutOfPermits immediately.
             let mut super_id: Option<Arc<dyn CachableIdTr>> = None;
             const SUPERTASK_FAIL_THRESHOLD: u32 = 3;
@@ -278,9 +287,11 @@ impl Arbiter {
                         }
                     }
                     Some(dropped) = drop_rx.recv() => {
-                        let val_ref = granted_counts.get_mut(&dropped.0).expect(&format!("no entry for {:?}", dropped.0));
-                        *val_ref-= dropped.1 as usize;
-                        if *val_ref == 0 {
+                        if {
+                            let mut val_ref = granted_counts.get_mut(&dropped.0).expect(&format!("no entry for {:?}", dropped.0));
+                            *val_ref-= dropped.1 as usize;
+                            *val_ref
+                        } == 0 {
                             granted_counts.remove(&dropped.0);
                         }
                         granted_counts_len.store(granted_counts.len(), Ordering::Release);

@@ -85,7 +85,7 @@ where
     ) -> Result<<Self as Adjuster<C>>::A, ThoError> {
 
 
-        let (device_idx, acquired_permits,  ctx_name)  = {
+        let (device_idx, acquired_permits,  _ctx_name)  = {
             let guard = adjustable.read();
             // assert_eq!(acquired_permits, MAX_PERMITS, "not enough permits {}", acquired_permits);
 
@@ -100,7 +100,7 @@ where
             match GlobalCtx::global().acquire_many(
                 device_idx,
                 MAX_PERMITS - acquired_permits,
-                Arc::new(simple_id!(format!("dump_to_cpu_for_{}", ctx_name))),
+                Arc::new(simple_id!(format!("dump_to_cpu_for_{}", _ctx_name))),
             ).await {
                 Ok(permits) => {
                     debug!("DumpToCpu::adjust: acquired {permits:?}");
