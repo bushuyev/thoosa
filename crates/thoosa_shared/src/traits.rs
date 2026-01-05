@@ -1,6 +1,7 @@
 use ambassador::delegatable_trait;
 use mockall::automock;
 use std::any::Any;
+#[cfg(debug_assertions)]
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};

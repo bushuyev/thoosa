@@ -44,8 +44,7 @@ thoosa_dummy_data_derive = { path = "../thoosa_macros/thoosa_dummy_data_derive" 
 
 thoosa_properties_map = {path = "../thoosa_macros/thoosa_properties_map" }
 thoosa_properties_map_derive = {path = "../thoosa_macros/thoosa_properties_map_derive" }
-
-
+tracing.workspace = true
 
 [dev-dependencies]
 rand_chacha = "0.3.1"

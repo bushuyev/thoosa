@@ -178,6 +178,11 @@ impl GlobalCtx {
         }
     }
 
+    // #[cfg(debug_assertions)] TODO
+    pub fn debug_semaphore(&self, device_idx:usize) -> &Box<dyn PermitSource>{
+        &self.semaphores[device_idx]
+    }
+
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
     pub async fn dump_all_to_cpu<'a>(

@@ -8,7 +8,7 @@ use thoosa_main::cli::run_cli;
 use thoosa_shims::context::ThoCudaContext;
 
 
- fn main() {
+fn main() {
     kick_register_cuda_hooks();
 
     let t1 = Instant::now();
@@ -22,20 +22,21 @@ use thoosa_shims::context::ThoCudaContext;
     1154|grda
     4208|other
     */
+    let cpu_num = std::thread::available_parallelism().map(|nz| nz.get()).unwrap_or(2);
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
             //runs cuCtxSetCurrent
-            ThoCudaContext::new(0).expect("Failed to create context");//TODO device
+            ThoCudaContext::new(0).expect("Failed to create context"); //TODO device
         })
-        .worker_threads(4) //std::thread::available_parallelism().expect("available_parallelism failed").into()) // async workers
-        .max_blocking_threads(32)        // more threads for spawn_blocking jobs
+        .worker_threads(cpu_num/2) //std::thread::available_parallelism().expect("available_parallelism failed").into()) // async workers
+        .max_blocking_threads(cpu_num/2)        // more threads for spawn_blocking jobs
         .enable_all()
         .build()
         .unwrap();
 
 
     rt.block_on(async move {
-
         match run_cli(
             |source_path| data::labeled_resourses(source_path, "train.csv"),
             |source_path, key| {
@@ -62,7 +63,6 @@ use thoosa_shims::context::ThoCudaContext;
                 error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
             }
         }
-
     });
 
 

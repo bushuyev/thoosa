@@ -60,7 +60,7 @@ use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::tasks::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResourcesMotifsDistInput, ClcResourcesMotifsDistInputDeviceWrapper, ClcResourcesMotifsDistInputDeviceWrapperSelector, ClcResourcesMotifsDistOutput};
 
 pub use crate::tasks::resources_motifs_clc_dist::{fold_dists, fold_mask};
-use crate::tasks::slices_iter::SlicesIter;
+use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 
 pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
 where
@@ -131,7 +131,7 @@ impl SelectMotifsSavableResultBuilder {
 impl OutputBuilder for SelectMotifsSavableResultBuilder {
     type O = ClcResourcesMotifsDistOutput;
 
-    fn add_partial_output(&mut self, o: Self::O) {
+    async fn add_partial_output(&mut self, o: Self::O) {
         debug!("SelectMotifsSavableResultBuilder::add_partial_output: o={o:?}");
 
        self.output.push (tokio::spawn(async {
@@ -141,7 +141,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
 
     async fn build(self) -> Result<Self::O, ThoError> {
 
-        let mut resource_ids_sizes = vec![];
+        let mut resource_ids_sizes: Vec<ResourceSlices> = vec![];
 
 
         let output:Vec<ClcResourcesMotifsDistOutput> = futures::future::try_join_all(self.output).await?
@@ -211,7 +211,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         Ok(ClcResourcesMotifsDistOutput::new(
             self.id.find_motifs_run_id,
             channel_masks_dists_ids,
-            SlicesIter::new(self.step, resource_ids_sizes)
+            SlicesIter::new_with_offsets(self.step, resource_ids_sizes)
         ))
     }
 }
@@ -336,6 +336,7 @@ where
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let (device_idx, cache_area, ctx_name) = {
             let guard = ctx.read();
@@ -523,7 +524,7 @@ where
                         Ok::<(), ThoError>(())
                     }
                 })
-                .buffer_unordered(10)
+                .buffer_unordered(crate::buffer_limits::SELECT_MOTIFS_STAGE_FIND_MOTIFS_BUFFER_UNORDERED_LIMIT)
                 .filter_map(|v| async {
                     match v {
                         Ok(v) => {
@@ -608,7 +609,7 @@ where
                 })
 
             })
-            .buffer_unordered(10)
+            .buffer_unordered(crate::buffer_limits::SELECT_MOTIFS_STAGE_GOOD_MOTIFS_BUFFER_UNORDERED_LIMIT)
             .filter_map(|result| async move {
                 //TODO clean up
                 match result {
@@ -1462,7 +1463,7 @@ pub mod tests {
                     (1u32, 100)
                 ])
             )
-        );
+        ).await;
 
         let mask_1 = Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5);
         output_builder.add_partial_output(
@@ -1491,7 +1492,7 @@ pub mod tests {
                     (1u32, 100)
                 ])
             )
-        );
+        ).await;
 
         let ClcResourcesMotifsDistOutput {
             channel_masks_dists_ids,

@@ -76,6 +76,7 @@ where
 
         let mut split_end = split_start.clone();
         split_end += adjust_context.split_len().clone();
+
         if let Some(overlap_len) = self.overlap_len.as_ref() {
             split_end += overlap_len.clone();
         }
@@ -88,10 +89,10 @@ where
     }
 
     fn degrade(&self, adjust_context: &mut AC) -> bool {
+        
         debug!("SplitsAdjuster::degrade: 0. adjust_context={adjust_context:?}");
 
         (*adjust_context.split_len_mut()) /= 2; //TODO configure degrade step
-
 
         let can_degrade = adjust_context.split_len() >= &self.min_split_len;
 
@@ -133,8 +134,8 @@ where
     <<R as Stage>::In<'b> as Data>::Metrics: AddAssign<<<R as Stage>::In<'b> as Data>::Metrics>,
     <<R as Stage>::In<'b> as Data>::Metrics: PartialOrd,
 {
-    fn add_partial_output(&mut self, o: R::Out){
-        self.output_builder.add_partial_output(o);
+    async fn add_partial_output(&mut self, o: R::Out){
+        self.output_builder.add_partial_output(o).await;
 
         self.done_to += self.split_len.clone();
 
@@ -203,25 +204,223 @@ where
 #[allow(async_fn_in_trait)]
 pub trait OutputBuilder: Debug + Send + Sync {
     type O;
-    fn add_partial_output(&mut self, o: Self::O);
+    async fn add_partial_output(&mut self, o: Self::O);
     async fn build(self) -> Result<Self::O, ThoError>;
 }
 
 #[cfg(test)]
 mod tests {
-    use mockall::mock;
+    use std::cell::RefCell;
+    use std::hash::{Hash, Hasher};
+    use std::ops::{Deref, Range};
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use async_trait::async_trait;
+    use log::debug;
+    use mockall::{mock, Any};
+    use mockall::predicate::always;
+    use parking_lot::RwLock;
+    use tokio::io::AsyncWriteExt;
+    use thoosa_shared::ThoError;
+    use crate::applicables_runner::{Input, Output};
+    use crate::copy_mode::CpuOrGpu;
+    use crate::CopyToDevice;
+    use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
+    use crate::runner::common::MockRunCtx;
+    use crate::runner::common::runnable::{Stage, SyncStage};
+    use crate::runner::oom_handler::{Adjuster, InputContext};
+    use crate::traits::{Adjustable, CachableIdTr, Data, WithId};
+    use crate::traits::mock_cachable_id::MockCachableId;
 
     mock! {
-        TestInputId {}
+        #[derive(Debug)]
+        pub TestInput {
+        }
+
+        #[async_trait]
+        impl CopyToDevice for TestInput {
+            async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> where Self:Sized;
+        }
+
+        impl Data for TestInput {
+              type Metrics = i64;
+
+                type M = CpuOrGpu<MockTestInput>;
+
+                fn size(&self) -> i64;
+                fn device(&self) -> usize;
+
+        }
+        impl Input for TestInput {}
     }
+
     mock! {
-        pub TestInput{
+
+        #[derive(Debug)]
+        pub TestOutput{
+        }
+
+        #[async_trait]
+        impl CopyToDevice for TestOutput {
+            async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> where Self:Sized;
+        }
+
+        impl Data for TestOutput {
+              type Metrics = i64;
+
+                type M = CpuOrGpu<MockTestOutput>;
+
+                fn size(&self) -> i64;
+                fn device(&self) -> usize;
+
+        }
+
+        impl WithId for TestOutput {
+            type ID =  MockCachableId;
+            fn id(&self) -> & MockCachableId;
+        }
+
+        impl Output for TestOutput {
         }
 
     }
 
-    #[test]
-    fn test_0() {
-        //TODO
+    mock! {
+        #[derive(Clone, Debug)]
+        pub TestTask {}
+
+        impl Stage for TestTask {
+            type In<'a> = MockTestInput;
+            type Out = MockTestOutput;
+            type Ctx = MockRunCtx;
+        }
+
+        impl SyncStage for TestTask {
+            fn do_run<'f>(self: Arc<Self>, _input: &<Self as Stage>::In<'f>, _ctx: Arc<parking_lot::RwLock<<Self as Stage>::Ctx>>) -> Result<<Self as Stage>::Out, ThoError>;
+        }
+
+        impl Adjustable for TestTask {
+
+        }
+
+    }
+
+    mock! {
+
+        #[derive(Clone, Debug)]
+        TestSelector {
+        }
+
+        impl Adjustable for TestSelector {
+        }
+
+        impl From<Range<i64>> for TestSelector {
+            fn from(range: Range<i64>) -> Self {
+                Self {
+                    range,
+                }
+            }
+        }
+    }
+
+    mock!{
+
+        #[derive(Debug)]
+        TestOutputBuilder {
+
+        }
+
+        impl OutputBuilder for TestOutputBuilder {
+            type O = MockTestOutput;
+            async fn add_partial_output(&mut self, o: MockTestOutput);
+            async fn build(self) -> Result<MockTestOutput, ThoError>;
+        }
+    }
+
+    pub struct MockTestOutputBuilderBuilder {
+        mock:MockTestOutputBuilder
+    }
+
+    impl MockTestOutputBuilderBuilder {
+        fn build() -> MockTestOutputBuilderBuilder {
+            MockTestOutputBuilderBuilder {
+                mock: MockTestOutputBuilder::new(),
+            }
+        }
+        fn with_add_partial_output(mut self) -> Self {
+            self.mock.expect_add_partial_output();
+
+            self
+        }
+
+        fn finish(self)->MockTestOutputBuilder {
+            self.mock
+        }
+
+        fn default()->MockTestOutputBuilder {
+            MockTestOutputBuilderBuilder::build()
+                .with_add_partial_output()
+                .finish()
+        }
+    }
+
+    pub struct MockTestSelectorBuilder {
+        mock:MockTestSelector
+    }
+
+
+
+    impl MockTestSelectorBuilder {
+
+        pub fn finish_with_from_ranges(ranges:Arc<parking_lot::RwLock<Vec<Range<i64>>>>) -> impl Default {
+            let from_ctx = MockTestSelector::from_context();
+
+            from_ctx.expect().returning( move |range|{
+                ranges.write().push(range);
+                Default::default()
+            });
+
+            from_ctx
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
+    async fn test_degrade_once() -> Result<(), ThoError>{
+        let ranges:Arc<parking_lot::RwLock<Vec<Range<i64>>>> = Arc::new(RwLock::new(vec![]));
+
+        let _from_ctx = MockTestSelectorBuilder::finish_with_from_ranges(Arc::clone(&ranges));
+
+        let splits_adjuster: SplitsAdjuster<MockTestSelector, i64> = SplitsAdjuster::new(1);
+        let output_builder = MockTestOutputBuilderBuilder::default();
+        let mut context_impl:SplitsAdjusterContextImpl<MockTestTask, MockTestOutputBuilder>= SplitsAdjusterContextImpl::new(100, output_builder);
+
+
+        let mut selector = MockTestSelector::new();
+
+
+        let _adjusted = splits_adjuster.adjust(&mut selector, &mut context_impl).await?;
+
+        assert!(splits_adjuster.degrade(&mut context_impl));//returns true, can degrade further
+
+        let _adjusted = splits_adjuster.adjust(&mut selector, &mut context_impl).await?;
+
+        context_impl.add_partial_output(MockTestOutput::new()).await;
+
+        let _adjusted = splits_adjuster.adjust(&mut selector, &mut context_impl).await?;
+
+        context_impl.add_partial_output(MockTestOutput::new()).await;
+
+        assert!(context_impl.all_done());
+
+        assert_eq!(
+            &vec![
+                0..100i64, //degrade ->
+                0..50, 50..100
+            ],
+            &*ranges.read()
+        );
+
+        Ok(())
+
     }
 }

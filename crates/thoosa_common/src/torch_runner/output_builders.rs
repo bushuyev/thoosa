@@ -59,7 +59,7 @@ where
 {
     type O = ThoTensor<D, Id>;
 
-    fn add_partial_output(&mut self, partial: Self::O) {
+    async fn add_partial_output(&mut self, partial: Self::O) {
         let partial_size = partial.size();
 
 
@@ -114,10 +114,10 @@ mod tests {
             SingleDimTensorOutputBuilder::new("test".into(), 0, &[10], FLOAT_CPU, BuildAs::Append),
         );
 
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[0, 1, 2]))?);
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5]))?);
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8]))?);
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[9]))?);
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[0, 1, 2]))?).await;
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5]))?).await;
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8]))?).await;
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[9]))?).await;
 
         let out = builder.build().await?;
 
@@ -139,9 +139,9 @@ mod tests {
             SingleDimTensorOutputBuilder::new("test".into(), 0, &[3], FLOAT_CPU, BuildAs::Sum),
         );
 
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[0, 1, 2]))?);
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5]))?);
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8]))?);
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[0, 1, 2]))?).await;
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5]))?).await;
+        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8]))?).await;
 
         let out = builder.build().await?;
 

@@ -120,6 +120,8 @@ impl <C> AsyncStage for LoadMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
 {
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifNet::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let (device_idx, cache_area) = {
             let guard = ctx.read();

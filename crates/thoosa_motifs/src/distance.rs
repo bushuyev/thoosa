@@ -140,6 +140,7 @@ impl<'a> MaskMaker<'a> {
     t_0, t_1 - channels x slices x slice_len
 */
 /// returns bool mask and if with_distances is true distances
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="distance::clc_dist_d2_and_mask"))]
 pub fn clc_dist_d2_and_mask(
     t_0: Tensor,
     t_1: Tensor,
@@ -1108,8 +1109,8 @@ mod distance_tests {
 
         assert_eq!(
             Tensor::from_slice(&[
-                false, false, //0.2 > 0.25 * 0.5
-                false, true, true, true, //0.1 < 0.25 * 0.5
+                false, false, false,//0.2 > 0.25 * 0.5
+                true, true, true,   //0.1 < 0.25 * 0.5
             ])
             .view((1, 3, 2))
             .totype(Bool),
@@ -1125,6 +1126,30 @@ mod distance_tests {
             &Tensor::from_slice(&[18]).view((1, -1)).totype(Int64),
             total_samples.lock().deref()
         );
+
+
+        let mask = mean_mask(
+            0.0,
+            &Tensor::from_slice(&[
+                // distances 3x2 slices
+                0.2, 0.2, 0.2, 0.1, 0.1, 0.1,
+            ])
+                .view((CHANNELS, 3, 2)),
+            None,
+            &mut means_acc,
+            &mut total_samples,
+        ).unwrap();
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                false, false, false,
+                false, false, false,
+            ])
+                .view((1, 3, 2))
+                .totype(Bool),
+            mask
+        );
+        debug!("mask=\n{mask}");
     }
 
     #[test]

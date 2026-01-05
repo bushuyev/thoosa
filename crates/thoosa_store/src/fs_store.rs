@@ -144,7 +144,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         Ok(())
     }
 
-    fn load_slices_into_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoError> {
+    fn load_slices_into_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<usize, ThoError> {
         debug!("MotifTrackerStore::load_slices_into_groups: max_slices_counts={max_slices_counts:?}");
 
         self.writer.shutdown()?;
@@ -156,8 +156,11 @@ impl MotifTrackerStore for FileMotifTrackerStore {
                 (IdSlice(slice_id, slices.0.0, slices.0.1), IdSlice(slice_id, slices.1.0, slices.1.1))
             })
         }));
-        info!("inserting {} groups {} slices", groups.len(), groups.values().map(|s| s.len()).sum::<usize>());
-        store.write().save_groups_as_motifs(self.run_id, self.channel as i64, filter_groups_by_slices_count(max_slices_counts, groups))
+        debug!("inserting {} groups {} slices", groups.len(), groups.values().map(|s| s.len()).sum::<usize>());
+        let groups_len = groups.len();
+        store.write().save_groups_as_motifs(self.run_id, self.channel as i64, filter_groups_by_slices_count(max_slices_counts, groups))?;
+
+        Ok(groups_len)
     }
 
     fn run_id(&self) -> RunId {

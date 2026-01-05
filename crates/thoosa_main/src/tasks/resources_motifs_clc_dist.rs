@@ -98,6 +98,7 @@ impl<C> SyncStage for ClcResourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ClcResourcesMotifsDist::do_run"))]
     fn do_run<'f>(
         self: Arc<Self>,
         input: &Self::In<'f>,
@@ -445,7 +446,7 @@ impl ClcResourcesMotifsDistOutput {
                         }
                     }
                 })
-                .buffered(10)//TODO
+                .buffered(crate::buffer_limits::CLC_RESOURCES_MOTIFS_DIST_OUTPUT_TO_CPU_BUFFERED_LIMIT)
                 .collect::<Vec<_>>()
                 .await,
             resources_iter: self.resources_iter,

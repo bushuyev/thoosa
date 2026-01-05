@@ -1012,7 +1012,7 @@ mod tests {
     impl OutputBuilder for DMulTaskOutputBuilder {
         type O = DMulTaskOutput;
 
-        fn add_partial_output(&mut self, o: Self::O) {
+        async fn add_partial_output(&mut self, o: Self::O) {
             self.partial_output.push(o);
         }
 
