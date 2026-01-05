@@ -195,6 +195,13 @@ impl<'a> SimpleMotifTracker<'a> {
         self.motifs.push(SlicesMatch(i_0, i_1, dist))
     }
 
+    pub fn track_many(&mut self, mut matches: Vec<SlicesMatch>) {
+        if matches.is_empty() {
+            return;
+        }
+        self.motifs.append(&mut matches);
+    }
+
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpleMotifTracker::dump"))]
     pub fn dump(&mut self) {
         debug!("SimpMotifTracker::dump: self.motifs={}", self.motifs.len());
