@@ -1,16 +1,47 @@
 use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::resource::ResourceId;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceSlices {
+    pub id: ResourceId,
+    pub size: usize,
+    pub offset: u32,
+}
+
+impl ResourceSlices {
+    pub fn new(id: ResourceId, size: usize, offset: u32) -> Self {
+        Self { id, size, offset }
+    }
+}
+
+impl From<(ResourceId, usize)> for ResourceSlices {
+    fn from(value: (ResourceId, usize)) -> Self {
+        Self {
+            id: value.0,
+            size: value.1,
+            offset: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)] //TODO clone? reset idx
 pub struct SlicesIter {
     pub step: usize,//TODO pub
-    pub resource_ids_sizes: Vec<(ResourceId, usize)>,
+    pub resource_ids_sizes: Vec<ResourceSlices>,
     outer_idx: usize, // which (ResourceId, len) we're on
     inner_idx: usize, // position within the current len
 }
 
 impl SlicesIter {
     pub fn new(step: usize, resource_ids_sizes: Vec<(ResourceId, usize)>) -> Self {
+        let resource_ids_sizes = resource_ids_sizes
+            .into_iter()
+            .map(ResourceSlices::from)
+            .collect();
+        Self::new_with_offsets(step, resource_ids_sizes)
+    }
+
+    pub fn new_with_offsets(step: usize, resource_ids_sizes: Vec<ResourceSlices>) -> Self {
         Self {
             step,
             resource_ids_sizes,
@@ -26,14 +57,17 @@ impl Iterator for SlicesIter {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             // Are we out of (id, size) pairs?
-            let (rid, size) = match self.resource_ids_sizes.get(self.outer_idx) {
-                Some((rid, size)) => (*rid, *size),
+            let (rid, size, offset) = match self.resource_ids_sizes.get(self.outer_idx) {
+                Some(entry) => (entry.id, entry.size, entry.offset),
                 None => return None,
             };
 
             // If there is still something to yield for the current (rid, size)…
             if self.inner_idx < size {
-                let out = TensorIdSliceIdx(rid, (self.inner_idx * self.step) as u32);
+                let out = TensorIdSliceIdx(
+                    rid,
+                    offset + (self.inner_idx * self.step) as u32,
+                );
                 self.inner_idx += 1;
                 return Some(out);
             }
@@ -48,13 +82,13 @@ impl Iterator for SlicesIter {
     fn size_hint(&self) -> (usize, Option<usize>) {
         // exact total remaining = (remaining in current) + sum of rest
         let mut total = 0usize;
-        if let Some((_, size)) = self.resource_ids_sizes.get(self.outer_idx) {
-            total += size.saturating_sub(self.inner_idx);
+        if let Some(entry) = self.resource_ids_sizes.get(self.outer_idx) {
+            total += entry.size.saturating_sub(self.inner_idx);
         }
         if self.outer_idx + 1 < self.resource_ids_sizes.len() {
             total += self.resource_ids_sizes[(self.outer_idx + 1)..]
                 .iter()
-                .map(|(_, s)| *s)
+                .map(|entry| entry.size)
                 .sum::<usize>();
         }
         (total, Some(total))
@@ -66,7 +100,7 @@ mod tests {
     use thoosa_shared::TensorIdSliceIdx;
     // If this file lives at `crate::tasks::slices_iter`, keep the path below.
     // Otherwise, you can also use `use super::*;`
-    use super::SlicesIter;
+    use super::{ResourceSlices, SlicesIter};
 
     #[test]
     fn test_basic() {
@@ -96,6 +130,24 @@ mod tests {
             TensorIdSliceIdx(11, 0),
             TensorIdSliceIdx(12, 0),
             TensorIdSliceIdx(12, 1),
+        ];
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn test_offsets() {
+        let it = SlicesIter::new_with_offsets(
+            2,
+            vec![
+                ResourceSlices::new(1, 2, 5),
+                ResourceSlices::new(2, 1, 3),
+            ],
+        );
+        let got: Vec<_> = it.collect();
+        let expected = vec![
+            TensorIdSliceIdx(1, 5),
+            TensorIdSliceIdx(1, 7),
+            TensorIdSliceIdx(2, 3),
         ];
         assert_eq!(got, expected);
     }

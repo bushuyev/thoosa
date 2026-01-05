@@ -37,6 +37,7 @@ use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use crate::tasks::run_ctx_2::MotifsCtx;
 use thoosa_shared::comp_id::SynKey;
+use crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN;
 
 #[derive(Debug, Clone, DummyData)]
 pub struct StackedMotifsInput {
@@ -199,6 +200,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackedMotifsLoader::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let (device_idx, cache_area) = {
             let guard = ctx.read();
@@ -256,7 +258,7 @@ where
                     Ok::<_, ThoError>(motif)
                 }
             })
-            .buffered/*_unordered*/(10)//TODO buffered- to keep motif ids order consistent, try buffer_unordered and then sort?
+            .buffered/*_unordered*/(STACKED_MOTIFS_LOADER_RUN)//TODO buffered- to keep motif ids order consistent, try buffer_unordered and then sort?
             .filter_map(|r| async move {
                 match r {
                     Ok(v) => {

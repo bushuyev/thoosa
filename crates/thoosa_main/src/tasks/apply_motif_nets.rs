@@ -115,7 +115,7 @@ where
                 load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(motif_id, channel as u32), 0)), stage_ctx).await
             }
         })
-        .buffered(10)//TODO config order is important to keep output tensor same
+        .buffered(crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT)//order is important to keep output tensor same
             .filter_map(|r|async {
                 match r {
                     Ok(net) => {
@@ -191,7 +191,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
 
-    // #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNets::run"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNets::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
         let (device_idx, cache_area, ctx_name) = {
@@ -249,7 +249,7 @@ where
                  }
 
             })
-            .buffered(10)//TODO config, TODO - use buffer_unordered and then sort by motif_id?
+            .buffered(crate::buffer_limits::APPLY_MOTIF_NETS_RUN_BUFFERED_LIMIT)//TODO config, TODO - use buffer_unordered and then sort by motif_id?
             .try_collect::<Vec<_>>().await?;
 
         debug!("ApplyMotifNets::run: matches={matches:?}");

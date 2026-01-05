@@ -159,6 +159,7 @@ where
     C: RunCtx + 'static,
 {
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifLoader::run"))]
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
@@ -256,6 +257,7 @@ where
     C: RunCtx + 'static,
 {
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RandomSlicesLoader::run"))]
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<SlicesLoaderInput>>,

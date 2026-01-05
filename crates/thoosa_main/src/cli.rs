@@ -258,13 +258,10 @@ where
     let devices = list_devices();
 
     let cpu_num = std::thread::available_parallelism()?;
-    let loader_threads = cli
-        .loader_threads
-        .unwrap_or_else(|| max(2, cpu_num.get() / 2));
 
     //TODO torch.backends.cuda.matmul.allow_tf32 = True
     info!(
-        "VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} loader_threads={loader_threads} tch::get_num_interop_threads={}, tch::get_num_threads={}",
+        "VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} tch::get_num_interop_threads={}, tch::get_num_threads={}",
         cli.ws_path,
         tch::get_num_interop_threads(),
         tch::get_num_threads()
@@ -510,7 +507,7 @@ where
 
             let find_motifs_run_config_range_or_value:FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue{
                 id: None,
-                step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+                step: RangeOrValue::Value(50), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
                 window: RangeOrValue::Value(1000), //RangeOrValue::Range { range: Range { start: 1000, end: 2001 }, step: Some((1000, 1)) },
                 min_tracker_step: None,
                 // filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
@@ -538,7 +535,7 @@ where
                             &store,
                             Arc::clone(&loader_2),
                             run_configs,
-                            FixedFindMotifsConfig::new(None, 10_000, false, None),
+                            FixedFindMotifsConfig::new(10_000, false, None),
                             ThoDevice::from(1),
                         )
                         .expect("FindMotifsStage::new failed"),
@@ -996,7 +993,7 @@ async fn run_plot_motif_slices(
                             info!("done {done} from  {motifs_len}");
                         }
                     }})
-                .buffer_unordered(10) // <- bound parallelism
+                .buffer_unordered(crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT) // <- bound parallelism
                 .collect::<Vec<()>>()
                 .await;
 
@@ -1043,7 +1040,7 @@ async fn run_plot_motif_slices(
                             info!("done {done} from  {motifs_len}");
                         }
                     }})
-                .buffer_unordered(10)
+                .buffer_unordered(crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT)
                 .collect::<Vec<()>>()
                 .await;
         }

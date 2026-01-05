@@ -53,7 +53,11 @@ pub trait SyncStage: Stage + Debug {
         unimplemented!()
     }
 
-    fn consume<'f>(self: Arc<Self>, _input: Self::In<'f>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoError> {
-        unimplemented!()
+    fn consume<'f>(
+        self: Arc<Self>,
+        _input: Self::In<'f>,
+        _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+    ) -> impl Future<Output = Result<Self::Out, ThoError>> + Send + 'f {
+        async { unimplemented!() }
     }
 }

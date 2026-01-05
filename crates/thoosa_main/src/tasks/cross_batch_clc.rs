@@ -1,7 +1,7 @@
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::slices_iter::SlicesIter;
+use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use async_trait::async_trait;
 use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
@@ -13,6 +13,7 @@ use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
 use futures_util::future::BoxFuture;
+use futures_util::FutureExt;
 use tch::Tensor;
 use tch::kind::FLOAT_CPU;
 use thoosa_common::utils::tensor_mem_size;
@@ -31,6 +32,8 @@ pub struct CrossInput<'a, R: AsRef<Resource>> {
     tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
     resources_0: &'a [R],
     resources_1: &'a [R],
+    resources_0_offsets: Vec<u32>,
+    resources_1_offsets: Vec<u32>,
 }
 
 impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
@@ -39,13 +42,60 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
         b_0: &'a [R],
         b_1: &'a [R],
     ) -> Self {
-        let batch_0_ids = b_0.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
-        let batch_1_ids = b_1.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
-        let id = mono_key!(
-            format!("cross_input_b0={batch_0_ids:?}_b1={batch_1_ids:?}"),
-            "CrossInput"
-        );
-        Self { id, tensors, resources_0: b_0, resources_1: b_1 }
+        Self::new_with_offsets(
+            tensors,
+            b_0,
+            b_1,
+            vec![0; b_0.len()],
+            vec![0; b_1.len()],
+        )
+    }
+
+    pub fn new_with_offsets(
+        tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
+        b_0: &'a [R],
+        b_1: &'a [R],
+        resources_0_offsets: Vec<u32>,
+        resources_1_offsets: Vec<u32>,
+    ) -> Self {
+        assert_eq!(b_0.len(), resources_0_offsets.len());
+        assert_eq!(b_1.len(), resources_1_offsets.len());
+
+        let has_offsets = resources_0_offsets.iter().any(|v| *v != 0)
+            || resources_1_offsets.iter().any(|v| *v != 0);
+
+        let id = if has_offsets {
+            let batch_0_ids = b_0
+                .iter()
+                .zip(resources_0_offsets.iter())
+                .map(|(r, offset)| (r.as_ref().id(), *offset))
+                .collect::<Vec<_>>();
+            let batch_1_ids = b_1
+                .iter()
+                .zip(resources_1_offsets.iter())
+                .map(|(r, offset)| (r.as_ref().id(), *offset))
+                .collect::<Vec<_>>();
+            mono_key!(
+                format!("cross_input_b0={batch_0_ids:?}_b1={batch_1_ids:?}"),
+                "CrossInput"
+            )
+        } else {
+            let batch_0_ids = b_0.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
+            let batch_1_ids = b_1.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
+            mono_key!(
+                format!("cross_input_b0={batch_0_ids:?}_b1={batch_1_ids:?}"),
+                "CrossInput"
+            )
+        };
+
+        Self {
+            id,
+            tensors,
+            resources_0: b_0,
+            resources_1: b_1,
+            resources_0_offsets,
+            resources_1_offsets,
+        }
     }
 
     pub fn tensors(&self) -> &'a [&'a ThoTensor<ChannelsData2, SynKey>] {
@@ -58,6 +108,14 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
 
     pub fn batch_1(&self) -> &'a [R] {
         self.resources_1
+    }
+
+    pub fn batch_0_offsets(&self) -> &[u32] {
+        &self.resources_0_offsets
+    }
+
+    pub fn batch_1_offsets(&self) -> &[u32] {
+        &self.resources_1_offsets
     }
 }
 
@@ -144,10 +202,12 @@ where
         selected_tensors.extend_from_slice(&self.tensors[..batch_0_len]);
         selected_tensors.extend_from_slice(&self.tensors[batch_1_offset..batch_1_end]);
 
-        let input = CrossInput::new(
+        let input = CrossInput::new_with_offsets(
             selected_tensors.as_slice(),
             self.resources_0,
-            &self.resources_1[range],
+            &self.resources_1[range.clone()],
+            self.resources_0_offsets.clone(),
+            self.resources_1_offsets[range].to_vec(),
         );
 
         do_run(&input)
@@ -158,6 +218,24 @@ pub trait CrossClcResultMerge: Debug + Send + Sync {
     fn merge_batch_1(self, other: Self) -> Result<Self, ThoError>
     where
         Self: Sized;
+
+    fn to_cpu(self) -> BoxFuture<'static, Result<Self, ThoError>>
+    where
+        Self: Sized + Send + 'static,
+    {
+        async move { Ok(self) }.boxed()
+    }
+
+    fn merge_batch_1_many(self, others: Vec<Self>) -> Result<Self, ThoError>
+    where
+        Self: Sized,
+    {
+        let mut acc = self;
+        for other in others {
+            acc = acc.merge_batch_1(other)?;
+        }
+        Ok(acc)
+    }
 }
 
 #[derive(Debug)]
@@ -333,6 +411,7 @@ where
 {
 
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CrossUnfoldClc::do_run"))]
     fn do_run<'s>(self: Arc<Self>, input: &Self::In<'s>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoError>
     where
         Self: Sized
@@ -340,50 +419,56 @@ where
         assert!(!input.resources_0.is_empty(), "CrossUnfoldClc::do_run: no input resources");
         let unfold_params = &self.unfold_params;
 
+        debug!("CrossUnfoldClc::do_run: input.tensors.len={} input.resources_0.len={} input.resources_1.len={}", input.tensors.len(), input.resources_0.len(), input.resources_1.len());
+
 
         let (batch_0_t, batch_0_sizes) =  unfold_and_cat(&input.tensors[0..input.resources_0.len()], &unfold_params)?;
 
-        assert_eq!(batch_0_sizes.len(), input.resources_0.len());
+        //TODO if tensor is filtered because it's less than window
+        // assert_eq!(batch_0_sizes.len(), input.resources_0.len());
         let resource_ids_sizes_0: Vec<_> = input
             .resources_0
             .into_iter()
             .zip(batch_0_sizes.into_iter())
-            .map(|v| (v.0.as_ref().id(), v.1 as usize))
+            .zip(input.batch_0_offsets().iter().copied())
+            .map(|((resource, size), offset)| {
+                ResourceSlices::new(resource.as_ref().id(), size as usize, offset)
+            })
             .collect();
 
 
         let (batch_1_t, batch_1_sizes) =  unfold_and_cat(&input.tensors[input.resources_0.len()..], &unfold_params)?;
 
-        assert_eq!(batch_1_sizes.len(), input.resources_1.len());
+        // assert_eq!(batch_1_sizes.len(), input.resources_1.len());
 
         let resource_ids_sizes_1: Vec<_> = input
             .resources_1
             .into_iter()
             .zip(batch_1_sizes.into_iter())
-            .map(|v| (v.0.as_ref().id(), v.1 as usize))
+            .zip(input.batch_1_offsets().iter().copied())
+            .map(|((resource, size), offset)| {
+                ResourceSlices::new(resource.as_ref().id(), size as usize, offset)
+            })
             .collect();
 
-        debug!("resource_ids_sizes={resource_ids_sizes_0:?}");
+        debug!("CrossUnfoldClc::do_run: resource_ids_sizes_0={resource_ids_sizes_0:?}");
+        debug!("CrossUnfoldClc::do_run: resource_ids_sizes_1={resource_ids_sizes_1:?}");
 
-        debug!(
-            "CrossUnfoldClc::do_run:  batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?} mem_0={} mem_1={}",
-            tensor_mem_size(&batch_0_t),
-            tensor_mem_size(&batch_1_t)
-        );
+        debug!("CrossUnfoldClc::do_run:  batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?} mem_0={} mem_1={}", tensor_mem_size(&batch_0_t), tensor_mem_size(&batch_1_t));
 
         (self.batch_clc_fn)(batch_0_t, batch_1_t, &input, &self.cross_batch_ctx, &ctx).map(|v| {
             CrossUnfoldClcOutput::new(
                 v,
-                SlicesIter::new(unfold_params.step as usize, resource_ids_sizes_0),
-                SlicesIter::new(unfold_params.step as usize, resource_ids_sizes_1),
+                SlicesIter::new_with_offsets(unfold_params.step as usize, resource_ids_sizes_0),
+                SlicesIter::new_with_offsets(unfold_params.step as usize, resource_ids_sizes_1),
             )
         })
     }
 }
 
-
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cross_batch_clc/unfold_and_cat"))]
 pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoError> {
-    assert!(!input.is_empty(), "unfold_and_cat: input is empty");
+    assert!(!input.is_empty(), "cross_batch_clc/unfold_and_cat: input is empty");
 
     let mut batch_0_sizes = vec![];
 
@@ -398,7 +483,7 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params
                 unfold_params.size,
                 unfold_params.step,
             )?;
-            debug!("CrossUnfoldClc::do_run: 0.  t.id={:?} t.size={:?} self.unfold_params={:?} unfolded.size()={:?}", t.id(), t.size(), unfold_params, unfolded.size());
+            debug!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?} unfolded.size={:?}", t.id(), t.size(), unfold_params, unfolded.size());
 
             batch_0_sizes.push(unfolded.size()[1]); //number of blocks
             Ok(unfolded)
@@ -463,12 +548,14 @@ mod tests {
                 ]).view((3,1,2));
                 assert!(t_1.allclose(&tensor_01, 0.1, 0.1, false));
 
-                Ok(DistsMask::new(
-                    Tensor::rand(&[0], FLOAT_CPU).lt(0.5),
-                    Some(Tensor::rand(&[0], FLOAT_CPU)),
-                    false,
-                    None,
-                )?)
+                let channels = t_0.size()[0];
+                let slices_0 = t_0.size()[1];
+                let slices_1 = t_1.size()[1];
+                let total = (channels * slices_0 * slices_1) as u32;
+                let dists = lin_t(total).view((channels, slices_0, slices_1));
+                let mask = dists.lt(3.0);
+
+                Ok(DistsMask::new(mask, Some(dists), false, None)?)
             },
             MeanDistsCtx::new(3, Cuda(0)),
             UnfoldParams::new(1, 2, 1),
@@ -505,10 +592,22 @@ mod tests {
             chunk_0_resources.as_slice(),
             chunk_1_resources.as_slice(),
         );
-        let out = cross_batch_clc.do_run(&input, Arc::new(RwLock::new(RunCtx2::new(0, 0, "test"))))?;
+        let out = cross_batch_clc.do_run(
+            &input,
+            Arc::new(RwLock::new(RunCtx2::new(1, 0, "test"))),
+        )?;
 
-        println!("{:?}", out);
-        //TODO asserts
+        let (mask, dists) = out.clc_result.unpack()?;
+        let dists = dists.expect("dists");
+        debug!("out=\n{mask}");
+
+        assert_eq!(mask.size(), vec![3, 5, 1]);
+        assert_eq!(dists.size(), vec![3, 5, 1]);
+
+        let expected_dists = lin_t(15).view((3, 5, 1));
+        let expected_mask = expected_dists.lt(3.0);
+        assert!(dists.allclose(&expected_dists, 0.0, 0.0, false));
+        assert!(mask.equal(&expected_mask));
 
         Ok(())
     }

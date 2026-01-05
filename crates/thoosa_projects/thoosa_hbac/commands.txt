@@ -57,21 +57,83 @@ select run_id, label_id, sl.motif_id, count(*) from slices sl left join labeled_
 insert into selected_motifs (motif_id, run_id, rate) select motif_id, 0, 0.0 from (select motif_id, count(*) cnt from slices group by motif_id having cnt < 100 and cnt > 10);
 
 
+cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'50',window:'1000','slices_filter':{'DistanceRunningMeanK':{'mean':'0.02'}}}" --max-chunk-size=10000
+Key                                                   | busy time, mls | elapsed time, mls |    invocations |  per inv. |
+--------------------------------------------------------------------------------------------------------------------------
+CrossClcResultMerge for DistsMask::merge_batch_1_many |          5 882 |             5 882 |              1 |     5 882 |
+CrossUnfoldClc::do_run                                |        282 184 |           282 329 |        180 909 |         1 |
+CrossUnfoldClcOutputBuilder::add_partial_output       |              0 |               387 |              2 |         0 |
+DistsMask::to_cpu                                     |          3 517 |           139 795 |        180 901 |         0 |
+DistsTracker::build_groups                            |      1 559 063 |         1 559 063 |              1 | 1 559 063 |
+DistsTracker::consume                                 |     11 117 628 |        45 856 363 |        180 896 |        61 |
+FindMotifsStage::run                                  |              0 |        13 126 841 |              1 |         0 |
+GlobalCtx::dump_all_to_cpu                            |             23 |                23 |              4 |         5 |
+OOMHandler::run                                       |        288 590 |           289 160 |        180 899 |         1 |
+RawTensorLoader::run                                  |            900 |               900 |            600 |         1 |
+SimpleMotifTracker::dump                              |        620 645 |           621 624 |      3 617 980 |         0 |
+SimpleMotifTracker::track                             |      1 596 066 |         6 111 790 | 25 519 710 541 |         0 |
+add_cache_area                                        |             17 |                95 |        180 899 |         0 |
+cross_batch_clc/unfold_and_cat                        |          6 737 |             6 867 |        361 818 |         0 |
+cuda_utils::copy_d2h_from_ptr                         |          1 844 |           138 278 |        180 900 |         0 |
+cuda_utils::move_d2h                                  |          2 725 |           139 071 |        180 900 |         0 |
+distance::clc_dist_d2_and_mask                        |        258 694 |           258 820 |        180 909 |         1 |
 
-refactor MotifsBy::RunId(RunId) (crates/thoosa_motifs/src/fragments.rs:547) to RunId { find_motifs_run_id:RunId, select_motifs_run_ids: Option<Vec<RunId>> }
-then change From<&str> for MotifsBy::from so that
-
- "run_id:11" -> RunId{find_motifs_run_id:11, select_motifs_run_ids:None}
- "run_id:11_" -> RunId{find_motifs_run_id:11, select_motifs_run_ids:Some(vec![])}
- "run_id:11_22,33,44,..." -> RunId{find_motifs_run_id:11, select_motifs_run_ids:Some(vec![22,33,44])}
 
 
-motif_id handling should not be affected. Update usage sites as needed.  Add simple test.
+08:42:54 [INFO] All done in 6179291 mls
+bu@bu-ml:~/dvl/rust/thoosa_for_codex/crates$ cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 10" --run-config-cnt="{step:'10',window:'100','slices_filter':{'DistanceRunningMeanK':{'mean':'0.02'}}}" --max-chunk-size=10000
+Key                                                   | busy time, mls | elapsed time, mls |    invocations | per inv. |
+-------------------------------------------------------------------------------------------------------------------------
+CrossClcResultMerge for DistsMask::merge_batch_1_many |         45 741 |            45 741 |              3 |   15 247 |
+CrossUnfoldClc::do_run                                |         42 674 |            42 677 |          1 927 |       22 |
+CrossUnfoldClcOutputBuilder::add_partial_output       |              3 |             1 690 |             13 |        0 |
+DistsMask::to_cpu                                     |            145 |            24 645 |          1 902 |        0 |
+DistsTracker::build_groups                            |        752 904 |           752 904 |              1 |  752 904 |
+DistsTracker::consume                                 |      5 300 854 |        19 584 896 |          1 886 |    2 810 |
+FindMotifsStage::run                                  |              1 |         6 179 233 |              1 |        1 |
+GlobalCtx::dump_all_to_cpu                            |              9 |                 9 |             13 |        0 |
+OOMHandler::run                                       |         88 450 |            90 142 |          1 889 |       46 |
+RawTensorLoader::run                                  |            192 |               193 |             60 |        3 |
+SimpleMotifTracker::dump                              |        270 030 |           270 066 |         37 780 |        7 |
+SimpleMotifTracker::track                             |        839 731 |         3 118 874 | 12 708 264 810 |        0 |
+add_cache_area                                        |              0 |                 1 |          1 889 |        0 |
+cross_batch_clc/unfold_and_cat                        |            445 |               447 |          3 854 |        0 |
+cuda_utils::copy_d2h_from_ptr                         |             35 |            24 538 |          1 899 |        0 |
+cuda_utils::move_d2h                                  |             52 |            24 553 |          1 899 |        0 |
+distance::clc_dist_d2_and_mask                        |         30 043 |            30 045 |          1 927 |       15 |
 
 
-refactor Arbiter (crates/thoosa_runner/caching_runner/src/permits/runner_queue.rs:16) to keep track of granted permits. Add another HashMap similar to fail_counts and put requester_id with granted permits count whenever try_acquire_many_owned succeeds.
-The values should be removed when RunnerPerm is dropped. This can be done by adding requester_id to RunnerPerm and  replacing RunnerPerm::notify:Option<Arc<Notify>> with something what can be used to send requester_id back to Arbiter from RunnerPerm::drop (one shot channel or wrapper struct keeping both Notify and requester_id)
 
-fix tests_no_global_ctx_mock::test_cache_areas (crates/thoosa_shared/src/runner/test/mod.rs:1231) - it fails because mockall_double installs mocked GlobalCtx, perhaps because
-DummyLoader and   DummyRunCtx are defined in the tests module (mod.rs:329) . See if it's possible to move them into separate module where  GlobalCtx is not substitued and use it in tests_no_global_ctx_mock.
-But inside tests mod GlobalCtx should still be mocked. Make sure tests in both modules compile and run.
+
+refactor SimpleMotifTracker add field 'capacity' and use it to initialize motifs vec with Vec::with_capacity.
+then in track method check if motifs len reached capacity and if it did, call dump which should be mand changed to call dumper.save_slices wrapped in tokio::task::spawn_blocking but lock calling
+
+
+
+19:50:20 [INFO] FindMotifs done, run_ids=[7364]
+19:50:20 [INFO]
+Key             | busy time, mls | elapsed time, mls | invocations | per inv. |
+--------------------------------------------------------------------------------
+OOMHandler::run |        203 910 |           204 111 |     180 899 |        1 |
+add_cache_area  |             21 |               122 |     180 899 |        0 |
+
+19:50:20 [INFO] All done in 647678 mls
+                           1911265
+bu@bu-ml:~/dvl/rust/thoosa/crates$ cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'100',window:'1000','slices_filter':{'DistanceRunningMeanK':{'mean':'0.02'}}}" --max-chunk-size=10000
+
+
+------------------------------------------------------------------------------------------
+OOMHandler::run           |        212 936 |           213 195 |     180 899 |        1 |
+SimpleMotifTracker::dump  |         19 807 |            20 815 |   3 617 980 |        0 |
+SimpleMotifTracker::track |        101 731 |           368 519 | 667 812 642 |        0 |
+add_cache_area            |             18 |               100 |     180 899 |        0 |
+
+20:32:43 [INFO] All done in 1911265 mls
+bu@bu-ml:~/dvl/rust/thoosa/crates$ cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'100',window:'1000','slices_filter':{'DistanceRunningMeanK':{'mean':'0.02'}}}" --max-chunk-size=10000
+
+
+dists_tracker perf:
+bu@bu-ml:~/dvl/rust/thoosa/crates$ cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'100',window:'1000','slices_filter':{'DistanceRunningMeanK':{'mean':'0.02'}}}" --max-chunk-size=10000
+650884 - without perf. logging
+1205871 - with spawn_blocking around tack
+677318 - with spawn_blocking around dump

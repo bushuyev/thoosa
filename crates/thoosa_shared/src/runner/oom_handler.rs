@@ -8,7 +8,7 @@ use thoosa_shared::runner::global_ctx::GlobalCtx;
 use crate::runner::permits::MAX_PERMITS;
 use thoosa_shared::runner::statistics::Statistics;
 use async_trait::async_trait;
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use mockall::automock;
 use mockall_double::double;
 use parking_lot::RwLock;
@@ -43,7 +43,7 @@ where
     R: Stage + 'a,
     // <R as Stage>::In<'a>: Data
 {
-    fn add_partial_output(&mut self, out: R::Out);
+    async fn add_partial_output(&mut self, out: R::Out);
     fn all_done(&self) -> bool;
     // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics;
     async fn build_final_output(self) -> Result<R::Out, ThoError>;
@@ -62,7 +62,7 @@ pub mod mock_input_context {
 
         }
         impl super::InputContext<'static, MockRunnable> for InputContext{
-            fn add_partial_output(&mut self, out: TestOutput);
+            async fn add_partial_output(&mut self, out: TestOutput);
             fn all_done(&self) -> bool;
             // fn input_len(&self) -> &[usize; 1];
             async fn build_final_output(self) -> Result<TestOutput, ThoError>;
@@ -192,7 +192,7 @@ where
     <R as Stage>::Out: Send + Sync,
     R: Stage + 'a,
 {
-    fn add_partial_output(&mut self, o: R::Out) {
+    async fn add_partial_output(&mut self, o: R::Out) {
         self.0.replace(o);
     }
 
@@ -478,7 +478,7 @@ where
                         let mut task_adjusted = None::<Arc<R>>;
 
                         for adjuster in adjusters {
-                            debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  starting adjuster={adjuster:?}", os_thread_id());
+                            debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} adjuster={adjuster:?} os_thread_id={}  starting adjuster", os_thread_id());
 
                             loop {
                                 i += 1;
@@ -541,7 +541,7 @@ where
                                 };
 
                                 if let Err(te) = adjust_result {
-                                    debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} adjuster error te={te:?}", os_thread_id());
+                                    debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} adjuster={adjuster:?} os_thread_id={} adjuster error te={te:?}", os_thread_id());
 
                                     match te.what() {
                                         Cause::OutOfMemory | Cause::AdjusterFailed => {
@@ -593,8 +593,9 @@ where
 
                                 match run_result {
                                     Ok(v) => {
+                                      
 
-                                        contexts.input.add_partial_output(v);
+                                        contexts.input.add_partial_output(v).await;
 
                                         let all_done = contexts.input.all_done();
 
@@ -654,8 +655,7 @@ where
                     }
                 }
 
-                debug!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={}  all failed: input.mem_size={:?}", os_thread_id(), input.mem_size());
-                trace!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} all failed: task={task:?} input={input:?}", os_thread_id());
+                warn!("OOMHandler::run: ctx_name={ctx_name} task={task:?} os_thread_id={} all failed: input.mem_size={:?} semaphore={:?}", os_thread_id(), input.mem_size(), GlobalCtx::global().debug_semaphore(device_idx));
 
                 Err(Cause::SomethingElse(format!("all failed: task={task:?}")).into())
             }
@@ -1081,7 +1081,7 @@ mod tests {
     }
 
     impl InputContext<'static, AsyncTestTask> for AsyncInputCtx {
-        fn add_partial_output(&mut self, o: TestOutput) {
+        async fn add_partial_output(&mut self, o: TestOutput) {
             self.outputs.push(o);
         }
 

@@ -123,6 +123,7 @@ pub fn speed_gb_per_s(bytes: u64, millis: u64) -> f64 {
     gigabytes / seconds
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_d2h"))]
 pub async fn copy_d2h<R: AsRef<Tensor>>(
     init_type: Kind,
     src_t: &R,
@@ -139,6 +140,7 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
     copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size).await
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::move_d2h"))]
 pub async fn move_d2h(
     init_type: Kind,
     src_t: Tensor,
@@ -157,7 +159,7 @@ pub async fn move_d2h(
     res
 }
 
-
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_d2h_from_ptr"))]
 pub async fn copy_d2h_from_ptr(
     init_type: Kind,
     buf_size_bytes: usize,
@@ -251,7 +253,7 @@ pub async fn copy_d2h_from_ptr(
     Ok(dst_t)
 }
 
-
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_h2d"))]
 pub async fn copy_h2d<R: AsRef<Tensor>>(
     init_type: Kind,
     src_t: &R,
@@ -276,7 +278,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
     .await
 }
 
-
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::move_h2d"))]
 pub async fn move_h2d(
     init_type: Kind,
     src_t: Tensor,
@@ -304,7 +306,7 @@ pub async fn move_h2d(
 }
 
 
-
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_h2d_from_ptr"))]
 pub async fn copy_h2d_from_ptr(
     init_type: Kind,
     buf_size: usize,
