@@ -6,12 +6,11 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
-use tch::{IndexOp, Kind, Tensor};
+use tch::{Kind, Tensor};
 use futures::{future::BoxFuture, FutureExt};
 use tch::Device;
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::{Bool, Uint8};
-use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
@@ -48,18 +47,357 @@ pub enum DistsMaskType {
 }
 
 #[derive(Debug)]
-pub struct DistsMaskIndices {
-    indices: Tensor,
-    dists: Option<Tensor>,
+enum DistsPtr {
+    F32(*const f32),
+    F64(*const f64),
 }
 
-impl DistsMaskIndices {
-    pub fn indices(&self) -> &Tensor {
-        &self.indices
+impl DistsPtr {
+    fn value(&self, idx: usize) -> f64 {
+        match self {
+            DistsPtr::F32(ptr) => unsafe { *ptr.add(idx) as f64 },
+            DistsPtr::F64(ptr) => unsafe { *ptr.add(idx) },
+        }
     }
+}
 
-    pub fn dists(&self) -> Option<&Tensor> {
-        self.dists.as_ref()
+#[derive(Debug)]
+struct DenseMaskMatchIter {
+    mask: Tensor,
+    dists: Option<Tensor>,
+    mask_ptr: *const u8,
+    dists_ptr: Option<DistsPtr>,
+    index: u64,
+    total: u64,
+    stride_0: u64,
+    dim_2: u64,
+}
+
+impl DenseMaskMatchIter {
+    fn new(mask: Tensor, dists: Option<Tensor>, mask_size: &[i64]) -> Self {
+        let dim_1 = mask_size[1] as u64;
+        let dim_2 = mask_size[2] as u64;
+        let stride_0 = dim_1 * dim_2;
+        let total = (mask_size[0] as u64) * stride_0;
+        let mask_ptr = mask.data_ptr() as *const u8;
+        let dists_ptr = dists.as_ref().map(dists_ptr);
+        Self {
+            mask,
+            dists,
+            mask_ptr,
+            dists_ptr,
+            index: 0,
+            total,
+            stride_0,
+            dim_2,
+        }
+    }
+}
+
+impl Iterator for DenseMaskMatchIter {
+    type Item = (u32, u32, u32, f64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.index < self.total {
+            let idx = self.index as usize;
+            let mask_val = unsafe { *self.mask_ptr.add(idx) != 0 };
+            let flat = self.index;
+            self.index += 1;
+            if !mask_val {
+                continue;
+            }
+
+            let i_0 = flat / self.stride_0;
+            let rem = flat - i_0 * self.stride_0;
+            let i_1 = rem / self.dim_2;
+            let i_2 = rem - i_1 * self.dim_2;
+
+            let dist = self
+                .dists_ptr
+                .as_ref()
+                .map(|ptr| ptr.value(idx))
+                .unwrap_or(0.0);
+
+            return Some((
+                u32::try_from(i_0).expect("DenseMaskMatchIter: channel overflow u32"),
+                u32::try_from(i_1).expect("DenseMaskMatchIter: i_0 overflow u32"),
+                u32::try_from(i_2).expect("DenseMaskMatchIter: i_1 overflow u32"),
+                dist,
+            ));
+        }
+        None
+    }
+}
+
+#[derive(Debug)]
+struct PackedMaskMatchIter {
+    mask: Tensor,
+    dists: Option<Tensor>,
+    bytes_ptr: *const u8,
+    dists_ptr: Option<DistsPtr>,
+    bit_index: u64,
+    total_bits: u64,
+    stride_0: u64,
+    dim_2: u64,
+}
+
+impl PackedMaskMatchIter {
+    fn new(mask: Tensor, dists: Option<Tensor>, mask_size: &[i64]) -> Self {
+        let dim_1 = mask_size[1] as u64;
+        let dim_2 = mask_size[2] as u64;
+        let stride_0 = dim_1 * dim_2;
+        let total_bits = (mask_size[0] as u64) * stride_0;
+        let bytes_ptr = mask.data_ptr() as *const u8;
+        let dists_ptr = dists.as_ref().map(dists_ptr);
+        Self {
+            mask,
+            dists,
+            bytes_ptr,
+            dists_ptr,
+            bit_index: 0,
+            total_bits,
+            stride_0,
+            dim_2,
+        }
+    }
+}
+
+impl Iterator for PackedMaskMatchIter {
+    type Item = (u32, u32, u32, f64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.bit_index < self.total_bits {
+            let idx = self.bit_index as usize;
+            let byte_idx = (self.bit_index / 8) as usize;
+            let bit_in_byte = (self.bit_index % 8) as u8;
+            let byte = unsafe { *self.bytes_ptr.add(byte_idx) };
+            let is_set = (byte & (0x80 >> bit_in_byte)) != 0;
+            let flat = self.bit_index;
+            self.bit_index += 1;
+            if !is_set {
+                continue;
+            }
+
+            let i_0 = flat / self.stride_0;
+            let rem = flat - i_0 * self.stride_0;
+            let i_1 = rem / self.dim_2;
+            let i_2 = rem - i_1 * self.dim_2;
+
+            let dist = self
+                .dists_ptr
+                .as_ref()
+                .map(|ptr| ptr.value(idx))
+                .unwrap_or(0.0);
+
+            return Some((
+                u32::try_from(i_0).expect("PackedMaskMatchIter: channel overflow u32"),
+                u32::try_from(i_1).expect("PackedMaskMatchIter: i_0 overflow u32"),
+                u32::try_from(i_2).expect("PackedMaskMatchIter: i_1 overflow u32"),
+                dist,
+            ));
+        }
+        None
+    }
+}
+
+#[derive(Debug)]
+struct TrueCoords3dIter {
+    flat_ptr: *const i64,
+    len: usize,
+    pos: usize,
+    d1d2: i64,
+    d2: i64,
+}
+
+impl Iterator for TrueCoords3dIter {
+    type Item = (u32, u32, u32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.len {
+            return None;
+        }
+        let v = unsafe { *self.flat_ptr.add(self.pos) };
+        self.pos += 1;
+        assert!(v >= 0, "TrueCoords3dIter: negative index {v}");
+
+        let i_0 = v / self.d1d2;
+        let rem = v - i_0 * self.d1d2;
+        let i_1 = rem / self.d2;
+        let i_2 = rem - i_1 * self.d2;
+
+        Some((
+            u32::try_from(i_0).expect("TrueCoords3dIter: i_0 overflow u32"),
+            u32::try_from(i_1).expect("TrueCoords3dIter: i_1 overflow u32"),
+            u32::try_from(i_2).expect("TrueCoords3dIter: i_2 overflow u32"),
+        ))
+    }
+}
+
+impl FlatIndicesMatchIter {
+    fn new(indices: Tensor, dists: Option<Tensor>, mask_size: &[i64]) -> Self {
+        let d1d2 = mask_size[1].saturating_mul(mask_size[2]);
+        let d2 = mask_size[2];
+        assert!(d1d2 > 0 && d2 > 0, "FlatIndicesMatchIter: invalid mask size");
+        let coords = TrueCoords3dIter {
+            flat_ptr: indices.data_ptr() as *const i64,
+            len: indices.numel() as usize,
+            pos: 0,
+            d1d2,
+            d2,
+        };
+        let dists_ptr = dists.as_ref().map(dists_ptr);
+        Self {
+            indices,
+            dists,
+            coords,
+            dists_ptr,
+            dist_pos: 0,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FlatIndicesMatchIter {
+    indices: Tensor,
+    dists: Option<Tensor>,
+    coords: TrueCoords3dIter,
+    dists_ptr: Option<DistsPtr>,
+    dist_pos: usize,
+}
+
+impl Iterator for FlatIndicesMatchIter {
+    type Item = (u32, u32, u32, f64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (c, i_0, i_1) = self.coords.next()?;
+        let dist = self
+            .dists_ptr
+            .as_ref()
+            .map(|ptr| {
+                let v = ptr.value(self.dist_pos);
+                self.dist_pos += 1;
+                v
+            })
+            .unwrap_or(0.0);
+        Some((c, i_0, i_1, dist))
+    }
+}
+
+#[derive(Debug)]
+struct TripletIndicesMatchIter {
+    indices: Tensor,
+    dists: Option<Tensor>,
+    indices_ptr: *const i64,
+    dists_ptr: Option<DistsPtr>,
+    pos: usize,
+    total: usize,
+}
+
+impl Iterator for TripletIndicesMatchIter {
+    type Item = (u32, u32, u32, f64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.total {
+            return None;
+        }
+
+        let base = self.pos * 3;
+        let c = unsafe { *self.indices_ptr.add(base) };
+        let i_0 = unsafe { *self.indices_ptr.add(base + 1) };
+        let i_1 = unsafe { *self.indices_ptr.add(base + 2) };
+        assert!(c >= 0 && i_0 >= 0 && i_1 >= 0, "TripletIndicesMatchIter: negative index");
+
+        let dist = self
+            .dists_ptr
+            .as_ref()
+            .map(|ptr| ptr.value(self.pos))
+            .unwrap_or(0.0);
+
+        self.pos += 1;
+
+        Some((
+            u32::try_from(c).expect("TripletIndicesMatchIter: channel overflow u32"),
+            u32::try_from(i_0).expect("TripletIndicesMatchIter: i_0 overflow u32"),
+            u32::try_from(i_1).expect("TripletIndicesMatchIter: i_1 overflow u32"),
+            dist,
+        ))
+    }
+}
+
+impl TripletIndicesMatchIter {
+    fn new(indices: Tensor, dists: Option<Tensor>) -> Self {
+        let total = indices.size()[0] as usize;
+        let indices_ptr = indices.data_ptr() as *const i64;
+        let dists_ptr = dists.as_ref().map(dists_ptr);
+        Self {
+            indices,
+            dists,
+            indices_ptr,
+            dists_ptr,
+            pos: 0,
+            total,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum IndicesMatchIter {
+    Flat(FlatIndicesMatchIter),
+    Triplet(TripletIndicesMatchIter),
+}
+
+impl Iterator for IndicesMatchIter {
+    type Item = (u32, u32, u32, f64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            IndicesMatchIter::Flat(iter) => iter.next(),
+            IndicesMatchIter::Triplet(iter) => iter.next(),
+        }
+    }
+}
+
+impl IndicesMatchIter {
+    fn new(mask: Tensor, dists: Option<Tensor>, mask_size: &[i64]) -> Self {
+        let size = mask.size();
+        if size.len() == 1 {
+            IndicesMatchIter::Flat(FlatIndicesMatchIter::new(mask, dists, mask_size))
+        } else {
+            assert!(
+                size.len() == 2 && size[1] == 3,
+                "IndicesMatchIter: expected Nx3 indices, got {size:?}"
+            );
+            IndicesMatchIter::Triplet(TripletIndicesMatchIter::new(mask, dists))
+        }
+    }
+}
+
+#[derive(Debug)]
+enum DistsMaskMatchIter {
+    Dense(DenseMaskMatchIter),
+    Packed(PackedMaskMatchIter),
+    Indices(IndicesMatchIter),
+}
+
+unsafe impl Send for DistsMaskMatchIter {}
+
+impl Iterator for DistsMaskMatchIter {
+    type Item = (u32, u32, u32, f64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            DistsMaskMatchIter::Dense(iter) => iter.next(),
+            DistsMaskMatchIter::Packed(iter) => iter.next(),
+            DistsMaskMatchIter::Indices(iter) => iter.next(),
+        }
+    }
+}
+
+fn dists_ptr(dists: &Tensor) -> DistsPtr {
+    match dists.kind() {
+        Kind::Float => DistsPtr::F32(dists.data_ptr() as *const f32),
+        Kind::Double => DistsPtr::F64(dists.data_ptr() as *const f64),
+        other => panic!("DistsMask: unsupported dists kind {other:?}"),
     }
 }
 
@@ -161,11 +499,19 @@ impl DistsMask {
                 }
                 let indices = mask.f_nonzero()?;
                 let indices = indices.f_to_kind(Kind::Int64)?;
+                let weights = Tensor::from_slice(&[
+                    mask_size[1].saturating_mul(mask_size[2]),
+                    mask_size[2],
+                    1i64,
+                ])
+                .f_to_device(mask.device())?
+                .f_to_kind(Kind::Int64)?;
+                let flat = (&indices * &weights).f_sum_dim_intlist(&[1i64][..], false, Kind::Int64)?;
                 // CopyCtx assumes contiguous tensors for raw pointer copies.
-                let indices = if indices.is_contiguous() {
-                    indices
+                let flat = if flat.is_contiguous() {
+                    flat
                 } else {
-                    indices.f_contiguous()?
+                    flat.f_contiguous()?
                 };
                 let dists = match dists {
                     Some(dists) => {
@@ -179,7 +525,7 @@ impl DistsMask {
                     None => None,
                 };
                 Ok(Self {
-                    mask: indices,
+                    mask: flat,
                     dists,
                     mask_type: DistsMaskType::MaskIndexes(mask_size),
                     stream_to_sync,
@@ -262,7 +608,7 @@ impl DistsMask {
     }
 
     //this is expected to be called after mask is copied to CPU
-    pub fn into_indices_iter(self) -> Result<DistsMaskIndices, ThoError> {
+    pub fn into_indices_iter(self) -> Result<DistsMaskMatchIter, ThoError> {
         let DistsMask {
             mask,
             dists,
@@ -271,68 +617,93 @@ impl DistsMask {
         } = self;
 
         match mask_type {
-            DistsMaskType::MaskIndexes(mask_size) => {
-                assert!(mask.device().eq(&Cpu), "DistsMask::into_indices_iter: indices must be on CPU");
-
-                let indices_size = mask.size();
-                assert!(indices_size.len() == 2 && indices_size[1] == 3, "DistsMask::into_indices_iter: expected Nx3 indices, got {indices_size:?}");
-
-                let indices_count = indices_size[0];
-                let dists = match dists {
-                    Some(dists) => {
-                        assert!(dists.device().eq(&Cpu), "DistsMask::into_indices_iter: dists must be on CPU");
-
-                        if dists.numel() as i64 == indices_count {
-                            Some(dists.f_reshape([-1])?)
-                        } else {
-                            Some(gather_dists_for_indices(&dists, &mask, &mask_size)?)
-                        }
-                    }
-                    None => None,
-                };
-                Ok(DistsMaskIndices { indices: mask, dists })
-            }
             DistsMaskType::AsIs => {
                 assert!(mask.device().eq(&Cpu), "DistsMask::into_indices_iter: expected CPU mask");
-
+                let mask = if mask.is_contiguous() {
+                    mask
+                } else {
+                    mask.f_contiguous()?
+                };
                 let mask_size = mask.size();
-                let indices = indices_from_mask_cpu(&mask, &mask_size)?;
-                let indices_count = indices.size()[0];
+                assert_eq!(mask_size.len(), 3, "DistsMask::into_indices_iter: expected 3D mask, got {mask_size:?}");
                 let dists = match dists {
                     Some(dists) => {
                         assert!(
                             dists.device().eq(&Cpu),
                             "DistsMask::into_indices_iter: dists must be on CPU"
                         );
-                        if dists.numel() as i64 == indices_count {
-                            Some(dists.f_reshape([-1])?)
+                        let dists = if dists.is_contiguous() {
+                            dists
                         } else {
-                            Some(gather_dists_for_indices(&dists, &indices, &mask_size)?)
-                        }
+                            dists.f_contiguous()?
+                        };
+                        Some(dists)
                     }
                     None => None,
                 };
-                Ok(DistsMaskIndices { indices, dists })
+                Ok(DistsMaskMatchIter::Dense(DenseMaskMatchIter::new(mask, dists, &mask_size)))
             }
             DistsMaskType::MaskPacked(mask_size, _) => {
                 assert!(mask.device().eq(&Cpu), "DistsMask::into_indices_iter: expected CPU packed mask");
-
-                let unpacked = unpack_packed_mask(&mask, &mask_size)?;
-                let indices = indices_from_mask_cpu(&unpacked, &mask_size)?;
-                let indices_count = indices.size()[0];
+                assert_eq!(mask.kind(), Uint8, "DistsMask::into_indices_iter: expected packed mask to be Uint8");
+                assert_eq!(mask_size.len(), 3, "DistsMask::into_indices_iter: expected 3D mask, got {mask_size:?}");
+                let mask = if mask.is_contiguous() {
+                    mask
+                } else {
+                    mask.f_contiguous()?
+                };
                 let dists = match dists {
                     Some(dists) => {
                         assert!(dists.device().eq(&Cpu), "DistsMask::into_indices_iter: dists must be on CPU");
-
-                        if dists.numel() as i64 == indices_count {
-                            Some(dists.f_reshape([-1])?)
+                        let dists = if dists.is_contiguous() {
+                            dists
                         } else {
-                            Some(gather_dists_for_indices(&dists, &indices, &mask_size)?)
-                        }
+                            dists.f_contiguous()?
+                        };
+                        Some(dists)
                     }
                     None => None,
                 };
-                Ok(DistsMaskIndices { indices, dists })
+                Ok(DistsMaskMatchIter::Packed(PackedMaskMatchIter::new(mask, dists, &mask_size)))
+            }
+            DistsMaskType::MaskIndexes(mask_size) => {
+                assert!(mask.device().eq(&Cpu), "DistsMask::into_indices_iter: indices must be on CPU");
+                assert_eq!(mask.kind(), Kind::Int64, "DistsMask::into_indices_iter: expected Int64 indices");
+                let mask = if mask.is_contiguous() {
+                    mask
+                } else {
+                    mask.f_contiguous()?
+                };
+                let indices_size = mask.size();
+                assert_eq!(mask_size.len(), 3, "DistsMask::into_indices_iter: expected 3D mask, got {mask_size:?}");
+                let indices_count = if indices_size.len() == 1 {
+                    indices_size[0]
+                } else {
+                    assert!(
+                        indices_size.len() == 2 && indices_size[1] == 3,
+                        "DistsMask::into_indices_iter: expected Nx3 indices, got {indices_size:?}"
+                    );
+                    indices_size[0]
+                };
+                let dists = match dists {
+                    Some(dists) => {
+                        assert!(dists.device().eq(&Cpu), "DistsMask::into_indices_iter: dists must be on CPU");
+                        let dists = if dists.is_contiguous() {
+                            dists
+                        } else {
+                            dists.f_contiguous()?
+                        };
+                        let dists = dists.f_reshape([-1])?;
+                        assert_eq!(
+                            dists.numel() as i64,
+                            indices_count,
+                            "DistsMask::into_indices_iter: dists size mismatch"
+                        );
+                        Some(dists)
+                    }
+                    None => None,
+                };
+                Ok(DistsMaskMatchIter::Indices(IndicesMatchIter::new(mask, dists, &mask_size)))
             }
         }
     }
@@ -376,34 +747,37 @@ impl DistsMask {
 
 }
 
-fn indices_from_mask_cpu(mask: &Tensor, size: &[i64]) -> Result<Tensor, ThoError> {
-    assert_eq!(size.len(), 3, "DistsMask::indices_from_mask_cpu: expected 3D mask, got {size:?}");
-
-    let mask = mask.f_contiguous()?;
-    let mut iter: BoolTensorIterator = (&mask).into();
-    let mut indices = Vec::new();
-
-    for c in 0..size[0] {
-        for i_0 in 0..size[1] {
-            for i_1 in 0..size[2] {
-
-                let mask_val = iter.next().ok_or_else(|| {
-                    ThoError::new("DistsMask::indices_from_mask_cpu: not enough mask values")
-                })?;
-                if mask_val {
-                    indices.push(c);
-                    indices.push(i_0);
-                    indices.push(i_1);
-                }
-            }
-        }
+fn rebase_flat_indices_last_dim(
+    flat: Tensor,
+    size: &[i64],
+    last_offset: i64,
+    new_last: i64,
+) -> Result<Tensor, ThoError> {
+    if flat.numel() == 0 {
+        return Ok(flat);
     }
+    assert_eq!(flat.kind(), Kind::Int64, "DistsMask: expected Int64 flat indices");
+    assert_eq!(size.len(), 3, "DistsMask: expected 3D size, got {size:?}");
 
-    if indices.is_empty() {
-        return Ok(Tensor::zeros([0, 3], (Kind::Int64, Cpu)));
-    }
+    let device = flat.device();
+    let dim_1 = size[1];
+    let dim_2 = size[2];
+    let d1d2 = dim_1.saturating_mul(dim_2);
 
-    Ok(Tensor::from_slice(indices.as_slice()).view([-1, 3]))
+    let d1d2_t = Tensor::from(d1d2).f_to_device(device)?;
+    let dim_2_t = Tensor::from(dim_2).f_to_device(device)?;
+    let dim_1_t = Tensor::from(dim_1).f_to_device(device)?;
+    let new_last_t = Tensor::from(new_last).f_to_device(device)?;
+    let offset_t = Tensor::from(last_offset).f_to_device(device)?;
+
+    let i_0 = flat.f_floor_divide(&d1d2_t)?;
+    let rem = &flat - &i_0 * &d1d2_t;
+    let i_1 = rem.f_floor_divide(&dim_2_t)?;
+    let i_2 = rem - &i_1 * &dim_2_t;
+    let i_2 = i_2 + offset_t;
+
+    let row = &i_0 * &dim_1_t + &i_1;
+    Ok((&row * new_last_t + i_2).f_to_kind(Kind::Int64)?)
 }
 
 fn unpack_packed_mask(mask: &Tensor, mask_size: &[i64]) -> Result<Tensor, ThoError> {
@@ -577,28 +951,55 @@ impl CrossClcResultMerge for DistsMask {
                 let left_indices_size = left_mask.size();
                 let right_indices_size = right_mask.size();
 
-                assert!(left_indices_size.len() == 2 && left_indices_size[1] == 3, "DistsMask merge: indices shape mismatch");
-                assert!(right_indices_size.len() == 2 && right_indices_size[1] == 3, "DistsMask merge: indices shape mismatch");
+                assert!(
+                    (left_indices_size.len() == 1 || (left_indices_size.len() == 2 && left_indices_size[1] == 3))
+                        && left_indices_size.len() == right_indices_size.len(),
+                    "DistsMask merge: indices shape mismatch"
+                );
+                assert!(
+                    right_indices_size.len() == 1 || (right_indices_size.len() == 2 && right_indices_size[1] == 3),
+                    "DistsMask merge: indices shape mismatch"
+                );
+                let left_count = left_indices_size[0];
+                let right_count = right_indices_size[0];
 
-                let mut right_indices = right_mask;
-                if right_indices_size[0] > 0 {
-                    let offset = Tensor::from(left_size[last_dim])
-                        .f_to_device(right_indices.device())?;
-                    let _ = right_indices.narrow(1, 2, 1).f_add_(&offset)?;
-                }
-
-                let indices = if left_indices_size[0] == 0 {
-                    right_indices
-                } else if right_indices_size[0] == 0 {
-                    left_mask
+                let new_last = left_size[last_dim] + right_size[last_dim];
+                let (left_indices, right_indices) = if left_indices_size.len() == 1 {
+                    let left_indices = rebase_flat_indices_last_dim(
+                        left_mask,
+                        &left_size,
+                        0,
+                        new_last,
+                    )?;
+                    let right_indices = rebase_flat_indices_last_dim(
+                        right_mask,
+                        &right_size,
+                        left_size[last_dim],
+                        new_last,
+                    )?;
+                    (left_indices, right_indices)
                 } else {
-                    Tensor::f_concat(&[left_mask, right_indices], 0)?
+                    let mut right_indices = right_mask;
+                    if right_count > 0 {
+                        let offset = Tensor::from(left_size[last_dim])
+                            .f_to_device(right_indices.device())?;
+                        let _ = right_indices.narrow(1, 2, 1).f_add_(&offset)?;
+                    }
+                    (left_mask, right_indices)
+                };
+
+                let indices = if left_count == 0 {
+                    right_indices
+                } else if right_count == 0 {
+                    left_indices
+                } else {
+                    Tensor::f_concat(&[left_indices, right_indices], 0)?
                 };
 
                 let dists = match (left_dists, right_dists) {
                     (Some(left), Some(right)) => {
                         assert_eq!(left.device(), right.device(), "DistsMask merge: dists device mismatch");
-                        assert!(left.numel() as i64 == left_indices_size[0] && right.numel() as i64 == right_indices_size[0], "DistsMask merge: dists size mismatch");
+                        assert!(left.numel() as i64 == left_count && right.numel() as i64 == right_count, "DistsMask merge: dists size mismatch");
                         Some(Tensor::f_concat(&[left, right], 0)?)
                     }
                     (None, None) => None,
@@ -606,7 +1007,7 @@ impl CrossClcResultMerge for DistsMask {
                 };
 
                 let mut merged_size = left_size;
-                merged_size[last_dim] += right_size[last_dim];
+                merged_size[last_dim] = new_last;
 
                 Ok(DistsMask {
                     mask: indices,
@@ -872,7 +1273,26 @@ impl CrossClcResultMerge for DistsMask {
                     stream_to_sync: None,
                 })
             }
-            DistsMaskType::MaskIndexes(base_size) => {
+            DistsMaskType::MaskIndexes(_) => {
+                let base_size = match &parts[0].mask_type {
+                    DistsMaskType::MaskIndexes(size) => size.clone(),
+                    _ => return Err(ThoError::new("DistsMask merge: type mismatch")),
+                };
+
+                let last_dim = base_size.len() - 1;
+                let mut total_last = 0i64;
+                for part in parts.iter() {
+                    let size = match &part.mask_type {
+                        DistsMaskType::MaskIndexes(size) => size,
+                        _ => return Err(ThoError::new("DistsMask merge: type mismatch")),
+                    };
+                    assert!(
+                        size.len() == base_size.len() && size[..last_dim] == base_size[..last_dim],
+                        "DistsMask merge: size mismatch"
+                    );
+                    total_last += size[last_dim];
+                }
+
                 let mut parts_iter = parts.into_iter();
                 let first = parts_iter
                     .next()
@@ -884,33 +1304,35 @@ impl CrossClcResultMerge for DistsMask {
                     ..
                 } = first;
 
-                let base_size = match first_type {
-                    DistsMaskType::MaskIndexes(size) => size,
-                    _ => return Err(ThoError::new("DistsMask merge: type mismatch")),
-                };
-
                 assert!(!base_size.is_empty(), "DistsMask merge: size mismatch");
-                let last_dim = base_size.len() - 1;
                 let device = first_mask.device();
                 let first_indices_size = first_mask.size();
 
-                assert!(first_indices_size.len() == 2 && first_indices_size[1] == 3, "DistsMask merge: indices shape mismatch");
+                let indices_rank = first_indices_size.len();
+                assert!(
+                    indices_rank == 1 || (indices_rank == 2 && first_indices_size[1] == 3),
+                    "DistsMask merge: indices shape mismatch"
+                );
+                let first_count = first_indices_size[0];
 
                 let has_dists = first_dists.is_some();
                 if let Some(dists) = first_dists.as_ref() {
                     assert_eq!(dists.device(), device, "DistsMask merge: dists device mismatch");
-                    assert_eq!(dists.numel() as i64, first_indices_size[0], "DistsMask merge: dists size mismatch");
+                    assert_eq!(dists.numel() as i64, first_count, "DistsMask merge: dists size mismatch");
                 }
 
                 let mut indices_parts = Vec::new();
-                indices_parts.push(first_mask);
+                let mut offset = base_size[last_dim];
+                let mut indices = if indices_rank == 1 {
+                    rebase_flat_indices_last_dim(first_mask, &base_size, 0, total_last)?
+                } else {
+                    first_mask
+                };
+                indices_parts.push(indices);
                 let mut dists_parts = Vec::new();
                 if let Some(dists) = first_dists {
                     dists_parts.push(dists);
                 }
-
-                let mut offset = base_size[last_dim];
-                let mut total_last = base_size[last_dim];
 
                 for part in parts_iter {
                     let DistsMask {
@@ -929,12 +1351,18 @@ impl CrossClcResultMerge for DistsMask {
 
                     let indices_size = mask.size();
                     assert!(
-                        indices_size.len() == 2 && indices_size[1] == 3,
+                        indices_size.len() == indices_rank
+                            && (indices_rank == 1 || indices_size[1] == 3),
                         "DistsMask merge: indices shape mismatch"
                     );
+                    let indices_count = indices_size[0];
 
-                    let mut indices = mask;
-                    if indices_size[0] > 0 {
+                    let mut indices = if indices_rank == 1 {
+                        rebase_flat_indices_last_dim(mask, &size, offset, total_last)?
+                    } else {
+                        mask
+                    };
+                    if indices_count > 0 && indices_rank == 2 {
                         let offset_t = Tensor::from(offset).f_to_device(device)?;
                         let _ = indices.narrow(1, 2, 1).f_add_(&offset_t)?;
                     }
@@ -944,7 +1372,7 @@ impl CrossClcResultMerge for DistsMask {
                             ThoError::new("DistsMask merge: dists mismatch")
                         })?;
                         assert_eq!(dists.device(), device, "DistsMask merge: dists device mismatch");
-                        assert_eq!(dists.numel() as i64, indices_size[0], "DistsMask merge: dists size mismatch");
+                        assert_eq!(dists.numel() as i64, indices_count, "DistsMask merge: dists size mismatch");
                         dists_parts.push(dists);
                     } else if dists.is_some() {
                         return Err(ThoError::new("DistsMask merge: dists mismatch"));
@@ -952,7 +1380,6 @@ impl CrossClcResultMerge for DistsMask {
 
                     indices_parts.push(indices);
                     offset += size[last_dim];
-                    total_last += size[last_dim];
                 }
 
                 let indices = if indices_parts.len() == 1 {
@@ -1116,94 +1543,42 @@ where
         assert!(mask_size[1] as usize == slices_0.len() && mask_size[2] as usize == slices_1.len(), "DistsTracker::consume: mask size mismatch mask={mask_size:?} slices_0={} slices_1={}", slices_0.len(), slices_1.len());
         assert_eq!(mask_size[0] as usize, self.channel_trackers.len(), "DistsTracker::consume: channel mismatch mask_channels={} trackers={}", mask_size[0], self.channel_trackers.len());
 
-        let match_indices = clc_result.into_indices_iter()?;
-        let indices = match_indices.indices().f_contiguous()?;
-
-        assert!(indices.device().eq(&Cpu), "DistsTracker::consume: indices must be on CPU");
-        let indices_size = indices.size();
-
-        assert!(indices_size.len() == 2 && indices_size[1] == 3, "DistsTracker::consume: expected Nx3 indices, got {indices_size:?}");
-        if indices_size[0] > 0 {
-            let mins = indices.min_dim(0, false).0;
-            let maxs = indices.max_dim(0, false).0;
-            let min_channel = mins.int64_value(&[0]);
-            let min_i0 = mins.int64_value(&[1]);
-            let min_i1 = mins.int64_value(&[2]);
-            let max_channel = maxs.int64_value(&[0]);
-            let max_i0 = maxs.int64_value(&[1]);
-            let max_i1 = maxs.int64_value(&[2]);
-
-            let max_channel_allowed = (self.channel_trackers.len() as i64).saturating_sub(1);
-            let max_i0_allowed = (slices_0.len() as i64).saturating_sub(1);
-            let max_i1_allowed = (slices_1.len() as i64).saturating_sub(1);
-
-            let out_of_bounds = min_channel < 0
-                || min_i0 < 0
-                || min_i1 < 0
-                || max_channel > max_channel_allowed
-                || max_i0 > max_i0_allowed
-                || max_i1 > max_i1_allowed;
-            assert!(!out_of_bounds, "DistsTracker::consume: indices out of bounds mins=[{min_channel},{min_i0},{min_i1}] maxs=[{max_channel},{max_i0},{max_i1}] allowed channels=0..{max_channel_allowed} slices_0=0..{max_i0_allowed} slices_1=0..{max_i1_allowed} mask_size={mask_size:?} indices_size={indices_size:?}");
-        }
-        let indices_flat = indices.f_reshape([-1])?;
-
-        let mut idx_iter = indices_flat.iter::<i64>()?;
-        let mut dist_iter = match match_indices.dists() {
-            Some(v) => {
-                assert!(
-                    v.device().eq(&Cpu),
-                    "DistsTracker::consume: dists must be on CPU"
-                );
-                Some(v.iter::<f64>()?)
-            }
-            None => None,
-        };
-
-        let mut matches_by_channel = vec![Vec::<SlicesMatch>::new(); self.channel_trackers.len()];
-
-        loop {
-            let channel = match idx_iter.next() {
-                Some(v) => v as usize,
-                None => break,
-            };
-
-            let i_0 = idx_iter.next().ok_or_else(|| {
-                ThoError::new("DistsTracker::consume: nonzero indices not paired")
-            })?;
-            let i_1 = idx_iter.next().ok_or_else(|| {
-                ThoError::new("DistsTracker::consume: nonzero indices not paired")
-            })?;
-
-            let dist = dist_iter
-                .as_mut()
-                .and_then(|it| it.next())
-                .unwrap_or(0.0f64);
-
-            assert!((i_0 as usize) < slices_0.len(), "DistsTracker::consume: mask index out of bounds (batch 0)");
-            assert!((i_1 as usize) < slices_1.len(), "DistsTracker::consume: mask index out of bounds (batch 1)");
-
-            let slice_0 = slices_0[i_0 as usize];
-            let slice_1 = slices_1[i_1 as usize];
-
-            if slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1 {
-                assert!(channel < matches_by_channel.len(), "DistsTracker::consume: channel index out of bounds {channel}");
-                matches_by_channel[channel].push(SlicesMatch(slice_0, slice_1, dist as f32));
-            }
-        }
-
         let channel_trackers = self.channel_trackers.clone();
         tokio::task::spawn_blocking(move || {
             use rayon::prelude::*;
             rayon_pool().install(|| {
+
+
+                let mut match_indices = clc_result.into_indices_iter()?;
+                let mut matches_by_channel = vec![Vec::<SlicesMatch>::new(); self.channel_trackers.len()];
+
+                match_indices.par_bridge().for_each(|(channel, i_0, i_1, dist) | {
+                    let channel = channel as usize;
+                    let i_0 = i_0 as usize;
+                    let i_1 = i_1 as usize;
+
+                    assert!(channel < matches_by_channel.len(), "DistsTracker::consume: channel index out of bounds {channel}");
+                    assert!(i_0 < slices_0.len(), "DistsTracker::consume: mask index out of bounds (batch 0)");
+                    assert!(i_1 < slices_1.len(), "DistsTracker::consume: mask index out of bounds (batch 1)");
+
+                    let slice_0 = slices_0[i_0];
+                    let slice_1 = slices_1[i_1];
+
+                    if slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1 {
+                        channel_trackers[channel].write().track(slice_0, slice_1, dist as f32);
+                    }
+                });
+
                 channel_trackers
                     .into_par_iter()
                     .zip(matches_by_channel.into_par_iter())
                     .try_for_each(|(mt, matches)| {
                         let mut guard = mt.write();
-                        guard.track_many(matches);
                         guard.dump();
                         Ok::<(), ThoError>(())
-                    })
+                    })?;
+
+                Ok::<_, ThoError>(())
             })
         })
         .await??;
@@ -1218,6 +1593,7 @@ mod tests {
     use crate::tasks::cross_batch_clc::CrossClcResultMerge;
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
     use tch::{Device, Kind, Tensor};
+    use tch::kind::FLOAT_CPU;
     use thoosa_common::utils::reset_print_options;
     use thoosa_shared::{Cause, ThoError};
     #[ctor::ctor]
@@ -1227,6 +1603,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_0() -> Result<(), ThoError> {
+        let t = Tensor::rand(&[1223], FLOAT_CPU);
+        let x = t.data_ptr();
         Ok(())
     }
 
@@ -1498,18 +1876,19 @@ mod tests {
         let dists = Tensor::from_slice(&[1.0f32, 2.0, 3.0]).view([1, 1, 3]);
 
         let mask = DistsMask::new(mask, Some(dists), DistsMaskType::AsIs, None)?;
-        let matches = mask.into_indices_iter()?;
+        let mut matches = mask.into_indices_iter()?;
+        let mut idx_values = Vec::new();
+        let mut dists_values = Vec::new();
 
-        let idx_values = matches
-            .indices()
-            .reshape([-1])
-            .iter::<i64>()
-            .unwrap()
-            .collect::<Vec<_>>();
-        let dists = matches.dists().expect("dists");
+        while let Some((channel, i_0, i_1, dist)) = matches.next() {
+            idx_values.push(channel);
+            idx_values.push(i_0);
+            idx_values.push(i_1);
+            dists_values.push(dist);
+        }
 
         assert_eq!(idx_values, vec![0, 0, 0, 0, 0, 2]);
-        assert_eq!(dists_values(dists), vec![1.0, 3.0]);
+        assert_eq!(dists_values, vec![1.0, 3.0]);
 
         Ok(())
     }
