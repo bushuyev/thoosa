@@ -109,19 +109,11 @@ impl DistsMask {
         }
 
         let mask_size = mask.size();
-        if mask_size.len() != 3 {
-            return Err(ThoError::new(format!(
-                "DistsMask::new: expected 3D mask, got {mask_size:?}"
-            )));
-        }
+        assert_eq!(mask_size.len(), 3, "DistsMask::new: expected 3D mask, got {mask_size:?}");
 
         if let Some(dists) = dists.as_ref() {
-            if dists.device() != mask.device() {
-                return Err(ThoError::new("DistsMask::new: mask/dists device mismatch"));
-            }
-            if dists.size() != mask_size {
-                return Err(ThoError::new("DistsMask::new: mask/dists size mismatch"));
-            }
+            assert_eq!(dists.device(), mask.device(), "DistsMask::new: mask/dists device mismatch");
+            assert_eq!(dists.size(), mask_size, "DistsMask::new: mask/dists size mismatch");
         }
 
         let _guard = if stream_to_sync.is_some() && mask.device().ne(&Cpu) {
@@ -134,13 +126,9 @@ impl DistsMask {
 
         match mask_type {
             DistsMaskType::AsIs => {
-                if mask.device().ne(&Cpu) {
-                    return Err(ThoError::new("DistsMask::new: AsIs expects CPU mask"));
-                }
+                assert!(mask.device().eq(&Cpu), "DistsMask::new: AsIs expects CPU mask");
                 if let Some(dists) = dists.as_ref() {
-                    if dists.device().ne(&Cpu) {
-                        return Err(ThoError::new("DistsMask::new: AsIs expects CPU dists"));
-                    }
+                    assert!(dists.device().eq(&Cpu), "DistsMask::new: AsIs expects CPU dists");
                 }
                 Ok(Self {
                     mask,
@@ -150,17 +138,9 @@ impl DistsMask {
                 })
             }
             DistsMaskType::MaskPacked(_, _) => {
-                if mask.device().eq(&Cpu) {
-                    return Err(ThoError::new(
-                        "DistsMask::new: MaskPacked expects non-CPU mask",
-                    ));
-                }
+                assert!(mask.device().ne(&Cpu), "DistsMask::new: MaskPacked expects non-CPU mask");
                 if let Some(dists) = dists.as_ref() {
-                    if dists.device().eq(&Cpu) {
-                        return Err(ThoError::new(
-                            "DistsMask::new: MaskPacked expects non-CPU dists",
-                        ));
-                    }
+                    assert!(dists.device().ne(&Cpu), "DistsMask::new: MaskPacked expects non-CPU dists");
                 }
                 let dists_size = dists.as_ref().map(|t| t.size());
                 let packed = pack_bits_bool(&mask)?;
@@ -175,17 +155,9 @@ impl DistsMask {
                 })
             }
             DistsMaskType::MaskIndexes(_) => {
-                if mask.device().eq(&Cpu) {
-                    return Err(ThoError::new(
-                        "DistsMask::new: MaskIndexes expects non-CPU mask",
-                    ));
-                }
+                assert!(mask.device().ne(&Cpu), "DistsMask::new: MaskIndexes expects non-CPU mask");
                 if let Some(dists) = dists.as_ref() {
-                    if dists.device().eq(&Cpu) {
-                        return Err(ThoError::new(
-                            "DistsMask::new: MaskIndexes expects non-CPU dists",
-                        ));
-                    }
+                    assert!(dists.device().ne(&Cpu), "DistsMask::new: MaskIndexes expects non-CPU dists");
                 }
                 let indices = mask.f_nonzero()?;
                 let indices = indices.f_to_kind(Kind::Int64)?;
@@ -226,12 +198,10 @@ impl DistsMask {
 
         match self.mask_type {
             DistsMaskType::AsIs => {
-                assert!(self.mask.device().eq(&Cpu), "To be copield AsIs mask should be on CPU");
+                assert!(self.mask.device().eq(&Cpu), "DistsMask::to_cpu: AsIs expects CPU mask");
 
                 if let Some(dists) = self.dists.as_ref() {
-                    if dists.device().ne(&Cpu) {
-                        return Err(ThoError::new("DistsMask::to_cpu: AsIs expects CPU dists"));
-                    }
+                    assert!(dists.device().eq(&Cpu), "DistsMask::to_cpu: AsIs expects CPU dists");
                 }
                 Ok(Self {
                     mask: self.mask,
@@ -291,6 +261,7 @@ impl DistsMask {
         }
     }
 
+    //this is expected to be called after mask is copied to CPU
     pub fn into_indices_iter(self) -> Result<DistsMaskIndices, ThoError> {
         let DistsMask {
             mask,
@@ -301,25 +272,16 @@ impl DistsMask {
 
         match mask_type {
             DistsMaskType::MaskIndexes(mask_size) => {
-                if mask.device().ne(&Cpu) {
-                    return Err(ThoError::new(
-                        "DistsMask::into_indices_iter: indices must be on CPU",
-                    ));
-                }
+                assert!(mask.device().eq(&Cpu), "DistsMask::into_indices_iter: indices must be on CPU");
+
                 let indices_size = mask.size();
-                if indices_size.len() != 2 || indices_size[1] != 3 {
-                    return Err(ThoError::new(format!(
-                        "DistsMask::into_indices_iter: expected Nx3 indices, got {indices_size:?}"
-                    )));
-                }
+                assert!(indices_size.len() == 2 && indices_size[1] == 3, "DistsMask::into_indices_iter: expected Nx3 indices, got {indices_size:?}");
+
                 let indices_count = indices_size[0];
                 let dists = match dists {
                     Some(dists) => {
-                        if dists.device().ne(&Cpu) {
-                            return Err(ThoError::new(
-                                "DistsMask::into_indices_iter: dists must be on CPU",
-                            ));
-                        }
+                        assert!(dists.device().eq(&Cpu), "DistsMask::into_indices_iter: dists must be on CPU");
+
                         if dists.numel() as i64 == indices_count {
                             Some(dists.f_reshape([-1])?)
                         } else {
@@ -331,21 +293,17 @@ impl DistsMask {
                 Ok(DistsMaskIndices { indices: mask, dists })
             }
             DistsMaskType::AsIs => {
-                if mask.device().ne(&Cpu) {
-                    return Err(ThoError::new(
-                        "DistsMask::into_indices_iter: expected CPU mask",
-                    ));
-                }
+                assert!(mask.device().eq(&Cpu), "DistsMask::into_indices_iter: expected CPU mask");
+
                 let mask_size = mask.size();
                 let indices = indices_from_mask_cpu(&mask, &mask_size)?;
                 let indices_count = indices.size()[0];
                 let dists = match dists {
                     Some(dists) => {
-                        if dists.device().ne(&Cpu) {
-                            return Err(ThoError::new(
-                                "DistsMask::into_indices_iter: dists must be on CPU",
-                            ));
-                        }
+                        assert!(
+                            dists.device().eq(&Cpu),
+                            "DistsMask::into_indices_iter: dists must be on CPU"
+                        );
                         if dists.numel() as i64 == indices_count {
                             Some(dists.f_reshape([-1])?)
                         } else {
@@ -357,21 +315,15 @@ impl DistsMask {
                 Ok(DistsMaskIndices { indices, dists })
             }
             DistsMaskType::MaskPacked(mask_size, _) => {
-                if mask.device().ne(&Cpu) {
-                    return Err(ThoError::new(
-                        "DistsMask::into_indices_iter: expected CPU packed mask",
-                    ));
-                }
+                assert!(mask.device().eq(&Cpu), "DistsMask::into_indices_iter: expected CPU packed mask");
+
                 let unpacked = unpack_packed_mask(&mask, &mask_size)?;
                 let indices = indices_from_mask_cpu(&unpacked, &mask_size)?;
                 let indices_count = indices.size()[0];
                 let dists = match dists {
                     Some(dists) => {
-                        if dists.device().ne(&Cpu) {
-                            return Err(ThoError::new(
-                                "DistsMask::into_indices_iter: dists must be on CPU",
-                            ));
-                        }
+                        assert!(dists.device().eq(&Cpu), "DistsMask::into_indices_iter: dists must be on CPU");
+
                         if dists.numel() as i64 == indices_count {
                             Some(dists.f_reshape([-1])?)
                         } else {
@@ -395,9 +347,7 @@ impl DistsMask {
 
     fn unpack_mask_cpu(&self) -> Result<Tensor, ThoError> {
         let mask = self.unpack_mask_device(&Cpu)?;
-        if mask.device().ne(&Cpu) {
-            return Err(ThoError::new("DistsMask::unpack_mask_cpu: expected CPU"));
-        }
+        assert!(mask.device().eq(&Cpu), "DistsMask::unpack_mask_cpu: expected CPU");
         Ok(mask)
     }
 
@@ -427,11 +377,7 @@ impl DistsMask {
 }
 
 fn indices_from_mask_cpu(mask: &Tensor, size: &[i64]) -> Result<Tensor, ThoError> {
-    if size.len() != 3 {
-        return Err(ThoError::new(format!(
-            "DistsMask::indices_from_mask_cpu: expected 3D mask, got {size:?}"
-        )));
-    }
+    assert_eq!(size.len(), 3, "DistsMask::indices_from_mask_cpu: expected 3D mask, got {size:?}");
 
     let mask = mask.f_contiguous()?;
     let mut iter: BoolTensorIterator = (&mask).into();
@@ -440,6 +386,7 @@ fn indices_from_mask_cpu(mask: &Tensor, size: &[i64]) -> Result<Tensor, ThoError
     for c in 0..size[0] {
         for i_0 in 0..size[1] {
             for i_1 in 0..size[2] {
+
                 let mask_val = iter.next().ok_or_else(|| {
                     ThoError::new("DistsMask::indices_from_mask_cpu: not enough mask values")
                 })?;
@@ -460,9 +407,8 @@ fn indices_from_mask_cpu(mask: &Tensor, size: &[i64]) -> Result<Tensor, ThoError
 }
 
 fn unpack_packed_mask(mask: &Tensor, mask_size: &[i64]) -> Result<Tensor, ThoError> {
-    if mask_size.is_empty() {
-        return Err(ThoError::new("DistsMask::unpack_packed_mask: empty mask size"));
-    }
+    assert!(!mask_size.is_empty(), "DistsMask::unpack_packed_mask: empty mask size");
+
     let total_bits = mask_size
         .iter()
         .fold(1i64, |a, v| a.saturating_mul(*v));
@@ -476,22 +422,13 @@ fn gather_dists_for_indices(
     indices: &Tensor,
     mask_size: &[i64],
 ) -> Result<Tensor, ThoError> {
-    if mask_size.len() != 3 {
-        return Err(ThoError::new(format!(
-            "DistsMask::gather_dists_for_indices: expected 3D mask, got {mask_size:?}"
-        )));
-    }
-    if dists.device() != indices.device() {
-        return Err(ThoError::new(
-            "DistsMask::gather_dists_for_indices: dists/indices device mismatch",
-        ));
-    }
+    assert_eq!(mask_size.len(), 3, "DistsMask::gather_dists_for_indices: expected 3D mask, got {mask_size:?}");
+    assert_eq!(dists.device(), indices.device(), "DistsMask::gather_dists_for_indices: dists/indices device mismatch");
+
     let indices_size = indices.size();
-    if indices_size.len() != 2 || indices_size[1] != 3 {
-        return Err(ThoError::new(format!(
-            "DistsMask::gather_dists_for_indices: expected Nx3 indices, got {indices_size:?}"
-        )));
-    }
+
+    assert!(indices_size.len() == 2 && indices_size[1] == 3, "DistsMask::gather_dists_for_indices: expected Nx3 indices, got {indices_size:?}");
+
     if indices_size[0] == 0 {
         return Ok(Tensor::zeros([0], (dists.kind(), dists.device())));
     }
@@ -514,11 +451,12 @@ fn gather_dists_for_indices(
 }
 
 impl CrossClcResultMerge for DistsMask {
-    //gpt generated
+
     fn to_cpu(self) -> BoxFuture<'static, Result<Self, ThoError>> {
         async move { DistsMask::to_cpu(self).await }.boxed()
     }
 
+    //gpt generated
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CrossClcResultMerge for DistsMask::merge_batch_1"))]
     fn merge_batch_1(self, other: Self) -> Result<Self, ThoError> {
         let left = self;
@@ -564,14 +502,10 @@ impl CrossClcResultMerge for DistsMask {
                 DistsMaskType::MaskPacked(left_sizes, left_dists_size),
                 DistsMaskType::MaskPacked(right_sizes, right_dists_size),
             ) => {
-                if left_sizes.len() != right_sizes.len() || left_sizes.is_empty() {
-                    return Err(ThoError::new("DistsMask merge: size mismatch"));
-                }
+                assert!(left_sizes.len() == right_sizes.len() && !left_sizes.is_empty(), "DistsMask merge: size mismatch");
 
                 let last_dim = left_sizes.len() - 1;
-                if left_sizes[..last_dim] != right_sizes[..last_dim] {
-                    return Err(ThoError::new("DistsMask merge: size mismatch"));
-                }
+                assert_eq!(left_sizes[..last_dim], right_sizes[..last_dim], "DistsMask merge: size mismatch");
 
                 let left_last = left_sizes[last_dim];
                 let right_last = right_sizes[last_dim];
@@ -605,17 +539,16 @@ impl CrossClcResultMerge for DistsMask {
 
                 let dists = match (left_dists, right_dists) {
                     (Some(left), Some(right)) => {
-                        let left_size = left_dists_size
-                            .ok_or_else(|| ThoError::new("DistsMask merge: dists size mismatch"))?;
-                        let right_size = right_dists_size
-                            .ok_or_else(|| ThoError::new("DistsMask merge: dists size mismatch"))?;
-                        if left_size.len() != right_size.len() || left_size.is_empty() {
-                            return Err(ThoError::new("DistsMask merge: dists size mismatch"));
-                        }
+                        assert!(left_dists_size.is_some(), "DistsMask merge: dists size mismatch");
+                        assert!(right_dists_size.is_some(), "DistsMask merge: dists size mismatch");
+
+                        let left_size = left_dists_size.expect("DistsMask merge: dists size mismatch");
+                        let right_size = right_dists_size.expect("DistsMask merge: dists size mismatch");
+
+                        assert!(left_size.len() == right_size.len() && !left_size.is_empty(), "DistsMask merge: dists size mismatch");
                         let dists_last = left_size.len() - 1;
-                        if left_size[..dists_last] != right_size[..dists_last] {
-                            return Err(ThoError::new("DistsMask merge: dists size mismatch"));
-                        }
+
+                        assert_eq!(left_size[..dists_last], right_size[..dists_last], "DistsMask merge: dists size mismatch");
                         Some(Tensor::f_concat(&[left, right], dists_last as i64)?)
                     }
                     (None, None) => None,
@@ -634,24 +567,18 @@ impl CrossClcResultMerge for DistsMask {
                 })
             }
             (DistsMaskType::MaskIndexes(left_size), DistsMaskType::MaskIndexes(right_size)) => {
-                if left_size.len() != right_size.len() || left_size.is_empty() {
-                    return Err(ThoError::new("DistsMask merge: size mismatch"));
-                }
+                assert!(left_size.len() == right_size.len() && !left_size.is_empty(), "DistsMask merge: size mismatch");
+
                 let last_dim = left_size.len() - 1;
-                if left_size[..last_dim] != right_size[..last_dim] {
-                    return Err(ThoError::new("DistsMask merge: size mismatch"));
-                }
-                if left_mask.device() != right_mask.device() {
-                    return Err(ThoError::new("DistsMask merge: device mismatch"));
-                }
+
+                assert_eq!(left_size[..last_dim], right_size[..last_dim], "DistsMask merge: size mismatch");
+                assert_eq!(left_mask.device(), right_mask.device(), "DistsMask merge: device mismatch");
+
                 let left_indices_size = left_mask.size();
                 let right_indices_size = right_mask.size();
-                if left_indices_size.len() != 2 || left_indices_size[1] != 3 {
-                    return Err(ThoError::new("DistsMask merge: indices shape mismatch"));
-                }
-                if right_indices_size.len() != 2 || right_indices_size[1] != 3 {
-                    return Err(ThoError::new("DistsMask merge: indices shape mismatch"));
-                }
+
+                assert!(left_indices_size.len() == 2 && left_indices_size[1] == 3, "DistsMask merge: indices shape mismatch");
+                assert!(right_indices_size.len() == 2 && right_indices_size[1] == 3, "DistsMask merge: indices shape mismatch");
 
                 let mut right_indices = right_mask;
                 if right_indices_size[0] > 0 {
@@ -670,14 +597,8 @@ impl CrossClcResultMerge for DistsMask {
 
                 let dists = match (left_dists, right_dists) {
                     (Some(left), Some(right)) => {
-                        if left.device() != right.device() {
-                            return Err(ThoError::new("DistsMask merge: dists device mismatch"));
-                        }
-                        if left.numel() as i64 != left_indices_size[0]
-                            || right.numel() as i64 != right_indices_size[0]
-                        {
-                            return Err(ThoError::new("DistsMask merge: dists size mismatch"));
-                        }
+                        assert_eq!(left.device(), right.device(), "DistsMask merge: dists device mismatch");
+                        assert!(left.numel() as i64 == left_indices_size[0] && right.numel() as i64 == right_indices_size[0], "DistsMask merge: dists size mismatch");
                         Some(Tensor::f_concat(&[left, right], 0)?)
                     }
                     (None, None) => None,
@@ -726,21 +647,19 @@ impl CrossClcResultMerge for DistsMask {
                 }
 
                 let first_size = parts[0].mask.size();
-                if first_size.is_empty() {
-                    return Err(ThoError::new("DistsMask merge: size mismatch"));
-                }
+                assert!(!first_size.is_empty(), "DistsMask merge: size mismatch");
+
                 let last_dim = first_size.len() - 1;
                 let device = parts[0].mask.device();
                 let mut total_last = first_size[last_dim];
 
                 for part in parts.iter().skip(1) {
                     let size = part.mask.size();
-                    if size.len() != first_size.len() || size[..last_dim] != first_size[..last_dim] {
-                        return Err(ThoError::new("DistsMask merge: size mismatch"));
-                    }
-                    if part.mask.device() != device {
-                        return Err(ThoError::new("DistsMask merge: device mismatch"));
-                    }
+                    assert!(
+                        size.len() == first_size.len() && size[..last_dim] == first_size[..last_dim],
+                        "DistsMask merge: size mismatch"
+                    );
+                    assert_eq!(part.mask.device(), device, "DistsMask merge: device mismatch");
                     total_last += size[last_dim];
                 }
 
@@ -767,23 +686,18 @@ impl CrossClcResultMerge for DistsMask {
                     let dists_device = first_dists.device();
                     let dists_kind = first_dists.kind();
                     let dists_size = first_dists.size();
-                    if dists_size.is_empty() {
-                        return Err(ThoError::new("DistsMask merge: dists size mismatch"));
-                    }
+                    assert!(!dists_size.is_empty(), "DistsMask merge: dists size mismatch");
+
                     let dists_last_dim = dists_size.len() - 1;
                     let mut total_dists_last = dists_size[dists_last_dim];
 
                     for part in parts.iter().skip(1) {
                         let dists = part.dists.as_ref().unwrap();
                         let size = dists.size();
-                        if size.len() != dists_size.len()
-                            || size[..dists_last_dim] != dists_size[..dists_last_dim]
-                        {
-                            return Err(ThoError::new("DistsMask merge: dists size mismatch"));
-                        }
-                        if dists.device() != dists_device {
-                            return Err(ThoError::new("DistsMask merge: dists device mismatch"));
-                        }
+
+                        assert!(size.len() == dists_size.len() && size[..dists_last_dim] == dists_size[..dists_last_dim], "DistsMask merge: dists size mismatch");
+                        assert_eq!(dists.device(), dists_device, "DistsMask merge: dists device mismatch");
+
                         total_dists_last += size[dists_last_dim];
                     }
 
@@ -821,9 +735,10 @@ impl CrossClcResultMerge for DistsMask {
                     return Err(ThoError::new("DistsMask merge: type mismatch"));
                 }
 
-                if base_sizes.is_empty() {
-                    return Err(ThoError::new("DistsMask merge: size mismatch"));
-                }
+                assert!(
+                    !base_sizes.is_empty(),
+                    "DistsMask merge: size mismatch"
+                );
                 let last_dim = base_sizes.len() - 1;
                 let device = parts[0].mask.device();
 
@@ -835,12 +750,10 @@ impl CrossClcResultMerge for DistsMask {
                         DistsMaskType::MaskPacked(sizes, _) => sizes,
                         _ => return Err(ThoError::new("DistsMask merge: type mismatch")),
                     };
-                    if sizes.len() != base_sizes.len() || sizes[..last_dim] != base_sizes[..last_dim] {
-                        return Err(ThoError::new("DistsMask merge: size mismatch"));
-                    }
-                    if part.mask.device() != device {
-                        return Err(ThoError::new("DistsMask merge: device mismatch"));
-                    }
+
+                    assert!(sizes.len() == base_sizes.len() && sizes[..last_dim] == base_sizes[..last_dim], "DistsMask merge: size mismatch");
+                    assert_eq!(part.mask.device(), device, "DistsMask merge: device mismatch");
+
                     total_last += sizes[last_dim];
                     all_aligned &= sizes[last_dim] % 8 == 0;
                 }
@@ -890,11 +803,11 @@ impl CrossClcResultMerge for DistsMask {
                 }
 
                 let (dists, merged_dists_sizes) = if has_dists {
-                    let dists_size = base_dists_size
-                        .ok_or_else(|| ThoError::new("DistsMask merge: dists size mismatch"))?;
-                    if dists_size.is_empty() {
-                        return Err(ThoError::new("DistsMask merge: dists size mismatch"));
-                    }
+                    assert!(base_dists_size.is_some(), "DistsMask merge: dists size mismatch");
+
+                    let dists_size = base_dists_size.expect("DistsMask merge: dists size mismatch");
+                    assert!(!dists_size.is_empty(), "DistsMask merge: dists size mismatch");
+
                     let dists_last_dim = dists_size.len() - 1;
                     let mut total_dists_last = 0;
                     let mut dists_device = None;
@@ -905,19 +818,15 @@ impl CrossClcResultMerge for DistsMask {
                             DistsMaskType::MaskPacked(_, dists_size) => dists_size,
                             _ => return Err(ThoError::new("DistsMask merge: type mismatch")),
                         };
+                        assert!(sizes.is_some(), "DistsMask merge: dists size mismatch");
                         let size = sizes
                             .as_ref()
-                            .ok_or_else(|| ThoError::new("DistsMask merge: dists size mismatch"))?;
-                        if size.len() != dists_size.len()
-                            || size[..dists_last_dim] != dists_size[..dists_last_dim]
-                        {
-                            return Err(ThoError::new("DistsMask merge: dists size mismatch"));
-                        }
+                            .expect("DistsMask merge: dists size mismatch");
+                        assert!(size.len() == dists_size.len() && size[..dists_last_dim] == dists_size[..dists_last_dim], "DistsMask merge: dists size mismatch");
                         let dists = part.dists.as_ref().unwrap();
+
                         if let Some(dev) = dists_device {
-                            if dists.device() != dev {
-                                return Err(ThoError::new("DistsMask merge: dists device mismatch"));
-                            }
+                            assert_eq!(dists.device(), dev, "DistsMask merge: dists device mismatch");
                         } else {
                             dists_device = Some(dists.device());
                         }
@@ -980,24 +889,17 @@ impl CrossClcResultMerge for DistsMask {
                     _ => return Err(ThoError::new("DistsMask merge: type mismatch")),
                 };
 
-                if base_size.is_empty() {
-                    return Err(ThoError::new("DistsMask merge: size mismatch"));
-                }
+                assert!(!base_size.is_empty(), "DistsMask merge: size mismatch");
                 let last_dim = base_size.len() - 1;
                 let device = first_mask.device();
                 let first_indices_size = first_mask.size();
-                if first_indices_size.len() != 2 || first_indices_size[1] != 3 {
-                    return Err(ThoError::new("DistsMask merge: indices shape mismatch"));
-                }
+
+                assert!(first_indices_size.len() == 2 && first_indices_size[1] == 3, "DistsMask merge: indices shape mismatch");
 
                 let has_dists = first_dists.is_some();
                 if let Some(dists) = first_dists.as_ref() {
-                    if dists.device() != device {
-                        return Err(ThoError::new("DistsMask merge: dists device mismatch"));
-                    }
-                    if dists.numel() as i64 != first_indices_size[0] {
-                        return Err(ThoError::new("DistsMask merge: dists size mismatch"));
-                    }
+                    assert_eq!(dists.device(), device, "DistsMask merge: dists device mismatch");
+                    assert_eq!(dists.numel() as i64, first_indices_size[0], "DistsMask merge: dists size mismatch");
                 }
 
                 let mut indices_parts = Vec::new();
@@ -1022,16 +924,14 @@ impl CrossClcResultMerge for DistsMask {
                         DistsMaskType::MaskIndexes(size) => size,
                         _ => return Err(ThoError::new("DistsMask merge: type mismatch")),
                     };
-                    if size.len() != base_size.len() || size[..last_dim] != base_size[..last_dim] {
-                        return Err(ThoError::new("DistsMask merge: size mismatch"));
-                    }
-                    if mask.device() != device {
-                        return Err(ThoError::new("DistsMask merge: device mismatch"));
-                    }
+                    assert!(size.len() == base_size.len() && size[..last_dim] == base_size[..last_dim], "DistsMask merge: size mismatch");
+                    assert_eq!(mask.device(), device, "DistsMask merge: device mismatch");
+
                     let indices_size = mask.size();
-                    if indices_size.len() != 2 || indices_size[1] != 3 {
-                        return Err(ThoError::new("DistsMask merge: indices shape mismatch"));
-                    }
+                    assert!(
+                        indices_size.len() == 2 && indices_size[1] == 3,
+                        "DistsMask merge: indices shape mismatch"
+                    );
 
                     let mut indices = mask;
                     if indices_size[0] > 0 {
@@ -1043,12 +943,8 @@ impl CrossClcResultMerge for DistsMask {
                         let dists = dists.ok_or_else(|| {
                             ThoError::new("DistsMask merge: dists mismatch")
                         })?;
-                        if dists.device() != device {
-                            return Err(ThoError::new("DistsMask merge: dists device mismatch"));
-                        }
-                        if dists.numel() as i64 != indices_size[0] {
-                            return Err(ThoError::new("DistsMask merge: dists size mismatch"));
-                        }
+                        assert_eq!(dists.device(), device, "DistsMask merge: dists device mismatch");
+                        assert_eq!(dists.numel() as i64, indices_size[0], "DistsMask merge: dists size mismatch");
                         dists_parts.push(dists);
                     } else if dists.is_some() {
                         return Err(ThoError::new("DistsMask merge: dists mismatch"));
@@ -1215,39 +1111,18 @@ where
 
         let clc_result = input.clc_result();
         let mask_size = clc_result.mask_size_hint()?;
-        if mask_size.len() != 3 {
-            return Err(ThoError::new(format!(
-                "DistsTracker::consume: expected 3D mask, got {mask_size:?}"
-            )));
-        }
-        if mask_size[1] as usize != slices_0.len() || mask_size[2] as usize != slices_1.len() {
-            return Err(ThoError::new(format!(
-                "DistsTracker::consume: mask size mismatch mask={mask_size:?} slices_0={} slices_1={}",
-                slices_0.len(),
-                slices_1.len()
-            )));
-        }
-        if mask_size[0] as usize != self.channel_trackers.len() {
-            return Err(ThoError::new(format!(
-                "DistsTracker::consume: channel mismatch mask_channels={} trackers={}",
-                mask_size[0],
-                self.channel_trackers.len()
-            )));
-        }
+
+        assert_eq!(mask_size.len(), 3, "DistsTracker::consume: expected 3D mask, got {mask_size:?}");
+        assert!(mask_size[1] as usize == slices_0.len() && mask_size[2] as usize == slices_1.len(), "DistsTracker::consume: mask size mismatch mask={mask_size:?} slices_0={} slices_1={}", slices_0.len(), slices_1.len());
+        assert_eq!(mask_size[0] as usize, self.channel_trackers.len(), "DistsTracker::consume: channel mismatch mask_channels={} trackers={}", mask_size[0], self.channel_trackers.len());
 
         let match_indices = clc_result.into_indices_iter()?;
         let indices = match_indices.indices().f_contiguous()?;
-        if indices.device().ne(&Cpu) {
-            return Err(ThoError::new(
-                "DistsTracker::consume: indices must be on CPU",
-            ));
-        }
+
+        assert!(indices.device().eq(&Cpu), "DistsTracker::consume: indices must be on CPU");
         let indices_size = indices.size();
-        if indices_size.len() != 2 || indices_size[1] != 3 {
-            return Err(ThoError::new(format!(
-                "DistsTracker::consume: expected Nx3 indices, got {indices_size:?}"
-            )));
-        }
+
+        assert!(indices_size.len() == 2 && indices_size[1] == 3, "DistsTracker::consume: expected Nx3 indices, got {indices_size:?}");
         if indices_size[0] > 0 {
             let mins = indices.min_dim(0, false).0;
             let maxs = indices.max_dim(0, false).0;
@@ -1268,36 +1143,30 @@ where
                 || max_channel > max_channel_allowed
                 || max_i0 > max_i0_allowed
                 || max_i1 > max_i1_allowed;
-            if out_of_bounds {
-                return Err(ThoError::new(format!(
-                    "DistsTracker::consume: indices out of bounds mins=[{min_channel},{min_i0},{min_i1}] \
-maxs=[{max_channel},{max_i0},{max_i1}] allowed channels=0..{max_channel_allowed} \
-slices_0=0..{max_i0_allowed} slices_1=0..{max_i1_allowed} mask_size={mask_size:?} indices_size={indices_size:?}"
-                )));
-            }
+            assert!(!out_of_bounds, "DistsTracker::consume: indices out of bounds mins=[{min_channel},{min_i0},{min_i1}] maxs=[{max_channel},{max_i0},{max_i1}] allowed channels=0..{max_channel_allowed} slices_0=0..{max_i0_allowed} slices_1=0..{max_i1_allowed} mask_size={mask_size:?} indices_size={indices_size:?}");
         }
         let indices_flat = indices.f_reshape([-1])?;
+
         let mut idx_iter = indices_flat.iter::<i64>()?;
         let mut dist_iter = match match_indices.dists() {
             Some(v) => {
-                if v.device().ne(&Cpu) {
-                    return Err(ThoError::new(
-                        "DistsTracker::consume: dists must be on CPU",
-                    ));
-                }
+                assert!(
+                    v.device().eq(&Cpu),
+                    "DistsTracker::consume: dists must be on CPU"
+                );
                 Some(v.iter::<f64>()?)
             }
             None => None,
         };
 
-        let mut matches_by_channel =
-            vec![Vec::<SlicesMatch>::new(); self.channel_trackers.len()];
+        let mut matches_by_channel = vec![Vec::<SlicesMatch>::new(); self.channel_trackers.len()];
 
         loop {
             let channel = match idx_iter.next() {
                 Some(v) => v as usize,
                 None => break,
             };
+
             let i_0 = idx_iter.next().ok_or_else(|| {
                 ThoError::new("DistsTracker::consume: nonzero indices not paired")
             })?;
@@ -1310,21 +1179,15 @@ slices_0=0..{max_i0_allowed} slices_1=0..{max_i1_allowed} mask_size={mask_size:?
                 .and_then(|it| it.next())
                 .unwrap_or(0.0f64);
 
-            let slice_0 = *slices_0.get(i_0 as usize).ok_or_else(|| {
-                ThoError::new("DistsTracker::consume: mask index out of bounds (batch 0)")
-            })?;
-            let slice_1 = *slices_1.get(i_1 as usize).ok_or_else(|| {
-                ThoError::new("DistsTracker::consume: mask index out of bounds (batch 1)")
-            })?;
+            assert!((i_0 as usize) < slices_0.len(), "DistsTracker::consume: mask index out of bounds (batch 0)");
+            assert!((i_1 as usize) < slices_1.len(), "DistsTracker::consume: mask index out of bounds (batch 1)");
+
+            let slice_0 = slices_0[i_0 as usize];
+            let slice_1 = slices_1[i_1 as usize];
 
             if slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1 {
-                if let Some(channel_matches) = matches_by_channel.get_mut(channel) {
-                    channel_matches.push(SlicesMatch(slice_0, slice_1, dist as f32));
-                } else {
-                    return Err(ThoError::new(format!(
-                        "DistsTracker::consume: channel index out of bounds {channel}"
-                    )));
-                }
+                assert!(channel < matches_by_channel.len(), "DistsTracker::consume: channel index out of bounds {channel}");
+                matches_by_channel[channel].push(SlicesMatch(slice_0, slice_1, dist as f32));
             }
         }
 
