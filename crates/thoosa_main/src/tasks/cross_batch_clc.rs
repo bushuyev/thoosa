@@ -503,7 +503,7 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params
 #[cfg(test)]
 mod tests {
     use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClc, UnfoldParams};
-    use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
+    use crate::tasks::dists_tracker::DistsMask;
     use crate::tasks::find_motifs::MeanDistsCtx;
     use crate::tasks::run_ctx_2::RunCtx2;
     use thoosa_shared::runner::common::MockRunCtx;
@@ -555,12 +555,7 @@ mod tests {
                 let dists = lin_t(total).view((channels, slices_0, slices_1));
                 let mask = dists.lt(3.0);
 
-                let mask_type = if mask.device().eq(&Cpu) {
-                    DistsMaskType::AsIs
-                } else {
-                    DistsMaskType::MaskPacked(mask.size(), Some(dists.size()))
-                };
-                Ok(DistsMask::new(mask, Some(dists), mask_type, None)?)
+                Ok(DistsMask::new(mask, Some(dists), false, None)?)
             },
             MeanDistsCtx::new(3, Cuda(0)),
             UnfoldParams::new(1, 2, 1),

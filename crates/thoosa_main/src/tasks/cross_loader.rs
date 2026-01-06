@@ -817,7 +817,7 @@ mod tests {
     use crate::tasks::cross_loader::{
         CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
     };
-    use crate::tasks::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
+    use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use crate::tasks::slices_iter::SlicesIter;
@@ -1043,7 +1043,7 @@ mod tests {
                 let sum_1 = t_1.f_sum_dim_intlist(2, false, Kind::Float)?;
                 let dists = sum_0.unsqueeze(2) + sum_1.unsqueeze(1);
                 let mask = (sum_0.unsqueeze(2) - sum_1.unsqueeze(1)).lt(0.0);
-                Ok(DistsMask::new(mask, Some(dists), DistsMaskType::AsIs, None)?)
+                Ok(DistsMask::new(mask, Some(dists), false, None)?)
             },
             (),
             UnfoldParams::new(1, unfold_size, unfold_step),
