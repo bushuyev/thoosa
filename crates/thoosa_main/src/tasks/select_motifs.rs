@@ -195,7 +195,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
                 Ok(Some(
                     (
                         DistsMask::new(
-                            Tensor::f_concat(&channel_masks_motif_ids.0, 1)?, //1 dim - resources
+                            Tensor::f_concat(&channel_masks_motif_ids.0, 2)?, //1 dim - resources
                             None,
                             DistsMaskType::AsIs,
                             None,

@@ -226,9 +226,8 @@ impl DistsMask {
 
         match self.mask_type {
             DistsMaskType::AsIs => {
-                if self.mask.device().ne(&Cpu) {
-                    return Err(ThoError::new("DistsMask::to_cpu: AsIs expects CPU mask"));
-                }
+                assert!(self.mask.device().eq(&Cpu), "To be copield AsIs mask should be on CPU");
+
                 if let Some(dists) = self.dists.as_ref() {
                     if dists.device().ne(&Cpu) {
                         return Err(ThoError::new("DistsMask::to_cpu: AsIs expects CPU dists"));
@@ -242,6 +241,7 @@ impl DistsMask {
                 })
             }
             mask_type @ (DistsMaskType::MaskPacked(_, _) | DistsMaskType::MaskIndexes(_)) => {
+
                 let mask = if self.mask.device().eq(&Cpu) {
                     self.mask
                 } else {
@@ -278,9 +278,6 @@ impl DistsMask {
         }
     }
 
-    pub async fn to_cpu_with_dists(self) -> Result<Self, ThoError>  {
-        self.to_cpu().await
-    }
 
     pub fn unpack(self) -> Result<(Tensor, Option<Tensor>), ThoError> {
         match self.mask_type {
@@ -899,7 +896,7 @@ impl CrossClcResultMerge for DistsMask {
                         return Err(ThoError::new("DistsMask merge: dists size mismatch"));
                     }
                     let dists_last_dim = dists_size.len() - 1;
-                    let mut total_dists_last = dists_size[dists_last_dim];
+                    let mut total_dists_last = 0;
                     let mut dists_device = None;
                     let mut dists_kind = None;
 
