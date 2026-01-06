@@ -29,6 +29,7 @@ Notes:
 - Linting: keep `clippy` clean; deny warnings in CI/local before PRs.
 - Naming: modules/files `snake_case`; types/traits `PascalCase`; functions/vars `snake_case`.
 - Concurrency: prefer `tokio` primitives; shared maps via `dashmap`; avoid `unsafe`.
+- asserts and logging should be on one line - no matter how long it gets.
 
 ## Testing Guidelines
 - Frameworks: `cargo test` with `#[test]` and `#[tokio::test]` (multi-thread where needed).
