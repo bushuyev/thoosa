@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
-use std::io;
+use std::{fs, io};
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::mem::size_of;
@@ -111,7 +111,11 @@ pub struct FileMotifTrackerStore {
 
 impl Debug for FileMotifTrackerStore {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FileMotifTrackerStore").field("run_id", &self.run_id).field("channel", &self.channel).field("path", &self.path).finish()
+        f.debug_struct("FileMotifTrackerStore")
+            .field("run_id", &self.run_id)
+            .field("channel", &self.channel)
+            .field("path", &self.path)
+            .finish()
     }
 }
 
@@ -129,7 +133,7 @@ impl FileMotifTrackerStore {
             run_id,
             channel,
             writer,
-            path: path.as_ref().to_path_buf(),
+            path: file_path,
         }))
     }
 }
@@ -150,7 +154,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         self.writer.shutdown()?;
         let mut slice_id = 0;
 
-        let groups: HashMap<u16, HashSet<IdSlice>> = group_slices(ChunkedSlicesReader::new(&self.path.join(format!("{}_{}_slices.zstd", self.run_id, self.channel).as_str()))?.flat_map(|slices| {
+        let groups: HashMap<u16, HashSet<IdSlice>> = group_slices(ChunkedSlicesReader::new(&self.path)?.flat_map(|slices| {
             slices.unwrap().into_iter().map(move |slices: SlicesMatch| {
                 slice_id += 1;
                 (IdSlice(slice_id, slices.0.0, slices.0.1), IdSlice(slice_id, slices.1.0, slices.1.1))
@@ -159,6 +163,8 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         debug!("inserting {} groups {} slices", groups.len(), groups.values().map(|s| s.len()).sum::<usize>());
         let groups_len = groups.len();
         store.write().save_groups_as_motifs(self.run_id, self.channel as i64, filter_groups_by_slices_count(max_slices_counts, groups))?;
+
+        fs::remove_file(&self.path)?;
 
         Ok(groups_len)
     }
@@ -171,9 +177,6 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         self.channel
     }
 
-    fn path(&self) -> &PathBuf {
-        todo!()
-    }
 }
 
 pub struct ChunkedSlicesReader<T: AnyBitPattern> {
