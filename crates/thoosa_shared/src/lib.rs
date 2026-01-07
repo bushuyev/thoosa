@@ -75,10 +75,8 @@ where
         let g_1 = pairs_groups.get(&pair.1);
         if let Some(g_0_val) = g_0 {
             if g_1.is_some() {
-                trace!(
-                    "separated group: g_0={:?} g_1={:?} ln={} pair={:?}",
-                    g_0, g_1, ln, pair
-                );
+                trace!("separated group: g_0={:?} g_1={:?} ln={} pair={:?}",g_0, g_1, ln, pair);
+
                 if g_0.ne(&g_1) {
                     separated_groups.push((*g_0_val, *g_1.unwrap()));
                 }

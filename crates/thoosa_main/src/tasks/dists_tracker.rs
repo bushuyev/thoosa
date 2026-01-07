@@ -30,7 +30,7 @@ use thoosa_shims::stream::ThoStreamGuard;
 use thoosa_store::fs_store::FileMotifTrackerStore;
 use thoosa_store::{SlicesMatch, SqlMotifTrackerStore, Store};
 
-// Data impl is minimal; DistsMask is still meant for one-way GPU->CPU copies.
+// DistsMask is meant for one-way GPU->CPU copies.
 #[derive(Debug)]
 pub struct DistsMask {
     mask: Tensor,
@@ -1522,23 +1522,24 @@ where
         let mut trackers_done = AtomicU32::new(0);
         let store = Arc::clone(&self.store);
         let channel_trackers = self.channel_trackers.clone();//TODO clone
+
         let channels_groups = Arc::new(RwLock::new(HashMap::new()));
-        let num_channels = channel_trackers.len();
-        let channels_groups_arc = Arc::clone(&channels_groups);
+        let channels_groups_for_rayon = Arc::clone(&channels_groups);
+
         tokio::task::spawn_blocking(move || {
             use rayon::prelude::*;
             rayon_pool().install(|| {
 
                 channel_trackers.par_iter().enumerate().try_for_each(|(channel, mt)| {
                     let groups_inserted = mt.write().build_groups(&store)?;
-                    channels_groups_arc.write().insert(channel, groups_inserted);
+                    channels_groups_for_rayon.write().insert(channel, groups_inserted);
                     Ok::<_, ThoError>(())
                 })
             })
         }).await??;
 
-        let g = channels_groups.read();
-        info!("groups inserted: {:?}", (0..self.channel_trackers.len()).map(|c|g.get(&c).map(|v|*v).ok_or(0)).collect::<Vec<_>>());
+        let channels_groups_guard = channels_groups.read();
+        info!("groups inserted: {:?}", (0..self.channel_trackers.len()).map(|c|channels_groups_guard.get(&c).map(|v|*v).ok_or(0)).collect::<Vec<_>>());
         Ok(())
     }
 }
