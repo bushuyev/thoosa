@@ -817,7 +817,7 @@ mod tests {
     use crate::tasks::cross_loader::{
         CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
     };
-    use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
+    use crate::tasks::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use crate::tasks::slices_iter::SlicesIter;
@@ -947,16 +947,29 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_cross_clc_without_oom() -> Result<(), ThoError> {
-        test_cross_clc(None, 20).await
+    async fn test_cross_clc_with_indexes_mask_without_oom() -> Result<(), ThoError> {
+        test_cross_clc(None, 20, |(mask_size, _dist_size)|DistsMaskType::MaskIndexes(mask_size)).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_cross_clc_with_oom() -> Result<(), ThoError> {
-        test_cross_clc(Some(20), 40).await
+    async fn test_cross_clc_with_indexes_mask_with_oom() -> Result<(), ThoError> {
+        test_cross_clc(Some(20), 40, |(mask_size, _dist_size)|DistsMaskType::MaskIndexes(mask_size)).await
     }
 
-    async fn test_cross_clc(oom_limit: Option<i64>, chunk_size: usize) -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_cross_clc_with_packed_mask_without_oom() -> Result<(), ThoError> {
+        test_cross_clc(None, 20, |(mask_size, dist_size)|DistsMaskType::MaskPacked(mask_size, dist_size)).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_cross_clc_with_packed_mask_with_oom() -> Result<(), ThoError> {
+        test_cross_clc(Some(20), 40, |(mask_size, dist_size)|DistsMaskType::MaskPacked(mask_size, dist_size)).await
+    }
+
+    async fn test_cross_clc<F>(oom_limit: Option<i64>, chunk_size: usize, mask_type:F) -> Result<(), ThoError>
+    where
+        F:Fn((Vec<i64>, Option<Vec<i64>>))->DistsMaskType + Send + Sync + 'static
+    {
         GlobalCtx::init_devices(2);
 
         let tensor_len = 10usize;
@@ -1026,24 +1039,26 @@ mod tests {
             ThoDevice::from(Device::Cpu),
         ));
 
+
         let batch_clc = Arc::new(CrossUnfoldClc::new(
             move |t_0, t_1, _input, _ctx, _| {
-                debug!("test_cross_cls, batch_clc: t_0={:?}, t_1={:?}", t_0.size(), t_1.size());
+
                 if let Some(limit) = oom_limit {
                     let batch_1_len = t_1.size()[1];
                     if batch_1_len > limit {
-                        debug!(
-                            "test_cross_clc: triggering OOM: batch_1_len={batch_1_len} limit={limit}"
-                        );
+                        debug!("test_cross_clc, batch_clc, triggering OOM: batch_1_len={batch_1_len} limit={limit}");
                         oom_triggered_cloned.store(true, Ordering::SeqCst);
                         return Err(ThoError::oom());
                     }
                 }
+                debug!("test_cross_cls, batch_clc, no OOM: t_0={:?}, t_1={:?}", t_0.size(), t_1.size());
                 let sum_0 = t_0.f_sum_dim_intlist(2, false, Kind::Float)?;
                 let sum_1 = t_1.f_sum_dim_intlist(2, false, Kind::Float)?;
                 let dists = sum_0.unsqueeze(2) + sum_1.unsqueeze(1);
                 let mask = (sum_0.unsqueeze(2) - sum_1.unsqueeze(1)).lt(0.0);
-                Ok(DistsMask::new(mask, Some(dists), false, None)?)
+                let mask_size = mask.size();
+                let dists_size = Some(dists.size());
+                Ok(DistsMask::new(mask, Some(dists), mask_type((mask_size, dists_size)), None)?)
             },
             (),
             UnfoldParams::new(1, unfold_size, unfold_step),
@@ -1070,7 +1085,7 @@ mod tests {
                 }
             },
             chunk_size, //TODO config
-            |batch| async { batch.to_cpu_with_dists().await.unwrap() }.boxed(),
+            |batch| async { batch.to_cpu().await.unwrap() }.boxed(),
             |_receiver| async {
                 Ok(())
             }.boxed(),
