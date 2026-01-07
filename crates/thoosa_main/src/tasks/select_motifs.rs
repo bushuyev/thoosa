@@ -52,7 +52,7 @@ use crate::tasks::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoade
 use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::dists_tracker::DistsMask;
+use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::run_ctx_2::{MotifsCtx, RunCtx2};
@@ -195,10 +195,10 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
                 Ok(Some(
                     (
                         DistsMask::new(
-                            Tensor::f_concat(&channel_masks_motif_ids.0, 1)?, //1 dim - resources
+                            Tensor::f_concat(&channel_masks_motif_ids.0, 2)?, //1 dim - resources
                             None,
-                            false,
-                            None
+                            DistsMaskType::AsIs,
+                            None,
                         )?,
                         channel_masks_motif_ids.1
                     ),
@@ -695,7 +695,7 @@ pub mod tests {
     use thoosa_motifs::generators::noise;
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
-    use crate::tasks::dists_tracker::DistsMask;
+    use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
     use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
     use crate::tasks::motif_loader::mock_motif_loader::MockMotifLoader;
     use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
@@ -1437,6 +1437,7 @@ pub mod tests {
         let mut output_builder = Box::new(SelectMotifsSavableResultBuilder::new(StackedMotifsOutputId::new(0,vec![]), num_channels as u32, 50, 0).await);
 
         let mask_0 = Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5);
+        let mask_0_size = mask_0.size();
         output_builder.add_partial_output(
             ClcResourcesMotifsDistOutput::new(
                 0,
@@ -1447,7 +1448,7 @@ pub mod tests {
                                 //3 channels, 5 motifs, 7 resource slices
                                 mask_0,
                                 None,
-                                false,
+                                DistsMaskType::MaskPacked(mask_0_size, None),
                                 None,
                             )?,
                             vec![
@@ -1466,6 +1467,7 @@ pub mod tests {
         ).await;
 
         let mask_1 = Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5);
+        let mask_1_size = mask_1.size();
         output_builder.add_partial_output(
             ClcResourcesMotifsDistOutput::new(
                 0,
@@ -1476,7 +1478,7 @@ pub mod tests {
                                 //3 channels, 5 motifs, 7 resource slices
                                 mask_1,
                                 None,
-                                false,
+                                DistsMaskType::MaskPacked(mask_1_size, None),
                                 None,
                             )?,
                             vec![

@@ -175,6 +175,8 @@ pub struct SimpleMotifTracker<'a> {
     max_slices_counts: Option<u32>,
 }
 
+const CAPACITY: usize = 10_000_000;
+
 impl<'a> SimpleMotifTracker<'a> {
     pub fn new(
         dumper: Box<dyn MotifTrackerStore + 'a>,
@@ -182,7 +184,7 @@ impl<'a> SimpleMotifTracker<'a> {
     ) -> SimpleMotifTracker {
         Self {
             last: None,
-            motifs: Vec::with_capacity(10_000_000),//TODO config + merge Vec::with_capacity + dump when capacity reached from origin/codex/fractional_splitter_async_consume
+            motifs: Vec::with_capacity(CAPACITY),//TODO config + merge Vec::with_capacity + dump when capacity reached from origin/codex/fractional_splitter_async_consume
             dumper,
             max_slices_counts,
         }
@@ -191,8 +193,19 @@ impl<'a> SimpleMotifTracker<'a> {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpleMotifTracker::track"))]
     pub fn track(&mut self, i_0: TensorIdSliceIdx, i_1: TensorIdSliceIdx, dist: f32) {
         trace!("SimpMotifTracker::track: i_0={i_0:?} i_1={i_1:?} dist={dist}");
+        self.motifs.push(SlicesMatch(i_0, i_1, dist));
 
-        self.motifs.push(SlicesMatch(i_0, i_1, dist))
+        if self.motifs.len() >= self.motifs.capacity() {
+            self.dump();
+            self.motifs.reserve(CAPACITY);//default capacity is 0 (created from mem::take in dump.)
+        }
+    }
+
+    pub fn track_many(&mut self, mut matches: Vec<SlicesMatch>) {
+        if matches.is_empty() {
+            return;
+        }
+        self.motifs.append(&mut matches);
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpleMotifTracker::dump"))]
@@ -499,10 +512,6 @@ mod motif_find_tests {
         }
 
         fn channel(&self) -> u32 {
-            todo!()
-        }
-
-        fn path(&self) -> &PathBuf {
             todo!()
         }
     }

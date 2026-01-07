@@ -10,6 +10,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
+use tch::Device::Cpu;
 
 use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
 use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
@@ -28,7 +29,7 @@ use thoosa_with_data::with_data;
 use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
 use crate::tasks::cross_batch_clc::{unfold_and_cat, UnfoldParams};
 use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::dists_tracker::DistsMask;
+use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::slices_iter::SlicesIter;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
@@ -178,23 +179,21 @@ where
                     if ids.is_empty() {
                         Ok(None) //no motifs in channel c
                     } else {
+                        let mask = fold_mask(mask.i((c as i64, .., ..)), ids, 0);
+                        let dists = dists.as_ref().map(|d| fold_dists(d.i((c as i64, .., ..)), ids, 0));
+                        let mask_type = if mask.device().eq(&Cpu) {
+                            DistsMaskType::AsIs
+                        } else {
+                            DistsMaskType::MaskPacked(mask.size(), dists.as_ref().map(|t| t.size()))
+                        };
+                        let stream = if mask.device().eq(&Cpu) {
+                            None
+                        } else {
+                            motifs_stream.clone()
+                        };
                         Ok(Some((
-                            DistsMask::new(
-                                fold_mask(
-                                    mask.i((c as i64, .., ..)),
-                                    ids,
-                                    0,
-                                ),
-                                dists.as_ref().map(|d| {
-                                    fold_dists(
-                                        d.i((c as i64, .., ..)),
-                                        ids,
-                                        0,
-                                    )
-                                }),
-                                true,
-                                motifs_stream.clone(),
-                            )?,
+                            //unsqueeze is to put back dimension for channel removed before folding
+                            DistsMask::new(mask.unsqueeze(0), dists.map(|t|t.unsqueeze(0)), mask_type, stream)?,
                             ids.iter()
                                 .fold((vec![], HashSet::new()), |mut acc, d| {
                                     if !acc.1.contains(d) {

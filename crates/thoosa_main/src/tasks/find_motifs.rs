@@ -2,7 +2,7 @@ use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClc, CrossUnfoldClcOu
 use crate::tasks::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
 };
-use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
+use crate::tasks::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
@@ -198,11 +198,13 @@ where
                         let (mask, dists) = clc_dist_d2_and_mask_result?;
 
                         debug!("FindMotifsStage::new, batch_clc:  dists={dists:?}");
-                        if device_idx > 0 {
-                            Ok(DistsMask::new(mask, dists, true, motifs_stream)?)
+                        let mask_type = if device_idx > 0 {
+                            DistsMaskType::MaskIndexes(mask.size())
                         } else {
-                            Ok(DistsMask::new(mask, dists, false, None)?)
-                        }
+                            DistsMaskType::AsIs
+                        };
+                        let stream = if device_idx > 0 { motifs_stream } else { None };
+                        Ok(DistsMask::new(mask, dists, mask_type, stream)?)
 
                     }),
                     MeanDistsCtx::new(channels, device.into()),
@@ -238,7 +240,7 @@ where
                         },
                         fixed_config.max_chunk_size as usize,
                         |batch|{
-                            async {batch.to_cpu().await.unwrap()}.boxed()//TODO unwrap
+                            async { batch.to_cpu().await.unwrap() }.boxed()//TODO unwrap
                         },
                         |receiver| {
                             let dists_tracker = Arc::clone(receiver);
