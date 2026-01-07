@@ -2867,7 +2867,6 @@ pub trait MotifTrackerStore: Debug + Send + Sync {
 
     fn run_id(&self) -> RunId;
     fn channel(&self) -> u32;
-    fn path(&self) -> &PathBuf;
 }
 
 pub fn filter_groups_by_slices_count(max_slices_counts: Option<u32>, groups: HashMap<u16, HashSet<IdSlice>>) -> HashMap<u16, HashSet<IdSlice>> {
@@ -2977,9 +2976,6 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         self.channel
     }
 
-    fn path(&self) -> &PathBuf {
-        &self.path
-    }
 }
 
 #[cfg(test)]

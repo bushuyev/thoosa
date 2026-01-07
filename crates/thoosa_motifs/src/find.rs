@@ -514,10 +514,6 @@ mod motif_find_tests {
         fn channel(&self) -> u32 {
             todo!()
         }
-
-        fn path(&self) -> &PathBuf {
-            todo!()
-        }
     }
 
     #[test]
