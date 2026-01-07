@@ -192,6 +192,7 @@ where
                             motifs_stream.clone()
                         };
                         Ok(Some((
+                            //unsqueeze is to put back dimension for channel removed before folding
                             DistsMask::new(mask.unsqueeze(0), dists.map(|t|t.unsqueeze(0)), mask_type, stream)?,
                             ids.iter()
                                 .fold((vec![], HashSet::new()), |mut acc, d| {
