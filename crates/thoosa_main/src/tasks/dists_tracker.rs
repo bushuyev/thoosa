@@ -55,6 +55,10 @@ enum DistsPtr {
 impl DistsPtr {
     fn value(&self, idx: usize) -> f64 {
         match self {
+            // Safety: ptr comes from a contiguous CPU Tensor that is owned by the iterator
+            // (kept alive for the entire iteration), and idx is bounds-checked by the caller.
+            // Safe alternatives like Tensor::iter or per-element indexing are much slower and/or
+            // allocate; we intentionally use raw pointers for a zero-copy, tight loop.
             DistsPtr::F32(ptr) => unsafe { *ptr.add(idx) as f64 },
             DistsPtr::F64(ptr) => unsafe { *ptr.add(idx) },
         }
@@ -79,6 +83,9 @@ impl DenseMaskMatchIter {
         let dim_2 = mask_size[2] as u64;
         let stride_0 = dim_1 * dim_2;
         let total = (mask_size[0] as u64) * stride_0;
+        // We keep `mask` owned by the iterator, so the raw pointer remains valid
+        // for the whole iteration. Using raw pointers avoids per-element Tensor
+        // indexing, which is significantly slower for large masks.
         let mask_ptr = mask.data_ptr() as *const u8;
         let dists_ptr = dists.as_ref().map(dists_ptr);
         Self {
@@ -100,6 +107,9 @@ impl Iterator for DenseMaskMatchIter {
     fn next(&mut self) -> Option<Self::Item> {
         while self.index < self.total {
             let idx = self.index as usize;
+            // Safety: idx < total (checked above), mask_ptr points to contiguous CPU
+            // data owned by `self.mask`, and we only read from it.
+            // Safe alternatives would either allocate or call into libtorch per element.
             let mask_val = unsafe { *self.mask_ptr.add(idx) != 0 };
             let flat = self.index;
             self.index += 1;
@@ -147,6 +157,8 @@ impl PackedMaskMatchIter {
         let dim_2 = mask_size[2] as u64;
         let stride_0 = dim_1 * dim_2;
         let total_bits = (mask_size[0] as u64) * stride_0;
+        // Packed masks are stored as Uint8 bytes. We keep the Tensor alive and
+        // read raw bytes to avoid unpacking into a full Bool tensor on CPU.
         let bytes_ptr = mask.data_ptr() as *const u8;
         let dists_ptr = dists.as_ref().map(dists_ptr);
         Self {
@@ -170,6 +182,9 @@ impl Iterator for PackedMaskMatchIter {
             let idx = self.bit_index as usize;
             let byte_idx = (self.bit_index / 8) as usize;
             let bit_in_byte = (self.bit_index % 8) as u8;
+            // Safety: byte_idx is derived from bit_index < total_bits, and the
+            // packed mask Tensor is contiguous and owned by the iterator.
+            // This avoids the cost of unpacking all bits up front.
             let byte = unsafe { *self.bytes_ptr.add(byte_idx) };
             let is_set = (byte & (0x80 >> bit_in_byte)) != 0;
             let flat = self.bit_index;
@@ -216,6 +231,9 @@ impl Iterator for TrueCoords3dIter {
         if self.pos >= self.len {
             return None;
         }
+        // Safety: flat_ptr comes from a contiguous Int64 Tensor held by the
+        // iterator; pos < len is enforced above. Using raw pointers avoids
+        // converting the tensor to a Vec or using per-element accessors.
         let v = unsafe { *self.flat_ptr.add(self.pos) };
         self.pos += 1;
         assert!(v >= 0, "TrueCoords3dIter: negative index {v}");
@@ -239,6 +257,9 @@ impl FlatIndicesMatchIter {
         let d2 = mask_size[2];
         assert!(d1d2 > 0 && d2 > 0, "FlatIndicesMatchIter: invalid mask size");
         let coords = TrueCoords3dIter {
+            // Indices are stored as a flat Int64 tensor (computed on GPU, moved
+            // to CPU). We keep the tensor alive and iterate by raw pointer for
+            // speed and to avoid extra copies.
             flat_ptr: indices.data_ptr() as *const i64,
             len: indices.numel() as usize,
             pos: 0,
@@ -274,6 +295,8 @@ impl Iterator for FlatIndicesMatchIter {
             .dists_ptr
             .as_ref()
             .map(|ptr| {
+                // Safety: dist_pos is incremented in lockstep with coords iteration,
+                // and dists_ptr points to a contiguous CPU tensor owned by self.
                 let v = ptr.value(self.dist_pos);
                 self.dist_pos += 1;
                 v
@@ -302,6 +325,9 @@ impl Iterator for TripletIndicesMatchIter {
         }
 
         let base = self.pos * 3;
+        // Safety: indices_ptr is derived from a contiguous Int64 Tensor that we
+        // own. base and base+2 are in-bounds because total == indices.size()[0].
+        // Raw pointer access avoids per-element Tensor calls inside tight loops.
         let c = unsafe { *self.indices_ptr.add(base) };
         let i_0 = unsafe { *self.indices_ptr.add(base + 1) };
         let i_1 = unsafe { *self.indices_ptr.add(base + 2) };
@@ -327,6 +353,8 @@ impl Iterator for TripletIndicesMatchIter {
 impl TripletIndicesMatchIter {
     fn new(indices: Tensor, dists: Option<Tensor>) -> Self {
         let total = indices.size()[0] as usize;
+        // We keep `indices` alive and read via raw pointer for efficiency. The
+        // tensor is required to be contiguous and on CPU by construction.
         let indices_ptr = indices.data_ptr() as *const i64;
         let dists_ptr = dists.as_ref().map(dists_ptr);
         Self {
@@ -379,6 +407,10 @@ enum DistsMaskMatchIter {
     Indices(IndicesMatchIter),
 }
 
+// Safety: the iterator only reads from CPU tensors that it owns. We never
+// mutate the underlying memory, and the raw pointers stay valid for the life
+// of the iterator because the owning Tensors are stored inside the enum.
+// We still avoid sharing the same iterator across threads concurrently.
 unsafe impl Send for DistsMaskMatchIter {}
 
 impl Iterator for DistsMaskMatchIter {
@@ -395,6 +427,9 @@ impl Iterator for DistsMaskMatchIter {
 
 fn dists_ptr(dists: &Tensor) -> DistsPtr {
     match dists.kind() {
+        // These raw pointers are used only for read-only iteration on CPU.
+        // Safe alternatives require per-element Tensor APIs or copying to Vec,
+        // which are too costly in hot paths.
         Kind::Float => DistsPtr::F32(dists.data_ptr() as *const f32),
         Kind::Double => DistsPtr::F64(dists.data_ptr() as *const f64),
         other => panic!("DistsMask: unsupported dists kind {other:?}"),
@@ -402,6 +437,9 @@ fn dists_ptr(dists: &Tensor) -> DistsPtr {
 }
 
 
+// Safety: DistsMask is treated as immutable data once constructed; it owns
+// its Tensors and does not expose interior mutability. We only move or read
+// it across threads, which is safe for the underlying CPU buffers.
 unsafe impl Sync for DistsMask {}
 
 impl Output for DistsMask {}
@@ -1603,8 +1641,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_0() -> Result<(), ThoError> {
-        let t = Tensor::rand(&[1223], FLOAT_CPU);
-        let x = t.data_ptr();
+        let v:Vec<usize>= Vec::default();
+
+        debug!("v={}", v.capacity());
         Ok(())
     }
 
