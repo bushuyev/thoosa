@@ -195,9 +195,9 @@ impl<'a> SimpleMotifTracker<'a> {
         trace!("SimpMotifTracker::track: i_0={i_0:?} i_1={i_1:?} dist={dist}");
         self.motifs.push(SlicesMatch(i_0, i_1, dist));
 
-        if self.motifs.len() > CAPACITY {
+        if self.motifs.len() >= self.motifs.capacity() {
             self.dump();
-            self.motifs.reserve(CAPACITY);
+            self.motifs.reserve(CAPACITY);//default capacity is 0 (created from mem::take in dump.)
         }
     }
 
