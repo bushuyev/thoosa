@@ -6,6 +6,7 @@ use parking_lot::RwLock;
 use tch::{IndexOp, TchError, Tensor};
 use tch::Device::Cuda;
 use cached_derive::Cached;
+use thoosa_named_derive::Named;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_shared::runner::common::OutId;
 use thoosa_shared::runner::common::RunCtx;
@@ -28,7 +29,7 @@ impl Dims for BandPassDims {
     type Metrics = AnyMetrics;//TODO
 }
 
-#[derive(Debug, Cached)]
+#[derive(Debug, Cached, Named)]
 pub struct FreqFilter<C>
 where
     C: RunCtx + 'static,

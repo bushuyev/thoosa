@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
-use crate::traits::Named;
+use thoosa_named_derive::Named;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ElvVal {
@@ -29,7 +29,7 @@ impl From<&str> for ElvVal {
     }
 }
 
-#[derive(Debug, Clone, Ord)]
+#[derive(Debug, Clone, Ord, Named)]
 pub struct MonoKey {
     val: ElvVal,
 
@@ -50,12 +50,6 @@ impl From<&str> for MonoKey {
 impl PartialOrd for MonoKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.val.partial_cmp(&other.val)
-    }
-}
-
-impl Named for MonoKey {
-    fn name(&self) -> &'static str {
-        "MonoKey"
     }
 }
 
@@ -123,7 +117,7 @@ impl Hash for MonoKey {
 
 
 /// ✅ Dynamic-length key, stored as a boxed slice (one allocation, no capacity slack).
-#[derive(Debug, Eq, PartialEq, Hash, Clone, Ord, PartialOrd)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Ord, PartialOrd, Named)]
 pub struct SynKey {
     vals: Box<[MonoKey]>,
 }
@@ -245,12 +239,6 @@ impl Add<&SynKey> for MonoKey {
 }
 
 
-
-impl Named for SynKey {
-    fn name(&self) -> &'static str {
-        "CompKey"
-    }
-}
 
 impl From<(u32, &str)> for SynKey {
     fn from(value: (u32, &str)) -> Self {

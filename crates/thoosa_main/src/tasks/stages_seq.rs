@@ -9,13 +9,14 @@ use futures_util::future::{BoxFuture, Shared};
 use parking_lot::RwLock;
 use log::debug;
 use cached_derive::Cached;
+use thoosa_named_derive::Named;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode};
 use thoosa_shared::applicables_runner::*;
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::comp_id::SynKey;
 
-#[derive(Debug, cached_derive::Cached)]
+#[derive(Debug, cached_derive::Cached, Named)]
 pub struct ABStage<A, B, C>
 where
     C:RunCtx + 'static,
@@ -157,7 +158,7 @@ where
 
 }
 
-#[derive(cached_derive::Cached)]//TODO delegate to B's cache
+#[derive(cached_derive::Cached, Named)]//TODO delegate to B's cache
 pub enum StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,

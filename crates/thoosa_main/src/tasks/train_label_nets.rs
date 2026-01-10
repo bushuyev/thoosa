@@ -80,7 +80,7 @@ pub async fn new_train_label_nets_with_ml<L, C, R>(
     run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
-    stage_ctx:Arc<parking_lot::RwLock<R>>,
+    stage_ctx:R,
     opt_config:Arc<OptConfig>
 ) -> Result<TrainLabelNets<L, ABStage<L, ApplyMotifNets<C>, C>, C>, ThoError>
 where
@@ -274,7 +274,7 @@ where
             let results = futures::stream::iter(labels_tain_and_valid_sets.clone())
             .map(|label_tain_and_valid_sets|{
                 let (label, resources_1) = label_tain_and_valid_sets;
-                let ctx_for_task = ctx.branch(format!("Train_{label}"), false);
+                let ctx_for_task = ctx.branch::<SynKey>( mono_key!(label.as_str(), format!("Train_{label}")).into(), false);//into is needed because mock needs SynKey or &str
 
                 let opt_config = Arc::clone(&self.opt_config);
                 let train_motifs_nodes_run_configs = Arc::clone(&train_motifs_nodes_run_configs);
@@ -284,8 +284,8 @@ where
                 let num_nets = self.num_nets;
                 async move {
                     let mut ctx = ctx_for_task;
-                    let new_name = format!("Train_{label}");
-                    let train_label_ctx = ctx.branch(new_name, false);
+
+                    let train_label_ctx = ctx.branch::<SynKey>( mono_key!(label.as_str(), format!("Train_{label}")).into(), false);
 
 
 
@@ -909,7 +909,7 @@ mod tests {
             run_configs,
             &ws,
             &store,
-            Arc::new(RwLock::new(mock_run_ctx::default(1))),
+            mock_run_ctx::default(1),
             Arc::new(OptConfig::new(10, 3))
         ).await?);
 
@@ -922,16 +922,15 @@ mod tests {
         // let ctx = MockRunCtx::purge_gpu_caches_context();
         // ctx.expect().with(always()).times(0..).returning( |_| Box::pin(async { Ok(()) }));
 
-        let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
+        let mut run_ctx = mock_run_ctx::default(1);
 
-        let run_ctx_branch = run_ctx.write().branch("train_label_nets_run", false);
-        let out = train_label_nets.run(input, run_ctx_branch).await?;
+        let out = train_label_nets.run(input, mock_run_ctx::default(1)).await?;
 
         info!("test_train_label_net_3x3: PERF={PERF:?}");
         info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
 
 
-        let ctx_for_data = run_ctx.write().branch("train_label_nets_assert", false);
+        let ctx_for_data = run_ctx.branch("train_label_nets_assert", false);
         with_data!(ctx_for_data, out; |out:&TrainLabelNetsOutput|{
              for r in &out.results {
                 info!("label={} loss={}", r.label, r.loss);

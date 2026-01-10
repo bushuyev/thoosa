@@ -5,6 +5,7 @@ use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use cached_derive::Cached;
+use thoosa_named_derive::Named;
 use thoosa_shared::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -29,7 +30,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::comp_id::SynKey;
 
-#[derive(Cached)]
+#[derive(Cached, Named)]
 pub struct LoadMotifAndClcDistanceStage<ML, CLC, C>
 where
     C: RunCtx + Adjustable + 'static,

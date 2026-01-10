@@ -69,7 +69,7 @@ pub async fn new_train_final_net_with_ml<L, C, R>(
     run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
-    stage_ctx: Arc<RwLock<R>>,
+    stage_ctx: R,
     opt_config: Arc<OptConfig>,
 ) -> Result<TrainFinalNet<L, ABStage<L, ApplyLabelNets<C>, C>, C>, ThoError>
 where
@@ -624,7 +624,7 @@ mod tests {
             run_configs,
             &ws,
             &store,
-            Arc::new(RwLock::new(mock_run_ctx::default(0))),
+            mock_run_ctx::default(0),
             Arc::new(OptConfig::new(1, 1)),
         ).await?);
 

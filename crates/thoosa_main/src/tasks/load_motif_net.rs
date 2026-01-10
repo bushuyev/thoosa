@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use log::debug;
 use parking_lot::RwLock;
 use cached_derive::Cached;
+use thoosa_named_derive::Named;
 use thoosa_shared::runner::common::cachable::DevicesWrap;
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
@@ -59,7 +60,7 @@ impl WithId for  LoadMotifNetInput{
 }
 
 
-#[derive(Debug, Cached)]
+#[derive(Debug, Cached, Named)]
 pub struct LoadMotifNet<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
