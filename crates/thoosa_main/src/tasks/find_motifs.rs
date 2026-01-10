@@ -61,7 +61,7 @@ where
     cross_loader: Arc<CrossLoader<
             RC,
         L,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &C) -> Result<DistsMask, ThoError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
             DistsTracker<C>,
             DistsMask,
             C,
@@ -79,7 +79,7 @@ where
         cross_loader: Arc<CrossLoader<
             RC,
             L,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &C) -> Result<DistsMask, ThoError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
             DistsTracker<C>,
             DistsMask,
             C,
@@ -146,14 +146,14 @@ where
                 let filter = run_config.slices_filter.clone();
 
                 let cross_unfold_clc: CrossUnfoldClc<
-                    Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &Arc<RwLock<C>>) -> Result<DistsMask, ThoError> + Send + Sync>,
+                    Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &C) -> Result<DistsMask, ThoError> + Send + Sync>,
                     DistsMask,
                     MeanDistsCtx,
                     C,
                 > = CrossUnfoldClc::new(
 
                     Box::new(move |t_0, t_1, input, means_ctx, ctx| {
-                        let device_idx = ctx.read().device_idx();
+                        let device_idx = ctx.device_idx();
                         let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
 
                         let mut mask_makers = match &filter {
@@ -291,19 +291,19 @@ where
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>,
-        ctx: Arc<RwLock<Self::Ctx>>,
+        mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
         let mut js: JoinSet<Result<Arc<DevicesWrap<()>>, ThoError>> = JoinSet::new();//TODO to stream + spawn
 
         debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
         for stage in self.run_config_stages.iter() {
-            let ctx_arc = ctx.write().branch(format!("find_motifs_for_rc_{}", stage.run_config.id.unwrap_or(0)).leak());
+            let ctx_for_stage = ctx.branch(format!("find_motifs_for_rc_{}", stage.run_config.id.unwrap_or(0)), true);
             let input_arc = Arc::clone(&input);
             let cross_loader_arc = Arc::clone(&stage.cross_loader);
 
             js.spawn(async move {
-                cross_loader_arc.run(input_arc, ctx_arc).await
+                cross_loader_arc.run(input_arc, ctx_for_stage).await
             });
         }
 
@@ -530,7 +530,7 @@ mod tests {
             ThoDevice::from(Device::Cpu),
         ));
 
-        let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa")));
+        let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, "aa")));
         ctx.write().add_permit(global_ctx.acquire_many(0, 1, Arc::new(SynKey::new([mono_key!("test", "test")]))).await?);
 
         let cache_area = ctx.read().cache_area();
@@ -572,7 +572,7 @@ mod tests {
                     .expect("FindMotifsStage::new failed in test"),
                 )
             },
-            || Arc::clone(&ctx),
+            || ctx.write().branch("find_motifs_test", false),
         )
         .await?;
 
@@ -596,23 +596,25 @@ mod tests {
 
             let motif = Arc::clone(&motif_loader_impl).run(
                 Arc::clone(&motif_id),
-                Arc::clone(&ctx),
+                ctx.write().branch("find_motifs_motif_loader", false),
             )
             .await?;
 
+            let mut ctx_for_data = ctx.write().branch("find_motifs_motif_data", false);
             motif
                 .with_data_ref(1,
-                Arc::clone(&ctx), None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
+                &mut ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, _ctx| {
                    debug!("motif_id={motif_id_raw} slices={:?}", t.data());
 
                    Ok(())
                })
                 .await?;
 
+            let mut ctx_for_dist = ctx.write().branch("find_motifs_dist_value", false);
             let _dist = Arc::clone(&clc_dist)
-                .run_cached(Arc::clone(&motif_id), Arc::clone(&ctx))
+                .run_cached(Arc::clone(&motif_id), ctx.write().branch("find_motifs_clc_dist", false))
                 .await?
-                .with_data_ref(0, Arc::clone(&ctx), None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
+                .with_data_ref(0, &mut ctx_for_dist, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
                 .await?;
         }
         ////////////////Select

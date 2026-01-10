@@ -12,7 +12,7 @@ use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_shared::mono_key;
 use futures_util::{future::BoxFuture, StreamExt};
 use log::{debug, info, trace};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::io::Write;
@@ -121,7 +121,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
-    BF:Fn(&RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
+    BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
@@ -147,7 +147,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
-    BF:Fn(&RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
+    BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
@@ -166,7 +166,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
-    BF:Fn(&RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
+    BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
@@ -181,7 +181,7 @@ where
 
     fn run_inner(
         self: Arc<Self>,
-        ctx: Arc<RwLock<C>>,
+        mut ctx: C,
         device_idx: usize,
         vs: &VarStore,
         run_config: RC,
@@ -211,12 +211,13 @@ where
             self.loss_fn,
         ));
 
-        let ctx_name = ctx.read().name();
         let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
+        let next_ctx = ctx.branch("train", false);
 
         Box::pin(async move {
-            let batch = (self.batch)(&run_config).await?;
+
+            let batch = (self.batch)(next_ctx, &run_config).await?;
             debug!("TrainNet::run_inner: device={:?} cycles={}", train_step.device(), cycles);
             {
                 let opt = train_step.opt.lock();
@@ -255,15 +256,16 @@ where
 
                     debug!("TrainNet::run_inner, train:  before oom input.id={:?}", input.id());
 
+
                     oom_handler.run(
                         &train_step,
                         Arc::clone(&input),
-                        Arc::clone(&ctx),
+                        ctx.branch("train_step", false),
                         Contexts::new(
                             NoopInputContext(None),
                             NoopRunnableContext {},
                             PermitsAndDumpToCpuAdjustableContex::new(
-                                PermitsAdjustContextImpl::new(ctx_name),
+                                PermitsAdjustContextImpl::new(),
                                 DumpToCpuContextImpl::new(&dump_to_cpu_exclude),
                             ),
                         ),
@@ -313,7 +315,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims, DY: Dims,
     B:AsyncDataBatch<DX, DY>,
-    BF:Fn(&RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
+    BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
@@ -333,7 +335,7 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY> + 'static,
-    BF:Fn(&RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
+    BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
@@ -344,9 +346,10 @@ where
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainNet::run"))]
-    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
+    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
+
         let run_config_source = Arc::clone(&self.run_config_source);
-        let device_idx = ctx.read().device_idx();
+        let device_idx = ctx.device_idx();
 
         debug!("TrainNet::run: input.size={:?}", input.size());
 
@@ -355,16 +358,16 @@ where
             let self_for_train = Arc::clone(&self);
             let device_idx_for_train = device_idx;
 
+            let mut c = ctx.branch("z", false);
 
             let (var_store, node_params, run_config, loss) = opt_train_2::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),
                 move |vs: &VarStore, run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
                     debug!("TrainNet::run, about to call run_inner: run_config={:?}", run_config);
 
-                    let ctx = Arc::clone(&ctx);
                     let self_arc = Arc::clone(&self_for_train);
 
-                    self_arc.run_inner(ctx, device_idx_for_train, vs, run_config)
+                    self_arc.run_inner(c.branch("z", false), device_idx_for_train, vs, run_config)
                 },
                 run_config_source,
                 ThoDevice::from(device_idx).into(),
@@ -452,12 +455,11 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
 impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
     type O<'o> = TrainStepInput<DI, DO>;
 
-    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: &mut P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
-        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError> + Send,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
         P: PermitsCtx,
     {
-        let _ = permits_ctx;
         let _ = trace_ctx;
 
         let x = if self.x.device_idx() == to_device_idx {
@@ -474,17 +476,16 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 
         let input = TrainStepInput::new(x, expected_y);
 
-        do_run(&input)
+        do_run(&input, permits_ctx)
     }
 }
 
 impl<DI: Dims, DO: Dims> WithSelectDataRef<()> for TrainStepInput<DI, DO> {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: &mut P, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
-        for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError>,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
         P: PermitsCtx,
     {
-        let _ = permits_ctx;
         let _ = trace_ctx;
 
         let x = if self.x.device_idx() == to_device_idx {
@@ -501,7 +502,7 @@ impl<DI: Dims, DO: Dims> WithSelectDataRef<()> for TrainStepInput<DI, DO> {
 
         let input = TrainStepInput::new(x, expected_y);
 
-        do_run(&input)
+        do_run(&input, permits_ctx)
     }
 }
 
@@ -581,7 +582,7 @@ where
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_run"))]
-    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoError> {
+    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let _ = ctx;
         let x_t_0 = input.x();
         let expected_y = input.expected_y();
@@ -661,7 +662,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use thoosa_shared::runner::common::cachable::DevicesWrap;
-    use thoosa_shared::runner::common::mock_run_ctx;
+    use thoosa_shared::runner::common::{mock_run_ctx, RunCtx};
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use futures_util::StreamExt;
     use futures::stream::{self, BoxStream};
@@ -783,10 +784,11 @@ mod tests {
                 .with_valid_stream_calls(Arc::clone(&valid_stream_calls), make_stream)
                 .finish(),
         );
+        let mut ctx = mock_run_ctx::default(0);
 
         let train_net: Arc<TrainNet<MockRunCtx, _, _, _, _, _, _, _, (), _, _, _>> = Arc::new(
             TrainNet::new(
-                move |_rc: &DummyRunConfig| ready(Ok(Arc::clone(&mock_test_batch))).boxed(),
+                move |c:MockRunCtx, _rc: &DummyRunConfig| ready(Ok(Arc::clone(&mock_test_batch))).boxed(),
                 net_fn,
                 Arc::clone(&opt_config),
                 Arc::clone(&run_config),
@@ -798,11 +800,11 @@ mod tests {
             ),
         );
 
-        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
+
         let output = train_net
             .run(
                 Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("test", "test")])), 0)),
-                Arc::clone(&ctx),
+                ctx,
             )
             .await?;
         let _ = Arc::into_inner(output)

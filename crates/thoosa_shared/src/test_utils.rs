@@ -16,7 +16,7 @@ use tracing_subscriber::{
     layer::SubscriberExt,
     EnvFilter, Layer,
 };
-use crate::perf_logging::{PerfLayer, SimplelogLikeEvent};
+use crate::perf_logging::SimplelogLikeEvent;
 
 pub fn init_test_logging() {
     if !LOG_INIT.load(Ordering::Relaxed) {

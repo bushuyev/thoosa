@@ -10,9 +10,12 @@ use std::fmt::Debug;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
+use futures_util::future::BoxFuture;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{Cause, ThoError};
 use tokio::sync::RwLock as AsyncRwLock;
+use thoosa_shared::runner::purger::PurgeCmd;
+use crate::runner::purger::Purger;
 
 #[derive(Debug)]
 pub struct CacheAreasKeeper {
@@ -20,6 +23,8 @@ pub struct CacheAreasKeeper {
 }
 
 impl CacheAreasKeeper {
+
+    //TODO make 32 x 32
     pub fn next_available_cache_area(&mut self) -> Result<u64, ThoError> {
         let next = first_free_bit(self.cache_areas);
         if next == 0 {
@@ -31,7 +36,8 @@ impl CacheAreasKeeper {
     }
 
     pub fn dispose_cache_area(&mut self, cache_area: u64)  {
-        remove_mask(self.cache_areas, cache_area);
+        debug!("CacheAreasKeeper::dispose_cache_area: cache_area={cache_area:064b}");
+        self.cache_areas = remove_mask(self.cache_areas, cache_area);
     }
 
     pub fn new() -> Self {
@@ -39,7 +45,6 @@ impl CacheAreasKeeper {
     }
 }
 
-#[allow(dead_code)]
 pub fn remove_mask(from: u64, mask: u64) -> u64 {
     !mask & from
 }
@@ -52,6 +57,41 @@ pub fn first_free_bit(c: u64) -> u64 {
     }
 }
 
+#[cfg(test)]
+mod test_areas_keeper_tests {
+    use log::debug;
+    use crate::runner::global_ctx::CacheAreasKeeper;
+    use crate::ThoError;
+
+    #[test]
+    fn test_full()->Result<(), ThoError>{
+        let mut keeper = CacheAreasKeeper::new();
+
+        for i in 0..64 {
+            let area = keeper.next_available_cache_area()?;
+            debug!("area={area:064b} cache_areas={:064b}", keeper.cache_areas);
+        }
+
+        assert_eq!(0b1111111111111111111111111111111111111111111111111111111111111111, keeper.cache_areas);
+
+        keeper.dispose_cache_area(0b0000000000000000000000000000000000000000000000000000000000000001);
+
+        assert_eq!(0b1111111111111111111111111111111111111111111111111111111111111110, keeper.cache_areas);
+
+        keeper.dispose_cache_area(0b0000000000000000000000000000000010000000000000000000000000000000);
+
+        assert_eq!(0b1111111111111111111111111111111101111111111111111111111111111110, keeper.cache_areas);
+
+        assert_eq!(0b0000000000000000000000000000000000000000000000000000000000000001, keeper.next_available_cache_area()?);
+
+        assert_eq!(0b0000000000000000000000000000000010000000000000000000000000000000, keeper.next_available_cache_area()?);
+
+
+        Ok(())
+    }
+}
+
+
 #[derive(Debug)]
 pub struct GlobalCtx {
     semaphores: Vec<Box<dyn PermitSource>>,
@@ -62,6 +102,7 @@ pub struct GlobalCtx {
     caches_areas: parking_lot::RwLock<CacheAreasKeeper>,
     cache_age: AtomicU64, //for tracking CPU-only lifetime
     purge_lock: tokio::sync::Mutex<()>,
+    purger: Purger
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
@@ -99,7 +140,12 @@ impl GlobalCtx {
 
             cache_age: Default::default(),
             purge_lock: tokio::sync::Mutex::new(()),
+            purger: Purger::new()
         }
+    }
+
+    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>, cache_area: u64) ->Result<(), ThoError>{
+        self.purger.run_purge_gpu(closures, cache_area)
     }
 
     ///num_devices: number of devices - CPU + GPU count
@@ -224,6 +270,7 @@ impl GlobalCtx {
     }
 
     pub fn dispose_cache_area(&self, cache_area:u64) {
+        debug!("GlobalCtx::dispose_cache_area: cache_area={cache_area}");
         self.caches_areas.write().dispose_cache_area(cache_area)
     }
 

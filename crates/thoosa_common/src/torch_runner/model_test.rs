@@ -32,17 +32,18 @@ mod tests {
     use std::sync::OnceLock;
     use crate::tho_device::ThoDevice;
     use crate::dims::Dims;
-    use thoosa_shared::{simple_id, CopyToDevice};
+    use thoosa_shared::{mono_key, simple_id, CopyToDevice};
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{CachableIdTr, Metrics, Named, SimpleId, WithId};
     use thoosa_shared::{Cause, ThoError};
+    use thoosa_shared::comp_id::{MonoKey, SynKey};
     use thoosa_shared::copy_mode::CpuOnly;
     use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
     use thoosa_shared::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
     use thoosa_shared::runner::test_utils::parse_numeric_part;
     use thoosa_with_data::with_data;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-    use crate::torch_runner::tests::TorchRunCtx;
+    use crate::torch_runner::tests::TestTorchRunCtx;
 
     #[ctor::ctor]
     fn init() {
@@ -65,7 +66,8 @@ mod tests {
     // ---------------- Run Context ----------------
     #[derive(Debug, Delegate)]
     #[delegate(PermitsCtx, target = "perms")]
-    struct CpuRunCtx {
+    struct TestCpuRunCtx {
+        id:MonoKey,
         device_idx: usize,
         cache_area: u64,
         perms: CpuPermsCtx,
@@ -98,9 +100,10 @@ mod tests {
         }
     }
 
-    impl CpuRunCtx {
+    impl TestCpuRunCtx {
         fn new(device_idx: usize, cache_area: u64) -> Self {
             Self {
+                id: mono_key!(0, "cpu_run_ctx"),
                 device_idx,
                 cache_area,
                 perms: CpuPermsCtx::new(),
@@ -108,13 +111,21 @@ mod tests {
         }
     }
 
-    impl Adjustable for CpuRunCtx {}
+    impl Adjustable for TestCpuRunCtx {}
 
-    impl RunCtx for CpuRunCtx {
+    impl WithId for TestCpuRunCtx {
+        type ID = MonoKey;
+
+        fn id(&self) -> &Self::ID {
+            &self.id
+        }
+    }
+
+    impl RunCtx for TestCpuRunCtx {
         fn device_idx(&self) -> usize {
             self.device_idx
         }
-        fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoError>>
+        fn purge_gpu_caches(&mut self) -> BoxFuture<'static, Result<(), ThoError>>
         where
             Self: Sized,
         {
@@ -123,9 +134,16 @@ mod tests {
         fn cache_area(&self) -> u64 {
             self.cache_area
         }
+
+        fn branch<I:Into<SynKey> + 'static>(&mut self, _new_name:I, with_new_cache_area: bool) -> Self
+        where
+            Self: Sized,
+        {
+            Self::new(self.device_idx, 0)
+        }
     }
 
-    impl Named for CpuRunCtx {}
+    impl Named for TestCpuRunCtx {}
 
     // ---------------- File Input / A/B Loader ----------------
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -347,7 +365,7 @@ mod tests {
     impl Stage for ABLoader {
         type In<'a> = FileInput;
         type Out = ThoTensor<ABData, SimpleId>;
-        type Ctx = TorchRunCtx;
+        type Ctx = TestTorchRunCtx;
     }
 
     // #[async_trait]
@@ -355,7 +373,7 @@ mod tests {
         async fn run(
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             // Features derived from file name only (no label knowledge): even index => +1, odd => -1.
             let idx = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(0.0) as i64;
@@ -363,10 +381,8 @@ mod tests {
             let x = Tensor::ones([self.input_len, self.feat], (self.kind, Device::Cpu)) * base;
             let id = self.out_id(WithId::id(input.as_ref()));
 
-            let (device_idx, cache_area) = {
-                let guard = ctx.read();
-                (guard.device_idx(), guard.cache_area())
-            };
+            let device_idx = ctx.device_idx();
+            let cache_area = ctx.cache_area();
             let num_devices = GlobalCtx::global().device_count();
 
             Ok(Arc::new(DevicesWrap::wrap(
@@ -456,7 +472,7 @@ mod tests {
     impl Stage for BatchBuilder {
         type In<'a> = FileListInput;
         type Out = ThoTensor<ABData, SimpleId>;
-        type Ctx = TorchRunCtx;
+        type Ctx = TestTorchRunCtx;
     }
 
     // #[async_trait]
@@ -464,7 +480,7 @@ mod tests {
         async fn run(
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            mut ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             // Look up the files and labels by input id
             let id_key = format!("{}", input.id());
@@ -512,33 +528,30 @@ mod tests {
             let mut feats: Vec<Arc<DevicesWrap<ThoTensor<ABData, SimpleId>>>> =
                 Vec::with_capacity(self.batch_size);
 
-            let (loader_device_idx, loader_cache_area) = {
-                let guard = ctx.read();
-                (guard.device_idx(), guard.cache_area())
-            };
+            let loader_device_idx = ctx.device_idx();
+            let loader_cache_area = ctx.cache_area();
 
             for &fi in &chosen {
                 let (f, lbl) = files[fi];
                 let feat = Arc::clone(&self.loader)
                     .run_cached(
                         new_file_input_cache(f, loader_device_idx, loader_cache_area),
-                        Arc::clone(&ctx),
+                        ctx.branch(format!("batch_builder_loader_{fi}"), false),
                     )
                     .await?;
                 feats.push(feat);
                 label_vec.push(lbl);
             }
 
-            let (device_idx, cache_area) = {
-                let g = ctx.read();
-                (g.device_idx(), g.cache_area())
-            };
+            let device_idx = ctx.device_idx();
+            let cache_area = ctx.cache_area();
             let num_devices = GlobalCtx::global().device_count();
 
             // Materialize all features to the target device and build a single stacked batch
             // let feat_refs: Vec<&DataCacheWrapper<ThoTensor2<ABData, SimpleId>>> = feats.iter().map(|a| &**a).collect();
 
-            let output = with_data!(Arc::clone(&ctx),device_idx,[feats];|data:&[&ThoTensor<ABData, SimpleId>]|{
+            let ctx_for_data = ctx.branch("batch_builder_data", false);
+            let output = with_data!(ctx_for_data, [feats];|data:&[&ThoTensor<ABData, SimpleId>]|{
 
                 let ax_id = SimpleId::from(format!("ax_{}", input.id()));
                 let first = data
@@ -687,14 +700,14 @@ mod tests {
     impl Stage for Classifier {
         type In<'a> = ThoTensor<ABData, SimpleId>;
         type Out = ThoTensor<ClsOut, SimpleId>;
-        type Ctx = TorchRunCtx;
+        type Ctx = TestTorchRunCtx;
     }
 
     impl SyncStage for Classifier {
         fn do_run<'a>(
             self: Arc<Self>,
             input: &Self::In<'a>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            ctx: &Self::Ctx,
         ) -> Result<Self::Out, ThoError>
         where
             Self: Sized,
@@ -702,12 +715,9 @@ mod tests {
             // Split input into features and labels using scoped tensor access
             let feat = self.in_dim;
             let fails = &self.fail_until;
-            let ctx_clone = Arc::clone(&ctx);
-
             let out_id = self.out_id(input.id());
             Ok(
-                      ThoTensor::new(out_id, input.run_inner( //TODO id
-                                                              |t: &Tensor| {
+                      ThoTensor::new(out_id, input.run_inner(|t: &Tensor| {
                             debug!("t.size()={:?}", t.size());
                         // Simulate OOM conditions based on batch size t.size()[0]
                         for fail_until in fails {
@@ -720,14 +730,14 @@ mod tests {
                                     }
                                 }
                                 MinPermits(min_permits) => {
-                                    let acquired_permits = ctx_clone.read().acquired_permits();
+                                    let acquired_permits = ctx.acquired_permits();
                                     if acquired_permits < *min_permits {
                                         debug!("Err(MyError::OutOfMemory) MinPermits: acquired_permits={acquired_permits}");
                                         return Err(Cause::OutOfMemory.into());
                                     }
                                 }
                                 DumpedToCpu => {
-                                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx_clone.read().device_idx());
+                                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx.device_idx());
                                     if !is_all_on_cpu {
                                         debug!("Err(MyError::OutOfMemory) DumpedToCpu");
                                         return Err(Cause::OutOfMemory.into());
@@ -768,22 +778,18 @@ mod tests {
         async fn run(
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            let (device_idx, cache_area) = {
-                let guard = ctx.read();
-                (guard.device_idx(), guard.cache_area())
-            };
+            let device_idx = ctx.device_idx();
+            let cache_area = ctx.cache_area();
             let num_devices = GlobalCtx::global().device_count();
 
             let stage = Arc::clone(&self);
-            let ctx_for_run = Arc::clone(&ctx);
-
+            let mut ctx = ctx;
             let output = input
-                .with_data_ref(device_idx,
-                               Arc::clone(&ctx), None, move |tensor: &Self::In<'_>| {
-                                                   Arc::clone(&stage).do_run(tensor, Arc::clone(&ctx_for_run))
-                                               })
+                .with_data_ref(device_idx, &mut ctx, None, move |tensor: &Self::In<'_>, run_ctx| {
+                    Arc::clone(&stage).do_run(tensor, run_ctx)
+                })
                 .await?;
 
             Ok(Arc::new(DevicesWrap::wrap(
@@ -875,7 +881,7 @@ mod tests {
     impl Stage for JoinAndClassifyTask {
         type In<'a> = FileListInput;
         type Out = ThoTensor<ClsOut, SimpleId>;
-        type Ctx = TorchRunCtx;
+        type Ctx = TestTorchRunCtx;
     }
 
     // #[async_trait]
@@ -883,17 +889,19 @@ mod tests {
         async fn run(
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            mut ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+            let (device_idx, ctx_name, cache_area) = (
+                ctx.device_idx(),
+                ctx.name(),
+                ctx.cache_area(),
+            );
+
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
-                .run_cached(Arc::clone(&input), Arc::clone(&ctx))
+                .run_cached(Arc::clone(&input), ctx.branch("join_and_classify_batch", false))
                 .await?;
 
-            let (device_idx, ctx_name) = {
-                let guard = ctx.read();
-                (guard.device_idx(), guard.name())
-            };
 
             // Build out_key for fairness and acquisitions
             let out_id = self.clf.out_id(batched.id());
@@ -912,13 +920,16 @@ mod tests {
             //     SplitsAdjuster::<ThoTensor2<ABData, SimpleId>, ABRange>::new(min_split_len),
             // ));
             //**********************
-
+            let parmits_key = Arc::new(ctx.id().clone());
             let result = OOMHandler::new(
                 vec![
                     Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                         MAX_PERMITS,
                         *PermitStep::TEN,
-                        move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
+                        move |n| {
+
+                            GlobalCtx::global().acquire_many(device_idx, n, Arc::clone(&parmits_key) as Arc<dyn CachableIdTr>)
+                        },
                     ))),
                     Adjusters::Input(Box::new(
                         SplitsAdjuster::<ABRange, ABMetrics>::new(min_split_len),
@@ -929,7 +940,7 @@ mod tests {
             .run(
                 &self.clf,
                 batched,
-                Arc::clone(&ctx),
+                ctx.branch("join_and_classify_clc", false),
                 Contexts::new(
                     SplitsAdjusterContextImpl::new(
                         size,
@@ -942,15 +953,12 @@ mod tests {
                         ),
                     ),
                     NoopRunnableContext {},
-                    PermitsAdjustContextImpl::new(ctx_name),
+                    PermitsAdjustContextImpl::new(),
                 ),
             )
             .await?;
 
-            let (final_device_idx, cache_area) = {
-                let guard = ctx.read();
-                (guard.device_idx(), guard.cache_area())
-            };
+            let final_device_idx = device_idx;
             let num_devices = GlobalCtx::global().device_count();
 
             Ok(Arc::new(DevicesWrap::wrap(
@@ -970,7 +978,7 @@ mod tests {
         }
         // CPU-only global ctx
         init_ctx_once();
-        let ctx = Arc::new(RwLock::new(TorchRunCtx::new(1, 0, "test")));
+        let mut ctx = TestTorchRunCtx::new(1, 0, "test");
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         let clf = Arc::new(Classifier::new(
@@ -992,20 +1000,19 @@ mod tests {
         registry().insert("files_0_1".to_string(), files.clone());
         let input = FileListInput::new(files, SimpleId::from("files_0_1"));
         let (device_idx, cache_area) = {
-            let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area())
+            (ctx.device_idx(), ctx.cache_area())
         };
         let input_cache = new_file_list_input_cache(input, device_idx, cache_area);
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(input_cache, Arc::clone(&ctx))
+            .run_cached(input_cache, ctx.branch("join_and_classify_cpu", false))
             .await?;
 
         debug!("acc={acc:?}");
 
         acc.with_data_ref(0,
-                          Arc::clone(&ctx), None, |acc_t: &ThoTensor<ClsOut, SimpleId>| {
+                          &mut ctx.branch("join_and_classify_cpu_data", false), None, |acc_t: &ThoTensor<ClsOut, SimpleId>, _ctx| {
                                       debug!("acc_t={acc_t:?} t=\n{}", acc_t.t_ref());
-                          
+
                                       // Dim impls are to define domain-specific operations on tensors
                                       let v = ClsOut::accuracy(acc_t);
                                       assert!(v > 0.9, "training accuracy too low: {v}");
@@ -1023,7 +1030,7 @@ mod tests {
         }
         // CPU-only global ctx
         init_ctx_once();
-        let ctx = Arc::new(RwLock::new(TorchRunCtx::new(0, 0, "test")));
+        let ctx = Arc::new(RwLock::new(TestTorchRunCtx::new(0, 0, "test")));
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         let clf = Arc::new(Classifier::new(
@@ -1055,11 +1062,12 @@ mod tests {
         };
         let input_cache = new_file_list_input_cache(input, device_idx, cache_area);
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(input_cache, Arc::clone(&ctx))
+            .run_cached(input_cache, ctx.write().branch("join_and_classify_cpu_many", false))
             .await?;
 
+        let mut ctx_for_data = ctx.write().branch("join_and_classify_cpu_many_data", false);
         acc.with_data_ref(1,
-                          Arc::clone(&ctx), None, |acc: &ThoTensor<ClsOut, SimpleId>| {
+                          &mut ctx_for_data, None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
                                       let v = ClsOut::accuracy(acc);
                                       assert!(v > 0.9, "training accuracy too low (4 files): {v}");
                                       Ok(())
@@ -1077,8 +1085,7 @@ mod tests {
         }
 
         init_ctx_once();
-        let ctx = Arc::new(RwLock::new(TorchRunCtx::new(1, 0, "test")));
-
+        let mut ctx = TestTorchRunCtx::new(1, 0, "test");
 
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
@@ -1112,25 +1119,24 @@ mod tests {
         registry().insert("files_oom_permits".to_string(), files.clone());
         let input = FileListInput::new(files, SimpleId::from("files_oom_permits"));
         let (device_idx, cache_area) = {
-            let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area())
+            (ctx.device_idx(), ctx.cache_area())
         };
         let input_cache = new_file_list_input_cache(input, device_idx, cache_area);
 
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(input_cache, Arc::clone(&ctx))
+            .run_cached(input_cache, ctx.branch("join_and_classify_oom", false))
             .await?;
 
-        ctx.write().add_permit(GlobalCtx::global().acquire_many(1, 1, Arc::new(simple_id!("zzz"))).await?);
+        // ctx.add_permit(GlobalCtx::global().acquire_many(1, 1, Arc::new(simple_id!("zzz"))).await?);
 
         acc.with_data_ref(1,
-                          Arc::clone(&ctx), None, |acc: &ThoTensor<ClsOut, SimpleId>| {
-                                      debug!("acc={}", acc.t_ref());
-                          
-                                      let v = ClsOut::accuracy(acc);
-                                      assert!(v >= 0.5, "should train after permits escalation: {v}");
-                                      Ok(())
-                                  })
+                          &mut ctx.branch("join_and_classify_oom_data", false), None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+              debug!("acc={}", acc.t_ref());
+
+              let v = ClsOut::accuracy(acc);
+              assert!(v >= 0.5, "should train after permits escalation: {v}");
+              Ok(())
+          })
         .await?;
 
         Ok(())

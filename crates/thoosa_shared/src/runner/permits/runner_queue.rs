@@ -23,9 +23,8 @@ pub struct Arbiter {
     shutdown: Arc<AtomicBool>,
 
     // #[cfg(debug_assertions)] TODO
-    granted_counts: Arc<DashMap<Arc<dyn CachableIdTr>, usize>>,
-    // #[cfg(debug_assertions)] TODO
     granted_counts_len: Arc<AtomicUsize>,
+    granted_counts: Arc<DashMap<Arc<dyn CachableIdTr>, usize>>,
     #[allow(dead_code)]
     device_idx: usize
 }
@@ -64,8 +63,8 @@ impl Arbiter {
             capacity,
             worker: Some(worker),
             shutdown,
-            granted_counts,
             granted_counts_len,
+            granted_counts,
             device_idx
         }
     }

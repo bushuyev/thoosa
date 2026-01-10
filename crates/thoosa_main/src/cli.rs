@@ -344,7 +344,7 @@ where
                         .expect("FindMotifsStage::new failed"),
                     )
                 },
-                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
+                || RunCtx2::new(1, "find motifs"),
             ).await?;
 
             info!("FindMotifs done, run_ids={run_ids:?}");
@@ -387,7 +387,7 @@ where
                         None
                     ))
                 },
-                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "select motifs"))),
+                || RunCtx2::new(1, "select motifs"),
             ).await?;
 
             info!("SelectMotifs done, run_ids={run_ids:?}");
@@ -419,7 +419,7 @@ where
                         run_configs,
                     )))
                 },
-                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train motif nets"))),
+                || RunCtx2::new(1, "train motif nets"),
             ).await?;
 
         }
@@ -453,11 +453,11 @@ where
                         run_configs,
                         &ws,
                         &store,
-                        Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, GlobalCtx::global().next_cache_area()?, "init label nets"))),
+                        Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, "init label nets"))),
                         opt_config
                     ).await.map(|v|Arc::new(v))
                 },
-                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train label nets"))),
+                || RunCtx2::new(1, "train label nets"),
             ).await?;
 
 
@@ -541,7 +541,7 @@ where
                         .expect("FindMotifsStage::new failed"),
                     )
                 },
-                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
+                || RunCtx2::new(1, "find motifs"),
             ).await?;
 
             info!("find motifs done, find_motif_run_ids={find_motif_run_ids:?}");
@@ -574,7 +574,7 @@ where
                         None
                     ))
                 },
-                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "select motifs"))),
+                || RunCtx2::new(1, "select motifs"),
             ).await?;
 
             info!("select motifs done: find_motif_run_ids={find_motif_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
@@ -617,7 +617,7 @@ where
                         run_configs,
                     )))
                 },
-                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train motif nets"))),
+                || RunCtx2::new(1, mono_key!(0, "train motif nets")),
             ).await?;
 
             info!("train motif nets done: run_ids={run_ids:?}");
@@ -649,11 +649,11 @@ where
                         run_configs,
                         &ws,
                         &store,
-                        Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "init label nets"))),
+                        Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, "init label nets"))),
                         Arc::clone(&opt_config)
                     ).await.map(|v|Arc::new(v))
                 },
-                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "train label nets"))),
+                || RunCtx2::new(1, "train label nets"),
             ).await?;
 
             info!("train label nets done: run_ids={run_ids:?}");
@@ -947,7 +947,7 @@ async fn run_plot_motif_slices(
     plot_motif_slices_params: &PlotMotifSlicesArgs,
     device: &Device,
 ) -> Result<(), ThoError> {
-    let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa")));
+    let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, mono_key!(0, "run_plot_motif_slices"))));
 
     let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtx2>, RunCtx2>::new(
         Arc::clone(store),
@@ -1064,19 +1064,19 @@ async fn plot_motif(
 
     let motif = Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_arc),
-        Arc::clone(&ctx),
+        ctx.write().branch("plot_motif_loader", false),
     )
     .await?;
 
+    let mut ctx_for_dist = ctx.write().branch("plot_motif_dist_value", false);
     let dist = clc_dist
-        .run_cached(Arc::clone(&motif_id_arc), Arc::clone(&ctx))
+        .run_cached(Arc::clone(&motif_id_arc), ctx.write().branch("plot_motif_clc_dist", false))
         .await?
-        .with_data_ref(0, Arc::clone(&ctx), None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
+        .with_data_ref(0, &mut ctx_for_dist, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
         .await?;
 
 
-
-    let r = motif.with_data_ref(0, Arc::clone(&ctx), None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>| {
+    let r = motif.with_data_ref(0, &mut ctx.write().branch("plot_motif_data", false), None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>, _ctx| {
             let run_id = motif.extra().find_motifs_run_id;
             let channel = motif.extra().channel;
 
@@ -1261,7 +1261,7 @@ where
     for<'c> <<ST as Stage>::In<'c> as Data>::M: DevicesWrapCopyMode<<ST as Stage>::In<'c>>,
     <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult,
     <<ST as Stage>::Out as Data>::M: DevicesWrapCopyMode<<ST as Stage>::Out>,
-    CtxF: FnOnce() -> Arc<RwLock<<ST as Stage>::Ctx>>,
+    CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {
     let grid_run_configs = rcrv.grid_run_configs();
     debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
@@ -1316,7 +1316,7 @@ where
     for<'c> <<ST as Stage>::In<'c> as Data>::M: DevicesWrapCopyMode<<ST as Stage>::In<'c>>,
     <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult,
     <<ST as Stage>::Out as Data>::M: DevicesWrapCopyMode<<ST as Stage>::Out>,
-    CtxF: FnOnce() -> Arc<RwLock<<ST as Stage>::Ctx>>,
+    CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {
     let opt_run_configs = rcrv.opt_run_configs();
     debug!("run_all_grid_step: grid_run_configs={opt_run_configs:?}");

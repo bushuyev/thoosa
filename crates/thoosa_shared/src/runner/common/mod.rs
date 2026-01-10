@@ -7,7 +7,7 @@ use runnable::Stage;
 use std::fmt::Debug;
 use std::sync::Arc;
 use crate::ThoError;
-use crate::traits::{Named, WithId};
+use crate::traits::{CachableIdTr, Named, WithId};
 
 pub mod cachable;
 pub mod runnable;
@@ -29,21 +29,27 @@ pub trait PermitsCtx: Named + Debug + Send + Sync {
     fn acquired_permits(&self) -> NumPermits;
 }
 
-pub trait RunCtx: PermitsCtx {//TODO remove PermitsCtx from RunCtx
+pub trait RunCtx: PermitsCtx + WithId {//TODO remove PermitsCtx from RunCtx
     fn device_idx(&self) -> usize;
 
-    fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoError>>
+    fn purge_gpu_caches(&mut self) -> BoxFuture<'static, Result<(), ThoError>>
     where
         Self: Sized,
     {
         Box::pin(async { Ok(()) })
     }
 
+
     fn cache_area(&self) -> u64;
 
-    fn branch(&mut self, _new_name:&str)-> Arc<RwLock<Self>> {
+    fn branch<I:Into<SynKey> + 'static>(&mut self, new_name:I, with_new_cache_area: bool) -> Self
+    where
+        Self: Sized;
+
+    fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
         todo!()
     }
+
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -55,7 +61,9 @@ pub mod mock_run_ctx {
     use std::sync::Arc;
     use mockall::predicate::always;
     use thoosa_shared::traits::{Adjustable, Named};
-    use thoosa_shared::ThoError;
+    use thoosa_shared::{mono_key, ThoError};
+    use crate::comp_id::{MonoKey, SynKey};
+    use crate::traits::WithId;
 
 
     mock! {
@@ -76,13 +84,17 @@ pub mod mock_run_ctx {
             fn acquired_permits(&self) -> crate::runner::permits::NumPermits;
         }
 
-        impl RunCtx for RunCtx {
-            fn device_idx(&self) -> usize;
-            fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoError >>;
-            fn cache_area(&self) -> u64;
-            fn branch(&mut self, new_name:&str)-> Arc<RwLock<Self>>;
+        impl WithId for RunCtx {
+            type ID = MonoKey;
+            fn id(&self) -> &MonoKey;
         }
 
+        impl RunCtx for RunCtx {
+            fn device_idx(&self) -> usize;
+            fn purge_gpu_caches(&mut self) -> BoxFuture<'static, Result<(), ThoError >>;
+            fn cache_area(&self) -> u64;
+            fn branch<I:Into<SynKey> + 'static>(&mut self, _new_name:I, _with_new_cache_area:bool)-> Self;
+        }
     }
 
     pub struct MockRunCtxBuilder {
@@ -90,6 +102,12 @@ pub mod mock_run_ctx {
     }
 
     impl MockRunCtxBuilder {
+
+        pub fn with_id(mut self, id: u32) -> Self {
+            self.mock.expect_id().return_const(mono_key!(id, "mock_run_ctx"));
+            self
+        }
+
         pub fn with_device_idx(mut self, out: usize) -> Self {
             self.mock.expect_device_idx().return_const(out);
             self
@@ -102,7 +120,7 @@ pub mod mock_run_ctx {
 
 
         pub fn with_acquired_permits(mut self, out: crate::runner::permits::NumPermits) -> Self {
-            self.mock.expect_acquired_permits().return_const(out);
+            self.mock.expect_acquired_permits().times(0..).return_const(out);
             self
         }
 
@@ -122,16 +140,16 @@ pub mod mock_run_ctx {
             self
         }
 
-        pub fn with_purge_gpu_caches(self) -> Self {
-            MockRunCtx::purge_gpu_caches_context().expect().with(always()).returning( |_| Box::pin(async { Ok(()) }));
+        pub fn with_purge_gpu_caches(mut self) -> Self {
+            self.mock.expect_purge_gpu_caches().times(0..).returning( || Box::pin(async { Ok(()) }));
 
             self
         }
 
         pub fn with_branch(mut self, depth: u8) -> Self {
             self.mock.expect_branch()
-                .with(always())
-                .returning(move |_| {
+                .with(always(), always())
+                .returning(move |_:&str, _with_new_cache_area:bool| {
                     let builder = build()
                         .with_device_idx(1)
                         .with_acquired_permits(100)
@@ -139,15 +157,13 @@ pub mod mock_run_ctx {
                         .with_drop_permits(vec![DropIf::IfNotMax])
                         .with_cache_area(0);
 
-                    Arc::new(RwLock::new(
-                        if depth == 0 {
-                            builder.finish()
-                        } else {
-                            builder
-                            .with_branch(depth - 1)
-                            .finish()
-                        }
-                    ))
+                    if depth == 0 {
+                        builder.finish()
+                    } else {
+                        builder
+                        .with_branch(depth - 1)
+                        .finish()
+                    }
                 });
 
             self
@@ -166,8 +182,10 @@ pub mod mock_run_ctx {
 
     pub fn default(device_idx: usize) -> MockRunCtx {
         build()
+            .with_id(0)
             .with_device_idx(device_idx)
             .with_acquired_permits(100)
+            .with_acquired_permits(1)
             .with_add_permits()
             .with_drop_permits(vec![DropIf::IfNotMax])
             .with_cache_area(0)
@@ -177,6 +195,7 @@ pub mod mock_run_ctx {
 }
 
 pub use mock_run_ctx::MockRunCtx;
+use crate::comp_id::SynKey;
 use crate::runner::permits::{NumPermits, RunnerPerm};
 // pub trait Input: WithId + Debug {}
 // pub trait Output: WithId + Debug {}

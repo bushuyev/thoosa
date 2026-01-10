@@ -201,18 +201,17 @@ where
 
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackedMotifsLoader::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let (device_idx, cache_area) = {
-            let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area())
-        };
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+        let device_idx = ctx.device_idx();
+        let cache_area = ctx.cache_area();
+        let mut ctx = ctx;
         let num_channels = self.ws.read().channels();
 
 
         let done_cnt = Arc::new(AtomicU32::new(0));
         let mut motif_avg_dists = Arc::new(parking_lot::RwLock::new(HashMap::new()));
 
-        let find_motifs_run_config = with_data!(Arc::clone(&ctx), 0, input; |input: &StackedMotifsInput|{
+        let find_motifs_run_config = with_data!(ctx.branch("stacked_motifs_input", false), input; |input: &StackedMotifsInput|{
             Ok::<Arc<FindMotifsRunConfig>, ThoError>(Arc::clone(&input.find_motifs_run_config))
         })?;
 
@@ -233,21 +232,21 @@ where
                 let motif_loader_clone = Arc::clone(&self.motif_loader);
                 let load_and_clc_avg_dist_clone = Arc::clone(&self.load_and_clc_avg_dist);
 
-                let ctx = Arc::clone(&ctx);
-                let ctx_for_clc = Arc::clone(&ctx);
+                let ctx_for_task = ctx.branch("stacked_motifs_loader_task", false);
                 let motif_avg_dists = Arc::clone(&motif_avg_dists);
 
                 // let select_motifs_run_config_id = input.select_motifs_run_config.id;
 
                 async move {
+                    let mut ctx = ctx_for_task;
                     let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id as u32).into()), cache_area));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
-                    let motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx).await?;
+                    let motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx.branch("stacked_motifs_loader_motif", false)).await?;
 
 
                     let avg_motif_dist = load_and_clc_avg_dist_clone
-                        .run_cached(Arc::clone(&motif_id_wrap), Arc::clone(&ctx_for_clc))
+                        .run_cached(Arc::clone(&motif_id_wrap), ctx.branch("stacked_motifs_loader_clc_run", false))
                         .await?
-                        .with_data_ref(0, Arc::clone(&ctx_for_clc), None, |dist_val: &AverageDistanceValue| Ok(dist_val.value()))
+                        .with_data_ref(0, &mut ctx.branch("stacked_motifs_loader_clc_data", false), None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
                         .await?;
 
                     debug!("StackedMotifsLoader::run: find_motifs_run_id={:?}  motif={motif:?} avg_motif_dist={avg_motif_dist}", find_motifs_run_config_id);
@@ -274,7 +273,8 @@ where
             .await;
 
         //TODO extract method stack_motifs
-        with_data!(Arc::clone(&ctx), device_idx, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
+        let ctx_for_data = ctx.branch("stacked_motifs_loaded", false);
+        with_data!(ctx_for_data, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
 
             let channels_motifs = data.iter().fold(
 
@@ -415,10 +415,10 @@ where
 
     }
 
-    fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+    fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &mut Self::Ctx)
     where
         Self: 'a
     {
-        ctx.write().add_stacked_motifs_id(self.out_id(input.id()));
+        ctx.add_stacked_motifs_id(self.out_id(input.id()));
     }
 }

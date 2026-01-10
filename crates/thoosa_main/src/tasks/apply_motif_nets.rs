@@ -9,7 +9,7 @@ use std::time::Instant;
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, error, info};
-use parking_lot::lock_api::RwLock;
+use parking_lot::RwLock;
 use tch::{nn, Device, IndexOp, Kind, Tensor};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
@@ -83,7 +83,6 @@ where
     where
         R:RunCtx + MotifsCtx + Adjustable + 'static
     {
-        let device_idx = stage_ctx.read().device_idx();
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));
 
         let loaded_motif_nets = futures::stream::iter(
@@ -112,7 +111,8 @@ where
 
                 debug!("ApplyMotifNets::new: channel={channel} motif_id={motif_id} load_motif_net={load_motif_net:?}");
 
-                load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(motif_id, channel as u32), 0)), stage_ctx).await
+                let load_ctx = stage_ctx.write().branch("apply_motif_nets_load_motif_net", false);
+                load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(motif_id, channel as u32), 0)), load_ctx).await
             }
         })
         .buffered(crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT)//order is important to keep output tensor same
@@ -136,7 +136,8 @@ where
         let mut motif_width = HashSet::new();
         let mut slice_step = HashSet::new();
         for v in &loaded_motif_nets {
-            with_data!(stage_ctx, device_idx, v; |v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+            let ctx_for_meta = stage_ctx.write().branch("apply_motif_nets_meta", false);
+            with_data!(ctx_for_meta, v; |v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
                 motif_width.insert(v.extra().motif_net_params.num_features);
                 slice_step.insert(v.extra().motif_net_params.stride);
 
@@ -192,12 +193,11 @@ where
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNets::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
-        let (device_idx, cache_area, ctx_name) = {
-            let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area(), guard.name())
-        };
+        let device_idx = ctx.device_idx();
+        let cache_area = ctx.cache_area();
+        let ctx_name = ctx.name();
 
         debug!("ApplyMotifNets::run: self.loaded_motif_nets.len={:?} input={input:?}", self.apply_motif_nets.len());
 
@@ -209,7 +209,7 @@ where
             .map(|apply_motif_net|{
                 let input = Arc::clone(&input);
                 let out_id = apply_motif_net.out_id(&input.id());
-                let apply_motif_net_ctx = ctx.write().branch(format!("apply_motif_net_ctx_{out_id:?}").leak());
+                let apply_motif_net_ctx = ctx.branch(format!("apply_motif_net_ctx_{out_id:?}"), false);
 
                 let slice_step = self.slice_step;
 
@@ -239,7 +239,7 @@ where
                              SplitsAdjusterContextImpl::new(input._size().into(), SingleDimTensorOutputBuilder::new(out_id, 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
                              NoopRunnableContext {},
                              PermitsAndDumpToCpuAdjustableContex::new(
-                                 PermitsAdjustContextImpl::new(ctx_name),
+                                 PermitsAdjustContextImpl::new(),
                                  DumpToCpuContextImpl::new(&map),
                              ),
                          ),
@@ -267,7 +267,7 @@ where
 
     }
 
-    fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<parking_lot::RwLock<Self::Ctx>>)
+    fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &mut Self::Ctx)
     where
         Self: 'a
     {
@@ -389,16 +389,13 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
     C: RunCtx + MotifsCtx + Adjustable + 'static
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
-    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
+    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
 
 
         let net_wrapper = Arc::clone(&self.net_wrapper);
-        let (device_idx, cache_area) = {
-            let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area())
-        };
+        let cache_area = ctx.cache_area();
         async move {
-            with_data!(ctx, device_idx, net_wrapper, input; |net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, input:&ThoTensor<ChannelsData2, SynKey>|{
+            with_data!(ctx.branch("apply_motif_net_data", false), net_wrapper, input; |net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, input:&ThoTensor<ChannelsData2, SynKey>|{
                 let motif_id = net.extra().motif_id();
                  #[cfg(test)]
                 if self.fail_if_size_bigger_than.map(|v| v < input.size()[1] as usize).unwrap_or(false) {
@@ -556,7 +553,7 @@ pub(crate) mod tests {
     use tch::nn::{LinearConfig, VarStore};
     use thoosa_shared::runner::common::cachable::DevicesWrap;
     use thoosa_shared::runner::common::mock_run_ctx;
-    use thoosa_shared::runner::common::PermitsCtx;
+    use thoosa_shared::runner::common::{PermitsCtx, RunCtx};
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::builder::SeqBuilder;
@@ -689,9 +686,10 @@ pub(crate) mod tests {
 
         let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
+        let run_ctx_branch = run_ctx.write().branch("apply_motif_nets_run", false);
         let out = apply_motif_nets.run(
             Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test_batch", "test_batch")]), resource_a_t)?, 0)),
-            Arc::clone(&run_ctx)
+            run_ctx_branch
         ).await?;
 
         debug!("test_apply_motif_nets_3_channels_1_motif: PERF={:?}", PERF);
@@ -705,7 +703,8 @@ pub(crate) mod tests {
 
         let sin_interval_starts_in_resources_a = resource_a_intervals[1][0][0].start;
 
-        with_data!(run_ctx, 0, out; |r:&ThoTensor<MotifProbability, SynKey>|{
+        let ctx_for_data = run_ctx.write().branch("apply_motif_nets_assert", false);
+        with_data!(ctx_for_data, out; |r:&ThoTensor<MotifProbability, SynKey>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
 
             let (pulse_matches_vals, pulse_matches_idx) = &r.t.i((0, ..)).topk(1i64, 0, true, true);
@@ -799,9 +798,10 @@ pub(crate) mod tests {
 
         let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
+        let run_ctx_branch = run_ctx.write().branch("apply_motif_nets_run", false);
         let out = apply_motif_nets.run(
             Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test_batch", "test_batch")]), resource_a_t)?, 0)),
-            Arc::clone(&run_ctx)
+            run_ctx_branch
         ).await?;
 
         debug!("test_apply_motif_nets_3_channels_1_motif: PERF={:?}", PERF);
@@ -812,7 +812,8 @@ pub(crate) mod tests {
         let pulse_interval_starts_in_resources_a = resource_a_intervals[0][0][0].start;
 
 
-        with_data!(run_ctx, 0, out; |r:&ThoTensor<MotifProbability, SynKey>|{
+        let ctx_for_data = run_ctx.write().branch("apply_motif_nets_assert", false);
+        with_data!(ctx_for_data, out; |r:&ThoTensor<MotifProbability, SynKey>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
 
             let (pulse_matches_vals, pulse_matches_idx) = &r.t.i((0, ..)).topk(1i64, 0, true, true);

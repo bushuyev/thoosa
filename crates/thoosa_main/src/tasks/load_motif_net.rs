@@ -122,11 +122,8 @@ where
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifNet::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let (device_idx, cache_area) = {
-            let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area())
-        };
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+        let (device_idx, cache_area) = (ctx.device_idx(), ctx.cache_area());
 
         let input = input.load_from_any_device_(0).await?;//TODO clone_from_cpu
         let mut motif_nets = self.ws.read().load_motif_nets(input.channel, input.motif_id, &ThoDevice::from(device_idx).into())?;
@@ -182,7 +179,7 @@ mod tests {
 
         let load_motif_net = Arc::new(LoadMotifNet::<MockRunCtx>::new(&ws));
 
-        load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(0, 0), 0)), Arc::new(RwLock::new(mock_run_ctx::default(1)))).await?;
+        load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(0, 0), 0)), mock_run_ctx::default(1)).await?;
 
         Ok(())
     }

@@ -36,7 +36,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorView<'a, D, Id> {
 }
 
 #[derive(Debug)]
-pub struct TorchPermsCtx {
+pub struct TorchPermsCtx {//TODO rename
     name: &'static str,
     pub permits: Vec<RunnerPerm>,//TODO pub
 }
@@ -133,61 +133,69 @@ mod tests {
     }
 
     #[derive(Debug, Delegate)]
-    #[delegate(PermitsCtx, target = "perms_ctx")]
-    pub struct TorchRunCtx {
+    #[delegate(PermitsCtx, target = "perms")]
+    pub struct TestTorchRunCtx {
+        id: SynKey,
         device_idx: usize,
         loaded_tensors_cached: Vec<SynKey>,
         multed_tensors_cached: Vec<SynKey>,
         cache_area: u64,
         name: &'static str,
-        perms_ctx: TorchPermsCtx,
+        perms: TorchPermsCtx,
     }
 
-    impl TorchRunCtx {
-        pub fn new(device_idx: usize, cache_area: u64, name: &'static str) -> Self {
+    impl TestTorchRunCtx {
+        pub fn new<I:Into<SynKey>>(device_idx: usize, cache_area: u64, name: I) -> Self {
             Self {
+                id: name.into(),
                 device_idx,
                 loaded_tensors_cached: vec![],
                 multed_tensors_cached: vec![],
                 cache_area,
-                name,
-                perms_ctx: TorchPermsCtx::new(name),
+                name: "TestTorchRunCtx",
+                perms: TorchPermsCtx::new("TorchPermsCtx"),
             }
         }
     }
 
-    impl Adjustable for TorchRunCtx {}
+    impl Adjustable for TestTorchRunCtx {}
 
-    impl RunCtx for TorchRunCtx {
+    impl WithId for TestTorchRunCtx {
+        type ID = SynKey;
+
+        fn id(&self) -> &Self::ID {
+            &self.id
+        }
+    }
+
+    impl RunCtx for TestTorchRunCtx {
         fn device_idx(&self) -> usize {
             self.device_idx
         }
 
-        fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoError>>
+        fn purge_gpu_caches(&mut self) -> BoxFuture<'static, Result<(), ThoError>>
         where
             Self: Sized,
         {
+            let (device_idx, ctx_id, cache_area, loaded_tensors_cached, mul_output_cached) = {
+
+                (
+                    self.device_idx,
+                    self.id.clone(),
+                    self.cache_area,
+                    mem::replace(&mut self.loaded_tensors_cached, Vec::new()),
+                    mem::replace(&mut self.multed_tensors_cached, Vec::new()),
+                )
+            };
+
             Box::pin(async move {
-                let (device_idx, ctx_name) = {
-                    let guard = ctx.read();
-                    (guard.device_idx, guard.name)
-                };
+
                 assert_ne!(device_idx, 0);
 
-                debug!("TorchRunCtx::purge_gpu_caches: 0 ctx_name={ctx_name} device_idx={device_idx} ");
+                debug!("TorchRunCtx::purge_gpu_caches: 0 ctx_id={ctx_id:?} device_idx={device_idx} ");
 
-                let (cache_area, loaded_tensors_cached, mul_output_cached) = {
-                    let mut guard = ctx.write();
 
-                    (
-                        guard.cache_area,
-                        mem::replace(&mut guard.loaded_tensors_cached, Vec::new()),
-                        mem::replace(&mut guard.multed_tensors_cached, Vec::new()),
-                    )
-                };
-                debug!(
-                    "purge_gpu_caches: 1 ctx_name={ctx_name}device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}"
-                );
+                debug!("purge_gpu_caches: 1 ctx_id={ctx_id:?} device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}");
 
                 tokio::try_join!(
                     TestTensorLoader::purge_gpu_cache_area(
@@ -198,7 +206,7 @@ mod tests {
                     ClcTask::purge_gpu_cache_area(mul_output_cached, cache_area, device_idx)
                 )?;
 
-                debug!("purge_gpu_caches: 2 ctx_name={ctx_name} device_idx={device_idx}");
+                debug!("purge_gpu_caches: 2 ctx_id={ctx_id:?} device_idx={device_idx}");
 
                 Ok(())
             })
@@ -207,11 +215,23 @@ mod tests {
         fn cache_area(&self) -> u64 {
             self.cache_area
         }
+
+        fn branch<I:Into<SynKey> + 'static>(&mut self, _new_name:I, with_new_cache_area: bool) -> Self
+        where
+            Self: Sized,
+        {
+
+            let mut ctx2 = Self::new(self.device_idx, self.cache_area, &self.id + _new_name.into());
+            ctx2.perms.permits = mem::take(&mut self.perms.permits);
+            ctx2.device_idx = self.device_idx;
+            ctx2.cache_area = self.cache_area;
+            ctx2
+        }
     }
 
-    impl Named for TorchRunCtx {
+    impl Named for TestTorchRunCtx {
         fn name(&self) -> &'static str {
-            self.name
+            "TestTorchRunCtx"
         }
     }
 
@@ -333,7 +353,7 @@ mod tests {
     impl Stage for TestTensorLoader {
         type In<'a> = LoaderInput;
         type Out = ThoTensor<LoadedTensor, SynKey>;
-        type Ctx = TorchRunCtx;
+        type Ctx = TestTorchRunCtx;
     }
 
     // #[async_trait]
@@ -341,14 +361,12 @@ mod tests {
         async fn run(
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
 
-            let (device_idx, cache_area) = {
-                let guard = ctx.read();
-                (guard.device_idx(), guard.cache_area())
-            };
+            let device_idx = ctx.device_idx();
+            let cache_area = ctx.cache_area();
 
             let num_devices = GlobalCtx::global().device_count();
 
@@ -371,12 +389,11 @@ mod tests {
         fn on_cached<'a>(
             &self,
             input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>,
-            ctx: &Arc<RwLock<Self::Ctx>>,
+            ctx: &mut Self::Ctx,
         ) where
             Self: 'a,
         {
-            ctx.write()
-                .loaded_tensors_cached
+            ctx.loaded_tensors_cached
                 .push(self.out_id(input.id()));
         }
     }
@@ -494,14 +511,14 @@ mod tests {
     impl Stage for ClcTask {
         type In<'a> = ThoTensor<LoadedTensor, SynKey>;
         type Out = ThoTensor<ClcTaskOutput, SynKey>;
-        type Ctx = TorchRunCtx;
+        type Ctx = TestTorchRunCtx;
     }
 
     impl SyncStage for ClcTask {
         fn do_run<'a>(
             self: Arc<Self>,
             input: &Self::In<'a>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            ctx: &Self::Ctx,
         ) -> Result<Self::Out, ThoError>
         where
             Self: Sized,
@@ -509,7 +526,7 @@ mod tests {
             // tokio::time::sleep(tokio::time::Duration::from_millis(random_range(0..10))).await;
             debug!("MulTask::run: loaded.id={:?}", input.id());
 
-            let deive_idx = ctx.read().device_idx;
+            let deive_idx = ctx.device_idx;
 
             for fail_until in &self.fail_until {
                 match fail_until {
@@ -525,7 +542,7 @@ mod tests {
                         }
                     }
                     FailUntil::MinPermits(min_permits) => {
-                        let acquired_permits = ctx.read().acquired_permits();
+                        let acquired_permits = ctx.acquired_permits();
                         debug!(
                             "MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}"
                         );
@@ -539,12 +556,13 @@ mod tests {
                     }
 
                     FailUntil::DumpedToCpu => {
+                        let device_idx = ctx.device_idx();
                         let is_all_on_cpu =
-                            GlobalCtx::global().is_all_on_cpu(ctx.read().device_idx());
+                            GlobalCtx::global().is_all_on_cpu(device_idx);
                         debug!(
                             "MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}",
-                            ctx.read().name(),
-                            ctx.read().device_idx()
+                            ctx.name(),
+                            device_idx
                         );
 
                         if !is_all_on_cpu {
@@ -569,22 +587,18 @@ mod tests {
         async fn run(
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            let (device_idx, cache_area) = {
-                let guard = ctx.read();
-                (guard.device_idx(), guard.cache_area())
-            };
+            let device_idx = ctx.device_idx();
+            let cache_area = ctx.cache_area();
             let num_devices = GlobalCtx::global().device_count();
 
             let stage = Arc::clone(&self);
-            let ctx_for_run = Arc::clone(&ctx);
-
+            let mut ctx = ctx;
             let output = input
-                .with_data_ref(device_idx,
-                               Arc::clone(&ctx), None, move |tensor: &ThoTensor<LoadedTensor, SynKey>| {
-                        Arc::clone(&stage).do_run(tensor, Arc::clone(&ctx_for_run))
-                    })
+                .with_data_ref(device_idx, &mut ctx, None, move |tensor: &ThoTensor<LoadedTensor, SynKey>, run_ctx| {
+                    Arc::clone(&stage).do_run(tensor, run_ctx)
+                })
                 .await?;
 
             Ok(Arc::new(DevicesWrap::wrap(
@@ -596,12 +610,11 @@ mod tests {
         fn on_cached<'a>(
             &self,
             input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>,
-            ctx: &Arc<RwLock<Self::Ctx>>,
+            ctx: &mut Self::Ctx,
         ) where
             Self: 'a,
         {
-            ctx.write()
-                .multed_tensors_cached
+            ctx.multed_tensors_cached
                 .push(self.out_id(input.id()));
         }
     }
@@ -624,7 +637,7 @@ mod tests {
     impl Stage for LoadAndClcTask {
         type In<'a> = LoaderInput;
         type Out = ThoTensor<ClcTaskOutput, SynKey>;
-        type Ctx = TorchRunCtx;
+        type Ctx = TestTorchRunCtx;
     }
 
     // #[async_trait]
@@ -632,10 +645,11 @@ mod tests {
         async fn run(
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            mut ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+            let ctx_for_loader = ctx.branch("load_and_clc_loader", false);
             let loaded = Arc::clone(&self.loader)
-                .run_cached(Arc::clone(&input), Arc::clone(&ctx))
+                .run_cached(Arc::clone(&input), ctx_for_loader)
                 .await?;
 
             let loaded_id = loaded.id().clone();
@@ -662,13 +676,11 @@ mod tests {
 
             let result = self
                 .clc_oom_runner
-                .run(&self.clc_task, loaded, Arc::clone(&ctx), &required_ids)
+                .run(&self.clc_task, loaded, ctx.branch("load_and_clc_clc", false), &required_ids)
                 .await?;
 
-            let (device_idx, cache_area) = {
-                let guard = ctx.read();
-                (guard.device_idx(), guard.cache_area())
-            };
+            let device_idx = ctx.device_idx();
+            let cache_area = ctx.cache_area();
             let num_devices = GlobalCtx::global().device_count();
 
             Ok(Arc::new(DevicesWrap::wrap(
@@ -759,7 +771,7 @@ mod tests {
         load_to_device: usize,
         loader: &Arc<TestTensorLoader>,
     ) -> Result<(), ThoError> {
-        let ctx_device_0 = Arc::new(RwLock::new(TorchRunCtx::new(
+        let ctx_device_0 = Arc::new(RwLock::new(TestTorchRunCtx::new(
             loader_ctx_device,
             0,
             "device_1_ctx",
@@ -777,13 +789,13 @@ mod tests {
                 "resource_1".into(),
                 cache_area,
             )),
-            Arc::clone(&ctx_device_0),
+            ctx_device_0.write().branch("test_loaded_tensor_0_0", false),
         ).await?;
 
         debug!("loaded_tensor_0_0={loaded_tensor_0_0:?}");
 
         let tensor_data_0_0 = loaded_tensor_0_0
-            .with_data_ref(load_to_device, Arc::clone(&ctx_device_0), None, |tensor_data_0_0: &ThoTensor<LoadedTensor, SynKey>| {
+            .with_data_ref(load_to_device, &mut ctx_device_0.write().branch("test_loaded_tensor_0_0_data", false), None, |tensor_data_0_0: &ThoTensor<LoadedTensor, SynKey>, _ctx| {
                     debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
 
                     assert!(
@@ -807,13 +819,13 @@ mod tests {
                     "resource_1".into(),
                     cache_area,
                 ))),
-                Arc::clone(&ctx_device_0),
+                ctx_device_0.write().branch("test_loaded_tensor_0_1", false),
             )
             .await?;
 
         loaded_tensor_0_0
             .with_data_ref(load_to_device,
-                           Arc::clone(&ctx_device_0), None, move|tensor_data_0_1: &ThoTensor<LoadedTensor, SynKey>| {
+                           &mut ctx_device_0.write().branch("test_loaded_tensor_0_0_data_second", false), None, move|tensor_data_0_1: &ThoTensor<LoadedTensor, SynKey>, _ctx| {
                     // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
                     assert_eq!(&tensor_data_0_0, tensor_data_0_1.t_ref());
@@ -862,7 +874,7 @@ mod tests {
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
-            |_device_idx, _cache_area, _name| TorchRunCtx::new(1, 0, "noname"),
+            |_device_idx, _cache_area, _name| TestTorchRunCtx::new(1, 0, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
@@ -945,7 +957,7 @@ mod tests {
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
-            |_device_idx, _cache_area, _name| TorchRunCtx::new(1, 0, "noname"),
+            |_device_idx, _cache_area, _name| TestTorchRunCtx::new(1, 0, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
@@ -995,7 +1007,7 @@ mod tests {
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
-            |_device_idx, _cache_area, _name| TorchRunCtx::new(1, 0, "noname"),
+            |_device_idx, _cache_area, _name| TestTorchRunCtx::new(1, 0, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
@@ -1049,7 +1061,7 @@ mod tests {
                 "resource_5",
             ], //,
             device_idx,
-            |_device_idx, _cache_area, _name| TorchRunCtx::new(1, 0, "noname"),
+            |_device_idx, _cache_area, _name| TestTorchRunCtx::new(1, 0, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
@@ -1101,7 +1113,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .as_slice(), //&["resource_1", "resource_2", "resource_3"],
             device_idx,
-            |_device_idx, _cache_area, _name| TorchRunCtx::new(1, 0, "noname"),
+            |_device_idx, _cache_area, _name| TestTorchRunCtx::new(1, 0, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
@@ -1152,7 +1164,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .as_slice(), //&["resource_1","resource_2",  "resource_3"], //,
             device_idx,
-            |_device_idx, _cache_area, name| TorchRunCtx::new(1, 0, name),
+            |_device_idx, _cache_area, name| TestTorchRunCtx::new(1, 0, name),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
@@ -1195,7 +1207,7 @@ mod tests {
             false,
         ));
 
-        let ctx_device = Arc::new(RwLock::new(TorchRunCtx::new(1, 0, "test")));
+        let ctx_device = Arc::new(RwLock::new(TestTorchRunCtx::new(1, 0, "test")));
 
         for res in (0..10).map(|i| &*format!("resource_{i}").leak()) {
             let (device_idx, cache_area) = {
@@ -1208,7 +1220,7 @@ mod tests {
                         res.into(),
                         cache_area,
                     )),
-                    Arc::clone(&ctx_device),
+                    ctx_device.write().branch(format!("test_load_and_clc_{res}"), false),
                 )
                 .await?;
         }
@@ -1345,7 +1357,7 @@ mod tests {
             true,
         ));
 
-        let ctx_device = Arc::new(RwLock::new(TorchRunCtx::new(1, 0, "test")));
+        let ctx_device = Arc::new(RwLock::new(TestTorchRunCtx::new(1, 0, "test")));
 
         let (device_idx, cache_area) = {
             let guard = ctx_device.read();
@@ -1358,7 +1370,7 @@ mod tests {
                     "resource_1".into(),
                     cache_area,
                 )),
-                Arc::clone(&ctx_device),
+                ctx_device.write().branch("test_load_and_clc_single_run", false),
             )
             .await?;
 
@@ -1366,7 +1378,7 @@ mod tests {
 
         multed
             .with_data_ref(1,
-                   Arc::clone(&ctx_device), None, |r: &ThoTensor<ClcTaskOutput, SynKey>| {
+                           &mut ctx_device.write().branch("test_load_and_clc_single_data", false), None, |r: &ThoTensor<ClcTaskOutput, SynKey>, _ctx| {
                     mul_check_with_exp_f(MUL_K as f64, "resource_1", r, 0.01, 0.01, |k, t| {
                         lin_for_size(k, size, t.kind(), &t.device())
                             .sum_dim_intlist(1, false, t.kind())
