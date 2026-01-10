@@ -116,7 +116,7 @@ where
     C: RunCtx + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="AverageEuclideanDistanceStage::do_run"))]
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoError> {
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         Ok(AverageDistanceValue::new(
             SynKey::new([mono_key!("todo", "todo")]),
             panic_to_err!(average_euclidean_distance(input.data().t_ref()))?
@@ -179,7 +179,7 @@ pub mod mock_average_stage {
 
 
         impl SyncStage for AverageEuclideanDistanceStage {
-            fn do_run<'f>(self: Arc<Self>, _input: &<Self as Stage>::In<'f>, _ctx: Arc<parking_lot::RwLock<<Self as Stage>::Ctx>>) -> Result<<Self as Stage>::Out, ThoError>;
+            fn do_run<'f>(self: Arc<Self>, _input: &<Self as Stage>::In<'f>, _ctx: &<Self as Stage>::Ctx) -> Result<<Self as Stage>::Out, ThoError>;
         }
 
 

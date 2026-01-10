@@ -1309,7 +1309,7 @@ impl SavableResult for TrainMotifsNetResult {
 
 pub async fn opt_train_2<P, R, F, N: Debug + Default>(
     opt_config: Arc<OptConfig>, //N node parameters
-    train: F,
+    mut train: F,
     run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
     device: Device,
     descr: &str,
@@ -1321,8 +1321,7 @@ where
             &VarStore,
             R,
             &'a mut (dyn TrainListener + 'b),
-        ) -> Result<(f32, N), ThoError>
-        + Clone,
+        ) -> Result<(f32, N), ThoError>,
 {
     let const_vals = run_config_source
         .grid_run_config_source()
@@ -1339,7 +1338,7 @@ where
     for grid_vals in grid_vals_sets.into_iter() {
         let const_vals = const_vals.clone();
         let grid_vals = grid_vals.clone();
-        let mut train_clone = train.clone();
+        let mut train_clone = &mut train;//.clone();
 
         let min_var_store_clone = Arc::clone(&min_var_store);
         let min_loss_moved = Arc::clone(&min_loss);

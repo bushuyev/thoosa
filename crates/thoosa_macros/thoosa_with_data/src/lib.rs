@@ -4,8 +4,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::{bracketed, parse_macro_input, Expr, ExprClosure, Ident, Result, Token};
 
 struct WithDataInput {
-    permits_ctx: Expr,
-    device: Expr,
+    ctx: Expr,
     args: Vec<Arg>,
     closure: ExprClosure,
 }
@@ -17,9 +16,7 @@ enum Arg {
 
 impl Parse for WithDataInput {
     fn parse(input: ParseStream) -> Result<Self> {
-        let permits_ctx = input.parse::<Expr>()?;
-        input.parse::<Token![,]>()?;
-        let device = input.parse::<Expr>()?;
+        let ctx = input.parse::<Expr>()?;
         input.parse::<Token![,]>()?;
 
         let mut args = Vec::new();
@@ -43,7 +40,7 @@ impl Parse for WithDataInput {
         input.parse::<Token![;]>()?;
         let closure = input.parse::<ExprClosure>()?;
 
-        Ok(Self { permits_ctx, device, args, closure })
+        Ok(Self { ctx, args, closure })
     }
 }
 
@@ -60,8 +57,7 @@ pub fn async_with_data(input: TokenStream) -> TokenStream {
 }
 
 fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::TokenStream {
-    let permits_ctx_expr = input.permits_ctx;
-    let device_expr = input.device;
+    let ctx_expr = input.ctx;
     let closure = input.closure;
 
     let mut prelude = Vec::new();
@@ -113,19 +109,19 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
         quote! { (#closure)(#(#arg_refs),*) }
     };
 
-    let _permits = if await_closure {
+    let permits = if await_closure {
         quote! {
-             if __with_data_permits_ctx.read().acquired_permits() == 0 {
-                let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(to_device_idx, ::std::sync::Arc::new(::thoosa_shared::simple_id!(name))).await?;
-                __with_data_permits_ctx.write().add_permit(permit);
+             if __with_data_ctx.acquired_permits() == 0 {
+                let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone())).await?;
+                __with_data_ctx.add_permit(permit);
             }
         }
     } else {
         quote! {
-             let _permit = if __with_data_permits_ctx.read().acquired_permits() == 0 {
-                    let name = __with_data_permits_ctx.read().name();
+             let _permit = if __with_data_ctx.acquired_permits() == 0 {
+
                     let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global()
-                        .acquire_one(to_device_idx, ::std::sync::Arc::new(::thoosa_shared::simple_id!(name)))
+                        .acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone()))
                         .await?;
                     Some(permit)
                 } else {
@@ -136,15 +132,14 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
 
     quote! {
         {
-            let __with_data_permits_ctx = ::std::sync::Arc::clone(&(#permits_ctx_expr));
-            let __with_data_device = #device_expr;
+            use thoosa_shared::traits::WithId;
+            use thoosa_shared::runner::common::PermitsCtx;
+
+            let mut __with_data_ctx = #ctx_expr;
+            let __device_idx = __with_data_ctx.device_idx();
             async {
-                let to_device_idx = __with_data_device;
-                let __device_idx = to_device_idx;
-
-
-
                 #(#prelude)*
+                #permits
                 #(#load_steps)*
 
                 #invoke_closure

@@ -102,13 +102,11 @@ where
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
-        ctx: Arc<RwLock<Self::Ctx>>,
+        mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
-        let (device_idx, cache_area) = {
-            let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area())
-        };
+        let device_idx = ctx.device_idx();
+        let cache_area = ctx.cache_area();
         let out_key = {
             let out_id = self.out_id(input.id());
             Arc::new(out_id) as Arc<dyn CachableIdTr>
@@ -123,11 +121,12 @@ where
 
 
         let num_devices = GlobalCtx::global().device_count();
+        let mut ctx_for_data = ctx.branch("freq_filter_data", false);
 
         let filtered = input
             .with_data_ref(
                 device_idx,
-               Arc::clone(&ctx), None, |tensor: &ThoTensor<ChannelsData2, SynKey>| {
+               &mut ctx_for_data, None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
 
                let t = notch_band_rfft(tensor.t_ref(), 200., 58., 62.)?;//TODO params
 
@@ -173,6 +172,7 @@ mod tests {
     use thoosa_shared::mono_key;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::transforms::freq_filter::FreqFilter;
+    use thoosa_shared::runner::common::RunCtx;
 
     #[tokio::test]
     async fn test_freq_fultder() ->Result<(), ThoError> {
@@ -187,11 +187,11 @@ mod tests {
 
         let bf = FreqFilter::new(&filter_config)?;
 
-        let ctx = Arc::new(RwLock::new(RunCtx2::new(1, 1, "test")));
+        let mut ctx = RunCtx2::new(1, "test");
 
         let r = Arc::new(bf).run(
             Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&[20, 100], FLOAT_CPU))?, 0)),
-            ctx.clone()
+            ctx.branch("freq_filter_test", false)
         ).await?;
 
         println!("r={r:?}");

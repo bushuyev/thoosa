@@ -12,7 +12,6 @@ use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::oom_handler::{Adjuster, Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use log::debug;
-use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{Add, Deref, DivAssign, Range};
@@ -178,17 +177,19 @@ where
         > + Adjustable + OutId + Sync + Send + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifAndClcDistanceStage::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     {
         let out_id = self.out_id(input.id());
-
-        let motif = Arc::clone(&self.motif_loader).run_cached(Arc::clone(&input), Arc::clone(&ctx)).await?;
+        let mut ctx = ctx;
+        let motif_ctx = ctx.branch("load_motif_and_clc_dist_motif", false);
+        let motif = Arc::clone(&self.motif_loader).run_cached(Arc::clone(&input), motif_ctx).await?;
 
         let motif_size = motif.size().clone();
 
         debug!("LoadMotifAndClcDistanceStage::run: out_id={out_id:?} motif_size={motif_size:?}");
 
 
+        let dist_ctx = ctx.branch("load_motif_and_clc_dist_dist", false);
         let dist = OOMHandler::new(
             vec![
                 Adjusters::Input(Box::new(SplitsAdjuster::<MotifSlicesSelector, MonoMetrics<0, 2>>::new([2, -1].into())))
@@ -196,7 +197,7 @@ where
             .run(
                 &self.clc_dist,
                 Arc::clone(&motif),
-                Arc::clone(&ctx),
+                dist_ctx,
                 Contexts::new(
                     SplitsAdjusterContextImpl::new(motif_size.clone(), DistOutputBuilder::new(out_id.clone())),
                     // NoopInputContext(None),
@@ -309,9 +310,11 @@ mod tests {
         let num_devices = GlobalCtx::global().device_count();
         let input_id_value = DataId::from(&42u32);
         let input_id = Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(input_id_value.clone()), 0));
-        let result = stage.run_cached(Arc::clone(&input_id), Arc::clone(&ctx)).await?;
+        let stage_ctx = ctx.write().branch("load_motif_and_clc_dist", false);
+        let result = stage.run_cached(Arc::clone(&input_id), stage_ctx).await?;
 
-        let result_value: AverageDistanceValue = result.with_data_ref(0, Arc::clone(&ctx), None, |val: &AverageDistanceValue| Ok(val.clone())).await?;
+        let mut ctx_for_data = ctx.write().branch("load_motif_and_clc_dist_data", false);
+        let result_value: AverageDistanceValue = result.with_data_ref(0, &mut ctx_for_data, None, |val: &AverageDistanceValue, _ctx| Ok(val.clone())).await?;
 
         assert_eq!(result_value.value(), 20.0);
         let expected_id = SynKey::new([mono_key!(input_id_value.0, format!("{input_id_value}_avg_ec_dist"))]);

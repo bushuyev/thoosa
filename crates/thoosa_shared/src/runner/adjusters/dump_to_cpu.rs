@@ -76,20 +76,19 @@ where
     A: Adjustable + RunCtx + Send,
     C: DumpToCpuContext<'a> + Send,
 {
-    type A = Arc<RwLock<A>>;
+    type A = A;
 
     async fn adjust(
         &self,
-        adjustable: &<Self as Adjuster<C>>::A,
+        mut adjustable: <Self as Adjuster<C>>::A,
         adjust_context: &mut C,
     ) -> Result<<Self as Adjuster<C>>::A, ThoError> {
 
 
         let (device_idx, acquired_permits,  _ctx_name)  = {
-            let guard = adjustable.read();
             // assert_eq!(acquired_permits, MAX_PERMITS, "not enough permits {}", acquired_permits);
 
-            (guard.device_idx(), guard.acquired_permits(), guard.name())
+            (adjustable.device_idx(), adjustable.acquired_permits(), adjustable.name())
         };
 
         debug!("DumpToCpu::adjust: adjustable={adjustable:?} acquired_permits={acquired_permits}");
@@ -104,11 +103,11 @@ where
             ).await {
                 Ok(permits) => {
                     debug!("DumpToCpu::adjust: acquired {permits:?}");
-                    adjustable.write().add_permit(permits);
+                    adjustable.add_permit(permits);
                 }
                 Err(e) => {
                     debug!("DumpToCpu::adjust: can't acquire {acquired_permits} permits, got {e:?}");
-                    adjustable.write().drop_permits(DropIf::Always);
+                    adjustable.drop_permits(DropIf::Always);
                     return Err(ThoError::new_with_error(
                         "DumpToCpu::adjust: can't acquire MAX_PERMITS",
                         Cause::AdjusterFailed,
@@ -127,7 +126,8 @@ where
 
         debug!("DumpToCpu::adjust done: is_all_on_cpu={}",GlobalCtx::global().is_all_on_cpu(device_idx));
 
-        Ok(Arc::clone(adjustable))
+        Ok(adjustable.branch("", false))
+        // todo!()
     }
 
     fn degrade(&self, adjust_context: &mut C) -> bool {
