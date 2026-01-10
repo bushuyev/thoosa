@@ -181,6 +181,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         motif_id: u32,
         motif_width: u32,
         min_distance: Option<u32>,
+        crop_len: u32,
     ) -> Result<
         (
             i64,
@@ -324,6 +325,7 @@ mock! {
             motif_id: u32,
             motif_width: u32,
             min_distance: Option<u32>,
+            crop_len:u32
         ) -> Result<
             (
                 i64,
@@ -1861,11 +1863,13 @@ impl Store for SqlStore {
         Ok(channel_slices)
     }
 
+    //gpt
     fn list_random_slices(
         &self,
         motif_id: u32,
         motif_width: u32,
         min_distance: Option<u32>,
+        crop_len: u32,//when input is processed by a conv filter which outputs shorter sequence (- kernel width)
     ) -> Result<
         (
             i64, RunId,
@@ -1876,9 +1880,7 @@ impl Store for SqlStore {
     > {
         debug!("list_random_slices: motif_id={motif_id} motif_width={motif_width} min_distance={min_distance:?}");
 
-        if motif_width == 0 {
-            return Err(ThoError::new("motif_width must be greater than zero"));
-        }
+        assert!(motif_width > 0, "motif_width must be greater than zero");
 
         // Keep helpers local to minimize surface area.
         fn respects_spacing(candidate: i64, guard_width: i64, sorted: &[i64]) -> bool {
@@ -1990,7 +1992,7 @@ impl Store for SqlStore {
                     resource: Resource::new(resource_id, import_id, key, length),
                     target_positions: positions,
                     generated_positions: Vec::new(),
-                    length: length as i64,
+                    length: (length - crop_len)as i64,
                 })
             })
             .collect::<Result<Vec<_>, ThoError>>()?
@@ -2006,7 +2008,7 @@ impl Store for SqlStore {
                         ))
                     })?;
                 contexts.push(RandomResourceCtx {
-                    length: resource.length() as i64,
+                    length: (resource.length() - crop_len) as i64,
                     resource,
                     target_positions: positions,
                     generated_positions: Vec::new(),
@@ -2039,7 +2041,7 @@ impl Store for SqlStore {
 
         // Heuristically explore candidate windows until we gather enough slices.
         while generated.len() < desired_count && attempts < max_attempts {
-            attempts += 1;
+            attempts += 1;//TODO fail it too many attempts?
 
             let ctx_index = if !target_indices.is_empty() && rng.random_range(0..10) < 7 {
                 let pick = rng.random_range(0..target_indices.len());
@@ -2088,6 +2090,7 @@ impl Store for SqlStore {
             resources_map
                 .entry(ctx.resource.id())
                 .or_insert_with(|| ctx.resource.clone());
+
             generated.push(TensorIdSliceIdx(ctx.resource.id(), candidate as u32));
         }
 
@@ -3861,7 +3864,7 @@ mod store_tests {
 
         const WIDTH: u32 = 40;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_slices(motif_id, WIDTH, None)?;
+            store.list_random_slices(motif_id, WIDTH, None, WIDTH)?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -3917,7 +3920,7 @@ mod store_tests {
         const WIDTH: u32 = 50;
         const MIN_DISTANCE: u32 = 300;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_slices(motif_id, WIDTH, Some(MIN_DISTANCE))?;
+            store.list_random_slices(motif_id, WIDTH, Some(MIN_DISTANCE), WIDTH)?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4101,7 +4104,7 @@ impl MockStoreBuilder {
         r: Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>
     ) -> Self {
         self.store.expect_list_random_slices().returning(
-            move |p_motif_id, p_width, p_min_distance| {
+            move |p_motif_id, p_width, p_min_distance, crop_len| {
                 if p_motif_id == motif_id && p_width == motif_width && p_min_distance == min_distance {
                     r.clone()
                 } else {

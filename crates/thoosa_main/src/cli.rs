@@ -45,7 +45,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{load_final_model, opt_train, opt_train_2, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FixedNumSlicesNetArgsRangeOrValue, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
+use thoosa_common::train_nets::{load_final_model, opt_train, opt_train_2, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, FixedNumSlicesNetArgsRangeOrValue, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
 use thoosa_common::utils::{cuda_mem, from, lin_t, list_devices, plot_series, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
@@ -82,6 +82,7 @@ use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEucl
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
+use crate::tasks::train_final_net::new_train_final_net_with_ml;
 use crate::tasks::train_label_nets::{new_train_label_nets_with_ml, TrainLabelNets, TrainLabelNetsInput};
 use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 
@@ -148,6 +149,15 @@ impl RunAllArgs {
         )
 
     }
+
+    pub fn train_final_resource_config(&self) -> NetResources<Logits> {
+        NetResources::new(
+            Logits::new(self.train_resource_group.clone()),
+            Logits::new(self.valid_resource_group.clone()),
+        )
+
+    }
+
 
 }
 
@@ -363,7 +373,8 @@ where
             //TODO move it into SelectMotifsStage
             let motif_loader = Arc::new(MotifLoader::new(
                 Arc::clone(&store),
-                Arc::clone(&loader_2)
+                Arc::clone(&loader_2),
+                &ws
             ));
 
             let run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
@@ -430,8 +441,8 @@ where
             let train_motif_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = serde_json5::from_str(&train_label_nets_args.run_config_cnt).expect("TrainLabelNets");
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
-                ResourcesConfigInput::new( //TODO the group is needed to load resouces not belonging to label being trained
-                                           train_label_nets_args.resource_config()),
+                ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
+                   train_label_nets_args.resource_config()),
                 0
             ));
 
@@ -467,20 +478,39 @@ where
 
         Some(TrainFinalNet(train_final_net_args)) => {
             debug!("TrainFinalNet: train_motif_nets_args.run_config_cnt={:?}",train_final_net_args.run_config_cnt);
-            // let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = serde_json5::from_str(&train_final_net_args.run_config_cnt).expect("TrainFinalNet");
-            //
-            // run_opt_step::<TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, OptConfig, NetResources<Logits>, _>(
-            //     Some(train_final_net_args.train_labels_run_ids.clone()),
-            //     train_final_net_run_config_range_or_value,
-            //     &train_final_net_args.fixed_config,
-            //     &train_final_net_args.resource_config(),
-            //     run_train_final_nets,
-            //     &ws,
-            //     &store,
-            //     &loader,
-            //     devices.clone(),
-            //     "TrainFinalNet",
-            // )?;
+            let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = serde_json5::from_str(&train_final_net_args.run_config_cnt).expect("TrainFinalNet");
+
+            let input_wrapper = Arc::new(DevicesWrap::wrap(
+                ResourcesConfigInput::new(
+                   train_final_net_args.resource_config()),
+                0
+            ));
+
+            let opt_config = Arc::new(train_final_net_args.fixed_config.clone());
+
+            let run_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
+                None,
+                train_final_net_run_config_range_or_value,
+                input_wrapper,
+                &ws,
+                &store,
+                true,
+                async |run_configs| {
+
+                    new_train_final_net_with_ml(
+                        train_final_net_args.select_motifs_run_id.clone(),
+                        loader_2,
+                        run_configs,
+                        &ws,
+                        &store,
+                        RunCtx2::new(1, "init final nets"),
+                        opt_config
+                    ).await.map(|v|Arc::new(v))
+
+                },
+                || RunCtx2::new(1, "train final nets"),
+            ).await?;
+
 
             info!("TrainFinalNet done");
         }
@@ -500,24 +530,30 @@ where
 
             let train_labels_input = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new( //TODO the group is needed to load resouces not belonging to label being trained
-                                           run_all_params.train_resource_config()).check(&store)?,
+                run_all_params.train_resource_config()).check(&store)?,
+                0
+            ));
+
+            let train_final_input = Arc::new(DevicesWrap::wrap(
+                ResourcesConfigInput::new(
+                   run_all_params.train_final_resource_config()).check(&store)?,
                 0
             ));
 
 
             let find_motifs_run_config_range_or_value:FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue{
                 id: None,
-                step: RangeOrValue::Value(50), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+                step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
                 window: RangeOrValue::Value(1000), //RangeOrValue::Range { range: Range { start: 1000, end: 2001 }, step: Some((1000, 1)) },
                 min_tracker_step: None,
-                // filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
-                //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((100., 1)) },
-                //     band_hz: RangeOrValue::Value(100.),
-                //     kernel_size: RangeOrValue::Value(1000),
-                //     stride: RangeOrValue::Value(1),
-                //     padding: RangeOrValue::Value(0),
-                // })),
-                filter: None,
+                filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
+                    low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((100., 1)) },
+                    band_hz: RangeOrValue::Value(100.),
+                    kernel_size: RangeOrValue::Value(1000),
+                    stride: RangeOrValue::Value(1),
+                    padding: RangeOrValue::Value(0),
+                })),
+                // filter: None,
                 slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ mean: RangeOrValue::Value(0.02)}),
             };
 
@@ -565,7 +601,8 @@ where
                         Arc::clone(&loader_2),
                         Arc::new(MotifLoader::new(
                             Arc::clone(&store),
-                            Arc::clone(&loader_2)
+                            Arc::clone(&loader_2),
+                            &ws
                         )),
                         run_configs,
                         find_motif_run_ids.clone(),
@@ -582,11 +619,11 @@ where
 
 
             let common_training_args = CommonTrainingRunConfigRangeOrValue {
-                cycles: RangeOrValue::Value(100),
+                cycles: RangeOrValue::Value(10),
                 batch_size: RangeOrValue::Value(20),
                 lr: RangeOrValue::Value(0.0001),
             };
-            let opt_config = Arc::new(OptConfig::new(100, 20));
+            let opt_config = Arc::new(OptConfig::new(30, 10));
 
             let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
                 id: None,
@@ -625,14 +662,14 @@ where
             ///////////////////
             let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue{
                 id: None,
-                common_training_args,
+                common_training_args: common_training_args.clone(),
                 net: LabelNetTypeArgsRangeOrValue::FixedNumSlices(FixedNumSlicesNetArgsRangeOrValue{
                     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
                     slices_len: RangeOrValue::Value(1000)
                 }),
             };
 
-            let select_motifs_run_ids = select_motifs_run_ids.clone();
+            let select_motifs_run_ids_for_labels = select_motifs_run_ids.clone();
 
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
                 None,
@@ -644,8 +681,8 @@ where
                 async |run_configs| {
 
                     new_train_label_nets_with_ml(
-                        select_motifs_run_ids,
-                        loader_2,
+                        select_motifs_run_ids_for_labels,
+                        Arc::clone(&loader_2),
                         run_configs,
                         &ws,
                         &store,
@@ -657,6 +694,39 @@ where
             ).await?;
 
             info!("train label nets done: run_ids={run_ids:?}");
+
+            ////////////////////////
+            let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue{
+                id: None,
+                common_training_args,
+                net: FinalNetArgsRangeOrValue {
+                    num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+                },
+            };
+
+            let run_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
+                None,
+                train_final_net_run_config_range_or_value,
+                train_final_input,
+                &ws,
+                &store,
+                true,
+                async |run_configs| {
+
+                    new_train_final_net_with_ml(
+                        select_motifs_run_ids,
+                        loader_2,
+                        run_configs,
+                        &ws,
+                        &store,
+                        RunCtx2::new(1, "init final nets"),
+                        opt_config
+                    ).await.map(|v|Arc::new(v))
+
+                },
+                || RunCtx2::new(1, "train final nets"),
+            ).await?;
+
 
             /*if let Some(source_path) = run_all_params.import_source_path.as_ref() {
                 debug!("RunAll: init_resources");
@@ -951,7 +1021,8 @@ async fn run_plot_motif_slices(
 
     let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtx2>, RunCtx2>::new(
         Arc::clone(store),
-        Arc::clone(loader)
+        Arc::clone(loader),
+        ws
     ));
     let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
         Arc::clone(&motif_loader_impl), // as Arc<dyn MotifLoaderStage<Output = <AverageEuclideanDistanceStage as Stage>::In<'static>>>,

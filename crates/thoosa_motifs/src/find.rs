@@ -104,7 +104,7 @@ impl FindMotifsArgs {
 pub struct FixedFindMotifsConfig {
 
     #[arg(long, default_value_t = 10_000)]
-    pub max_chunk_size: u32, //max number of entries in butched tensors
+    pub max_chunk_size: u32, //max number of entries in tensor batches 
 
     #[arg(long, default_value_t = false)]
     pub keep_slice_matches: bool, //sql

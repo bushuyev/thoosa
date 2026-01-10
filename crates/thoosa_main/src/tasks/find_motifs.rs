@@ -211,7 +211,7 @@ where
                     UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
                 );
 
-                let configured_loader = config_to_stage(&loader, &run_config)?;
+                let configured_loader = config_to_stage(&loader, &run_config, ws)?;
                 let run_config_clone = run_config.clone();
                 let step = cross_unfold_clc.unfold_params.step();
 
@@ -323,7 +323,7 @@ where
 }
 
 
-pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
+pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>
@@ -340,7 +340,7 @@ where
             new(
                 SynKey::new([mono_key!("ab", "stage")]),
                 Arc::clone(loader),
-                Arc::new(FreqFilter::<C>::new(filter_config)?),
+                Arc::new(FreqFilter::<C>::new(filter_config, ws)?),
             ))))
         },
     };
@@ -412,13 +412,13 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
         let base_path = test_dir.to_string_lossy().to_string();
 
-        let n = 1000;
+        let n = 1234;
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir.clone(),
             3,
             n as u32,
-            32000,
+            100,
         )?));
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;
@@ -525,6 +525,7 @@ mod tests {
         let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
             move |key, _| {
                 let tensor = Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem())))?;
+                debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
                 Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
             },
             ThoDevice::from(Device::Cpu),
@@ -544,15 +545,24 @@ mod tests {
             0
         ));
 
+        let step_10_window_100 = r#"{
+            step:"10",
+            window:"100",
+            slices_filter: {'DistanceRunningMeanK':{'mean':'0.2'}}
+        }"#;
+
+
+        let step_10_window_100_with_filter = r#"{
+            step:'10',
+            window:'100',
+            'filter': {'BandPassFilter': {'low_hz':'20.', 'band_hz':'10.', kernel_size:'10', stride:'1', 'padding':'0'}},
+            'slices_filter':{'DistanceRunningMeanK':{'mean':'0.02'}}}
+        "#;
         let run_ids = run_grid::<_, _, _, _, _>(
             None,
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(
-                &r#"{
-                step:"100",
-                window:"1000",
-                slices_filter: {'DistanceRunningMeanK':{'mean':'0.2'}}
-
-            }"#,
+                // &step_10_window_100,
+                &step_10_window_100_with_filter,
             )
             .unwrap(),
             resources_input,
@@ -566,7 +576,7 @@ mod tests {
                         &store,
                         Arc::clone(&loader),
                         run_configs,
-                        FixedFindMotifsConfig::new(2, false, None),
+                        FixedFindMotifsConfig::new(30000, false, None),
                         ThoDevice::from(1),
                     )
                     .expect("FindMotifsStage::new failed in test"),
@@ -578,7 +588,8 @@ mod tests {
 
         let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtx2>, RunCtx2>::new(
             Arc::clone(&store),
-            Arc::clone(&loader)
+            Arc::clone(&loader),
+            &ws
         ));
 
         let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
@@ -587,6 +598,8 @@ mod tests {
         ));
 
         let motifs = store.read().list_motifs(run_ids[0])?;
+
+        debug!("test_find_motifs: motifs={motifs:?}");
 
         for motif_id_raw in motifs {
             let cache_area_loop = ctx.read().cache_area();
@@ -604,48 +617,21 @@ mod tests {
             motif
                 .with_data_ref(1,
                 &mut ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, _ctx| {
-                   debug!("motif_id={motif_id_raw} slices={:?}", t.data());
+                   debug!("test_find_motifs: motif_id={motif_id_raw} slices={:?}", t.data());
 
                    Ok(())
                })
                 .await?;
 
             let mut ctx_for_dist = ctx.write().branch("find_motifs_dist_value", false);
-            let _dist = Arc::clone(&clc_dist)
+            let dist = Arc::clone(&clc_dist)
                 .run_cached(Arc::clone(&motif_id), ctx.write().branch("find_motifs_clc_dist", false))
                 .await?
                 .with_data_ref(0, &mut ctx_for_dist, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
                 .await?;
+
+            debug!("test_find_motifs:  dist={dist:?} motif_id={motif_id_raw}");
         }
-        ////////////////Select
-        let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue =
-            serde_json5::from_str(
-            &r#"{
-                motif_selector:{'ByLabelVariance': {"_dummy":0}}
-            }"#
-            ).expect("SelectMotifs2");
-
-        let input_wrapper = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(Labeled::new("test".to_string())),
-            0
-        ));
-
-        // let run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
-        //     None,
-        //     select_motifs_run_config_range_or_value,
-        //     input_wrapper,
-        //     &store,
-        //     true,
-        //     |run_configs| {
-        //         Arc::new(SelectMotifsStage::<RawTensorLoader, RunCtx2>::new(
-        //             &ws,
-        //             &store,
-        //             Arc::clone(&loader),
-        //             run_configs,
-        //         ))
-        //     },
-        //     || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
-        // ).await?;
 
         Ok(())
     }

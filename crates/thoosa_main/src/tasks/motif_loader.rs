@@ -31,6 +31,7 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
+use thoosa_common::ws::Workspace;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_shared::runner::permits::MAX_PERMITS;
 use thoosa_dummy_data_derive::DummyData;
@@ -105,6 +106,7 @@ where
 {
     store: Arc<RwLock<Box<dyn Store>>>,
     loader: Arc<L>,
+    ws: Arc<RwLock<Box<dyn Workspace>>>,
     pd: PhantomData<C>,
 }
 
@@ -116,10 +118,12 @@ where
     pub fn new(
         store: Arc<RwLock<Box<dyn Store>>>,
         loader: Arc<L>,
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Self {
         Self {
             store,
             loader,
+            ws: Arc::clone(&ws),
             pd: Default::default(),
         }
     }
@@ -183,7 +187,7 @@ where
                 .read()
                 .list_motif_slices(motif_id_value, None, None, None)?;
 
-        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), None, None, &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area).await?;
+        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), None, None, &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "motif_loader").await?;
 
 
         Ok(Arc::new(DevicesWrap::wrap(
@@ -204,6 +208,7 @@ where
 {
     store: Arc<RwLock<Box<dyn Store>>>,
     loader: Arc<L>,
+    ws: Arc<RwLock<Box<dyn Workspace>>>,
     pd: PhantomData<C>,
 }
 
@@ -212,8 +217,8 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
-    pub fn new(store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>) -> Self {
-        Self { store, loader, pd: PhantomData::default() }
+    pub fn new(store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
+        Self { store, loader, pd: PhantomData::default(), ws:Arc::clone(&ws) }
     }
 }
 
@@ -286,9 +291,14 @@ where
         let (channel, find_motifs_run_id, slices, resources_map) =
             self.store
                 .read()
-                .list_random_slices(motif_id_value, find_motifs_run_config.window, None)?;
+                .list_random_slices(
+                    motif_id_value,
+                    find_motifs_run_config.window,
+                    None,
+                    find_motifs_run_config.window//it's assumed that filter's kernel is of same size as window
+                )?;
 
-        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), Some(limit), Some((0, 0)), &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area).await?;
+        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), Some(limit), Some((0, 0)), &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "random loader").await?;
 
 
         Ok(Arc::new(DevicesWrap::wrap(
@@ -298,12 +308,14 @@ where
     }
 }
 
-async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &mut C, find_motifs_run_id: u32, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, channel: i64, device_idx: usize, cache_area: u64) -> Result<( u32, ThoTensor<MotifSlices, DataId>), ThoError>
+async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &mut C, find_motifs_run_id: u32, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, channel: i64, device_idx: usize, cache_area: u64, ws: &Arc<RwLock<Box<dyn Workspace>>>, descr: &str) -> Result<(u32, ThoTensor<MotifSlices, DataId>), ThoError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
 {
 
+
+    debug!("load_motif_slices: slices={slices:?} descr={descr}");
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
         find_motifs_run_id,
@@ -323,11 +335,11 @@ where
 
     let window = find_motifs_run_config.window;
 
-    debug!("MotifLoader::run: find_motifs_run_id={find_motifs_run_id} window={window:?} device_idx={device_idx}");
+    debug!("load_motif_slices: find_motifs_run_id={find_motifs_run_id} window={window:?} device_idx={device_idx}");
 
     let tmp_cache: TmpCached<ThoTensor<ChannelsData2, SynKey>> = TmpCached::new("motifs", cache_area).await;
 
-    let configurable_loader = config_to_stage(&loader, &find_motifs_run_config)?;
+    let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
 
     let mut ctx_for_data = ctx.branch("motif_loader_selected_data", false);
 
@@ -359,7 +371,7 @@ where
                 .filter(|slice| {
                     let r = MonoMetrics::from([channel + 1, (slice + window) as i64]) <= *size;
                     if !r {
-                        warn!("MotifLoader::run: motif_id={motif_id} slice={slice:?} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id}");
+                        warn!("load_motif_slices: motif_id={motif_id} slice={slice:?} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id}  in {descr}");
                     }
                     r
                 })
@@ -381,13 +393,13 @@ where
                     &mut ctx_for_data,
                     selector.clone(),
                     |tt, _ctx| {
-                        debug!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id} try_count={try_count} resource_id={resource_id}  tt.size={:?}", tt.size());
-                        trace!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id}  try_count={try_count} resource_id={resource_id}  t={}", tt.t_ref());
+                        debug!("load_motif_slices:  motif_id={motif_id} resource_id={resource_id} try_count={try_count} resource_id={resource_id}  tt.size={:?}", tt.size());
+                        trace!("load_motif_slices:  motif_id={motif_id} resource_id={resource_id}  try_count={try_count} resource_id={resource_id}  t={}", tt.t_ref());
                         if tt.size() == &[0] {
-                            warn!("MotifLoader::run: motif_id={motif_id} resource_id={resource_id}  got empty motif");
+                            warn!("load_motif_slices: motif_id={motif_id} resource_id={resource_id}  got empty motif in {descr}");
                         } else {
                             tmp_cache.insert(tt);
-                            debug!("MotifLoader::run: motif_id={motif_id} resource_id={resource_id} added to tmp_cache");
+                            debug!("load_motif_slices: motif_id={motif_id} resource_id={resource_id} added to tmp_cache");
                         }
 
                         Ok(())
@@ -396,7 +408,7 @@ where
                             break
                         }
                         Err(e) => {
-                            warn!("MotifLoader::run: motif_id={motif_id} error while loading raw tensor: {e:?}");
+                            warn!("load_motif_slices: motif_id={motif_id} error while loading raw tensor: {e:?}");
 
                             if try_count < 1 {
                                 let acquired_permits = ctx_for_data.acquired_permits();
@@ -406,12 +418,12 @@ where
                                         .await?;
                                     ctx_for_data.add_permit(result); //permits can be dropped only from OOM handler or when context is dropped
                                 }
-                                debug!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id}  try_count={try_count} got {e:?}, acquired MAX_PERMITS, purging gpu({device_idx})");
+                                debug!("load_motif_slices:  motif_id={motif_id} resource_id={resource_id}  try_count={try_count} got {e:?}, acquired MAX_PERMITS, purging gpu({device_idx})");
                                 tmp_cache.purge_gpu(device_idx).await?;
 
                                 ctx_for_data.drop_permits(DropIf::Always);
 
-                                debug!("MotifLoader::run:  motif_id={motif_id} resource_id={resource_id} purge gpu done");
+                                debug!("load_motif_slices:  motif_id={motif_id} resource_id={resource_id} purge gpu done");
 
                                 try_count += 1;
                             } else {
@@ -423,11 +435,11 @@ where
             }
 
         } else {
-            warn!("Empty selector for resource_id={resource_id}  got empty motif for motif_id={motif_id}");
+            warn!("Empty selector for resource_id={resource_id}  got empty motif for motif_id={motif_id}  in {descr}");
         }
     }
 
-    debug!("MotifLoader::run: motif_id={motif_id} taking tmp_cache");
+    debug!("load_motif_slices: motif_id={motif_id} taking tmp_cache");
 
     let tensors: Vec<Tensor> = tmp_cache
         .take_all(device_idx)
@@ -436,7 +448,7 @@ where
         .map(|tt| tt.t())
         .collect();
 
-    debug!("MotifLoader::run: loaded {} tensors for motif_id={motif_id}", tensors.len());
+    debug!("load_motif_slices: loaded {} tensors for motif_id={motif_id}", tensors.len());
 
     assert!(!tensors.is_empty(), "no slice tensors loaded for motif_id={motif_id} ");
 
@@ -445,7 +457,7 @@ where
         Tensor::f_cat(tensors.as_slice(), 0)?,
     )?;
 
-    debug!("MotifLoader::run: motif of size {:?} is built for motif_id={motif_id} device={:?}", motif.size(), motif.t.device());
+    debug!("load_motif_slices: motif of size {:?} is built for motif_id={motif_id} device={:?}", motif.size(), motif.t.device());
 
     Ok((window, motif))
 }
@@ -579,13 +591,14 @@ mod tests {
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::cross_dims::MotifSlices;
     use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::ws::mock_ws_simp;
     use thoosa_motifs::distance::average_euclidean_distance;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_motifs() -> Result<(), ThoError> {
         set_max_level(Trace);
         GlobalCtx::init_devices(2);
-
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
         let run_id = 1;
 
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
@@ -607,7 +620,6 @@ mod tests {
 
         let motif_loader = Arc::new(MotifLoader::new(
             Arc::new(RwLock::new(store)),
-
             Arc::new(
                 mock_tensor_loader::build()
                     .with_out_id()
@@ -616,7 +628,8 @@ mod tests {
                         (resource_b, lin_t(1000).view((1,-1)))
                     ])
                     .finish(),
-            )
+            ),
+            &ws
         ));
 
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
@@ -649,7 +662,7 @@ mod tests {
     async fn test_load_random_slices() -> Result<(), ThoError> {
         set_max_level(Trace);
         GlobalCtx::init_devices(2);
-
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
         let run_id = 1;
         let motif_id = 10u32;
         let motif_width = 100;
@@ -674,7 +687,6 @@ mod tests {
 
         let random_slices_loader = Arc::new(RandomSlicesLoader::new(
             Arc::new(RwLock::new(store)),
-
             Arc::new(
                 mock_tensor_loader::build()
                     .with_out_id()
@@ -683,7 +695,8 @@ mod tests {
                         (resource_b, lin_t(1000).view((1,-1)))
                     ])
                     .finish(),
-            )
+            ),
+            &ws
         ));
 
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));

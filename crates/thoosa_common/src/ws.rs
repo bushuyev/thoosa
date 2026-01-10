@@ -245,7 +245,7 @@ impl Workspace for FsWorkspace {
 
     fn load_label_nets(
         &self,
-        train_label_nodes_run_ids: Option<&[RunId]>,
+        train_label_nets_run_ids: Option<&[RunId]>,
         device: &Device,
     ) -> Result<
         HashMap<
@@ -260,9 +260,9 @@ impl Workspace for FsWorkspace {
     > {
         let label_models_paths = self.label_models()?;
 
-        let train_label_nodes_run_ids_hash = train_label_nodes_run_ids.map(|v| v.into_iter().collect::<HashSet<_>>());
+        let train_label_nodes_run_ids_hash = train_label_nets_run_ids.map(|v| v.into_iter().collect::<HashSet<_>>());
 
-        debug!("load_all_label_models_ws: label_models_paths={label_models_paths:?} train_label_nodes_run_ids={train_label_nodes_run_ids:?} train_label_nodes_run_ids_hash={train_label_nodes_run_ids_hash:?}");
+        debug!("load_all_label_models_ws: label_models_paths={label_models_paths:?} train_label_nodes_run_ids={train_label_nets_run_ids:?} train_label_nodes_run_ids_hash={train_label_nodes_run_ids_hash:?}");
 
         label_models_paths
             .into_iter()
