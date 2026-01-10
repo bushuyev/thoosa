@@ -19,6 +19,7 @@ use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{CachableIdTr, WithId};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::ws::Workspace;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 
@@ -37,26 +38,34 @@ where
     // filters:Vec<> TODO
     band_pass_tensor: Option<ThoTensor<BandPassDims, SynKey>>,
     _ctx: PhantomData<C>,
+    num_channels:i64,
+    sample_rate:f64
 }
 
 impl<C> FreqFilter<C>
 where
     C: RunCtx + 'static,
 {
-    pub fn new(filter_config: &InputFilter) -> Result<Self, ThoError> {
+    pub fn new(filter_config: &InputFilter, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Self, ThoError> {
+        let (num_channels, sample_rate)  = {
+            let guard = ws.read();
+            (guard.channels() as i64, guard.sample_rate() as f64)
+        };
+
         let band_pass_tensor = match filter_config {
             InputFilter::Conv1(_) => {
                 None//TODO
             }
             InputFilter::BandPassFilter(band_pass_config) => {
                 let high_hz = band_pass_config.low_hz + band_pass_config.band_hz;
+
                 let kernel = band_pass_filter(
                     band_pass_config.low_hz,
                     high_hz,
                     band_pass_config.kernel_size,
-                    200., //TODO take from ws
+                    sample_rate, //TODO take from ws
                     1e-6
-                ).repeat([20, 1, 1]).to_device(Cuda(0));
+                ).repeat([num_channels, 1, 1]).to_device(Cuda(0));
 
                 Some(ThoTensor::new(
                     SynKey::new([
@@ -71,6 +80,8 @@ where
         Ok(Self {
             band_pass_tensor,
             _ctx: PhantomData,
+            num_channels,
+            sample_rate
         })
     }
 }
@@ -127,26 +138,26 @@ where
         let filtered = input
             .with_data_ref(
                 device_idx,
-               &mut ctx_for_data, None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+               &mut ctx_for_data, None, |input_tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
 
-               let t = notch_band_rfft(tensor.t_ref(), 200., 58., 62.)?;//TODO params
+               let noise_filtered_t = notch_band_rfft(input_tensor.t_ref(), self.sample_rate, 58., 62.)?;//TODO params - noise from electricity 60Hz
 
                if let Some(band_filter) = self.band_pass_tensor.as_ref() {
 
                    let t =  band_filter.run_inner(|band_filter_inner| {
-                       let input = t.unsqueeze(0);
+                       let input = noise_filtered_t.unsqueeze(0);
 
 
-                       let output = input.conv1d(band_filter_inner, None::<Tensor>, 1, 0, 1, 20).view((20, -1));//TODO channels from WS
+                       let output = input.conv1d(band_filter_inner, None::<Tensor>, 1, 0, 1, self.num_channels).view((self.num_channels, -1));//TODO channels from WS
 
                        debug!("FreqFilter::run: band_filter.size={:?} input.size={:?} output.size={:?}", band_filter_inner.size(), input.size(), output.size());
                        Ok(output)
                    })?;
 
-                   Ok(ThoTensor::new(self.out_id(tensor.id()), t)?)
+                   Ok(ThoTensor::new(self.out_id(input_tensor.id()), t)?)
 
                } else {
-                   Ok(ThoTensor::new(self.out_id(tensor.id()), t)?)
+                   Ok(ThoTensor::new(self.out_id(input_tensor.id()), noise_filtered_t)?)
                }
            })
             .await?;
@@ -169,6 +180,7 @@ mod tests {
     use thoosa_common::transforms::filters::BandPassFilterParams;
     use thoosa_shared::ThoError;
     use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use crate::tasks::run_ctx_2::RunCtx2;
@@ -185,8 +197,9 @@ mod tests {
             stride: 1,
             padding: 0,
         });
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
 
-        let bf = FreqFilter::new(&filter_config)?;
+        let bf = FreqFilter::new(&filter_config, &ws)?;
 
         let mut ctx = RunCtx2::new(1, "test");
 

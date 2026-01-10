@@ -304,7 +304,7 @@ where
             assert!(max_motif_slices > 0, "no motif slices for {data:?}");
 
 
-            let mut channels_motif_ids = vec![Vec::<DataId>::new(); num_channels as usize];
+            let mut channels_motif_ids = vec![Vec::<DataId>::new(); num_channels as usize];//contains channels x motif ids * number of slices in the motif
             let mut channels_motifs_tensors_vec = vec![];
             let mut channels_motif_avg_dists_tensors_vec = vec![];
             for c in 0..num_channels {

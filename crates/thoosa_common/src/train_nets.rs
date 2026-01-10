@@ -687,6 +687,8 @@ pub enum LabelNetTypeParams {
     MaxPadding(MaxPaddingNetParams),
 
     FixedNumSlices(FixedNumSlicesNetParams),
+
+    AnyLenNetParams(AnyLenNetParams)
 }
 
 impl Default for LabelNetTypeParams {
@@ -706,6 +708,16 @@ impl MaxPaddingNetParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FixedNumSlicesNetParams {}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnyLenNetParams {}
+
+impl AnyLenNetParams {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
 
 impl FixedNumSlicesNetParams {
     pub fn new() -> Self {
@@ -744,6 +756,9 @@ impl LabelNetParams {
             }
             LabelNetTypeParams::FixedNumSlices(fixed_num_slices_params) => {
                 LabelNetParams::label_net_fixed_num_slices(&self, fixed_num_slices_params)
+            }
+            LabelNetTypeParams::AnyLenNetParams(_) => {
+                any_len_label_node(&self)
             }
         }
     }
@@ -1661,7 +1676,7 @@ impl WithId for LoadMotifNetOutput {
 #[derive(Args, Debug, Clone)]
 pub struct TrainFinalNetArgs {
     #[arg(long)]
-    pub train_labels_run_ids: Vec<RunId>,
+    pub select_motifs_run_id: Vec<RunId>,
 
     #[arg(long)]
     train_resource_group: String,
@@ -1880,7 +1895,7 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{dummy_label_net, motif_node, opt_train, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MaxPaddingNetParams, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
+    use crate::train_nets::{any_len_label_node, dummy_label_net, motif_node, opt_train, AnyLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MaxPaddingNetParams, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore,
     };
@@ -2143,18 +2158,78 @@ mod train_tests {
             .write()
             .save_label_model(1, &"test_label", &vs_0, &params)?;
 
-        debug!(
-            "model_path={model_path:?} vs_0.variables().len()={}",
-            vs_0.variables().len()
-        );
+        debug!("model_path={model_path:?} vs_0.variables().len()={}",vs_0.variables().len());
 
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
-                                                                                           thoosa_shared::replace_extension(&model_path, "safetensors")
-                                                                                               .1
-                                                                                               .into(),
-                                                                                           Cpu,
+           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
+           thoosa_shared::replace_extension(&model_path, "safetensors")
+               .1
+               .into(),
+           Cpu,
+        )?;
+
+        assert!(vs_0.variables().len() > 0);
+        assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
+
+        Ok(())
+    }
+
+
+    #[tokio::test]
+    async fn test_save_load_any_len_label_node() -> Result<(), ThoError> {
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        debug!("test_dir={test_dir:?}");
+        let channels = 3;
+        let max_motif_nodes = 19;
+        let slices_len = 23;
+
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+            test_dir,
+            channels as u32,
+            1000,
+            32000,
+        )?));
+        let params = LabelNetParams::new(
+            channels,
+            max_motif_nodes,
+            3,
+            slices_len,
+            LabelNetTypeParams::AnyLenNetParams(AnyLenNetParams::new()),
+        );
+
+        let mut vs_0 = VarStore::new(Cpu);
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> =
+            any_len_label_node(&params).build_tch_module(&vs_0.root())?;
+        vs_0.freeze();
+
+        let batch = 11i64;
+        let _ = net.tho_forward(
+            &Tensor::rand(
+                [
+                    batch,
+                    channels as i64,
+                    max_motif_nodes as i64,
+                ],
+                FLOAT_CPU,
+            )
+                .into(),
+            false,
+        );
+
+        let model_path = ws
+            .write()
+            .save_label_model(1, &"test_label", &vs_0, &params)?;
+
+        debug!("model_path={model_path:?} vs_0.variables().len()={}",vs_0.variables().len());
+
+        let params_for_builder = params.clone();
+        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
+           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
+           thoosa_shared::replace_extension(&model_path, "safetensors")
+               .1
+               .into(),
+           Cpu,
         )?;
 
         assert!(vs_0.variables().len() > 0);

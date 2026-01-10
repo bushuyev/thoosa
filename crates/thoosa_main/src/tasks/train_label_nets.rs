@@ -28,7 +28,7 @@ use thoosa_common::batches::{AsyncDataBatch};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train_2, CommonTrainingRunConfig, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train_2, AnyLenNetParams, CommonTrainingRunConfig, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -88,25 +88,30 @@ where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
     R:RunCtx + MotifsCtx + Adjustable + 'static
 {
-    let apply_motif_nets = Arc::new(ApplyMotifNets::new(ws, store, select_motifs_run_ids.clone(), stage_ctx,
-                                                        #[cfg(test)]
-                                                        None
+    let apply_motif_nets = Arc::new(ApplyMotifNets::new(
+        ws,
+        store,
+        select_motifs_run_ids.clone(),
+        stage_ctx,
+        #[cfg(test)]
+        None
     ).await?);
+
+    let num_nets = apply_motif_nets.num_nets() as u32;
 
     let motif_loader = Arc::new(ABStage::new(
         SynKey::new([
             mono_key!("Loader_with_motifs", "stage"),
             mono_key!(format!("{select_motifs_run_ids:?}"), "select_motifs_run_ids"),
         ]),
-        Arc::clone(&loader),
-        Arc::clone(&apply_motif_nets)
+        loader,
+        apply_motif_nets
     ));
-
 
     TrainLabelNets::new(
         select_motifs_run_ids,
         motif_loader,
-        apply_motif_nets.num_nets() as u32,
+        num_nets,
         run_configs,
         ws,
         store,
@@ -354,7 +359,7 @@ where
                                     num_layers, slices_len
                                 }) => {
 
-                                    let net_params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
+                                    let net_params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::AnyLenNetParams(AnyLenNetParams::new()));
 
                                     Ok((any_len_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }

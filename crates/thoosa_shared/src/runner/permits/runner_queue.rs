@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use dashmap::DashMap;
-use log::{error, info, trace, debug};
+use log::{error, info, trace, debug, warn};
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{Cause, ThoError};
 use tokio::sync::{Notify, Semaphore, TryAcquireError, mpsc, oneshot};
@@ -97,7 +97,8 @@ impl Arbiter {
         })?;
 
         recv.await.map_err(|e| {
-            debug!("Arbiter::send_acquire_rq: e={e:?}, requester_id={requester_id:?}");
+            warn!("Arbiter::send_acquire_rq: e={e:?}, requester_id={requester_id:?}");
+
             Cause::External {
                 type_name: std::any::type_name::<oneshot::error::RecvError>(),
                 source: Arc::new(e),
@@ -144,7 +145,7 @@ impl Arbiter {
 
             loop {
                 if shutdown.load(Ordering::Acquire) {
-                    debug!("Arbiter::spawn: shutting down device_idx={device_idx}");
+                    info!("Arbiter::spawn: shutting down device_idx={device_idx}");
 
                     while let Some(Req { reply, .. }) = q.pop_front() {
                         let _ =
@@ -218,7 +219,7 @@ impl Arbiter {
                                         requester_id,
                                     } = q.pop_front().unwrap();
 
-                                    *granted_counts.entry(requester_id.clone()).or_insert(0) +=inner.num_permits();
+                                    *granted_counts.entry(requester_id.clone()).or_insert(0) += inner.num_permits();
 
                                     granted_counts_len.store(granted_counts.len(), Ordering::Release);
 
@@ -248,17 +249,16 @@ impl Arbiter {
                                         if *c >= SUPERTASK_FAIL_THRESHOLD {
                                             super_id = Some(requester_id);
                                         }
-                                    break
+                                    // break
                                     // } else {
                                     //     break;
                                     // }
                                 }
                                 Err(e) => {
-                                    debug!("Arbiter::spawn: device_idx={device_idx} got e={e:?}");
+                                    warn!("Arbiter::spawn: device_idx={device_idx} got e={e:?}");
 
                                     let Req { reply, .. } = q.pop_front().unwrap();
-                                    let _ = reply
-                                        .send(
+                                    let _ = reply.send(
                                             Err(Cause::SomethingElse("semaphore closed".into()).into()),
                                         );
                                 }
@@ -410,7 +410,24 @@ mod tests {
 
     use log::debug;
     use std::sync::Arc;
+    use crate::mono_key;
     use crate::runner::permits::MAX_PERMITS;
+
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    async fn test_one_by_one() -> Result<(), ThoError> {
+        let arb = Arc::new(Arbiter::new(100, 0));
+        let mut aaa_permits = vec![];
+        aaa_permits.push(arb.send_acquire_rq(10, Arc::new(mono_key!(0, "aaa")) as Arc<dyn CachableIdTr>).await?);
+
+        debug!("aaa_permits={aaa_permits:?}");
+        assert_eq!(aaa_permits.len(), 1);
+
+        assert_eq!(aaa_permits[0].num_permits(), 10);
+        
+        Ok(())
+    }
+
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_fifo_arbiter() -> Result<(), ()> {

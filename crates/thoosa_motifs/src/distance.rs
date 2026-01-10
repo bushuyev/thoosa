@@ -346,18 +346,11 @@ fn mean_mask(
 
     trace!("mean_mask: full. mean_t=\n{mean_t}");
 
-    debug!(
-        "mean_mask: samples.size={:?} mean_t.size={:?}",
-        distances.size(),
-        mean_t.size()
-    );
+    debug!("mean_mask: samples.size={:?} mean_t.size={:?}",distances.size(),mean_t.size());
 
     debug!("mean_mask: total_samples={total_samples:?} counts={counts_t:?}");
-    debug!(
-        "mean_mask: total_samples.device={:?} counts.device={:?}",
-        total_samples.lock().device(),
-        counts_t.device()
-    );
+    debug!("mean_mask: total_samples.device={:?} counts.device={:?}",total_samples.lock().device(),counts_t.device());
+
     let (mean_t, counts_t) = (
         mean_t.f_to_device(distances.device())?,
         counts_t.f_to_device(distances.device())?,
@@ -402,11 +395,7 @@ fn mean_mask(
 
     let tensor_2 =  tensor_1.f_broadcast_to(distances_size)?;
     trace!("new_total_means: tensor_2=\n{tensor_2}");
-    debug!(
-        "new_total_means: distances.dev={:?} tensor_1.device={:?}",
-        distances.device(),
-        tensor_1.device()
-    );
+    debug!("new_total_means: distances.dev={:?} tensor_1.device={:?}",distances.device(),tensor_1.device());
 
     let le = distances
         .f_le_tensor(&tensor_2)

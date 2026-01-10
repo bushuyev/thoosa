@@ -1573,6 +1573,8 @@ where
         let slices_0: Vec<_> = iter_0.collect();
         let slices_1: Vec<_> = iter_1.collect();
 
+        debug!("DistsTracker::consume: slices_0={slices_0:?} slices_1={slices_1:?}");
+
         let clc_result = input.clc_result();
         let mask_size = clc_result.mask_size_hint()?;
 
@@ -1602,6 +1604,8 @@ where
                     let slice_1 = slices_1[i_1];
 
                     if slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1 {
+                        debug!("DistsTracker::consume, track: slice_0={slice_0:?} slice_1={slice_1:?}");
+
                         channel_trackers[channel].write().track(slice_0, slice_1, dist as f32);
                     }
                 });
