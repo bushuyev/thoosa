@@ -2,7 +2,8 @@ use crate::tho_tensor::{ThoTensor};
 use async_trait::async_trait;
 use std::fmt::Debug;
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Metrics, MonoMetrics, Named, SimpleId};
+use thoosa_shared::traits::{Metrics, MonoMetrics, SimpleId};
+use thoosa_named_derive::Named;
 
 pub trait Dims: Send + Sync + Clone + Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default + TryFrom<Vec<i64>>;
@@ -105,13 +106,11 @@ pub type TCDF = ThoTensor<ChannelsDataFiltered, SimpleId>;
 pub type TCSD = ThoTensor<ChannelsSlicesData, SimpleId>;
 pub type ThoBatch<D> = ThoTensor<Batch<D>, SimpleId>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Named)]
+#[name = "n/a"]
 pub struct AnyDims {}
 impl Dims for AnyDims {
     type Metrics = AnyMetrics;
-}
-impl Named for AnyDims {
-
 }
 
 pub struct AnySub {}

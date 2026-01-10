@@ -110,9 +110,9 @@ where
         for <'i> <R::In<'i> as Data>::Metrics: PartialOrd,
         <R as Stage>::In<'z>: Select<S, Output=<R as Stage>::In<'z>>
     {
-        let (device_idx, ctx_name) = {
-            (ctx.device_idx(), ctx.name())
-        };
+
+        let device_idx = ctx.device_idx();
+
 
         let size = input._size().clone();
         let mut min_split_len = input._size().clone();
@@ -347,9 +347,10 @@ pub(crate) mod fixtures {
     use log::debug;
     use parking_lot::RwLock;
     use tokio::sync::Semaphore;
+    use thoosa_named_derive::Named;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::traits::{Data, Named, Select, SimpleId, WithId};
+    use thoosa_shared::traits::{Data, Select, SimpleId, WithId};
     use thoosa_shared::{ThoError};
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
     use crate::comp_id::{MonoKey, SynKey};
@@ -362,16 +363,11 @@ pub(crate) mod fixtures {
     use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
     use crate::traits::Adjustable;
 
-    #[derive(Debug, Clone, Hash, Eq, PartialEq)]
+    #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
+    #[name = "MulTaskOutputId"]
     pub(crate) struct DMulTaskOutputId(pub(crate) &'static str);
 
-    impl Named for DMulTaskOutputId {
-        fn name(&self) -> &'static str {
-            "MulTaskOutputId"
-        }
-    }
-
-    #[derive(Debug, Delegate)]
+    #[derive(Debug, Delegate, Named)]
     #[delegate(PermitsCtx, target = "perms_ctx")]
     pub(crate) struct DummyRunCtx {
         id:MonoKey,
@@ -383,7 +379,7 @@ pub(crate) mod fixtures {
         perms_ctx: DummyPermsCtx,
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Named)]
     struct DummyPermsCtx {//TODO it's same as TorchPermsCtx, replace
         name: &'static str,
         permits: Vec<RunnerPerm>,
@@ -395,12 +391,6 @@ pub(crate) mod fixtures {
                 name,
                 permits: Vec::new(),
             }
-        }
-    }
-
-    impl Named for DummyPermsCtx {
-        fn name(&self) -> &'static str {
-            self.name
         }
     }
 
@@ -508,13 +498,7 @@ pub(crate) mod fixtures {
         }
     }
 
-    impl Named for DummyRunCtx {
-        fn name(&self) -> &'static str {
-            self.name
-        }
-    }
-
-    #[derive(Debug, cached_derive::Cached)]
+    #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "LoadedTensorId"]
     pub(crate) struct DummyLoader {
         pub(crate) run_count: AtomicUsize,
@@ -649,14 +633,8 @@ pub(crate) mod fixtures {
         }
     }
 
-    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
     pub(crate) struct DLoaderInputId(pub(crate) &'static str);
-
-    impl Named for DLoaderInputId {
-        fn name(&self) -> &'static str {
-            "DLoaderInputId"
-        }
-    }
 
     #[derive(Debug, Clone)]
     pub(crate) struct DLoaderInput {
@@ -754,6 +732,7 @@ mod tests {
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use log::{debug, error};
+    use thoosa_named_derive::Named;
     use mockall_double::double;
     use parking_lot::RwLock;
     use thoosa_shared::CopyToDevice;
@@ -784,7 +763,7 @@ mod tests {
             .init();
     });
 
-    #[derive(Debug)]
+    #[derive(Debug, Named)]
     pub(crate) struct DummyLoader {
         pub(crate) run_count: AtomicUsize,
         len: usize,
@@ -941,7 +920,7 @@ mod tests {
                 FailUntil::DumpedToCpu => {
                     let device_idx = ctx.device_idx();
                     let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx);
-                    debug!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}",ctx.name(),device_idx);
+                    debug!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}","ctx.name()",device_idx);
 
                     if !is_all_on_cpu {
                         return Err(Cause::OutOfMemory.into());
@@ -950,7 +929,7 @@ mod tests {
                 FailUntil::Never => {}
             }
 
-            debug!("MulTask::do_run: running ctx.name={:?} device_idx={} ",ctx.name(),ctx.device_idx());
+            debug!("MulTask::do_run: running ctx.name={:?} device_idx={} ","ctx.name()",ctx.device_idx());
 
             Ok(DMulTaskOutput {
                 id: self.out_id(WithId::id(input)),
@@ -1056,7 +1035,7 @@ mod tests {
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct DLoadAndMulTaskId(&'static str);
 
-    #[derive(Debug, Cached)]
+    #[derive(Debug, Cached, Named)]
     #[cache_name = "MulTaskOutputId"]
     #[allow(dead_code)]
     struct DLoadAndMulTask {

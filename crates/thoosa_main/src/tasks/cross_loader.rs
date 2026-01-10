@@ -501,7 +501,7 @@ where
 
                         debug!("CrossLoader::run: input={input:?}");
 
-                        let ctx_name = ctx_for_clc.name();
+                        let ctx_name = "ctx_for_clc.name()";
                         let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
                         let input_len = input.size();
                         let out_key = Arc::new(batch_clc.out_id(input.id())) as Arc<dyn CachableIdTr>;

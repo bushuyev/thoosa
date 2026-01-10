@@ -202,13 +202,14 @@ mod tests {
     use parking_lot::RwLock;
     use std::sync::Arc;
     use thoosa_shared::Cause;
-    use thoosa_shared::traits::Named;
+    use thoosa_named_derive::Named;
     use crate::comp_id::{MonoKey, SynKey};
     use crate::mono_key;
     use crate::runner::common::PermitsCtx;
     use crate::traits::WithId;
 
-    #[derive(Debug)]
+    #[derive(Debug, Named)]
+    #[name = "n/a"]
     struct TestRunCtx {
         device_idx: usize,
         acquired: NumPermits,
@@ -272,8 +273,6 @@ mod tests {
             Self::new(self.device_idx, 0)
         }
     }
-
-    impl Named for TestRunCtx {}
 
     fn ctx(name: &'static str, want: NumPermits) -> PermitsAdjustContextImpl {
         let mut c = PermitsAdjustContextImpl::new();

@@ -3,6 +3,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use cached_derive::Cached;
+use thoosa_named_derive::Named;
 use futures_util::{StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::RwLock;
@@ -30,7 +31,7 @@ use crate::tasks::run_ctx_2::MotifsCtx;
 
 /// Applies label nets and returns per-model probabilities. Output is a flat list of label-model
 /// scores (Model1ForLabelA, Model2ForLabelA, ...), not a per-label aggregate.
-#[derive(Debug, Cached)]
+#[derive(Debug, Cached, Named)]
 pub struct ApplyLabelNets<C>
 where
     C: RunCtx + MotifsCtx + Adjustable + 'static,
@@ -49,14 +50,13 @@ where
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
         select_motifs_run_ids: Vec<RunId>,
-        stage_ctx: Arc<RwLock<R>>,
+        stage_ctx: R,
     ) -> Result<Self, ThoError>
     where
         R: RunCtx + MotifsCtx + Adjustable + 'static,
     {
         let (device_idx, cache_area) = {
-            let guard = stage_ctx.read();
-            (guard.device_idx(), guard.cache_area())
+            (stage_ctx.device_idx(), stage_ctx.cache_area())
         };
 
         let apply_motif_nets = Arc::new({
@@ -66,7 +66,7 @@ where
                     ws,
                     store,
                     select_motifs_run_ids.clone(),
-                    Arc::clone(&stage_ctx),
+                    stage_ctx,
                     None,
                 )
                 .await?
@@ -77,7 +77,7 @@ where
                     ws,
                     store,
                     select_motifs_run_ids.clone(),
-                    Arc::clone(&stage_ctx),
+                    stage_ctx,
                 )
                 .await?
             }
@@ -458,7 +458,7 @@ mod tests {
             &ws,
             &store,
             vec![select_motifs_run_id],
-            Arc::new(RwLock::new(mock_run_ctx::default(0))),
+            mock_run_ctx::default(0),
         ).await?);
 
         let input = ThoTensor::<ChannelsData2, SynKey>::new(
@@ -466,11 +466,11 @@ mod tests {
             Tensor::f_zeros(&[1, motif_width as i64], (Kind::Float, device))?,
         )?;
 
-        let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
-        let run_ctx_branch = run_ctx.write().branch("apply_label_nets_run", false);
+        let mut run_ctx = mock_run_ctx::default(0);
+        let run_ctx_branch = run_ctx.branch("apply_label_nets_run", false);
         let out = apply_label_nets.run(Arc::new(DevicesWrap::wrap(input, 0)), run_ctx_branch).await?;
 
-        let ctx_for_data = run_ctx.write().branch("apply_label_nets_assert", false);
+        let ctx_for_data = run_ctx.branch("apply_label_nets_assert", false);
         with_data!(ctx_for_data, out; |out:&ThoTensor<LabelProbability, SynKey>|{
             assert_eq!(out.t_ref().size(), vec![3, 1]);
             let vals = vec_f32_from(out.t_ref());

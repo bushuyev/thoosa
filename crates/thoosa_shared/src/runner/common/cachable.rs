@@ -18,14 +18,14 @@ use crate::CopyToDevice;
 use crate::Cause;
 use tokio::sync::{Notify, RwLockReadGuard};
 use crate::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
-use crate::traits::{Data, Select};
+use crate::traits::{Data, Named, Select};
 use crate::runner::common::{OutId, PermitsCtx, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage};
 use crate::ThoError;
 use crate::traits::WithId;
 
 #[async_trait]
-pub trait Cached: AsyncStage
+pub trait Cached: AsyncStage + Named
 where
     for <'i> Self::In<'i>: Data + WithId + Send + Sync,
     <Self as Stage>::Out: Data + WithId + Send + Sync + 'static,

@@ -5,6 +5,7 @@ use thoosa_shared::runner::common::{DropIf, PermitsCtx};
 use thoosa_shared::runner::permits::{NumPermits, RunnerPerm, MAX_PERMITS};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::Named;
+use thoosa_named_derive::Named;
 use crate::dims::Dims;
 use crate::tho_tensor::ThoTensor;
 
@@ -35,7 +36,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorView<'a, D, Id> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Named)]
 pub struct TorchPermsCtx {//TODO rename
     name: &'static str,
     pub permits: Vec<RunnerPerm>,//TODO pub
@@ -47,12 +48,6 @@ impl TorchPermsCtx {
             name,
             permits: Vec::new(),
         }
-    }
-}
-
-impl Named for TorchPermsCtx {
-    fn name(&self) -> &'static str {
-        self.name
     }
 }
 
@@ -115,6 +110,7 @@ mod tests {
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use crate::torch_runner::TorchPermsCtx;
+    use thoosa_named_derive::Named;
     use thoosa_shared::runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
     use thoosa_shared::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
     use thoosa_shared::runner::test::FailUntil::MinPermits;
@@ -132,7 +128,7 @@ mod tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-    #[derive(Debug, Delegate)]
+    #[derive(Debug, Delegate, Named)]
     #[delegate(PermitsCtx, target = "perms")]
     pub struct TestTorchRunCtx {
         id: SynKey,
@@ -229,21 +225,9 @@ mod tests {
         }
     }
 
-    impl Named for TestTorchRunCtx {
-        fn name(&self) -> &'static str {
-            "TestTorchRunCtx"
-        }
-    }
-
     //////////////////LOADER
-    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
     pub struct LoaderInputId(&'static str);
-
-    impl Named for LoaderInputId {
-        fn name(&self) -> &'static str {
-            "LoaderInputId"
-        }
-    }
 
     #[derive(Debug, Clone)]
     pub struct LoaderInput {
@@ -327,7 +311,7 @@ mod tests {
     }
 
 
-    #[derive(Debug, cached_derive::Cached)]
+    #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "LoadedTensorId"]
     struct TestTensorLoader {
         size: MonoMetrics<1, 2>,
@@ -406,7 +390,7 @@ mod tests {
         type Metrics = MonoMetrics<1, 2>;
     }
 
-    #[derive(Debug, cached_derive::Cached)]
+    #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "MulTaskOutputId"]
     struct ClcTask {
         id: SynKey,
@@ -561,7 +545,7 @@ mod tests {
                             GlobalCtx::global().is_all_on_cpu(device_idx);
                         debug!(
                             "MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}",
-                            ctx.name(),
+                            "ctx.name()",
                             device_idx
                         );
 
@@ -624,7 +608,7 @@ mod tests {
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct LoadAndClcTaskId(&'static str);
 
-    #[derive(Debug)]
+    #[derive(Debug, Named)]
     struct LoadAndClcTask {
         #[allow(dead_code)]
         id: LoadAndClcTaskId,
@@ -660,7 +644,7 @@ mod tests {
             let loaded_id_name = "LoadedTensorId"; //loaded.id().id_name().clone();
             let output_id_name = "MulTaskOutputId"; //loaded.id().id_name().clone();
 
-            debug!("LoadAndMulTask::run: loaded_id_name={loaded_id_name:?} output_id.name()={:?}",output_id.name());
+            debug!("LoadAndMulTask::run: loaded_id_name={loaded_id_name:?} output_id={:?}" ,output_id);
 
             let set_loaded = [&loaded_id as &dyn CachableIdTr]
                 .into_iter()

@@ -1,6 +1,6 @@
 use crate::ThoError;
 use crate::applicables_runner::Input;
-use crate::traits::{Named, WithId};
+use crate::traits::WithId;
 use log::trace;
 use mockall::automock;
 use parking_lot::RwLock;
@@ -9,6 +9,7 @@ use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_named_derive::Named;
 
 #[automock]
 pub trait ResourceStore {
@@ -48,7 +49,8 @@ pub trait ResourceStore {
 
 }
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, DummyData, Named)]
+#[name = "n/a"]
 #[dummy_data(clone)]
 pub struct Resource {
     id: ResourceId,
@@ -92,8 +94,6 @@ impl Resource {
     // }
 }
 
-
-impl Named for Resource {}
 
 impl WithId for Resource {
     type ID = Resource;

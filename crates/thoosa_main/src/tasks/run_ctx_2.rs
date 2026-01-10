@@ -10,10 +10,10 @@ use tracing::error;
 use thoosa_shared::runner::common::{ambassador_impl_PermitsCtx, DropIf, MockRunCtx, PermitsCtx, RunCtx};
 use thoosa_shared::runner::common::cachable::Cached;
 use thoosa_shared::traits::{Adjustable, WithId};
+use thoosa_named_derive::Named;
 use thoosa_shared::runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::Named;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_common::torch_runner::TorchPermsCtx;
 use thoosa_shared::runner::global_ctx::GlobalCtx;
@@ -21,7 +21,7 @@ use crate::tasks::stacked_moitfs_loader::{StackedMotifsLoader, StackedMotifsOutp
 use crate::tasks::motif_loader::MotifLoader;
 use crate::tasks::tensor_loader::RawTensorLoader;
 
-#[derive(Delegate)]
+#[derive(Delegate, Named)]
 #[delegate(PermitsCtx, target = "perms")]
 pub struct RunCtx2 {
     id: SynKey,
@@ -45,12 +45,6 @@ impl Debug for RunCtx2 {
 }
 
 impl Adjustable for RunCtx2 {}
-
-impl Named for RunCtx2 {
-    fn name(&self) -> &'static str {
-        "RunCtx2"
-    }
-}
 
 impl WithId for RunCtx2 {
     type ID = SynKey;

@@ -743,9 +743,7 @@ mod tests {
         LOSS_FN_CALLS.store(0, Ordering::SeqCst);
 
         // Avoid double-init panics if other tests already set the global context.
-        if std::panic::catch_unwind(|| GlobalCtx::global()).is_err() {
-            GlobalCtx::init_devices(2);
-        }
+        GlobalCtx::init_devices(2);
 
         let net_fn = |_rc: &DummyRunConfig, vs: &VarStore| {
             let net: Box<dyn ThoModule<Batch<DummyX>, Batch<DummyY>>> =

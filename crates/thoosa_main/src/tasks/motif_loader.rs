@@ -10,6 +10,7 @@ use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
 use tch::Tensor;
 use cached_derive::Cached;
+use thoosa_named_derive::Named;
 use thoosa_shared::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
@@ -96,7 +97,7 @@ impl WithId for MotifLoaderInput {
     }
 }
 
-#[derive(Debug, Cached)]
+#[derive(Debug, Cached, Named)]
 pub struct MotifLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
@@ -345,7 +346,7 @@ where
             .expect(&format!("no resource with id={resource_id}"));
         let resource_cache = Arc::new(DevicesWrap::wrap(resource, cache_area));
 
-        let ctx_for_loader = ctx.branch(format!("motif_loader_resource_{resource_id}"), false);
+        let ctx_for_loader = ctx.branch::<SynKey>(format!("motif_loader_resource_{resource_id}").into(), false);//into is needed because mock needs SynKey or &str
         let raw_tensor = Arc::clone(&configurable_loader)
             .run_cached(resource_cache, ctx_for_loader)
             .await?;
@@ -461,7 +462,8 @@ pub mod mock_motif_loader {
     use thoosa_shared::runner::common::{MockRunCtx, OutId, RunCtx};
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use thoosa_shared::ThoError;
-    use thoosa_shared::traits::{DataId, Named};
+    use thoosa_shared::traits::DataId;
+    use thoosa_named_derive::Named;
     use thoosa_shared::traits::WithId;
     use thoosa_common::tho_tensor::ThoTensor;
     use dashmap::DashMap;
@@ -474,7 +476,7 @@ pub mod mock_motif_loader {
     use crate::tasks::cross_dims::MotifSlices;
     use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
     mock! {
-        #[derive(Debug)]
+        #[derive(Debug, Named)]
         pub MotifLoader {}
 
 
@@ -502,6 +504,10 @@ pub mod mock_motif_loader {
                 ctx: <MockMotifLoader as Stage>::Ctx,
             ) -> Result<Arc<DevicesWrap<<MockMotifLoader as Stage>::Out>>, ThoError>;
         }
+    }
+
+    impl thoosa_shared::traits::Named for MockMotifLoader {
+        fn name() -> &'static str { "MockMotifLoader" }
     }
 
     pub struct MockMotifLoaderBuilder {
