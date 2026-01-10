@@ -129,12 +129,14 @@ where
         >    ) -> Self {
         let motif_loader = Arc::new(MotifLoader::new(
             Arc::clone(&store),
-            Arc::clone(&loader)
+            Arc::clone(&loader),
+            ws
         ));
 
         let random_slices_loader = Arc::new(RandomSlicesLoader::new(
             Arc::clone(&store),
-            Arc::clone(&loader)
+            Arc::clone(&loader),
+            ws
         ));
 
         Self {

@@ -419,10 +419,14 @@ where
         assert!(!input.resources_0.is_empty(), "CrossUnfoldClc::do_run: no input resources");
         let unfold_params = &self.unfold_params;
 
+        debug!("CrossUnfoldClc::do_run: input={input:?} unfold_params={unfold_params:?}");
         debug!("CrossUnfoldClc::do_run: input.tensors.len={} input.resources_0.len={} input.resources_1.len={}", input.tensors.len(), input.resources_0.len(), input.resources_1.len());
 
 
         let (batch_0_t, batch_0_sizes) =  unfold_and_cat(&input.tensors[0..input.resources_0.len()], &unfold_params)?;
+
+        debug!("CrossUnfoldClc::do_run: batch_0_sizes={batch_0_sizes:?}");
+
 
         //TODO if tensor is filtered because it's less than window
         // assert_eq!(batch_0_sizes.len(), input.resources_0.len());
@@ -440,6 +444,7 @@ where
         let (batch_1_t, batch_1_sizes) =  unfold_and_cat(&input.tensors[input.resources_0.len()..], &unfold_params)?;
 
         // assert_eq!(batch_1_sizes.len(), input.resources_1.len());
+        debug!("CrossUnfoldClc::do_run: batch_1_sizes={batch_1_sizes:?}");
 
         let resource_ids_sizes_1: Vec<_> = input
             .resources_1
@@ -468,15 +473,17 @@ where
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cross_batch_clc/unfold_and_cat"))]
 pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoError> {
+    debug!("cross_batch_clc::unfold_and_cat: input={input:?} unfold_params={unfold_params:?}");
+
     assert!(!input.is_empty(), "cross_batch_clc/unfold_and_cat: input is empty");
 
     let mut batch_0_sizes = vec![];
 
     let batch_0_tensors = input
         .iter()
+        //filter tensors smaller than motif window
         .filter(|t| t.size().dim_1() >= unfold_params.size) //TODO use metrics's size
         .map(|t| {
-
 
             let unfolded = t.t_ref().f_unfold(
                 unfold_params.dimension,
@@ -617,4 +624,5 @@ mod tests {
 
         Ok(())
     }
+
 }

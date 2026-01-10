@@ -57,14 +57,14 @@ fn main() {
         {
             Ok(_) => {
                 info!("All done in {} mls", t1.elapsed().as_millis());
+                std::process::exit(0);
             }
 
             Err(e) => {
                 error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
+                std::process::exit(1);
             }
         }
     });
 
-
-    // std::process::exit(0x0000); //for jupyter
 }
