@@ -47,7 +47,7 @@ pub trait RunCtx: PermitsCtx + WithId {//TODO remove PermitsCtx from RunCtx
         Self: Sized;
 
     fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
-        todo!()
+        //TODO use RunCtx2 in instead of dummy impls in tests
     }
 
 }
@@ -60,18 +60,19 @@ pub mod mock_run_ctx {
     use parking_lot::RwLock;
     use std::sync::Arc;
     use mockall::predicate::always;
+    use tracing::debug;
     use thoosa_shared::traits::{Adjustable, Named};
     use thoosa_shared::{mono_key, ThoError};
     use crate::comp_id::{MonoKey, SynKey};
     use crate::traits::WithId;
-
+    use crate::runner::oom_handler::MockRunCtxContext;
 
     mock! {
         #[derive(Debug)]
         pub RunCtx {}
 
         impl Named for RunCtx {
-            fn name(&self) -> &'static str {
+            fn name() -> &'static str {
                 "MockRunCtx"
             }
         }
@@ -99,6 +100,7 @@ pub mod mock_run_ctx {
 
     pub struct MockRunCtxBuilder {
         mock: MockRunCtx,
+        device_idx: Option<usize>
     }
 
     impl MockRunCtxBuilder {
@@ -108,8 +110,9 @@ pub mod mock_run_ctx {
             self
         }
 
-        pub fn with_device_idx(mut self, out: usize) -> Self {
-            self.mock.expect_device_idx().return_const(out);
+        pub fn with_device_idx(mut self, device_idx: usize) -> Self {
+            self.device_idx = Some(device_idx);
+            self.mock.expect_device_idx().return_const(device_idx);
             self
         }
 
@@ -148,10 +151,12 @@ pub mod mock_run_ctx {
 
         pub fn with_branch(mut self, depth: u8) -> Self {
             self.mock.expect_branch()
-                .with(always(), always())
-                .returning(move |_:&str, _with_new_cache_area:bool| {
+                // .with(always(), always())
+                .returning(move |name:SynKey, _with_new_cache_area:bool| {
+
                     let builder = build()
-                        .with_device_idx(1)
+                        .with_id(depth as u32)
+                        .with_device_idx(self.device_idx.unwrap_or(0))
                         .with_acquired_permits(100)
                         .with_add_permits()
                         .with_drop_permits(vec![DropIf::IfNotMax])
@@ -166,6 +171,28 @@ pub mod mock_run_ctx {
                     }
                 });
 
+            //TODO wrap into helper both SynKey and &str
+            self.mock.expect_branch()
+                // .with(always(), always())
+                .returning(move |name:&str, _with_new_cache_area:bool| {
+
+                    let builder = build()
+                        .with_id(depth as u32)
+                        .with_device_idx(self.device_idx.unwrap_or(0))
+                        .with_acquired_permits(100)
+                        .with_add_permits()
+                        .with_drop_permits(vec![DropIf::IfNotMax])
+                        .with_cache_area(0);
+
+                    if depth == 0 {
+                        builder.finish()
+                    } else {
+                        builder
+                            .with_branch(depth - 1)
+                            .finish()
+                    }
+                });
+
             self
         }
 
@@ -175,9 +202,9 @@ pub mod mock_run_ctx {
     }
 
     pub fn build() -> MockRunCtxBuilder {
-        let mut mock = super::MockRunCtx::new();
-        mock.expect_name().return_const("MockRunCtx");
-        MockRunCtxBuilder { mock }
+        let mock = super::MockRunCtx::new();
+        MockRunCtx::name_context().expect().return_const("MockRunCtx");//TODO return ctx
+        MockRunCtxBuilder { mock, device_idx: None }
     }
 
     pub fn default(device_idx: usize) -> MockRunCtx {
@@ -189,7 +216,7 @@ pub mod mock_run_ctx {
             .with_add_permits()
             .with_drop_permits(vec![DropIf::IfNotMax])
             .with_cache_area(0)
-            .with_branch(4)
+            .with_branch(255)
             .finish()
     }
 }

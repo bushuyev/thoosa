@@ -178,7 +178,7 @@ where
             let motif_loader = Arc::clone(&self.motif_loader);
             let random_slices_loader = Arc::clone(&self.random_slices_loader);
 
-            let ctx_for_task = ctx.branch(mono_key!(motif_id_rate.0,"train_motif_nets_task"), true);
+            let ctx_for_task = ctx.branch::<SynKey>(mono_key!(motif_id_rate.0,"train_motif_nets_task").into(), true);//into is needed because mock needs SynKey or &str
             let opt_config = Arc::clone(&opt_config);
             let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
             let store = Arc::clone(&self.store);

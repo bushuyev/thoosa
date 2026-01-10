@@ -339,7 +339,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let mut ctx = ctx;
-        let (device_idx, cache_area, ctx_name) = (ctx.device_idx(), ctx.cache_area(), ctx.name());
+        let (device_idx, cache_area, ctx_name) = (ctx.device_idx(), ctx.cache_area(), ctx.id().clone());
 
         let resources: Vec<Resource> = with_data!(ctx.branch("select_motifs_resources", false), input; |input: &ResourcesConfigInput<Simple>|{
             Ok::<Vec<Resource>, ThoError>(input

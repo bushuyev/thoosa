@@ -13,6 +13,7 @@ use rand::rng;
 use tch::Kind::Float;
 use tch::{IndexOp, Tensor};
 use cached_derive::Cached;
+use thoosa_named_derive::Named;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
@@ -27,7 +28,7 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::{mono_key, sample_n_owned, CopyToDevice, ThoError};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, Named, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -69,7 +70,8 @@ impl WithId for StackedMotifsInput {
     }
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
+#[name = "n/a"]
 pub struct StackedMotifsOutputId {
     pub(crate)  find_motifs_run_id:RunId,
     pub(crate)  select_motifs_run_id:Vec<RunId>//not used, can be used to return previously ran select_motifs ids
@@ -80,9 +82,6 @@ impl StackedMotifsOutputId {
         Self { find_motifs_run_id, select_motifs_run_id }
     }
 }
-
-impl Named for StackedMotifsOutputId {}
-
 
 #[derive(Debug)]
 pub struct StackedMotifsOutput {
@@ -135,7 +134,7 @@ impl WithId for StackedMotifsOutput {
 impl Output for StackedMotifsOutput {}
 
 ///loads motif slices found during initial find motifs stage. Used from SelectMotifs - slices added there are not loaded
-#[derive(Debug, Cached)]
+#[derive(Debug, Cached, Named)]
 pub struct StackedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,

@@ -208,7 +208,7 @@ where
 impl<D: Dims, Id: Named + Debug + Clone> Debug for ThoTensor<D, Id> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("")
-            .field("id.name", &self.id.name())
+            .field("id", &self.id)
             .field("t", &self.t)
             .finish()
     }

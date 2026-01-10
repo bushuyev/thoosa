@@ -46,6 +46,7 @@ lazy_static = "1.5.0"
 cached_derive = {path = "../thoosa_macros/cached_derive" }
 thoosa_run_config_args = {path = "../thoosa_macros/thoosa_run_config_args" }
 thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args_derive" }
+thoosa_named_derive = {path = "../thoosa_macros/thoosa_named_derive" }
 
 
 thoosa_properties_map = {path = "../thoosa_macros/thoosa_properties_map" }

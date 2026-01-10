@@ -85,21 +85,19 @@ where
     ) -> Result<<Self as Adjuster<C>>::A, ThoError> {
 
 
-        let (device_idx, acquired_permits,  _ctx_name)  = {
-            // assert_eq!(acquired_permits, MAX_PERMITS, "not enough permits {}", acquired_permits);
-
-            (adjustable.device_idx(), adjustable.acquired_permits(), adjustable.name())
+        let (device_idx, acquired_permits)  = {
+            (adjustable.device_idx(), adjustable.acquired_permits())
         };
 
         debug!("DumpToCpu::adjust: adjustable={adjustable:?} acquired_permits={acquired_permits}");
 
-        if acquired_permits < MAX_PERMITS {
+        if adjustable.acquired_permits() < MAX_PERMITS {
             // DumpToCpu is special: only dump when we hold MAX_PERMITS to avoid
             // dumping tensors still in use by other tasks.
             match GlobalCtx::global().acquire_many(
-                device_idx,
-                MAX_PERMITS - acquired_permits,
-                Arc::new(simple_id!(format!("dump_to_cpu_for_{}", _ctx_name))),
+                adjustable.device_idx(),
+                MAX_PERMITS - adjustable.acquired_permits(),
+                Arc::new(adjustable.id().clone()) as Arc<dyn CachableIdTr>,
             ).await {
                 Ok(permits) => {
                     debug!("DumpToCpu::adjust: acquired {permits:?}");

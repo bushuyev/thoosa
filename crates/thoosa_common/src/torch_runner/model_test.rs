@@ -25,6 +25,7 @@ mod tests {
 
     use crate::tho_tensor::ThoTensor;
     use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select};
+    use thoosa_named_derive::Named;
     use dashmap::DashMap as DMap;
     use log::debug;
     use rand::seq::SliceRandom;
@@ -64,7 +65,8 @@ mod tests {
     }
 
     // ---------------- Run Context ----------------
-    #[derive(Debug, Delegate)]
+    #[derive(Debug, Delegate, Named)]
+    #[name = "n/a"]
     #[delegate(PermitsCtx, target = "perms")]
     struct TestCpuRunCtx {
         id:MonoKey,
@@ -73,7 +75,8 @@ mod tests {
         perms: CpuPermsCtx,
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Named)]
+    #[name = "n/a"]
     struct CpuPermsCtx {
         acquired: NumPermits,
     }
@@ -83,8 +86,6 @@ mod tests {
             Self { acquired: 0 }
         }
     }
-
-    impl Named for CpuPermsCtx {}
 
     impl PermitsCtx for CpuPermsCtx {
         fn add_permit(&mut self, permit: RunnerPerm) {
@@ -143,16 +144,9 @@ mod tests {
         }
     }
 
-    impl Named for TestCpuRunCtx {}
-
     // ---------------- File Input / A/B Loader ----------------
-    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
     struct FileInputId(&'static str);
-    impl Named for FileInputId {
-        fn name(&self) -> &'static str {
-            "FileInputId"
-        }
-    }
 
     #[derive(Debug, Clone)]
     struct FileInput {
@@ -336,7 +330,7 @@ mod tests {
         }
     }*/
 
-    #[derive(Debug, cached_derive::Cached)]
+    #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "ABDataId"]
     struct ABLoader {
         input_len: i64,
@@ -448,7 +442,7 @@ mod tests {
         }
     }*/
 
-    #[derive(Debug, cached_derive::Cached)]
+    #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "ABBatchId"]
     struct BatchBuilder {
         loader: Arc<ABLoader>,
@@ -659,7 +653,7 @@ mod tests {
         }
     }
 
-    #[derive(Debug, cached_derive::Cached)]
+    #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "ClsOutId"]
     struct Classifier {
         id: SimpleId,
@@ -853,7 +847,7 @@ mod tests {
         ))
     }
 
-    #[derive(Debug, cached_derive::Cached)]
+    #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "ClsOutId"]
     struct JoinAndClassifyTask {
         // Builds a cached batch (features + labels) from files
@@ -891,9 +885,8 @@ mod tests {
             input: Arc<DevicesWrap<Self::In<'static>>>,
             mut ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            let (device_idx, ctx_name, cache_area) = (
+            let (device_idx, cache_area) = (
                 ctx.device_idx(),
-                ctx.name(),
                 ctx.cache_area(),
             );
 

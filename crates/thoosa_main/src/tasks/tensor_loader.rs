@@ -15,7 +15,8 @@ use thoosa_common::dims::Dims;
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
-use thoosa_shared::traits::{Named, WithId};
+use thoosa_shared::traits::WithId;
+use thoosa_named_derive::Named;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_with_data::with_data;
@@ -24,7 +25,7 @@ use thoosa_with_data::with_data;
 type LoadFn =
     dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoError> + Sync + Send;
 
-#[derive(cached_derive::Cached)]
+#[derive(cached_derive::Cached, Named)]
 #[cache_name = "RawTensors"]
 pub struct RawTensorLoader<C>
 where
@@ -133,7 +134,7 @@ pub(crate) mod mock_tensor_loader {
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use thoosa_shared::ThoError;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::Named;
+    use thoosa_named_derive::Named;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::traits::WithId;
@@ -143,7 +144,7 @@ pub(crate) mod mock_tensor_loader {
     use parking_lot::RwLock;
     use tch::Tensor;
     mock! {
-        #[derive(Debug)]
+        #[derive(Debug, Named)]
         pub TensorLoader {}
 
         impl Stage for TensorLoader {
@@ -171,6 +172,10 @@ pub(crate) mod mock_tensor_loader {
                     ctx: <MockTensorLoader as Stage>::Ctx,
                 ) -> Result<Arc<DevicesWrap<<MockTensorLoader as Stage>::Out>>, ThoError>;
         }
+    }
+
+    impl thoosa_shared::traits::Named for MockTensorLoader {
+        fn name() -> &'static str { "MockTensorLoader" }
     }
 
     pub struct  MockTensorLoaderBuilder {

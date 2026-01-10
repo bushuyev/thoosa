@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
 use std::sync::Arc;
 use log::debug;
+use thoosa_named_derive::Named;
 use crate::applicables_runner::Input;
 use crate::{CopyToDevice, ThoError};
 use uuid::Uuid;
@@ -125,12 +126,12 @@ impl dyn CachableIdTr {
 //triggers blanked impl<T: ... Named + 'static> CachableId for T
 #[automock]
 pub trait Named {// like Type name
-    fn name(&self) -> &'static str {
+    fn name() -> &'static str {
         "n/a"
     }
 }
 ///////////////////////////////////
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Named)]
 pub struct SimpleId(
     #[cfg(debug_assertions)]
     pub Cow<'static, str>,
@@ -164,12 +165,6 @@ macro_rules! simple_id {
 unsafe impl Send for SimpleId {}
 unsafe impl Sync for SimpleId {}
 
-impl Named for SimpleId {
-    fn name(&self) -> &'static str {
-        "SimpleId"
-    }
-}
-
 #[cfg(debug_assertions)]
 impl From<&'static str> for SimpleId {
     fn from(value: &'static str) -> Self {
@@ -199,7 +194,7 @@ impl Display for SimpleId {
 }
 
 ///////////////////////////////////
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Named)]
 pub struct TmpId(Uuid);
 
 
@@ -213,33 +208,19 @@ unsafe impl Sync for TmpId {}
 
 
 
-impl Named for TmpId {
-    fn name(&self) -> &'static str {
-        "TmpId"
-    }
-}
-
-
-
 impl Display for TmpId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 ///--------------------
-#[derive(Debug, Eq, PartialEq, Hash, Clone, DummyData)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, DummyData, Named)]
 #[dummy_data(clone)]
 pub struct DataId(pub u32);//for sql-store based stuff
 
 unsafe impl Send for DataId {}
 unsafe impl Sync for DataId {}
 
-
-impl Named for DataId {
-    fn name(&self) -> &'static str {
-        "DataId"
-    }
-}
 
 impl WithId for DataId {
     type ID = Self;
@@ -289,10 +270,9 @@ pub trait WithId {
     fn id(&self) -> &Self::ID;
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
+#[name = "n/a"]
 pub struct DummyCachableId(pub &'static str);
-
-impl Named for DummyCachableId {}
 
 impl From<&'static str> for DummyCachableId {
     fn from(value: &'static str) -> Self {

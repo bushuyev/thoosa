@@ -14,28 +14,6 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
     let DeriveInput { attrs, ident: name, generics, .. } = input;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    // Optional #[cache_name = "..."] attribute
-    let mut reg_name = None::<syn::LitStr>;
-    for attr in attrs.iter() {
-        if attr.path().is_ident("cache_name") {
-            if let Meta::NameValue(nv) = attr.meta.clone() {
-                if let Expr::Lit(expr_lit) = &nv.value {
-                    if let Lit::Str(lit) = &expr_lit.lit {
-                        reg_name = Some(lit.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    let reg_name_tokens = if let Some(lit) = reg_name {
-        quote! { #lit }
-    } else {
-        quote! {
-            stringify!(<<#name #ty_generics as thoosa_shared::runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID)
-        }
-    };
-
     let map_type = quote! {
         dashmap::DashMap<
             <<Self as thoosa_shared::runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID,
@@ -76,14 +54,14 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
                     &*((*ptr_ref) as *const #map_type)
                 };
 
-                let cache_name: &'static str = #reg_name_tokens;
 
                 #register_static_ident
                     .get_or_init(|| async move {
+                        use thoosa_shared::traits::Named;
 
                         thoosa_shared::runner::global_ctx::GlobalCtx::global()
                             .register_cache((
-                                cache_name,
+                                Self::name(),
                                 map as &'static dyn thoosa_shared::runner::purge::FuturesRunnerMapPurger,
                             ))
                             .await;

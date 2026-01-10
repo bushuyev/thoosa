@@ -4651,6 +4651,7 @@ dependencies = [
  "statrs",
  "tch",
  "thoosa_dummy_data_derive",
+ "thoosa_named_derive",
  "thoosa_properties_map",
  "thoosa_properties_map_derive",
  "thoosa_run_config_args",
@@ -4756,6 +4757,7 @@ dependencies = [
  "thoosa_common",
  "thoosa_dummy_data_derive",
  "thoosa_motifs",
+ "thoosa_named_derive",
  "thoosa_properties_map",
  "thoosa_properties_map_derive",
  "thoosa_run_config_args",
@@ -4806,6 +4808,15 @@ dependencies = [
  "thoosa_store",
  "torch-sys",
  "tracing",
+]
+
+[[package]]
+name = "thoosa_named_derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
 ]
 
 [[package]]
@@ -4889,6 +4900,7 @@ dependencies = [
  "serde",
  "simplelog",
  "thoosa_dummy_data_derive",
+ "thoosa_named_derive",
  "thoosa_with_data",
  "time",
  "time_series_generator",

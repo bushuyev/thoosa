@@ -464,6 +464,8 @@ where
 
         let mut input_select_adjusted: Option<S> = None;
 
+
+
     
         match panic_to_err_async!({
             let run_ctx = run_context.branch("oom_handler_run_initial", false);
@@ -652,8 +654,8 @@ where
 
                 // warn!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} all failed: input.mem_size={:?} semaphore={:?}", os_thread_id(), input.mem_size(), GlobalCtx::global().debug_semaphore(device_idx));
 
-                // Err(Cause::SomethingElse(format!("all failed: task={task:?}")).into())
-                Err(Cause::SomethingElse(format!("XXX")).into())
+                Err(Cause::SomethingElse(format!("all failed: task.out_key={out_key:?}")).into())
+                // Err(Cause::SomethingElse(format!("XXX")).into())
             }
             Ok(o) => {
                 debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} done without oom ", os_thread_id());
@@ -668,20 +670,15 @@ where
 #[cfg(test)]
 pub mod test_types {
     use super::*;
+    use thoosa_named_derive::Named;
     // use crate::common::Data;
     use crate::runner::test_utils::DummyTensor;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::traits::WithId;
 
-    #[derive(Debug, Clone, Hash, Eq, PartialEq)]
+    #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
     pub struct TestId(&'static str);
-
-    impl Named for TestId {
-        fn name(&self) -> &'static str {
-            "TestId"
-        }
-    }
 
     impl From<&'static str> for TestId {
         fn from(value: &'static str) -> Self {
