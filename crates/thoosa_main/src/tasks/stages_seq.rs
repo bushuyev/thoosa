@@ -140,15 +140,15 @@ where
     B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>
 {
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let input_id = input.id().clone();
         debug!("ABStage::run: input.id={input_id:?} ctx={ctx:?}");
 
-        let output_a = Arc::clone(&self.stage_a).run_cached(input, Arc::clone(&ctx)).await?;
+        let output_a = Arc::clone(&self.stage_a).run_cached(input, ctx.branch("ab_stage_a", false)).await?;
 
         debug!("ABStage::run: input.id={input_id:?} a done");
 
-        let output_b = Arc::clone(&self.stage_b).run_cached(output_a, ctx).await?;
+        let output_b = Arc::clone(&self.stage_b).run_cached(output_a, ctx.branch("ab_stage_b", false)).await?;
 
         debug!("ABStage::run: input.id={input_id:?} b done");
 
@@ -223,7 +223,7 @@ where
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
-        ctx: Arc<RwLock<Self::Ctx>>,
+        ctx: <A as Stage>::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         match &*self {
             StageChainOption::Single(stage) => Arc::clone(stage).run_cached(input, ctx).await,

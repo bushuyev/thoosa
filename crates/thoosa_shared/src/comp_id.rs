@@ -167,6 +167,14 @@ impl From<&str> for SynKey {
     }
 }
 
+impl From<String> for SynKey {
+    fn from(value: String) -> Self {
+        Self {
+            vals: Box::new([mono_key!(value.clone(), value)])
+        }
+    }
+}
+
 /// Add now produces a dynamic-length CompKey (LEN = runtime sum).
 impl Add<&SynKey> for &SynKey {
     type Output = SynKey;
@@ -175,6 +183,17 @@ impl Add<&SynKey> for &SynKey {
         let mut v = Vec::with_capacity(self.vals.len() + rhs.vals.len());
         v.extend(self.vals.iter().cloned());
         v.extend(rhs.vals.iter().cloned());
+        SynKey::from_vec(v)
+    }
+}
+
+impl Add<SynKey> for &SynKey {
+    type Output = SynKey;
+
+    fn add(self, rhs: SynKey) -> Self::Output {
+        let mut v = Vec::with_capacity(self.vals.len() + rhs.vals.len());
+        v.extend(self.vals.iter().cloned());
+        v.extend(rhs.vals.into_iter());
         SynKey::from_vec(v)
     }
 }

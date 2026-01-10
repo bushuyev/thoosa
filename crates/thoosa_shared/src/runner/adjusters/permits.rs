@@ -73,16 +73,13 @@ pub trait PermitsAdjustContext: Debug + Send + Sync {
 pub struct PermitsAdjustContextImpl {
     to_acquire: NumPermits,
 
-    _ctx_name: &'static str, //for debug
-                             // statistics: Option<Arc<Statistics>>
 }
 
 impl PermitsAdjustContextImpl {
-    pub fn new(ctx_name: &'static str) -> Self {
+    pub fn new() -> Self {
         Self {
             to_acquire: 0,
 
-            _ctx_name: ctx_name, // statistics,
         }
     }
 }
@@ -107,36 +104,36 @@ where
     A: Adjustable + RunCtx,
     C: PermitsAdjustContext,
 {
-    type A = Arc<RwLock<A>>;
+    type A = A;
 
     async fn adjust(
         &self,
-        adjustable: &<Self as Adjuster<C>>::A,
+        mut adjustable: <Self as Adjuster<C>>::A,
         adjust_context: &mut C,
     ) -> Result<<Self as Adjuster<C>>::A, ThoError> {
-        let acquired_permits = adjustable.read().acquired_permits();
+        let acquired_permits = adjustable.acquired_permits();
         if adjust_context.to_acquire() <= acquired_permits {
             //TODO warn
-            return Ok(Arc::clone(adjustable));
+            return Ok(adjustable);
         }
 
         let permits_to_acquire = adjust_context.to_acquire() - acquired_permits;
 
-        let adjustable_name = adjustable.read().name();
-        debug!("PermitsAdjuster::adjust: name={adjustable_name} thread={:?} self.max={} permits_to_acquire/{}/ = adjust_context.to_acquire()/{}/ - acquired_permits/{acquired_permits}/",std::thread::current().id(),self.max,   permits_to_acquire,      adjust_context.to_acquire());
+        let adjustable_name = adjustable.id().clone();//TODO clone for debug only
+        debug!("PermitsAdjuster::adjust: name={adjustable_name:?} thread={:?} self.max={} permits_to_acquire/{}/ = adjust_context.to_acquire()/{}/ - acquired_permits/{acquired_permits}/",std::thread::current().id(),self.max,   permits_to_acquire,      adjust_context.to_acquire());
 
         if permits_to_acquire > 0 {
             match (self.acquire_fn)(permits_to_acquire).await {
                 Ok(permit) => {
-                    debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name} acquired_permits={acquired_permits} permits_to_acquire={permits_to_acquire} acquired ok ");
-                    adjustable.write().add_permit(permit);
+                    debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name:?} acquired_permits={acquired_permits} permits_to_acquire={permits_to_acquire} acquired ok ");
+                    adjustable.add_permit(permit);
                 }
 
                 //can't acquire permits,
                 Err(te) => {
                     match te.what() {
                         Cause::OutOfPermits => {
-                            debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name} acquired_permits={acquired_permits} Error: {te:?} device_idx={}", adjustable.read().device_idx());
+                            debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name:?} acquired_permits={acquired_permits} Error: {te:?} device_idx={}", adjustable.device_idx());
 
                            /* if adjustable.read().device_idx() != 0 {
                                 //not on CPU, TODO
@@ -144,11 +141,11 @@ where
                                     debug!("PermitsAdjuster::adjust: purge_gpu_caches failed: {e:?}");
                                 };
                             }*/
-                            adjustable.write().drop_permits(DropIf::Always);
+                            adjustable.drop_permits(DropIf::Always);
 
                             *adjust_context.to_acquire_mut() = 0;
 
-                            debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name} yielding");
+                            debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name:?} yielding");
 
                             tokio::task::yield_now().await;
                         }
@@ -162,7 +159,8 @@ where
             };
         }
 
-        Ok(Arc::clone(adjustable))
+        Ok(adjustable)
+        // todo!()
     }
 
     fn degrade(&self, adjust_context: &mut C) -> bool {
@@ -205,12 +203,16 @@ mod tests {
     use std::sync::Arc;
     use thoosa_shared::Cause;
     use thoosa_shared::traits::Named;
+    use crate::comp_id::{MonoKey, SynKey};
+    use crate::mono_key;
     use crate::runner::common::PermitsCtx;
+    use crate::traits::WithId;
 
     #[derive(Debug)]
     struct TestRunCtx {
         device_idx: usize,
         acquired: NumPermits,
+        id:MonoKey
     }
 
     impl TestRunCtx {
@@ -218,6 +220,7 @@ mod tests {
             Self {
                 device_idx,
                 acquired,
+                id: mono_key!(0, "test_key")
             }
         }
     }
@@ -238,12 +241,20 @@ mod tests {
         }
     }
 
+    impl WithId for TestRunCtx {
+        type ID = MonoKey;
+
+        fn id(&self) -> &Self::ID {
+            &self.id
+        }
+    }
+
     impl RunCtx for TestRunCtx {
         fn device_idx(&self) -> usize {
             self.device_idx
         }
 
-        fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoError>>
+        fn purge_gpu_caches(&mut self) -> BoxFuture<'static, Result<(), ThoError>>
         where
             Self: Sized,
         {
@@ -253,25 +264,32 @@ mod tests {
         fn cache_area(&self) -> u64 {
             0
         }
+
+        fn branch<I:Into<SynKey> + 'static>(&mut self, _new_name:I, with_new_cache_area: bool) -> Self
+        where
+            Self: Sized,
+        {
+            Self::new(self.device_idx, 0)
+        }
     }
 
     impl Named for TestRunCtx {}
 
     fn ctx(name: &'static str, want: NumPermits) -> PermitsAdjustContextImpl {
-        let mut c = PermitsAdjustContextImpl::new(name);
+        let mut c = PermitsAdjustContextImpl::new();
         *c.to_acquire_mut() = want;
         c
     }
 
     #[tokio::test]
     async fn adjust_handles_out_of_permits() {
-        let adjustable = Arc::new(RwLock::new(TestRunCtx::new(0, 0)));
+        let adjustable = TestRunCtx::new(0, 0);
         let adjuster = PermitsAdjuster::<_, _, TestRunCtx>::new(100, 10, |_n| async {
             Err(Cause::OutOfPermits.into())
         });
         let mut ac = ctx("test", 10);
 
-        let res = adjuster.adjust(&adjustable, &mut ac).await;
+        let res = adjuster.adjust(adjustable, &mut ac).await;
         assert!(res.is_ok());
         // OutOfPermits path resets requested acquire to 0
         assert_eq!(ac.to_acquire(), 0);
@@ -279,13 +297,13 @@ mod tests {
 
     #[tokio::test]
     async fn adjust_propagates_other_errors() {
-        let adjustable = Arc::new(RwLock::new(TestRunCtx::new(0, 0)));
+        let adjustable = TestRunCtx::new(0, 0);
         let adjuster = PermitsAdjuster::<_, _, TestRunCtx>::new(100, 10, |_n| async {
             Err(Cause::SomethingElse("boom".into()).into())
         });
         let mut ac = ctx("test", 10);
 
-        let res = adjuster.adjust(&adjustable, &mut ac).await;
+        let res = adjuster.adjust(adjustable, &mut ac).await;
         assert!(matches!(
             res,
             Err(ThoError {

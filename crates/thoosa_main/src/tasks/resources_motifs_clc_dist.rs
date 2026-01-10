@@ -13,7 +13,7 @@ use tch::{IndexOp, Tensor};
 use tch::Device::Cpu;
 
 use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
-use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
+use thoosa_shared::runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
 use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::cuda_utils::with_cuda_stream;
 use thoosa_dummy_data_derive::DummyData;
@@ -22,7 +22,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Select, WithId};
+use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Named, Select, WithId};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
@@ -33,6 +33,48 @@ use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::slices_iter::SlicesIter;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::runner::permits::{NumPermits, RunnerPerm};
+
+#[derive(Clone, Copy, Debug)]
+struct DeviceCtx {
+    device_idx: usize,
+}
+
+impl DeviceCtx {
+    fn new(device_idx: usize) -> Self {
+        Self { device_idx }
+    }
+
+    fn device_idx(&self) -> usize {
+        self.device_idx
+    }
+}
+
+impl Named for DeviceCtx {
+
+}
+
+impl WithId for DeviceCtx {
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        &()
+    }
+}
+
+impl PermitsCtx for DeviceCtx {
+    fn add_permit(&mut self, permit: RunnerPerm) {
+
+    }
+
+    fn drop_permits(&mut self, drop_if: DropIf) {
+
+    }
+
+    fn acquired_permits(&self) -> NumPermits {
+        0
+    }
+}
 
 pub struct ClcResourcesMotifsDist<C>
 where
@@ -103,11 +145,11 @@ where
     fn do_run<'f>(
         self: Arc<Self>,
         input: &Self::In<'f>,
-        ctx: Arc<RwLock<Self::Ctx>>,
+        ctx: &Self::Ctx,
     ) -> Result<Self::Out, ThoError> {
         debug!("ClcResourcesMotifsDist::do_run: input={input:?}");
 
-        let device_idx = ctx.read().device_idx();
+        let device_idx = ctx.device_idx();
 
         let unfold_params = UnfoldParams::new(
             1,
@@ -270,14 +312,15 @@ impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
 impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     type O<'o> = ClcResourcesMotifsDistInput<'o>;
 
-    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, _permits_ctx: &mut P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
-        F: for <'f> FnOnce(&Self::O<'f>) -> Result<R, ThoError>,
+        F: for <'f> FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
         P:PermitsCtx
     {
         let t_1_batch= self.batch.clone();
         let stacked_motifs = Arc::clone(&self.stacked_motifs);
-        with_data!(Arc::clone(&permits_ctx), to_device_idx, [t_1_batch], stacked_motifs;
+        let ctx = DeviceCtx::new(to_device_idx);
+        with_data!(ctx, [t_1_batch], stacked_motifs;
             |
              batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
              stacked_motifs:&StackedMotifsOutput
@@ -287,7 +330,7 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
                     batch_v,
                     self.resource_ids.clone(),
                     stacked_motifs,
-                ))
+                ), _permits_ctx)
 
         })
     }
@@ -315,10 +358,10 @@ impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapperSelector {}
 
 
 impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, _permits_ctx: &mut P, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         P:PermitsCtx,
-        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError>
+        for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>
     {
 
         debug!("ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref: selector={selector:?}");
@@ -328,7 +371,8 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
         let t_1_batch= self.batch[range.clone()].to_vec();
         let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
 
-        with_data!(Arc::clone(&permits_ctx), to_device_idx, [t_1_batch], stacked_motifs_output;
+        let ctx = DeviceCtx::new(to_device_idx);
+        with_data!(ctx, [t_1_batch], stacked_motifs_output;
             |
              batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
              stacked_motifs_output:&StackedMotifsOutput
@@ -339,7 +383,7 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
                     stacked_motifs_output,
                 );
 
-                do_run(&inpt)
+                do_run(&inpt, _permits_ctx)
         })
     }
 }

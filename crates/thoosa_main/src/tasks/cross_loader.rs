@@ -136,7 +136,7 @@ where
 
 async fn split_tensor_if_needed<C>(
     t: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>,
-    ctx: Arc<RwLock<C>>,
+    ctx: &mut C,
     cache_area: u64,
     max_batch: i64,
     step: u32,
@@ -164,7 +164,7 @@ where
 
     let len_i64 = len;
     let splits = t
-        .with_data_ref(0, Arc::clone(&ctx), None, move |data| {
+        .with_data_ref(0, ctx, None, move |data, _ctx| {
             let mut out = Vec::new();
             let mut start = 0i64;
             let mut split_idx: u32 = 0;
@@ -195,7 +195,7 @@ where
         })
         .await?;
 
-    let device_idx = ctx.read().device_idx();
+    let device_idx = ctx.device_idx();
     t.dump_to_cpu(device_idx).await?;
 
     Ok(splits
@@ -383,16 +383,17 @@ where
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
-        ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+        ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+        let mut ctx = ctx;
         // let chunk_size = self.chunk_size;
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
-        let device_idx = ctx.read().device_idx();
-        let cache_area = ctx.read().cache_area();
-        let loader_ctx = Arc::clone(&ctx).write().branch("LoaderForCrossLoader_TODO");//self id
+        let device_idx = ctx.device_idx();
+        let cache_area = ctx.cache_area();
         let output_merge_mode = self.output_merge_mode;
 
-        let resources = input.with_data_ref(0, Arc::clone(&ctx), None, |input: &ResourcesConfigInput<ResC>|{
+        let mut ctx_for_data = ctx.branch("cross_loader_resources", false);
+        let resources = input.with_data_ref(0, &mut ctx_for_data, None, |input: &ResourcesConfigInput<ResC>, _ctx|{
                 Ok(input
                     .resources_config
                     .to_resources(&self.store)?
@@ -418,12 +419,13 @@ where
 
 
             let t_0 = Arc::clone(&self.loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone(), 0)), Arc::clone(&loader_ctx))
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone(), 0)), ctx.branch("cross_loader_t_0", false))
                 .await?;
 
+            let mut ctx_for_split = ctx.branch("cross_loader_split_t_0", false);
             let t_0_slices = split_tensor_if_needed(
                 t_0,
-                Arc::clone(&ctx),
+                &mut ctx_for_split,
                 cache_area,
                 max_batch,
                 self.step,
@@ -451,14 +453,14 @@ where
                 .enumerate()
                 .skip(skip_0_i)//skipping lower triangle
             {
-
                 let t_1 = Arc::clone(&self.loader)
-                    .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone(), 0)), Arc::clone(&loader_ctx))
+                    .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone(), 0)), ctx.branch("cross_loader_t_1", false))
                     .await?;
 
+                let mut ctx_for_split = ctx.branch("cross_loader_split_t_1", false);
                 let t_1_slices = split_tensor_if_needed(
                     t_1,
-                    Arc::clone(&ctx),
+                    &mut ctx_for_split,
                     cache_area,
                     max_batch,
                     self.step,
@@ -479,14 +481,14 @@ where
                 debug!("CrossLoader::run: t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}");
                 let batches_concated = [t_0_batch.clone(), t_1_batch].concat();
                 let batch_clc = Arc::clone(&self.batch_clc);
-                let ctx_for_clc = ctx.write().branch("cross_clc_output");
+                let ctx_for_clc = ctx.branch("cross_clc_output", false);
                 let t_0_batch_resources_cloned = t_0_batch_resources.clone();
                 let t_1_batch_resources_cloned = t_1_batch_resources.clone();
                 let t_0_batch_offsets_cloned = t_0_batch_offsets.clone();
                 let t_1_batch_offsets_cloned = t_1_batch_offsets.clone();
+                let ctx_for_data = ctx.branch("cross_clc_data", false);
                 let mut cross_clc_output = async_with_data!(
-                    Arc::clone(&ctx),
-                    device_idx,
+                    ctx_for_data,
                     [batches_concated];
                     |data| async move {
                         let input = CrossInput::new_with_offsets(
@@ -499,7 +501,7 @@ where
 
                         debug!("CrossLoader::run: input={input:?}");
 
-                        let ctx_name = ctx_for_clc.read().name();
+                        let ctx_name = ctx_for_clc.name();
                         let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
                         let input_len = input.size();
                         let out_key = Arc::new(batch_clc.out_id(input.id())) as Arc<dyn CachableIdTr>;
@@ -526,7 +528,7 @@ where
                         .run(
                             &batch_clc,
                             Arc::new(input),
-                            Arc::clone(&ctx_for_clc),
+                            ctx_for_clc,
                             Contexts::new(
                                 SplitsAdjusterContextImpl::new(
                                     input_len,
@@ -534,7 +536,7 @@ where
                                 ),
                                 NoopRunnableContext {},
                                 PermitsAndDumpToCpuAdjustableContex::new(
-                                    PermitsAdjustContextImpl::new(ctx_name),
+                                    PermitsAdjustContextImpl::new(),
                                     DumpToCpuContextImpl::new(&required_ids),
                                 ),
                             ),
@@ -547,9 +549,8 @@ where
                 let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await;
 
                 let receiver_arc = Arc::clone(&receiver);
-                let ctx_arc = Arc::clone(&ctx);
 
-                receiver_arc.consume(cross_clc_output, ctx_arc).await?;
+                receiver_arc.consume(cross_clc_output, ctx.branch("cross_loader_receiver", false)).await?;
 
 
                 t_1_batch = vec![];
@@ -579,7 +580,6 @@ pub(crate) mod mock_cross_loader_clc {
     use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
     use thoosa_shared::runner::common::{OutId, RunCtx};
     use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
-    use parking_lot::RwLock;
     use std::fmt::Debug;
     use std::marker::PhantomData;
     use std::sync::Arc;
@@ -590,7 +590,7 @@ pub(crate) mod mock_cross_loader_clc {
 
     type RunBatchFn<Out, C> = dyn for<'a> Fn(
         &CrossInput<'a, Arc<Resource>>,
-        Arc<RwLock<C>>,
+        &C,
     ) -> Result<CrossUnfoldClcOutput<Out>, ThoError>
     + Send
     + Sync
@@ -650,7 +650,7 @@ pub(crate) mod mock_cross_loader_clc {
         fn do_run<'s>(
             self: Arc<Self>,
             input: &Self::In<'s>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            ctx: &Self::Ctx,
         ) -> Result<Self::Out, ThoError>
         where
             Self: Sized,
@@ -678,7 +678,7 @@ pub(crate) mod mock_cross_loader_clc {
         where
             F: for<'a> Fn(
                 &CrossInput<'a, Arc<Resource>>,
-                Arc<RwLock<C>>,
+                &C,
             ) -> Result<CrossUnfoldClcOutput<Out>, ThoError>
             + Send
             + Sync
@@ -716,7 +716,6 @@ pub(crate) mod mock_cross_loader_receiver {
     use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
     use thoosa_shared::runner::common::RunCtx;
     use mockall::mock;
-    use parking_lot::RwLock;
     use std::fmt::Debug;
     use std::future::Future;
     use std::pin::Pin;
@@ -751,7 +750,7 @@ pub(crate) mod mock_cross_loader_receiver {
             fn consume<'s>(
                 self: Arc<Self>,
                 out: <Self as Stage>::In<'static>,
-                ctx: Arc<RwLock<<Self as Stage>::Ctx>>,
+                ctx: <Self as Stage>::Ctx,
             ) -> Pin<Box<dyn Future<Output = Result<<Self as Stage>::Out, ThoError>> + Send + 's>>;
         }
     }
@@ -772,7 +771,7 @@ pub(crate) mod mock_cross_loader_receiver {
     {
         pub fn with_receive_fn<F>(mut self, f: F) -> Self
         where
-            F: Fn(In, Arc<RwLock<C>>) -> Result<(), ThoError> + Send + Sync + 'static,
+            F: Fn(In, C) -> Result<(), ThoError> + Send + Sync + 'static,
         {
             let receive_fn = Arc::new(f);
             self.mock
@@ -987,7 +986,7 @@ mod tests {
             .collect();
 
         // Exercise GPU path and copy mask/dists back to CPU for DistsTracker.
-        let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa")));
+        let mut ctx = RunCtx2::new(1, "aa");
 
         let resource_stats = resource_keys
             .iter()
@@ -1093,14 +1092,14 @@ mod tests {
             0,
         ));
 
-        let cache_area = ctx.read().cache_area();
+        let cache_area = ctx.cache_area();
         let input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(Simple::new(ResourceType::List(resource_keys))),
             cache_area,
         ));
 
         let output = cross_loader
-            .run(input, Arc::clone(&ctx))
+            .run(input, ctx.branch("cross_loader_run", false))
             .await?;
 
         assert_eq!(output.id(), &());
@@ -1220,7 +1219,7 @@ mod tests {
         let received_outputs = Arc::new(Mutex::new(Vec::<TestBatchOutput>::new()));
         let receiver_observed = Arc::clone(&received_outputs);
 
-        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
+        let mut ctx = mock_run_ctx::default(0);
 
         let mut mocked_store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
@@ -1267,7 +1266,7 @@ mod tests {
             0,
         ));
 
-        let cache_area = ctx.read().cache_area();
+        let cache_area = ctx.cache_area();
         let input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
                 "resource_a".to_string(),
@@ -1277,7 +1276,7 @@ mod tests {
         ));
 
         let _ = cross_loader
-            .run(input, Arc::clone(&ctx))
+            .run(input, ctx.branch("cross_loader_run", false))
             .await?;
 
         yield_now().await;
@@ -1400,7 +1399,7 @@ mod tests {
                 .finish(),
         );
 
-        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
+        let mut ctx = mock_run_ctx::default(1);
 
         let mut mocked_store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
@@ -1425,7 +1424,7 @@ mod tests {
             1,
         ));
 
-        let cache_area = ctx.read().cache_area();
+        let cache_area = ctx.cache_area();
         let input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
                 "resource_a".to_string(),
@@ -1433,7 +1432,7 @@ mod tests {
             cache_area,
         ));
 
-        let _ = cross_loader.run(input, Arc::clone(&ctx)).await?;
+        let _ = cross_loader.run(input, ctx.branch("cross_loader_run", false)).await?;
 
         let observed = observations.lock().expect("observations.lock").clone();
         assert_eq!(observed.len(), 1);

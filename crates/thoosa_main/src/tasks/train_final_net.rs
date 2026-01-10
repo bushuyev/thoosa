@@ -8,7 +8,7 @@ use futures::FutureExt;
 use futures_util::{StreamExt, TryStreamExt};
 use futures_util::stream::BoxStream;
 use log::{debug, trace};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Reduction, Tensor};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
@@ -201,24 +201,21 @@ where
     fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
-        ctx: Arc<RwLock<Self::Ctx>>,
+        ctx: Self::Ctx,
     ) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
-        let (device_idx, cache_area) = {
-            let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area())
-        };
+        let mut ctx = ctx;
+        let cache_area = ctx.cache_area();
 
         let train_final_run_configs = Arc::clone(&self.run_configs);
         let label_loader = Arc::clone(&self.label_loader);
         let label_net_run_ids = self.label_net_run_ids.clone();
         let num_label_nets = self.num_label_nets;
         let opt_config = Arc::clone(&self.opt_config);
-        let ctx_for_batches = Arc::clone(&ctx);
         let store = Arc::clone(&self.store);
         let cache_area = cache_area.clone();
 
         async move {
-            let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) = with_data!(ctx, 0, input; |input:&ResourcesConfigInput<NetResources<Logits>>|{
+            let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) = with_data!(ctx.branch("train_final_resources", false), input; |input:&ResourcesConfigInput<NetResources<Logits>>|{
                 Ok::<_, ThoError>(input.resources_config().to_resources(&store)?)
             })?;
 
@@ -240,11 +237,11 @@ where
             let valid_resources = Arc::new(valid_resources);
 
             let train_net = Arc::new(TrainNet::new(
-                move |rc:&TrainFinalNetRunConfig| {
+                move |ctx:C, rc:&TrainFinalNetRunConfig| {
                     let label_loader = Arc::clone(&label_loader);
                     let train_resources = Arc::clone(&train_resources);
                     let valid_resources = Arc::clone(&valid_resources);
-                    let ctx = Arc::clone(&ctx_for_batches);
+
                     ready(LogitsResourcesBatch::new(
                         label_loader,
                         rc.common_training_args.batch_size,
@@ -272,7 +269,8 @@ where
                 "final".to_string()
             ));
 
-            let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])) , cache_area)), Arc::clone(&ctx)).await?).unwrap().take_data(0).await?;
+            let train_net_ctx = ctx.branch("train_final_net", false);
+            let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])) , cache_area)), train_net_ctx).await?).unwrap().take_data(0).await?;
 
             let final_result = TrainFinalNetsRunConfigResult::new(
                 Some(&label_net_run_ids),
@@ -300,7 +298,7 @@ where
     valid_resources: Arc<Vec<(Resource, Vec<f32>)>>,
     loader: Arc<L>,
     labels_len: usize,
-    ctx: Arc<RwLock<C>>,
+    ctx: Mutex<C>,
 }
 
 impl<L, C> Debug for LogitsResourcesBatch<L, C>
@@ -324,7 +322,7 @@ where
         train_resources: Arc<Vec<(Resource, Vec<f32>)>>,
         valid_resources: Arc<Vec<(Resource, Vec<f32>)>>,
         labels_len: usize,
-        ctx: Arc<RwLock<C>>,
+        ctx: C,
     ) -> Result<Self, ThoError> {
         if train_resources.is_empty() || valid_resources.is_empty() {
             return Err(ThoError::new("LogitsResourcesBatch::new: empty resources"));
@@ -341,13 +339,13 @@ where
             valid_resources,
             loader,
             labels_len,
-            ctx,
+            ctx: Mutex::new(ctx),
         })
     }
 
     fn build_batch_stream<'a>(
         loader: Arc<L>,
-        ctx: Arc<RwLock<C>>,
+        ctx: &'a Mutex<C>,
         resources: Arc<Vec<(Resource, Vec<f32>)>>,
         batch_size: u32,
         labels_len: usize,
@@ -357,15 +355,16 @@ where
         futures_util::stream::iter(batches)
             .map(move |batch_keys| {
                 let loader = Arc::clone(&loader);
-                let ctx = Arc::clone(&ctx);
                 let resources = Arc::clone(&resources);
                 async move {
                     let (outputs, labels) = futures_util::stream::iter(batch_keys)
                         .map(|index| {
                             let loader = Arc::clone(&loader);
-                            let ctx = Arc::clone(&ctx);
                             let (resource, labels) = resources[index].clone();
-                            let ctx_for_loader = ctx.write().branch("final_net_batch_loader");
+                            let ctx_for_loader = {
+                                let mut guard = ctx.lock();
+                                guard.branch("final_net_batch_loader", false)
+                            };
                             async move {
                                 let out = Arc::clone(&loader)
                                     .run_cached(Arc::new(DevicesWrap::wrap(resource, 0)), ctx_for_loader)
@@ -383,9 +382,15 @@ where
                             a
                         });
 
-                    let device_idx = ctx.read().device_idx();
-                    let ctx_for_build = ctx.write().branch("final_net_batch_build");
-                    with_data!(Arc::clone(&ctx_for_build), device_idx, [outputs]; |xs:&[&ThoTensor<LabelProbability, SynKey>]|{
+                    let device_idx = {
+                        let guard = ctx.lock();
+                        guard.device_idx()
+                    };
+                    let ctx_for_build = {
+                        let mut guard = ctx.lock();
+                        guard.branch("final_net_batch_build", false)
+                    };
+                    with_data!(ctx_for_build, [outputs]; |xs:&[&ThoTensor<LabelProbability, SynKey>]|{
                         let x = Tensor::f_stack(
                             xs.iter()
                                 .map(|x| x.t_ref().f_flatten(0, 1))
@@ -425,7 +430,7 @@ where
     async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, ThoBatch<LabelsProbabilities>), ThoError>> {
         Self::build_batch_stream(
             Arc::clone(&self.loader),
-            Arc::clone(&self.ctx),
+            &self.ctx,
             Arc::clone(&self.train_resources),
             self.batch_size,
             self.labels_len,
@@ -435,7 +440,7 @@ where
     async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, ThoBatch<LabelsProbabilities>), ThoError>> {
         Self::build_batch_stream(
             Arc::clone(&self.loader),
-            Arc::clone(&self.ctx),
+            &self.ctx,
             Arc::clone(&self.valid_resources),
             self.batch_size,
             self.labels_len,
@@ -628,7 +633,7 @@ mod tests {
             0,
         ));
 
-        train_final_net.run(input, Arc::new(RwLock::new(mock_run_ctx::default(0)))).await?;
+        train_final_net.run(input, mock_run_ctx::default(0)).await?;
 
         Ok(())
     }

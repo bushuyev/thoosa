@@ -8,7 +8,6 @@ use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
 use log::{debug, trace};
 use mockall_double::double;
-use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -43,7 +42,7 @@ where
     async fn run_cached(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
-        ctx: Arc<RwLock<Self::Ctx>>,
+        mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     where
         Self: Sized + OutId,
@@ -54,16 +53,45 @@ where
         Self::Out: Data // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
     {
         let key = self.out_id(WithId::id(input.as_ref()));
-        let (cache_area, device_idx) = {
-            let guard = ctx.read();
-            (guard.cache_area(), guard.device_idx())
-        };
+        let cache_area  = ctx.cache_area();
+        let device_idx = ctx.device_idx();
 
-        debug!("run_cached: key={key:?} device_idx={device_idx}");
+        debug!("Cached::run_cached: key={key:?} device_idx={device_idx}");
 
         let cache = Self::cache().await;
+        let key_for_purger = key.clone();
 
-        self.on_cached(input.as_ref(), &ctx);
+        ctx.add_purge_gpu_closure(
+            Box::new( move || {
+                let key_for_purger = key_for_purger.clone();
+                debug!("Cachable::purge_gpu_cache_area: 1  key={key_for_purger:?}");
+
+                async move {
+
+                    if let Some(value) = Self::cache().await.get_mut(&key_for_purger) {
+                        let shared_fut = value.value().clone();
+                        if shared_fut.peek().is_some() { //to avoid locking on itself
+                            let data: Arc<DevicesWrap<Self::Out>> = shared_fut.await?;
+                            let new_mask = data.remove_cache_area(cache_area);
+
+                            debug!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} new_mask={new_mask} ");
+                            if new_mask == 0 {
+                                data.dump_to_cpu(device_idx).await?;
+
+                                debug!("Cachable::purge_gpu_cache_area: 3  key={key_for_purger:?} done");
+                            }
+                        }
+                    } else {
+                        debug!("Cachable::purge_gpu_cache_area: 4 key_for_purger={key_for_purger:?} ot found"); //warning
+                    }
+
+                    Ok(())
+                }.boxed()
+            })
+
+       );
+
+        self.on_cached(input.as_ref(), &mut ctx);
 
         GlobalCtx::global().do_age();
 
@@ -153,26 +181,26 @@ where
     where
         Self:Sized;
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: &'a mut P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         Self:Sized,
-        F: FnOnce(&O) -> Result<R, ThoError> + Send + 'a,
+        F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
         P:PermitsCtx + 'a;
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: &mut P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         Self:Sized,
         O: Select<S, Output=O>,
-        for <'f> F: FnOnce(&O) -> Result<R, ThoError>,
+        for <'f> F: FnOnce(&O, &P) -> Result<R, ThoError>,
         S:Debug + Clone + 'static,
         P:PermitsCtx;
 
     async fn with_selected_data<S, R, P>(
         wrap:&DevicesWrap<O>,
         to_device_idx: usize,
-        permits_ctx: Arc<parking_lot::RwLock<P>>,
+        permits_ctx: &mut P,
         selector: S,
-        do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoError>,
+        do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>,
     ) -> Result<R, ThoError>
     where
         O: Select<S>,
@@ -236,39 +264,40 @@ where
         }
     }
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, _permits_ctx: Arc<RwLock<P>>, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: &'a mut P, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
-            for<'f> F: FnOnce(&O) -> Result<R, ThoError> + Send + 'a,
+            for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
             P: PermitsCtx + 'a
     {
         Box::pin(async move {
             match wrap.load_from_any_device_(to_device_idx).await {
                 Ok(v) => {
                     let data = v.deref();
-                    do_run(data)
+                    do_run(data, permits_ctx)
                 }
                 Err(e) => Err(e),
             }
         })
     }
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, _permits_ctx: Arc<RwLock<P>>, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: &mut P, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         O: Select<S, Output=O>,
-        for<'f> F: FnOnce(&O) -> Result<R, ThoError>,
+        for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError>,
         S:Debug + Clone + 'static,
         P: PermitsCtx
     {
         match wrap.load_from_any_device_(to_device_idx).await {
             Ok(v) => {
                 let data = v.deref();
-                do_run(&data.subview(selector)?)
+                let sub = data.subview(selector)?;
+                do_run(&sub, permits_ctx)
             }
             Err(e) => Err(e),
         }
     }
 
-    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, _permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoError>) -> Result<R, ThoError>
+    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: &mut P, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>) -> Result<R, ThoError>
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
@@ -279,7 +308,7 @@ where
         match wrap.load_from_any_device_(to_device_idx).await {
             Ok(v) => {
                 let data = v.deref();
-                do_run(data.subview(selector)?)
+                do_run(data.subview(selector)?, permits_ctx)
             }
             Err(e) => Err(e),
         }
@@ -412,32 +441,32 @@ where
         }
     }
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: &'a mut P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
-        F: FnOnce(&O) -> Result<R, ThoError> + Send + 'a,
+        F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
         P: PermitsCtx + 'a
     {
         Box::pin(async move {
-            if permits_ctx.read().acquired_permits() == 0 {
+            if permits_ctx.acquired_permits() == 0 {
                 let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?;
-                permits_ctx.write().add_permit(permit);
+                permits_ctx.add_permit(permit);
             }
 
 
             match wrap.load_from_any_device_(to_device_idx).await {
                 Ok(v) => {
                     let data = v.deref();
-                    DevicesWrap::do_run_trace_ref(trace_ctx, do_run, data)
+                    DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, permits_ctx), data)
                 }
                 Err(e) => Err(e),
             }
         })
     }
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: &mut P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         O: Select<S, Output=O>,
-        for<'f> F: FnOnce(&O) -> Result<R, ThoError>,
+        for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError>,
         S:Debug + Clone + 'static,
         P: PermitsCtx
     {
@@ -448,14 +477,14 @@ where
                 .as_ref()
                 .expect("no value behind guard");
 
-            let _permit =  if permits_ctx.read().acquired_permits() == 0 {
+            let _permit =  if permits_ctx.acquired_permits() == 0 {
                 Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
             } else {
                 None
             };
             let data: O = base.subview(selector.clone())?;
 
-            return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, do_run, data);
+            return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, permits_ctx), data);
         }
 
         drop(read_guard);
@@ -471,21 +500,21 @@ where
                 let sub_t: O = src.subview(selector.clone())?;
 
                 debug!("DataCacheWrapper::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
-                let _permit =  if permits_ctx.read().acquired_permits() == 0 {
+                let _permit =  if permits_ctx.acquired_permits() == 0 {
                     Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
                 } else {
                     None
                 };
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
-                return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, do_run, data);
+                return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, permits_ctx), data);
             }
         }
 
         Err(Cause::NotFound.into())
     }
 
-    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoError>) -> Result<R, ThoError>
+    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: &mut P, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>) -> Result<R, ThoError>
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
@@ -501,7 +530,7 @@ where
                 .expect("no value behind guard")
                 .subview(selector.clone())?;
 
-            return do_run(data);
+            return do_run(data, permits_ctx);
         }
 
         drop(read_guard);
@@ -516,14 +545,14 @@ where
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t = src.subview(selector.clone())?;
                 debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
-                let _permit =  if permits_ctx.read().acquired_permits() == 0 {
+                let _permit =  if permits_ctx.acquired_permits() == 0 {
                     Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
                 } else {
                     None
                 };
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
-                return do_run(data);
+                return do_run(data, permits_ctx);
             }
         }
 
@@ -742,9 +771,9 @@ where
     pub async fn with_selected_data<S, R, P>(
         &self,
         to_device_idx: usize,
-        permits_ctx: Arc<parking_lot::RwLock<P>>,
+        permits_ctx: &mut P,
         selector: S,
-        do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoError>,
+        do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>,
     ) -> Result<R, ThoError>
     where
         O: Select<S>,
@@ -950,12 +979,12 @@ pub trait WithDataRef: WithId + Debug {
     async fn with_data_ref<R, F, P>(
         &self,
         to_device_idx: usize,
-        permits_ctx: Arc<parking_lot::RwLock<P>>,
+        permits_ctx: &mut P,
         trace_ctx: Option<&'static str>,
         do_run: F,
     ) -> Result<R, ThoError>
     where
-       for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError> + Send,
+       for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
         P:PermitsCtx;
 
 
@@ -980,13 +1009,13 @@ where
     async fn with_selected_data_ref<'o, R, F, P>(
         &self,
         to_device_idx: usize,
-        _permits_ctx: Arc<parking_lot::RwLock<P>>,
+        _permits_ctx: &mut P,
         selector: S,
         trace_ctx: Option<&'static str>,
         do_run: F,
     ) -> Result<R, ThoError> where
      // Self::O<'o>: Select<S, Output = Self::O<'o>>,
-     for<'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError>,
+     for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
      P:PermitsCtx;
 }
 
@@ -997,9 +1026,9 @@ where
 {
     type O<'o> = O;
 
-    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: &mut P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
-            for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError> + Send,
+            for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
             P:PermitsCtx
     {
         O::M::with_data_ref(self, to_device_idx, permits_ctx, trace_ctx, do_run).await
@@ -1026,10 +1055,10 @@ where
     O: Select<S, Output=O> + Data + WithId + Send + Sync + CopyToDevice,
     O::M: DevicesWrapCopyMode<O>,
 {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: Arc<parking_lot::RwLock<P>>, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: &mut P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
-        for <'f> F: FnOnce(&Self::O<'f>) -> Result<R, ThoError>,
+        for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
         P:PermitsCtx
     {
         O::M::with_selected_data_ref(self, to_device_idx, permits_ctx, selector, trace_ctx, do_run).await
@@ -1142,9 +1171,10 @@ mod tests {
         let tested = super::DevicesWrap::wrap(data, 0);
         assert!(tested.cached_data[1].read().await.is_none());
 
+        let mut ctx_for_data = mock_run_ctx::default(1);
         tested
             .with_data_ref(1,
-               Arc::clone(&Arc::new(RwLock::new(mock_run_ctx::default(1)))), None, |data_on_1: &MockDataWithId| {
+               &mut ctx_for_data, None, |data_on_1: &MockDataWithId, _ctx| {
                    assert_eq!(data_on_1.device(), &1);
 
                    Ok(())
@@ -1182,8 +1212,8 @@ mod tests {
 
 
         //TODO ensure that asserts were actually invoked
-        let permits_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
-        with_data!(Arc::clone(&permits_ctx), 1, wrap_a, [wrap_vec], wrap_b, [wrap_vec_second];
+        let ctx_for_data = mock_run_ctx::default(1);
+        with_data!(ctx_for_data, wrap_a, [wrap_vec], wrap_b, [wrap_vec_second];
             |a: &MockDataWithId, first: &[&MockDataWithId], b: &MockDataWithId, second: &[&MockDataWithId]|{
                 assert_eq!(a.device(), &1);
                 assert_eq!(b.device(), &1);
@@ -1207,8 +1237,8 @@ mod tests {
 
         let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), 0));
 
-        let permits_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
-        with_data!(Arc::clone(&permits_ctx), 1, wrap_a;
+        let ctx_for_data = mock_run_ctx::default(1);
+        with_data!(ctx_for_data, wrap_a;
             |a: &MockDataWithId|{
                 assert_eq!(a.device(), &1);
                 Ok::<(), ThoError>(())

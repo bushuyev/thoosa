@@ -649,3 +649,6 @@ impl Adjustable for (){}
 impl<A> Adjustable for Arc<RwLock<A>> where A: Adjustable {}
 
 impl<T: Send + Sync> Adjustable for std::ops::Range<T> {}
+
+
+impl <A:Adjustable> Adjustable for Arc<A> {}

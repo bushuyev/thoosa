@@ -66,7 +66,7 @@ impl DistsPtr {
 }
 
 #[derive(Debug)]
-struct DenseMaskMatchIter {
+pub(crate) struct DenseMaskMatchIter {
     mask: Tensor,
     dists: Option<Tensor>,
     mask_ptr: *const u8,
@@ -140,7 +140,7 @@ impl Iterator for DenseMaskMatchIter {
 }
 
 #[derive(Debug)]
-struct PackedMaskMatchIter {
+pub(crate) struct PackedMaskMatchIter {
     mask: Tensor,
     dists: Option<Tensor>,
     bytes_ptr: *const u8,
@@ -278,7 +278,7 @@ impl FlatIndicesMatchIter {
 }
 
 #[derive(Debug)]
-struct FlatIndicesMatchIter {
+pub(crate) struct FlatIndicesMatchIter {
     indices: Tensor,
     dists: Option<Tensor>,
     coords: TrueCoords3dIter,
@@ -307,7 +307,7 @@ impl Iterator for FlatIndicesMatchIter {
 }
 
 #[derive(Debug)]
-struct TripletIndicesMatchIter {
+pub(crate) struct TripletIndicesMatchIter {
     indices: Tensor,
     dists: Option<Tensor>,
     indices_ptr: *const i64,
@@ -369,7 +369,7 @@ impl TripletIndicesMatchIter {
 }
 
 #[derive(Debug)]
-enum IndicesMatchIter {
+pub(crate) enum IndicesMatchIter {
     Flat(FlatIndicesMatchIter),
     Triplet(TripletIndicesMatchIter),
 }
@@ -401,7 +401,7 @@ impl IndicesMatchIter {
 }
 
 #[derive(Debug)]
-enum DistsMaskMatchIter {
+pub(crate) enum DistsMaskMatchIter {
     Dense(DenseMaskMatchIter),
     Packed(PackedMaskMatchIter),
     Indices(IndicesMatchIter),
@@ -1564,10 +1564,8 @@ where
     async fn consume<'a>(
         self: Arc<Self>,
         input: Self::In<'a>,
-        ctx: Arc<RwLock<Self::Ctx>>,
+        _ctx: Self::Ctx,
     ) -> Result<Self::Out, ThoError> {
-
-
         //TODO clone to resources ref
         let iter_0 = input.iter_0();
         let iter_1 = input.iter_1();
