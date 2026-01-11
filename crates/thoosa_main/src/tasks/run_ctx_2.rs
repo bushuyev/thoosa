@@ -68,7 +68,7 @@ impl RunCtx2 {
         Self {
             id: key,
             device_idx,
-            cache_area: GlobalCtx::global().next_cache_area().expect("no more cache areas"),
+            cache_area,
             perms: TorchPermsCtx::new("TorchPermsCtx"),
             loaded_raw_tensors: vec![],
             batched_motifs_id: vec![],
