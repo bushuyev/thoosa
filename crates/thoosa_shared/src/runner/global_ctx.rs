@@ -8,7 +8,7 @@ use mockall::automock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use futures_util::future::BoxFuture;
 use thoosa_shared::traits::CachableIdTr;
@@ -16,78 +16,241 @@ use thoosa_shared::{Cause, ThoError};
 use tokio::sync::RwLock as AsyncRwLock;
 use thoosa_shared::runner::purger::PurgeCmd;
 use crate::runner::purger::Purger;
+/// Public “area handle”: global bit index (0..n_areas).
+pub type CacheArea = u64;
+
+/// Convert CacheArea(bit_index) -> (word_index, mask_in_word)
+#[inline]
+fn area_to_word_mask(area: CacheArea) -> (usize, u64) {
+    let bit = area as usize;
+    let word = bit / 64;
+    let shift = (bit % 64) as u32;
+    (word, 1u64 << shift)
+}
+
+#[inline]
+fn valid_bits_mask_for_last_word(n_areas: usize) -> u64 {
+    let rem = n_areas % 64;
+    if rem == 0 { u64::MAX } else { (1u64 << rem) - 1 }
+}
 
 #[derive(Debug)]
 pub struct CacheAreasKeeper {
-    cache_areas: u64,
+    n_areas: usize,
+    words: Vec<u64>, // memory region of bits: 1 = used, 0 = free
 }
 
 impl CacheAreasKeeper {
+    pub fn new(n_areas: usize) -> Self {
+        let n_words = (n_areas + 63) / 64;
+        Self { n_areas, words: vec![0; n_words] }
+    }
 
-    //TODO make 32 x 32
-    pub fn next_available_cache_area(&mut self) -> Result<u64, ThoError> {
-        let next = first_free_bit(self.cache_areas);
-        if next == 0 {
+    /// Returns a u64 bit index (CacheArea).
+    pub fn next_available_cache_area(&mut self) -> Result<CacheArea, ThoError> {
+        debug!("CacheAreasKeeper::next_available_cache_area: self.n_areas={}", self.n_areas );
+        if self.n_areas == 0 {
             return Err(Cause::SomethingElse("no cache areas available".into()).into());
         }
-        self.cache_areas |= next;
 
-        Ok(next)
+        let last = self.words.len() - 1;
+
+        for (wi, w) in self.words.iter_mut().enumerate() {
+            let valid = if wi == last { valid_bits_mask_for_last_word(self.n_areas) } else { u64::MAX };
+            let free = (!*w) & valid;
+            if free == 0 { continue; }
+
+            let bit_in_word = free.trailing_zeros();        // 0..63
+            let mask = 1u64 << bit_in_word;
+
+            *w |= mask;
+
+            let bit_index = (wi * 64 + bit_in_word as usize) as u64;
+            return Ok(bit_index);
+        }
+
+        Err(Cause::SomethingElse("no cache areas available".into()).into())
     }
 
-    pub fn dispose_cache_area(&mut self, cache_area: u64)  {
-        debug!("CacheAreasKeeper::dispose_cache_area: cache_area={cache_area:064b}");
-        self.cache_areas = remove_mask(self.cache_areas, cache_area);
+    pub fn dispose_cache_area(&mut self, area: CacheArea) {
+
+        let bit = area as usize;
+        if bit >= self.n_areas {
+            debug!("dispose_cache_area: out-of-range area={area} n_areas={}", self.n_areas);
+            return;
+        }
+
+        let (word, mask) = area_to_word_mask(area);
+        debug!("dispose_cache_area: area={area} word={word} mask={mask:064b}");
+
+        self.words[word] &= !mask;
     }
 
-    pub fn new() -> Self {
-        Self { cache_areas: 0 }
-    }
+    /// Only for tests / introspection.
+    pub fn words(&self) -> &[u64] { &self.words }
 }
 
-pub fn remove_mask(from: u64, mask: u64) -> u64 {
-    !mask & from
+/// ---------- Atomic bitset for “SomeStruct holds many areas” ----------
+
+#[derive(Debug)]
+pub struct AtomicCacheAreas {
+    n_areas: usize,
+    words: Box<[AtomicU64]>,
 }
 
-pub fn first_free_bit(c: u64) -> u64 {
-    if c == u64::MAX {
-        0
-    } else {
-        1u64 << c.trailing_ones()
+impl AtomicCacheAreas {
+    pub fn new(n_areas: usize) -> Self {
+        let n_words = (n_areas + 63) / 64;
+        let mut v = Vec::with_capacity(n_words);
+        v.resize_with(n_words, || AtomicU64::new(0));
+        Self { n_areas, words: v.into_boxed_slice() }
+    }
+
+    pub fn add_cache_area(&self, area: CacheArea) {
+        let bit = area as usize;
+        debug_assert!(bit < self.n_areas);
+        let (word, mask) = area_to_word_mask(area);
+        self.words[word].fetch_or(mask, Ordering::AcqRel);
+    }
+
+    pub fn remove_cache_area(&self, area: CacheArea) {
+        let bit = area as usize;
+        debug_assert!(bit < self.n_areas);
+        let (word, mask) = area_to_word_mask(area);
+        self.words[word].fetch_and(!mask, Ordering::AcqRel);
+    }
+
+    pub fn snapshot_words(&self) -> Vec<u64> {
+        self.words.iter().map(|w| w.load(Ordering::Acquire)).collect()
     }
 }
 
 #[cfg(test)]
 mod test_areas_keeper_tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use log::debug;
-    use crate::runner::global_ctx::CacheAreasKeeper;
+    use crate::runner::global_ctx::{AtomicCacheAreas, CacheAreasKeeper};
     use crate::ThoError;
+
+
+    #[test]
+    fn keeper_full_64_and_reuse() -> Result<(), ThoError> {
+        let mut k = CacheAreasKeeper::new(64);
+
+        for expected in 0..64u64 {
+            let a = k.next_available_cache_area()?;
+            assert_eq!(a, expected);
+        }
+        assert!(k.next_available_cache_area().is_err());
+        assert_eq!(k.words()[0], u64::MAX);
+
+        k.dispose_cache_area(0);
+        k.dispose_cache_area(31);
+        assert_eq!(k.words()[0], u64::MAX & !(1u64 << 0) & !(1u64 << 31));
+
+        assert_eq!(k.next_available_cache_area()?, 0);
+        assert_eq!(k.next_available_cache_area()?, 31);
+
+        Ok(())
+    }
+
+    #[test]
+    fn keeper_130_crosses_words() -> Result<(), ThoError> {
+        let mut k = CacheAreasKeeper::new(130);
+
+        for _ in 0..130 {
+            k.next_available_cache_area()?;
+        }
+        assert!(k.next_available_cache_area().is_err());
+
+        k.dispose_cache_area(0);
+        k.dispose_cache_area(64);
+
+        assert_eq!(k.next_available_cache_area()?, 0);
+        assert_eq!(k.next_available_cache_area()?, 64);
+
+        Ok(())
+    }
+
+    #[test]
+    fn atomic_add_remove() -> Result<(), ThoError> {
+        let mut k = CacheAreasKeeper::new(128);
+        let s = AtomicCacheAreas::new(128);
+
+        let a0 = k.next_available_cache_area()?;
+        let a1 = k.next_available_cache_area()?;
+        s.add_cache_area(a0);
+        s.add_cache_area(a1);
+        s.remove_cache_area(a0);
+        s.remove_cache_area(a1);
+
+        assert!(s.snapshot_words().into_iter().all(|w| w == 0));
+        Ok(())
+    }
+    struct SomeStruct {
+        cache_area: AtomicU64,
+    }
+
+    impl SomeStruct {
+        pub fn add_cache_area(&self, ca: u64) -> u64 {
+            self.cache_area.fetch_or(ca, Ordering::SeqCst) | ca
+        }
+
+        pub fn remove_cache_area(&self, ca: u64) -> u64 {
+            self.cache_area.fetch_and(!ca, Ordering::AcqRel) & !ca
+        }
+
+        pub fn cache_areas(&self) -> u64 {
+            self.cache_area.load(Ordering::Acquire)
+        }
+    }
 
     #[test]
     fn test_full()->Result<(), ThoError>{
-        let mut keeper = CacheAreasKeeper::new();
+        let mut keeper = CacheAreasKeeper::new(1);
 
         for i in 0..64 {
             let area = keeper.next_available_cache_area()?;
-            debug!("area={area:064b} cache_areas={:064b}", keeper.cache_areas);
+            debug!("area={area:064b} cache_areas={:064b}", keeper.words[0]);
         }
 
-        assert_eq!(0b1111111111111111111111111111111111111111111111111111111111111111, keeper.cache_areas);
+        // assert_eq!(0b1111111111111111111111111111111111111111111111111111111111111111, keeper.cache_areas);
 
-        keeper.dispose_cache_area(0b0000000000000000000000000000000000000000000000000000000000000001);
-
-        assert_eq!(0b1111111111111111111111111111111111111111111111111111111111111110, keeper.cache_areas);
-
-        keeper.dispose_cache_area(0b0000000000000000000000000000000010000000000000000000000000000000);
-
-        assert_eq!(0b1111111111111111111111111111111101111111111111111111111111111110, keeper.cache_areas);
-
-        assert_eq!(0b0000000000000000000000000000000000000000000000000000000000000001, keeper.next_available_cache_area()?);
-
-        assert_eq!(0b0000000000000000000000000000000010000000000000000000000000000000, keeper.next_available_cache_area()?);
+        // keeper.dispose_cache_area(0b0000000000000000000000000000000000000000000000000000000000000001);
+        //
+        // assert_eq!(0b1111111111111111111111111111111111111111111111111111111111111110, keeper.cache_areas);
+        //
+        // keeper.dispose_cache_area(0b0000000000000000000000000000000010000000000000000000000000000000);
+        //
+        // assert_eq!(0b1111111111111111111111111111111101111111111111111111111111111110, keeper.cache_areas);
+        //
+        // assert_eq!(0b0000000000000000000000000000000000000000000000000000000000000001, keeper.next_available_cache_area()?);
+        //
+        // assert_eq!(0b0000000000000000000000000000000010000000000000000000000000000000, keeper.next_available_cache_area()?);
 
 
         Ok(())
+    }
+
+    #[test]
+    fn sample(){
+        let mut keeper = CacheAreasKeeper::new(3);
+
+        let mut ss = SomeStruct {
+            cache_area: AtomicU64::new(0)
+        };
+
+        let area_0 = keeper.next_available_cache_area().unwrap();
+        ss.add_cache_area(area_0);
+        let area_1 = keeper.next_available_cache_area().unwrap();
+        ss.add_cache_area(area_1);
+
+
+        ss.remove_cache_area(area_0);
+        ss.remove_cache_area(area_1);
+
+        assert_eq!(ss.cache_areas(), 0);
+
     }
 }
 
@@ -136,7 +299,7 @@ impl GlobalCtx {
 
             is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
 
-            caches_areas: parking_lot::RwLock::new(CacheAreasKeeper::new()),
+            caches_areas: parking_lot::RwLock::new(CacheAreasKeeper::new(10_000)),
 
             cache_age: Default::default(),
             purge_lock: tokio::sync::Mutex::new(()),
