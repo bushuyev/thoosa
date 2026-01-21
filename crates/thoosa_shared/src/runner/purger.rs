@@ -26,14 +26,16 @@ impl Purger {
             loop {
                 match rx.recv().await {
                     Some(PurgeCmd::Gpu { closures, cache_area }) => {
+                        debug!("Purger::new, loop, got cmd: closures.len={}, cache_area={cache_area:064b} ", closures.len());
+
 
                         for cl in &closures {
                             match (cl)().await {
                                 Ok(()) => {
-                                    debug!("done purging ")
+                                    debug!("Purger::new, loop: done purging ")
                                 }
                                 Err(e) => {
-                                    error!("purge failed: {e:?}")
+                                    error!("Purger::new, loop:  purge failed: {e:?}")
                                 }
                             }
                         }
@@ -49,7 +51,9 @@ impl Purger {
         Self { tx, worker: Some(worker) }
     }
 
+    //TODO rename to send_purge_gpu_rq
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>, cache_area: u64) -> Result<(), ThoError>{
+        debug!("Purger::run_purge_gpu: closures.len={}", closures.len());
         self.tx.send(PurgeCmd::Gpu {cache_area, closures}).map_err(|e|e.into())
     }
 }

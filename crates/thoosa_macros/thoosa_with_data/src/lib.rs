@@ -104,32 +104,26 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
     }
 
     let invoke_closure = if await_closure {
-        quote! { (#closure)(#(#arg_refs),*).await }
+        quote! { (#closure)(__with_data_ctx #(, #arg_refs)*).await }
     } else {
-        quote! { (#closure)(#(#arg_refs),*) }
+        quote! { (#closure)(__with_data_ctx #(, #arg_refs)*) }
     };
 
     let permits = if await_closure {
         quote! {
-             if __with_data_ctx.acquired_permits() == 0 {
+            if __with_data_ctx.acquired_permits() == 0 {
                 let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone())).await?;
                 __with_data_ctx.add_permit(permit);
             }
         }
     } else {
         quote! {
-             let _permit = if __with_data_ctx.acquired_permits() == 0 {
-
-                    let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global()
-                        .acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone()))
-                        .await?;
-                    Some(permit)
-                } else {
-                    None
-                };
+            if __with_data_ctx.acquired_permits() == 0 {
+                let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone())).await?;
+                __with_data_ctx.add_permit(permit);
+            }
         }
     };
-
     quote! {
         {
             use thoosa_shared::traits::WithId;
@@ -137,13 +131,15 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
 
             let mut __with_data_ctx = #ctx_expr;
             let __device_idx = __with_data_ctx.device_idx();
-            async {
+            let r = async {
                 #(#prelude)*
                 #permits
                 #(#load_steps)*
 
                 #invoke_closure
-            }.await
+            }.await;
+
+            r
         }
     }
 }

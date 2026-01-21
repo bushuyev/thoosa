@@ -17,6 +17,8 @@ use crate::CopyToDevice;
 use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
+#[cfg(any(test, feature = "mock_global_ctx"))]
+use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::purge::FuturesRunnerMapPurger;
 
 
@@ -42,7 +44,7 @@ where
         self.map.insert(
             value.id().clone(),
 
-            Arc::new(DevicesWrap::wrap(value, cache_area))
+            Arc::new(DevicesWrap::wrap(value, cache_area.into()))
         );
 
     }
@@ -182,6 +184,9 @@ where
     fn drop(&mut self) {
         tokio::task::block_in_place(move || {
             Handle::current().block_on(async move {
+                #[cfg(any(test, feature = "mock_global_ctx"))]
+                let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
                 GlobalCtx::global().remove_cache(self.name).await
             });
         });
@@ -194,13 +199,16 @@ mod tests {
     use std::collections::HashMap;
     use std::pin::Pin;
     use thoosa_dummy_data_derive::DummyData;
+    use thoosa_shared::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::{CopyToDevice, ThoError};
     use crate::applicables_runner::Output;
     use crate::copy_mode::CpuOrGpu;
+    // use crate::common::Data;
+    use crate::runner::global_ctx::mock_global_ctx;
     use crate::traits::{Data, SimpleId, WithId};
     use crate::runner::global_ctx;
     // use crate::common::Data;
-    use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx, MockGlobalCtx};
+    use crate::runner::global_ctx::{GlobalCtx, MockGlobalCtx};
     use crate::runner::tmp_cache::TmpCached;
 
     #[tokio::test]
@@ -226,17 +234,14 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_tmp_cache() -> Result<(), ThoError> {
 
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
 
-        GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();;
 
         #[derive(Debug, Clone)]
         struct TestData {

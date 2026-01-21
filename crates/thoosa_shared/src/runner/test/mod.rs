@@ -12,6 +12,7 @@ use mockall_double::double;
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
 use tokio::task::JoinSet;
+use crate::mono_key;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use crate::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
@@ -111,25 +112,20 @@ where
         <R as Stage>::In<'z>: Select<S, Output=<R as Stage>::In<'z>>
     {
 
-        let device_idx = ctx.device_idx();
-
-
         let size = input._size().clone();
         let mut min_split_len = input._size().clone();
         min_split_len /= 10;
 
         // debug!("ClcOOMRUnner::run: min_split_len={min_split_len:?} size={size:?}");
         let out_id = runnable.out_id(input.id()); //.clone();
-        let out_key = Arc::new(out_id.clone()) as Arc<dyn CachableIdTr>;
 
         match self.config {
             OOMRunnerConfig::Permits { max, step } => {
-                let run_ctx = ctx.branch("clc_oom_runner_permits", false);
+                let run_ctx = ctx.branch(Some("clc_oom_runner_permits"), false, false);
                 OOMHandler::new(
                     vec![Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                         max,
                         step,
-                        move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
                     )))],
                     None,
                 )
@@ -147,7 +143,7 @@ where
                 // todo!()
             },
             OOMRunnerConfig::Splits => {
-                let run_ctx = ctx.branch("clc_oom_runner_splits", false);
+                let run_ctx = ctx.branch(Some("clc_oom_runner_splits"), false, false);
                 OOMHandler::new(
                     vec![
                         Adjusters::Input(Box::new(
@@ -172,13 +168,12 @@ where
                 max: _max,
                 step: _step,
             } => {
-                let run_ctx = ctx.branch("clc_oom_runner_permits_splits", false);
+                let run_ctx = ctx.branch(Some("clc_oom_runner_permits_splits"), false, false);
                 OOMHandler::new(
                     vec![
                         Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                             MAX_PERMITS,
                             *PermitStep::TWENTY,
-                            move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
                         ))),
                         Adjusters::Input(Box::new(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
                             min_split_len,
@@ -199,14 +194,13 @@ where
                 .await
             }
             OOMRunnerConfig::DumpedToCpu => {
-                let run_ctx = ctx.branch("clc_oom_runner_dumped_to_cpu", false);
+                let run_ctx = ctx.branch(Some("clc_oom_runner_dumped_to_cpu"), false, false);
                 OOMHandler::new(
                     vec![
                         Adjusters::RunContext(Box::new(DumpToCpu::new())),
                         Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                             MAX_PERMITS,
                             *PermitStep::FIFTY,
-                            move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
                         ))),
                         Adjusters::Input(Box::new(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
                             min_split_len,
@@ -286,14 +280,14 @@ where
 
                 let multed = load_and_mul
                     .run_cached(
-                        Arc::new(DevicesWrap::wrap(<&str as Into<StageInStatic<R>>>::into(res), 0)),
-                        ctx_device.branch("run_mul_task_run", false),
+                        Arc::new(DevicesWrap::wrap(<&str as Into<StageInStatic<R>>>::into(res), 0.into())),
+                        ctx_device.branch(Some(&format!("run_mul_task_run_{idx}")), false, false),
                     )
                     .await?;
 
                 multed
                     .with_data_ref(device_idx,
-                                   &mut ctx_device.branch("run_mul_task_data", false), None, |guard: &<R as Stage>::Out, _ctx| {
+                                   &mut ctx_device.branch(Some("run_mul_task_data"), false, false), None, |guard: &<R as Stage>::Out, _ctx| {
                            // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
 
                            check_arc(res, &guard);
@@ -318,7 +312,7 @@ where
         .into_iter()
         .collect::<Result<(), ThoError>>();
 
-    debug!("r={r:?} res_cnt={res_cnt:?}");
+    debug!("test result={r:?} res_cnt={res_cnt:?}");
     assert!(r.is_ok());
 
     assert_eq!(resources.len() as u32, res_cnt.load(Relaxed));
@@ -333,33 +327,22 @@ where
 // Shared fixtures for tests that must bypass the MockGlobalCtx from `tests`.
 pub(crate) mod fixtures {
     use std::cmp::min;
-    use std::mem;
     use std::ops::Range;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::Arc;
 
-    use ambassador::Delegate;
     use async_trait::async_trait;
-    use dashmap::Entry;
-    use futures_util::FutureExt;
-    use futures_util::future::BoxFuture;
-    use log::debug;
-    use parking_lot::RwLock;
-    use tokio::sync::Semaphore;
     use thoosa_named_derive::Named;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{Data, Select, SimpleId, WithId};
-    use thoosa_shared::{ThoError};
+    use thoosa_shared::ThoError;
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
-    use crate::comp_id::{MonoKey, SynKey};
-    use crate::mono_key;
-    use crate::runner::common::{OutId, RunCtx, ambassador_impl_PermitsCtx, PermitsCtx, DropIf};
-    use crate::runner::common::cachable::{Cached, DevicesWrap};
+    use crate::runner::common::{OutId, RunCtx};
+    use crate::runner::common::cachable::DevicesWrap;
     use crate::runner::common::runnable::{AsyncStage, Stage};
-    use crate::runner::global_ctx::GlobalCtx;
-    use crate::runner::permits::{NumPermits, RunnerPerm, MAX_PERMITS};
+    use crate::runner::run_ctx_2::RunCtxWithPermits;
     use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
     use crate::traits::Adjustable;
 
@@ -367,136 +350,6 @@ pub(crate) mod fixtures {
     #[name = "MulTaskOutputId"]
     pub(crate) struct DMulTaskOutputId(pub(crate) &'static str);
 
-    #[derive(Debug, Delegate, Named)]
-    #[delegate(PermitsCtx, target = "perms_ctx")]
-    pub(crate) struct DummyRunCtx {
-        id:MonoKey,
-        device_idx: usize,
-        loaded_tensors_cached: Vec<SimpleId>,
-        multed_tensors_cached: Vec<DMulTaskOutputId>,
-        cache_area: u64,
-        name: &'static str,
-        perms_ctx: DummyPermsCtx,
-    }
-
-    #[derive(Debug, Named)]
-    struct DummyPermsCtx {//TODO it's same as TorchPermsCtx, replace
-        name: &'static str,
-        permits: Vec<RunnerPerm>,
-    }
-
-    impl DummyPermsCtx {
-        fn new(name: &'static str) -> Self {
-            Self {
-                name,
-                permits: Vec::new(),
-            }
-        }
-    }
-
-    impl PermitsCtx for DummyPermsCtx {
-        fn add_permit(&mut self, permit: RunnerPerm) {
-            self.permits.push(permit);
-        }
-
-        fn drop_permits(&mut self, drop_if: DropIf) {
-
-            let acquired_permits: NumPermits = self.acquired_permits();
-            debug!("drop_permits::drop_permits acquired_permits={acquired_permits} ctx.name={} drop_if={drop_if:?}",self.name);
-
-            match drop_if {
-                DropIf::Always => {
-                    debug!("TorchRunCtx: ctx.name={} dropping permits", self.name);
-                    self.permits.clear();
-                }
-                DropIf::IfNotMax => {
-                    if acquired_permits < MAX_PERMITS {
-                        debug!("TorchRunCtx: ctx.name={} dropping permits", self.name);
-                        self.permits.clear();
-                    }
-                }
-            }
-        }
-
-        fn acquired_permits(&self) -> NumPermits {
-            self.permits.iter().map(|p| p.num_permits()).sum()
-        }
-    }
-
-    impl Adjustable for DummyRunCtx {}
-    impl DummyRunCtx {
-        pub fn new(device_idx: usize, cache_area: u64, name: &'static str) -> Self {
-            let mut ctx = DummyPermsCtx::new(name);
-            ctx.add_permit(RunnerPerm::new(Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap()));
-            Self {
-                id: mono_key!(0, "dummy"),
-                device_idx,
-                loaded_tensors_cached: vec![],
-                multed_tensors_cached: vec![],
-                cache_area,
-                name,
-                perms_ctx: ctx,
-            }
-        }
-
-        pub(crate) fn push_loaded_tensor(&mut self, id: SimpleId) {
-            self.loaded_tensors_cached.push(id);
-        }
-
-        pub(crate) fn push_multed_tensor(&mut self, id: DMulTaskOutputId) {
-            self.multed_tensors_cached.push(id);
-        }
-    }
-
-    impl WithId for DummyRunCtx {
-        type ID = MonoKey;
-
-        fn id(&self) -> &Self::ID {
-            &self.id
-        }
-    }
-
-    impl RunCtx for DummyRunCtx {
-        fn device_idx(&self) -> usize {
-            self.device_idx
-        }
-
-        fn purge_gpu_caches(&mut self) -> BoxFuture<'static, Result<(), ThoError>>
-        where
-            Self: Sized,
-        {
-            let (cache_area, loaded_tensors_cached, mul_output_cached) = {
-                (
-                    self.cache_area,
-                    mem::replace(&mut self.loaded_tensors_cached, Vec::new()),
-                    mem::replace(&mut self.multed_tensors_cached, Vec::new()),
-                )
-            };
-            let device_idx = self.device_idx;
-            Box::pin(async move {
-
-                assert_ne!(device_idx, 0);
-
-
-                debug!("purge_gpu_caches: device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}");
-
-                DummyLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx).await?;
-
-                Ok(())
-            })
-        }
-
-        fn cache_area(&self) -> u64 {
-            self.cache_area
-        }
-
-        fn branch<I:Into<SynKey> + 'static>(&mut self, _new_name:I, with_new_cache_area: bool) -> Self
-        where
-            Self: Sized,
-        {
-            Self::new(self.device_idx, self.cache_area, self.name)
-        }
-    }
 
     #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "LoadedTensorId"]
@@ -588,49 +441,6 @@ pub(crate) mod fixtures {
             }
         }
 
-        // Mirrors `run_cached` but keeps the real GlobalCtx for tests_no_global_ctx_mock.
-        pub(crate) async fn run_cached_no_global_ctx(
-            self: Arc<Self>,
-            input: Arc<DevicesWrap<DLoaderInput>>,
-            mut ctx: DummyRunCtx,
-        ) -> Result<Arc<DevicesWrap<DLoadedTensor>>, ThoError> {
-            let key = self.out_id(WithId::id(input.as_ref()));
-            let cache_area = ctx.cache_area();
-            let device_idx = ctx.device_idx();
-
-            debug!("run_cached_no_global_ctx: key={key:?} device_idx={device_idx}");
-
-            let cache = <DummyLoader as Cached>::cache().await;
-
-            self.on_cached(input.as_ref(), &mut ctx);
-
-            GlobalCtx::global().do_age();
-
-            match cache.entry(key) {
-                Entry::Occupied(slot) => {
-                    let shared = slot.get().clone();
-                    drop(slot);
-                    shared
-                        .map(|res| {
-                            if let Ok(data) = &res {
-                                data.add_cache_area(cache_area);
-                            }
-                            res
-                        })
-                        .await
-                }
-                Entry::Vacant(slot) => {
-                    let fut = Arc::clone(&self)
-                        .run(input, ctx)
-                        .boxed()
-                        .shared();
-
-                    slot.insert(fut.clone()); //slot consumed, fut.await doesn't block it
-
-                    fut.await
-                }
-            }
-        }
     }
 
     #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
@@ -682,7 +492,7 @@ pub(crate) mod fixtures {
     impl Stage for DummyLoader {
         type In<'a> = DLoaderInput;
         type Out = DLoadedTensor;
-        type Ctx = DummyRunCtx;
+        type Ctx = RunCtxWithPermits;
     }
 
     // #[async_trait]
@@ -707,14 +517,9 @@ pub(crate) mod fixtures {
                                 .map(|v| v as f32 * k)
                                 .collect::<Vec<f32>>()
                                 .into(),
-                        }, cache_area)))
+                        }, cache_area.into())))
         }
 
-        fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &mut Self::Ctx)
-        where
-            Self:'a {
-            ctx.push_loaded_tensor(self.out_id(input.id()));
-        }
     }
 }
 
@@ -725,7 +530,7 @@ mod tests {
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock, OnceLock};
 
-    use super::fixtures::{DLoadedTensor, DLoaderInput, DLoaderInputId, DMulTaskOutputId, DummyRunCtx};
+    use super::fixtures::{DLoadedTensor, DLoaderInput, DLoaderInputId, DMulTaskOutputId};
     use super::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
     use async_trait::async_trait;
     use cached_derive::Cached;
@@ -741,16 +546,18 @@ mod tests {
     use thoosa_shared::traits::{Data, Named, SimpleId, WithId};
     use thoosa_shared::{Cause, ThoError};
     use crate::runner::adjusters::splits::OutputBuilder;
-    use crate::runner::common::{OutId, RunCtx, PermitsCtx};
+    use crate::runner::common::{OutId, PermitsCtx, RunCtx};
     use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
+    use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::permits::{PermitStep, MAX_PERMITS};
     use crate::runner::purge::FuturesRunnerMapPurger;
+    use crate::runner::run_ctx_2::RunCtxWithPermits;
     use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
     use crate::traits::Adjustable;
     #[double]
     use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use crate::runner::global_ctx::mock_global_ctx;
 
     #[ctor::ctor]
     fn init() {
@@ -833,7 +640,7 @@ mod tests {
     impl Stage for DummyLoader {
         type In<'a> = DLoaderInput;
         type Out = DLoadedTensor;
-        type Ctx = DummyRunCtx;
+        type Ctx = RunCtxWithPermits;
     }
 
     impl AsyncStage for DummyLoader {
@@ -858,16 +665,10 @@ mod tests {
                         .collect::<Vec<f32>>()
                         .into(),
                 },
-                cache_area,
+                cache_area.into(),
             )))
         }
 
-        fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &mut Self::Ctx)
-        where
-            Self:'a
-        {
-            ctx.push_loaded_tensor(self.out_id(input.id()));
-        }
     }
 
     ////////////
@@ -891,7 +692,7 @@ mod tests {
     impl Stage for DMulTask {
         type In<'a> = DLoadedTensor;
         type Out = DMulTaskOutput;
-        type Ctx = DummyRunCtx;
+        type Ctx = RunCtxWithPermits;
     }
 
     impl SyncStage for DMulTask {
@@ -1076,7 +877,7 @@ mod tests {
     impl Stage for DLoadAndMulTask {
         type In<'a> = DLoaderInput;
         type Out = DMulTaskOutput;
-        type Ctx = DummyRunCtx;
+        type Ctx = RunCtxWithPermits;
     }
 
     // #[async_trait]
@@ -1084,7 +885,7 @@ mod tests {
 
 
         async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            let ctx_for_loader = ctx.branch("load_and_mul_loader", false);
+            let ctx_for_loader = ctx.branch(Some("load_and_mul_loader"), false, false);
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, ctx_for_loader)
                 .await?;
@@ -1099,23 +900,17 @@ mod tests {
                     .run(
                         &self.mul,
                         loaded,
-                        ctx.branch("load_and_mul_mul", false),
+                        ctx.branch(Some("load_and_mul_mul"), false, false),
                         &HashMap::from([("", &HashSet::new())]),
                     )
                     .await.map_err(|e|{
                         error!("DLoadAndMulTask::run: e={e:?}");
                         e
-                     })?, cache_area)))
+                     })?, cache_area.into())))
             }
             .await
         }
 
-        fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &mut Self::Ctx)
-        where
-            Self:'a
-        {
-            ctx.push_multed_tensor(self.out_id(input.id()));
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
@@ -1130,15 +925,15 @@ mod tests {
 
         let loader = Arc::new(DummyLoader::new(3));
 
-        let mut ctx_device_0 = DummyRunCtx::new(device_idx, 0, "noname");
-        let ctx_device_0_0 = ctx_device_0.branch("test_load_dummy_0_0", false);
-        let ctx_device_0_1 = ctx_device_0.branch("test_load_dummy_0_1", false);
+        let mut ctx_device_0 = RunCtxWithPermits::new(device_idx, "noname");
+        let ctx_device_0_0 = ctx_device_0.branch(Some("test_load_dummy_0_0"), false, false);
+        let ctx_device_0_1 = ctx_device_0.branch(Some("test_load_dummy_0_1"), false, false);
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
                 Arc::new(DevicesWrap::wrap(DLoaderInput {
                                     id: DLoaderInputId("resource_1"),
-                                }, 0)),
+                                }, 0.into())),
                 ctx_device_0_0,
             )
             .await;
@@ -1149,7 +944,7 @@ mod tests {
             .run_cached(
                 Arc::new(DevicesWrap::wrap(DLoaderInput {
                                     id: DLoaderInputId("resource_1"),
-                                }, 0)),
+                                }, 0.into())),
                 ctx_device_0_1,
             )
             .await;
@@ -1164,15 +959,15 @@ mod tests {
 
         assert_eq!(loader.run_count.load(Relaxed), 1);
 
-        let mut ctx_device_1 = DummyRunCtx::new(1, 0, "noname");
-        let ctx_device_1_0 = ctx_device_1.branch("test_load_dummy_1_0", false);
-        let mut ctx_device_1_data = ctx_device_1.branch("test_load_dummy_1_0_data", false);
+        let mut ctx_device_1 = RunCtxWithPermits::new(1, "noname");
+        let ctx_device_1_0 = ctx_device_1.branch(Some("test_load_dummy_1_0"), false, false);
+        let mut ctx_device_1_data = ctx_device_1.branch(Some("test_load_dummy_1_0_data"), false, false);
 
         let loaded_tensor_1_0 = Arc::clone(&loader)
             .run_cached(
                 Arc::new(DevicesWrap::wrap(DLoaderInput {
                                     id: DLoaderInputId("resource_1"),
-                                }, 0)),
+                                }, 0.into())),
                 ctx_device_1_0,
             )
             .await?;
@@ -1217,15 +1012,15 @@ mod tests {
                 Box::new(|id| DMulTaskOutputBuilder::new(id)),
             ),
         ));
-        let mut ctx_device_0 = DummyRunCtx::new(1, 0, "noname");
-        let ctx_device_0_run = ctx_device_0.branch("test_load_and_mul_no_oom_run", false);
-        let mut ctx_device_0_data = ctx_device_0.branch("test_load_and_mul_no_oom_data", false);
+        let mut ctx_device_0 = RunCtxWithPermits::new(1, "noname");
+        let ctx_device_0_run = ctx_device_0.branch(Some("test_load_and_mul_no_oom_run"), false, false);
+        let mut ctx_device_0_data = ctx_device_0.branch(Some("test_load_and_mul_no_oom_data"), false, false);
 
         let multed = load_and_mut
             .run_cached(
                 Arc::new(DevicesWrap::wrap(DLoaderInput {
                                     id: DLoaderInputId("resource_1"),
-                                }, 0)),
+                                }, 0.into())),
                 ctx_device_0_run,
             )
             .await?;
@@ -1282,7 +1077,7 @@ mod tests {
                 Arc::clone(&load_and_mut),
                 &["resource_1", "resource_2", "resource_3"],
                 device_idx,
-                |device_idx, cache_area, name| DummyRunCtx::new(device_idx, cache_area, name),
+                |device_idx, _cache_area, name| RunCtxWithPermits::new(device_idx, name),
                 |res, out| {
                     mul_check(MUL_K, res, out);
                 },
@@ -1317,7 +1112,7 @@ mod tests {
                 Arc::clone(&load_and_mut),
                 &["resource_1", "resource_2", "resource_3"],
                 device_idx,
-                |device_idx, cache_area, name| DummyRunCtx::new(device_idx, cache_area, name),
+                |device_idx, _cache_area, name| RunCtxWithPermits::new(device_idx, name),
                 |res, out| {
                     mul_check(MUL_K, res, out);
                 },
@@ -1355,7 +1150,7 @@ mod tests {
                     "resource_5",
                 ], //,
                 device_idx,
-                |_device_idx, _cache_area, _name| DummyRunCtx::new(1, 0, "noname"),
+                |_device_idx, _cache_area, _name| RunCtxWithPermits::new(1, "noname"),
                 move |res, out| {
                     mul_check(MUL_K, res, out);
                 },
@@ -1388,7 +1183,7 @@ mod tests {
                 Arc::clone(&load_and_mut),
                 &["resource_1", "resource_2", "resource_3"],
                 device_idx,
-                |device_idx, cache_area, name| DummyRunCtx::new(device_idx, cache_area, name),
+                |device_idx, _cache_area, name| RunCtxWithPermits::new(device_idx, name),
                 |res, out| {
                     mul_check(MUL_K, res, out);
                 },
@@ -1403,21 +1198,26 @@ mod tests {
 #[cfg(test)]
 mod tests_no_global_ctx_mock{
     use std::sync::Arc;
+    use std::time::Duration;
     use log::debug;
-    use thoosa_shared::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::runner::cache_areas::CacheArea;
     use crate::runner::common::cachable::{Cached, DevicesWrap};
     use crate::runner::common::RunCtx;
     use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx, MockGlobalCtx};
-    use crate::runner::test::fixtures::{DLoaderInput, DummyLoader, DummyRunCtx};
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::runner::test::fixtures::{DLoaderInput, DummyLoader};
+    use crate::runner::run_ctx_2::RunCtxWithPermits;
     use crate::ThoError;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_cache_areas() -> Result<(), ThoError> {
-        let global_ctx = GlobalCtx::init_devices(2);
-        let mock_ctx = MockGlobalCtx::global_context();
-        mock_ctx.expect().returning(|| {
-            Box::leak(Box::new(mock_global_ctx::build_default()))
-        });
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
+
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+
+        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
 
         let loader = Arc::new(DummyLoader::new(10));
         let resource_1_arc = DLoaderInput::from("resource_1");
@@ -1425,48 +1225,46 @@ mod tests_no_global_ctx_mock{
 
         let device_idx = 1;
 
-        let cache_area_0 = global_ctx.next_cache_area()?;
+        let cache_area_0 = GlobalCtx::global().next_cache_area()?;
         debug!("cache_area_0={:064b}", cache_area_0);
 
-        let mut ctx_0 = DummyRunCtx::new(
-            device_idx,
-            cache_area_0,
-            "ctx_0",
-        );
-        let ctx_0_run = ctx_0.branch("test_cache_areas_0", false);
+        let mut ctx_0 = RunCtxWithPermits::with_cache_area_(device_idx, "ctx_0".into(), cache_area_0);
         let resource_0_for_ctx_0 = Arc::clone(&loader)
-            .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_0)), ctx_0_run)
+            .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_0.into())), ctx_0.branch(Some("test_cache_areas_0"), false, false))
             .await?;
 
-        let cache_area_1 = global_ctx.next_cache_area()?;
+        let cache_area_1 = GlobalCtx::global().next_cache_area()?;
         debug!("cache_area_1={:064b}", cache_area_1);
 
-        let mut ctx_1 = DummyRunCtx::new(
-            device_idx,
-            cache_area_1,
-            "ctx_1",
-        );
-        let ctx_1_run = ctx_1.branch("test_cache_areas_1", false);
+        let mut ctx_1 = RunCtxWithPermits::with_cache_area_(device_idx, "ctx_1".into(), cache_area_1);
         let resource_0_for_ctx_1 = Arc::clone(&loader)
-            .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_1)), ctx_1_run)
+            .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_1.into())), ctx_1.branch(Some("test_cache_areas_1"), false, false))
             .await?;
 
-        debug!("cache_areas 0+1={:064b}",resource_0_for_ctx_1.cache_areas());
+        debug!("cache_areas 0+1={:?}",resource_0_for_ctx_1.cache_areas());
 
         assert!(Arc::ptr_eq(&resource_0_for_ctx_0, &resource_0_for_ctx_1));
-        assert_ne!(resource_0_for_ctx_1.cache_areas(), 0);
+        assert!(resource_0_for_ctx_1.cache_areas().contains(cache_area_0));
+        assert!(resource_0_for_ctx_1.cache_areas().contains(cache_area_1));
 
-        ctx_0.purge_gpu_caches().await?;
-        debug!("cache_areas   1={:064b}",resource_0_for_ctx_1.cache_areas());
-        assert_ne!(resource_0_for_ctx_1.cache_areas(), 0);
+        drop(ctx_0);
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
-        ctx_1.purge_gpu_caches().await?;
-        debug!("cache_areas   ={:064b}", resource_0_for_ctx_1.cache_areas());
-        assert_eq!(resource_0_for_ctx_1.cache_areas(), 0);
+        debug!("cache_areas   1={:?}",resource_0_for_ctx_1.cache_areas());
+        assert!(!resource_0_for_ctx_1.cache_areas().contains(cache_area_0));
+        assert!(resource_0_for_ctx_1.cache_areas().contains(cache_area_1));
+
+        drop(ctx_1);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        debug!("cache_areas   ={:?} default={:?}", resource_0_for_ctx_1.cache_areas(), CacheArea::default());
+        assert!(!resource_0_for_ctx_1.cache_areas().contains(cache_area_1));
+
+        assert_eq!(resource_0_for_ctx_1.cache_areas(), &CacheArea::default());
 
         assert_eq!(loader_cache.len(), 1);
 
-        global_ctx.purge_cpu(0).await;
+        GlobalCtx::global().purge_cpu(0).await;
         debug!("loader_cache={loader_cache:?} len={}", loader_cache.len());
         assert_eq!(loader_cache.len(), 0);
 

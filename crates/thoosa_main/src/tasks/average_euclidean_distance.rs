@@ -1,6 +1,6 @@
 use crate::tasks::cross_dims::MotifSlices;
 use crate::tasks::motif_loader::MotifMeta;
-use crate::tasks::run_ctx_2::RunCtx2;
+use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use async_trait::async_trait;
 use thoosa_shared::runner::adjusters::splits::OutputBuilder;
 use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
@@ -118,7 +118,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="AverageEuclideanDistanceStage::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         Ok(AverageDistanceValue::new(
-            SynKey::new([mono_key!("todo", "todo")]),
+            SynKey::new([mono_key!("AverageDistanceValue", "AverageDistanceValue")]),
             panic_to_err!(average_euclidean_distance(input.data().t_ref()))?
         ))
     }
@@ -126,10 +126,17 @@ where
 
 #[cfg(test)]
 mod tests {
+    use log::debug;
+    use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::mono_key;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn test_average_euclidean_distance() {
-        //TODO
+    async fn test_debug() {
+        let syn_key:SynKey = [mono_key!(0, "aaa"),mono_key! (1, "bbb"), mono_key!(2, "ccc"), mono_key!("ddd", "ddd")].into();
+
+        debug!("syn_key: {syn_key:?}");
+        //should print
+        //SynKey[(0,"aaa)/(1, "bbb")/(2,"ccc")]
     }
 }
 #[cfg(test)]

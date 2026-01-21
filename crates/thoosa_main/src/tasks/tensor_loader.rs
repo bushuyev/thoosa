@@ -1,5 +1,4 @@
 use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::run_ctx_2::MotifsCtx;
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
@@ -19,6 +18,7 @@ use thoosa_shared::traits::WithId;
 use thoosa_named_derive::Named;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use thoosa_with_data::with_data;
 // use crate::tasks::stages_seq::StagesSeq;
 
@@ -29,7 +29,7 @@ type LoadFn =
 #[cache_name = "RawTensors"]
 pub struct RawTensorLoader<C>
 where
-    C: RunCtx + MotifsCtx + 'static,
+    C: RunCtx + 'static,
 {
     id: SynKey,
     device: ThoDevice,
@@ -39,7 +39,7 @@ where
 
 impl<C> Debug for RawTensorLoader<C>
 where
-    C: RunCtx + MotifsCtx + 'static,
+    C: RunCtx + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TensorLoader")
@@ -51,7 +51,7 @@ where
 
 impl<C> Stage for RawTensorLoader<C>
 where
-    C: RunCtx + MotifsCtx + 'static,
+    C: RunCtx + 'static,
 {
     type In<'a> = Resource;
     type Out = ThoTensor<ChannelsData2, SynKey>;
@@ -61,7 +61,7 @@ where
 // #[async_trait]
 impl<C> AsyncStage for RawTensorLoader<C>
 where
-    C: RunCtx + MotifsCtx + 'static,
+    C: RunCtx + 'static,
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RawTensorLoader::run"))]
@@ -70,32 +70,22 @@ where
         input: Arc<DevicesWrap<Self::In<'static>>>,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let cache_area = ctx.cache_area();
 
-        let num_devices = GlobalCtx::global().device_count();
-        let target_device = self.device.ordinal();
-
-        let ctx_for_input = ctx.branch("raw_tensor_loader_input", false);
-        with_data!(ctx_for_input, input; |resource: &Resource| {
+        with_data!(ctx.branch(Some("raw_tensor_loader_input"), false, false), input; |ctx:C, resource: &Resource| {
             let tensor = (self.loader_fn)(resource, &self.device)?;
+
             Ok::<Arc<DevicesWrap<Self::Out>>, ThoError>(Arc::new(DevicesWrap::wrap(
                 tensor,
-                cache_area,
+                ctx.cache_area().into(),
             )))
         })
     }
 
-    fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &mut Self::Ctx)
-    where
-        Self: 'a
-    {
-        ctx.add_loaded_raw_tensor_id(self.out_id(input.id()))
-    }
 }
 
 impl<C> OutId for RawTensorLoader<C>
 where
-    C: RunCtx + MotifsCtx + 'static,
+    C: RunCtx + 'static,
 {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SynKey::new([mono_key!(input_id.id(), format!("loaded_{}", input_id.id()))])
@@ -104,7 +94,7 @@ where
 
 impl<C> RawTensorLoader<C>
 where
-    C: RunCtx + MotifsCtx + 'static,
+    C: RunCtx + 'static,
 {
     pub fn new<F>(loader_fn: F, device: ThoDevice) -> Self
     where
@@ -130,6 +120,7 @@ pub(crate) mod mock_tensor_loader {
     use mockall::mock;
     use std::sync::Arc;
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
+    use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::common::{MockRunCtx, OutId};
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use thoosa_shared::ThoError;
@@ -199,7 +190,7 @@ pub(crate) mod mock_tensor_loader {
                 let id = SynKey::new([mono_key!(k.file_stem(), format!("file_stem={}", k.file_stem()))]);
                 let tensor = ThoTensor::new(id, v)
                     .expect("ThoTensor::new failed in MockTensorLoaderBuilder");
-                (k, Arc::new(DevicesWrap::wrap(tensor, 0)))
+                (k, Arc::new(DevicesWrap::wrap(tensor, CacheArea::default())))
             }).collect());
 
             self.mock.expect_run_cached().returning(move |input, ctx|{
@@ -227,9 +218,10 @@ pub(crate) mod mock_tensor_loader {
 
 #[cfg(test)]
 mod tests {
-    use crate::tasks::run_ctx_2::RunCtx2;
+    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::runner::common::RunCtx;
     use rand::Rng;
@@ -252,7 +244,7 @@ mod tests {
         rand::rng().fill(&mut data[..]);
         let data_0 = data.clone();
 
-        let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
+        let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
             move |key, _| {
                 Ok(ThoTensor::new(
                     SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
@@ -262,15 +254,15 @@ mod tests {
             ThoDevice::from(Device::Cpu),
         ));
 
-        let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, "aa")));
+        let ctx = Arc::new(parking_lot::RwLock::new(RunCtxWithPermits::new(0, "aa")));
 
-        let load_ctx = ctx.write().branch("tensor_loader_load", false);
+        let load_ctx = ctx.write().branch(Some("tensor_loader_load"), false, false);
         let loaded = loader
-            .run_cached(Arc::new(DevicesWrap::wrap(Resource::new(0, 0, "aaa", 20), 0)), load_ctx)
+            .run_cached(Arc::new(DevicesWrap::wrap(Resource::new(0, 0, "aaa", 20), CacheArea::default())), load_ctx)
             .await
             ?;
 
-        let mut data_ctx = ctx.write().branch("tensor_loader_data", false);
+        let mut data_ctx = ctx.write().branch(Some("tensor_loader_data"), false, false);
         let result = loaded
             .with_data_ref(0,
             &mut data_ctx, None, |v: &ThoTensor<ChannelsData2, SynKey>, _ctx| {

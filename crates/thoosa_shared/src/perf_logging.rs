@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use dashmap::DashMap;
-use tracing::Level;
+use tracing::{error, Level};
 use tracing_subscriber::{fmt, fmt::{format::Writer, time::FormatTime}, layer::SubscriberExt, registry, EnvFilter, Layer};
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
@@ -112,10 +112,10 @@ where
     }
 }
 
-/// Perf-only tracing to stdout, but formatted like your simplelog lines.
-pub fn maybe_init_perf_tracing_stdout_simplelog_like(perf_filter: &str, perf_file: PathBuf) -> Result<bool, ThoError> {
+/// Perf-only tracing to stdout, but formatted like simplelog lines.
+pub fn maybe_init_perf_tracing_stdout_simplelog_like(perf_filter: &str, perf_file: PathBuf) -> Result<(), ThoError> {
     if perf_filter.trim() == "off" {
-        return Ok(false);
+        return Ok(());
     }
 
     let perf_f = File::create(perf_file)?;
@@ -135,9 +135,12 @@ pub fn maybe_init_perf_tracing_stdout_simplelog_like(perf_filter: &str, perf_fil
     registry()
         .with(layer)
         .with(PerfLayer::new())
-        .try_init()
-        .map(|_|true)
-        .map_err(|e| ThoError::from_error("init perf tracing subscriber", e))
+        .try_init().map_err(|e|{
+            error!("Init tracing logging failed: {e:?}");//TODO print in CLI
+            e
+        })?;
+
+    Ok(())
 }
 
 
