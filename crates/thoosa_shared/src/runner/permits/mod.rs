@@ -1,11 +1,13 @@
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
+use std::mem;
 use std::ops::Deref;
 use std::sync::Arc;
-use log::trace;
+use log::{debug, trace};
 use crate::ThoError;
 use crate::traits::CachableIdTr;
 use tokio::sync::{Notify, OwnedSemaphorePermit, mpsc};
+use crate::comp_id::SynKey;
 
 pub mod runner_queue;
 
@@ -37,17 +39,22 @@ pub trait PermitSource: Debug + Send + Sync {
         num_permits: NumPermits,
         out_id: std::sync::Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoError>;
+
+    async fn wait_for_permits_hint(&self);
+
+    //TODO #[cfg(debug_assertions)]
+    fn move_permits(&self, from:&SynKey, to:&SynKey);
 }
 
 pub type NumPermits = u8;
 
 pub struct RunnerPerm {
-    inner: OwnedSemaphorePermit,
+    inner: Option<OwnedSemaphorePermit>,
     drop_signal: Option<DropSignal>,
 }
 
 pub struct DropSignal {
-    notify: Arc<Notify>,
+    notify: Arc<Notify>,//Arc to Arbiter::notify
     drop_tx: mpsc::UnboundedSender<(Arc<dyn CachableIdTr>, u8)>,
     requester_id: Arc<dyn CachableIdTr>,
 }
@@ -69,7 +76,7 @@ impl DropSignal {
 impl Debug for RunnerPerm {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunnerPerm")
-            .field("v", &self.inner.num_permits())
+            .field("v", &self.inner)
             .finish()
     }
 }
@@ -77,19 +84,19 @@ impl Debug for RunnerPerm {
 impl RunnerPerm {
     #[inline]
     pub fn num_permits(&self) -> NumPermits {
-        self.inner.num_permits() as NumPermits
+        self.inner.as_ref().map(|v|v.num_permits()).unwrap_or(0) as NumPermits
     }
 
     pub fn new(inner: OwnedSemaphorePermit) -> Self {
         Self {
-            inner,
+            inner: Some(inner),
             drop_signal: None,
         }
     }
 
     pub fn with_drop_signal(inner: OwnedSemaphorePermit, drop_signal: DropSignal) -> Self {
         Self {
-            inner,
+            inner: Some(inner),
             drop_signal: Some(drop_signal),
         }
     }
@@ -97,12 +104,16 @@ impl RunnerPerm {
 
 impl Drop for RunnerPerm {
     fn drop(&mut self) {
-        trace!("Drop for RunnerPerm::drop");
+
+        let permits_to_drop = self.num_permits() as u8;
+        drop(self.inner.take());
         // Releasing permits is done by tokio::OwnedSemaphorePermit’s Drop.
-        // We only need to wake the arbiter to re-check the head of queue.
+        //  wake the arbiter to re-check the head of queue
         if let Some(drop_signal) = self.drop_signal.take() {
-            let _ = drop_signal.drop_tx.send((drop_signal.requester_id, self.inner.num_permits() as u8));
-            drop_signal.notify.notify_one();
+            debug!("PermitsDebug: Drop for RunnerPerm::drop: drop_signal.requester_id={:?} num_permits={permits_to_drop:?}", drop_signal.requester_id);
+
+            let _ = drop_signal.drop_tx.send((drop_signal.requester_id, permits_to_drop));
+            drop_signal.notify.notify_one(); //requesters also wait on same notify
         }
     }
 }

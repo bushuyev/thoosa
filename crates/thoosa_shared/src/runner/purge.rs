@@ -1,4 +1,4 @@
-use crate::runner::common::cachable::{DevicesWrapCopyMode, DevicesWrap};
+use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::StreamExt;
@@ -97,7 +97,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thoosa_shared::runner::global_ctx::{MockGlobalCtx, mock_global_ctx};
+    use thoosa_shared::runner::global_ctx::MockGlobalCtx;
     use async_trait::async_trait;
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, FutureExt};
@@ -106,6 +106,8 @@ mod tests {
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::traits::{DummyCachableId, WithId};
     use thoosa_shared::copy_mode::CpuOrGpu;
+    use crate::runner::global_ctx::mock_global_ctx;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
     #[derive(Debug, Clone)]
     struct DummyOutput {
@@ -162,11 +164,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tasks_are_throttled_and_complete() -> Result<(), ThoError> {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(mock_global_ctx::build_default()))
-                as &'static MockGlobalCtx
-        });
+        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
 
         let map: DashMap<
             DummyCachableId,
@@ -189,7 +188,7 @@ mod tests {
                 purge_active: purge_active.clone(),
                 max_purge: max_purge.clone(),
             };
-            let wrapper = Arc::new(DevicesWrap::wrap(out, 0));
+            let wrapper = Arc::new(DevicesWrap::wrap(out, 0.into()));
             let active_c = futures_active.clone();
             let max_c = max_futures.clone();
             let processed_c = processed.clone();

@@ -16,7 +16,7 @@ use tracing_subscriber::{
     layer::SubscriberExt,
     EnvFilter, Layer,
 };
-use crate::perf_logging::SimplelogLikeEvent;
+use crate::perf_logging::{PerfLayer, SimplelogLikeEvent};
 
 pub fn init_test_logging() {
     if !LOG_INIT.load(Ordering::Relaxed) {
@@ -82,42 +82,31 @@ pub fn maybe_init_perf_tracing_stdout(perf_filter: &str) -> bool {
 
     tracing_subscriber::registry()
         .with(layer)
-        // .with(PerfLayer::new())
+        .with(PerfLayer::new())
         .try_init()
         .is_ok()
 }
 
 
 pub fn set_panic_hook() {
-    // std::panic::set_hook(Box::new(|panic_info| {
-    //     let backtrace = std::backtrace::Backtrace::capture();
-    //     error!("Panic info: {:?}", panic_info);
-    //     for frame in backtrace.frames() {
-    //         error!("{:?}", frame);
-    //     }
-    //
-    // }));
     let default_hook = std::panic::take_hook();
 
     std::panic::set_hook(Box::new(move |info| {
         debug!("Panic info: {:?}", info);
-        // 1. dump the payload (works for both &str and String)
+
         if let Some(s) = info.payload().downcast_ref::<&str>() {
             log::error!("panic payload: {s}");
         } else if let Some(s) = info.payload().downcast_ref::<String>() {
             log::error!("panic payload: {s}");
         }
 
-        // 2. optional extra back-trace
-        // log::error!("{:?}", std::backtrace::Backtrace::force_capture());
+
         let backtrace = std::backtrace::Backtrace::force_capture();
         for frame in backtrace.frames() {
             debug!("{:?}\n", frame);
         }
         log::logger().flush(); // make sure async loggers flush
 
-        // 3. hand control back to the standard reporter so you
-        //    still get the nicely formatted panic + back-trace
         default_hook(info);
     }));
 }

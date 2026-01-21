@@ -3,7 +3,7 @@ use crate::tasks::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
 };
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
-use crate::tasks::run_ctx_2::RunCtx2;
+use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use thoosa_shared::runner::common::{OutId, RunCtx};
@@ -34,6 +34,7 @@ use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_common::cuda_utils::{pack_bits_bool, with_cuda_stream};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::data_with_extra::DataWithExtra;
@@ -298,7 +299,7 @@ where
 
         debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
         for stage in self.run_config_stages.iter() {
-            let ctx_for_stage = ctx.branch(format!("find_motifs_for_rc_{}", stage.run_config.id.unwrap_or(0)), true);
+            let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.run_config.id.unwrap_or(0))), true, false);
             let input_arc = Arc::clone(&input);
             let cross_loader_arc = Arc::clone(&stage.cross_loader);
 
@@ -318,7 +319,7 @@ where
 
         info!("failed {} out of {}",failed.load(Ordering::Relaxed),self.run_config_stages.len());
 
-        Ok(Arc::new(DevicesWrap::wrap(FindMotifsSavableResult::new(), 0)))
+        Ok(Arc::new(DevicesWrap::wrap(FindMotifsSavableResult::new(), CacheArea::default())))
     }
 }
 
@@ -353,10 +354,11 @@ mod tests {
     use crate::cli::{import_resources, run_grid};
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_motifs::FindMotifsStage;
-    use crate::tasks::run_ctx_2::RunCtx2;
+    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use thoosa_shared::runner::common::{PermitsCtx, RunCtx};
     use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef};
+    use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use log::debug;
@@ -522,7 +524,7 @@ mod tests {
 
         debug!("test_motifs: resources_0_0={resources_0_0:?}");
 
-        let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
+        let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
             move |key, _| {
                 let tensor = Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem())))?;
                 debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
@@ -531,7 +533,7 @@ mod tests {
             ThoDevice::from(Device::Cpu),
         ));
 
-        let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, "aa")));
+        let ctx = Arc::new(parking_lot::RwLock::new(RunCtxWithPermits::new(1, "aa")));
         ctx.write().add_permit(global_ctx.acquire_many(0, 1, Arc::new(SynKey::new([mono_key!("test", "test")]))).await?);
 
         let cache_area = ctx.read().cache_area();
@@ -542,7 +544,7 @@ mod tests {
                     .map(|v| v.to_string())
                     .collect(),
             ))),
-            0
+            CacheArea::default()
         ));
 
         let step_10_window_100 = r#"{
@@ -582,11 +584,11 @@ mod tests {
                     .expect("FindMotifsStage::new failed in test"),
                 )
             },
-            || ctx.write().branch("find_motifs_test", false),
+            || ctx.write().branch(Some("find_motifs_test"), false, false),
         )
         .await?;
 
-        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtx2>, RunCtx2>::new(
+        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::new(
             Arc::clone(&store),
             Arc::clone(&loader),
             &ws
@@ -594,7 +596,7 @@ mod tests {
 
         let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
             Arc::clone(&motif_loader_impl),
-            Arc::new(AverageEuclideanDistanceStage::<RunCtx2>::new())
+            Arc::new(AverageEuclideanDistanceStage::<RunCtxWithPermits>::new())
         ));
 
         let motifs = store.read().list_motifs(run_ids[0])?;
@@ -605,15 +607,15 @@ mod tests {
             let cache_area_loop = ctx.read().cache_area();
             let num_devices_loop = GlobalCtx::global().device_count();
             let motif_id_value = DataId::from(&(motif_id_raw as u32));
-            let motif_id = Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(motif_id_value.clone()), 0));
+            let motif_id = Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(motif_id_value.clone()), CacheArea::default()));
 
             let motif = Arc::clone(&motif_loader_impl).run(
                 Arc::clone(&motif_id),
-                ctx.write().branch("find_motifs_motif_loader", false),
+                ctx.write().branch(Some("find_motifs_motif_loader"), false, false),
             )
             .await?;
 
-            let mut ctx_for_data = ctx.write().branch("find_motifs_motif_data", false);
+            let mut ctx_for_data = ctx.write().branch(Some("find_motifs_motif_data"), false, false);
             motif
                 .with_data_ref(1,
                 &mut ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, _ctx| {
@@ -623,9 +625,9 @@ mod tests {
                })
                 .await?;
 
-            let mut ctx_for_dist = ctx.write().branch("find_motifs_dist_value", false);
+            let mut ctx_for_dist = ctx.write().branch(Some("find_motifs_dist_value"), false, false);
             let dist = Arc::clone(&clc_dist)
-                .run_cached(Arc::clone(&motif_id), ctx.write().branch("find_motifs_clc_dist", false))
+                .run_cached(Arc::clone(&motif_id), ctx.write().branch(Some("find_motifs_clc_dist"), false, false))
                 .await?
                 .with_data_ref(0, &mut ctx_for_dist, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
                 .await?;

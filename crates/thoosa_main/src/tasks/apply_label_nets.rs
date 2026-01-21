@@ -27,14 +27,13 @@ use thoosa_with_data::with_data;
 
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::run_ctx_2::MotifsCtx;
 
 /// Applies label nets and returns per-model probabilities. Output is a flat list of label-model
 /// scores (Model1ForLabelA, Model2ForLabelA, ...), not a per-label aggregate.
 #[derive(Debug, Cached, Named)]
 pub struct ApplyLabelNets<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
     apply_motif_nets: Arc<ApplyMotifNets<C>>,
@@ -44,7 +43,7 @@ where
 
 impl<C> ApplyLabelNets<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     pub async fn new<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -53,7 +52,7 @@ where
         stage_ctx: R,
     ) -> Result<Self, ThoError>
     where
-        R: RunCtx + MotifsCtx + Adjustable + 'static,
+        R: RunCtx + Adjustable + 'static,
     {
         let (device_idx, cache_area) = {
             (stage_ctx.device_idx(), stage_ctx.cache_area())
@@ -135,11 +134,7 @@ where
                 .collect::<Vec<_>>(),
         );
 
-        debug!(
-            "ApplyLabelNets::new: label_nets.len={} run_ids={:?}",
-            apply_label_nets.len(),
-            label_net_run_ids
-        );
+        debug!("ApplyLabelNets::new: label_nets.len={} run_ids={:?}",apply_label_nets.len(),label_net_run_ids);
 
         Ok(Self {
             id,
@@ -156,7 +151,7 @@ where
 
 impl<C> Stage for ApplyLabelNets<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = ThoTensor<ChannelsData2, SynKey>;
@@ -165,7 +160,7 @@ where
 
 impl<C> AsyncStage for ApplyLabelNets<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNets::run"))]
     async fn run(
@@ -177,24 +172,25 @@ where
         let input_id = input.id().clone();
 
         let motif_probs = Arc::clone(&self.apply_motif_nets)
-            .run_cached(input, ctx.branch("apply_label_nets_motif_probs", false))
+            .run_cached(input, ctx.branch(Some("apply_label_nets_motif_probs"), false, false))
             .await?;
 
         let label_nets = self.apply_label_nets.clone();
         let label_outputs = futures::stream::iter(label_nets.into_iter())
             .map(|apply_label_net| {
                 let motif_probs = Arc::clone(&motif_probs);
-                let apply_label_net_ctx = ctx
-                    .branch(format!("apply_label_net_ctx_{}_{}", apply_label_net.label, apply_label_net.run_id), false);
+                let apply_label_net_ctx = ctx.branch(Some(&format!("apply_label_net_ctx_{}_{}", apply_label_net.label, apply_label_net.run_id)), false, false);
 
-                async move { apply_label_net.run(motif_probs, apply_label_net_ctx).await }
+                async move {
+                    apply_label_net.run(motif_probs, apply_label_net_ctx).await
+                }
             })
             .buffered(crate::buffer_limits::APPLY_LABEL_NETS_RUN_BUFFERED_LIMIT)
             .try_collect::<Vec<_>>()
             .await?;
 
         let out_id = self.out_id(&input_id);
-        let tensor = with_data!(ctx.branch("apply_label_nets_stack", false), [label_outputs]; |outs:&[&ThoTensor<LabelProbability, SynKey>]|{
+        let tensor = with_data!(ctx, [label_outputs]; |_ctx, outs:&[&ThoTensor<LabelProbability, SynKey>]|{
             let stacked = Tensor::f_stack(
                 outs.iter()
                     .map(|o| o.t_ref().shallow_clone())
@@ -205,13 +201,13 @@ where
             ThoTensor::new(out_id, stacked)
         })?;
 
-        Ok(Arc::new(DevicesWrap::wrap(tensor, cache_area)))
+        Ok(Arc::new(DevicesWrap::wrap(tensor, cache_area.into())))
     }
 }
 
 impl<C> OutId for ApplyLabelNets<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -221,8 +217,9 @@ where
 #[derive(Debug)]
 struct ApplyLabelNet<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable,
+    C: RunCtx + Adjustable,
 {
+    id: SynKey,
     label: String,
     run_id: RunId,
     net_wrapper: Arc<DevicesWrap<ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>>>,
@@ -231,7 +228,7 @@ where
 
 impl<C> ApplyLabelNet<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable,
+    C: RunCtx + Adjustable,
 {
     fn new(
         label: String,
@@ -240,9 +237,10 @@ where
         cache_area: u64,
     ) -> Self {
         Self {
+            id: mono_key!(label.clone(), "ApplyLabelNet") + net.id(),
             label,
             run_id,
-            net_wrapper: Arc::new(DevicesWrap::wrap(net, cache_area)),
+            net_wrapper: Arc::new(DevicesWrap::wrap(net, cache_area.into())),
             pd: PhantomData,
         }
     }
@@ -250,13 +248,13 @@ where
 
 impl<C> Adjustable for ApplyLabelNet<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable,
+    C: RunCtx + Adjustable,
 {
 }
 
 impl<C> Stage for ApplyLabelNet<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable,
+    C: RunCtx + Adjustable,
 {
     type Ctx = C;
     type In<'a> = ThoTensor<MotifProbability, SynKey>;
@@ -265,26 +263,28 @@ where
 
 impl<C> AsyncStage for ApplyLabelNet<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
-        ctx: Self::Ctx,
+        mut ctx: Self::Ctx,
     ) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
         let net_wrapper = Arc::clone(&self.net_wrapper);
         let out_id = self.out_id(input.id());
+
         async move {
+
             let cache_area = ctx.cache_area();
-            let mut ctx = ctx;
-            let ctx_for_data = ctx.branch("apply_label_net_data", false);
-            with_data!(ctx_for_data, net_wrapper, input; |net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, input:&ThoTensor<MotifProbability, SynKey>|{
+
+            with_data!(ctx, net_wrapper, input; |_ctx, net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, input:&ThoTensor<MotifProbability, SynKey>|{
                 let batch_input = input.t_ref().f_unsqueeze(0)?;
                 let batch_input: ThoTensor<MotifsNetsSelectionDims, thoosa_shared::traits::SimpleId> = batch_input.into();
                 let out = net.tho_forward(&batch_input, false)?;
                 let out = out.t_ref().f_i(0)?;
                 let out = ThoTensor::new(out_id, out)?;
-                Ok(Arc::new(DevicesWrap::wrap(out, cache_area)))
+
+                Ok(Arc::new(DevicesWrap::wrap(out, cache_area.into())))
             })
         }
     }
@@ -292,15 +292,10 @@ where
 
 impl<C> OutId for ApplyLabelNet<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable,
+    C: RunCtx + Adjustable,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        let stage_key = SynKey::new([
-            mono_key!("ApplyLabelNet", "stage"),
-            mono_key!(self.label.clone(), "label"),
-            mono_key!(self.run_id, "label_net_run_id"),
-        ]);
-        &stage_key + input_id
+        &self.id + input_id
     }
 }
 
@@ -318,6 +313,7 @@ mod tests {
     use thoosa_common::utils::{assert_close, vec_f32_from};
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_shared::runner::common::cachable::DevicesWrap;
+    use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::common::{mock_run_ctx, RunCtx};
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
@@ -467,11 +463,9 @@ mod tests {
         )?;
 
         let mut run_ctx = mock_run_ctx::default(0);
-        let run_ctx_branch = run_ctx.branch("apply_label_nets_run", false);
-        let out = apply_label_nets.run(Arc::new(DevicesWrap::wrap(input, 0)), run_ctx_branch).await?;
+        let out = apply_label_nets.run(Arc::new(DevicesWrap::wrap(input, CacheArea::default())), run_ctx.branch(Some("apply_label_nets_run".into()), false, false)).await?;
 
-        let ctx_for_data = run_ctx.branch("apply_label_nets_assert", false);
-        with_data!(ctx_for_data, out; |out:&ThoTensor<LabelProbability, SynKey>|{
+        with_data!(run_ctx.branch(Some("apply_label_nets_assert".into()), false, false), out; |_ctx, out:&ThoTensor<LabelProbability, SynKey>|{
             assert_eq!(out.t_ref().size(), vec![3, 1]);
             let vals = vec_f32_from(out.t_ref());
             assert_close(vals[0], 0.3, 1e-4);

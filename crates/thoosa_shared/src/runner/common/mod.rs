@@ -8,7 +8,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use crate::ThoError;
 use crate::traits::{CachableIdTr, Named, WithId};
-
 pub mod cachable;
 pub mod runnable;
 
@@ -36,19 +35,18 @@ pub trait RunCtx: PermitsCtx + WithId {//TODO remove PermitsCtx from RunCtx
     where
         Self: Sized,
     {
+        //TODO remove - replaced by add_purge_gpu_closure + purge on drop
         Box::pin(async { Ok(()) })
     }
 
 
     fn cache_area(&self) -> u64;
 
-    fn branch<I:Into<SynKey> + 'static>(&mut self, new_name:I, with_new_cache_area: bool) -> Self
+    fn branch(&mut self, new_name: Option<&str>, with_new_cache_area: bool, give_permits_back_to_parent: bool) -> Self
     where
         Self: Sized;
 
-    fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
-        //TODO use RunCtx2 in instead of dummy impls in tests
-    }
+    fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>);
 
 }
 
@@ -94,7 +92,8 @@ pub mod mock_run_ctx {
             fn device_idx(&self) -> usize;
             fn purge_gpu_caches(&mut self) -> BoxFuture<'static, Result<(), ThoError >>;
             fn cache_area(&self) -> u64;
-            fn branch<I:Into<SynKey> + 'static>(&mut self, _new_name:I, _with_new_cache_area:bool)-> Self;
+            fn branch<'a>(&mut self, new_name:Option<&'a str>, with_new_cache_area:bool, give_permits_back_to_parent:bool)-> Self;
+            fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>);
         }
     }
 
@@ -127,6 +126,12 @@ pub mod mock_run_ctx {
             self
         }
 
+        pub fn with_add_purge_gpu_closure(mut self) -> Self{
+            self.mock.expect_add_purge_gpu_closure().withf(|_cl| true).times(0..).returning(|_cl| ());
+
+            self
+        }
+
         pub fn with_drop_permits(mut self, inp: Vec<DropIf>) -> Self {
             for param in inp {
                 self.mock.expect_drop_permits().call(param);
@@ -152,7 +157,7 @@ pub mod mock_run_ctx {
         pub fn with_branch(mut self, depth: u8) -> Self {
             self.mock.expect_branch()
                 // .with(always(), always())
-                .returning(move |name:SynKey, _with_new_cache_area:bool| {
+                .returning(move |_name:Option<&str>, _with_new_cache_area:bool, give_permits_back_to_parent:bool| {
 
                     let builder = build()
                         .with_id(depth as u32)
@@ -160,6 +165,7 @@ pub mod mock_run_ctx {
                         .with_acquired_permits(100)
                         .with_add_permits()
                         .with_drop_permits(vec![DropIf::IfNotMax])
+                        .with_add_purge_gpu_closure()
                         .with_cache_area(0);
 
                     if depth == 0 {
@@ -168,28 +174,6 @@ pub mod mock_run_ctx {
                         builder
                         .with_branch(depth - 1)
                         .finish()
-                    }
-                });
-
-            //TODO wrap into helper both SynKey and &str
-            self.mock.expect_branch()
-                // .with(always(), always())
-                .returning(move |name:&str, _with_new_cache_area:bool| {
-
-                    let builder = build()
-                        .with_id(depth as u32)
-                        .with_device_idx(self.device_idx.unwrap_or(0))
-                        .with_acquired_permits(100)
-                        .with_add_permits()
-                        .with_drop_permits(vec![DropIf::IfNotMax])
-                        .with_cache_area(0);
-
-                    if depth == 0 {
-                        builder.finish()
-                    } else {
-                        builder
-                            .with_branch(depth - 1)
-                            .finish()
                     }
                 });
 
@@ -217,6 +201,8 @@ pub mod mock_run_ctx {
             .with_drop_permits(vec![DropIf::IfNotMax])
             .with_cache_area(0)
             .with_branch(255)
+            .with_acquired_permits(1)
+            .with_add_purge_gpu_closure()
             .finish()
     }
 }

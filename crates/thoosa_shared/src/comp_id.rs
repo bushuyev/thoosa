@@ -1,21 +1,37 @@
 #[cfg(debug_assertions)]
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::fmt;
+use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
 use thoosa_named_derive::Named;
+use crate::val::Val;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ElvVal {
     Str(String),
-    U32(u32),
+    Num(usize),
 }
 
 impl From<u32> for ElvVal {
     fn from(value: u32) -> Self {
-        ElvVal::U32(value)
+        ElvVal::Num(value as usize)
     }
 }
+
+impl From<usize> for ElvVal {
+    fn from(value: usize) -> Self {
+        ElvVal::Num(value)
+    }
+}
+
+impl From<i32> for ElvVal {
+    fn from(value: i32) -> Self {
+        ElvVal::Num(value as usize)
+    }
+}
+
 
 impl From<String> for ElvVal {
     fn from(value: String) -> Self {
@@ -117,9 +133,63 @@ impl Hash for MonoKey {
 
 
 /// ✅ Dynamic-length key, stored as a boxed slice (one allocation, no capacity slack).
-#[derive(Debug, Eq, PartialEq, Hash, Clone, Ord, PartialOrd, Named)]
+#[derive(Eq, PartialEq, Hash, Clone, Ord, PartialOrd, Named)]
 pub struct SynKey {
     vals: Box<[MonoKey]>,
+}
+
+impl fmt::Debug for SynKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SynKey[")?;
+        for (idx, mono) in self.vals.iter().enumerate() {
+            if idx > 0 {
+                f.write_str("/")?;
+            }
+            fmt_mono_key(mono, f)?;
+        }
+        f.write_str("]")
+    }
+}
+
+fn fmt_elv_val(val: &ElvVal, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match val {
+        ElvVal::Num(value) => write!(f, "{value}"),
+        ElvVal::Str(value) => write!(f, "{value:?}"),
+    }
+}
+
+#[cfg(debug_assertions)]
+fn fmt_mono_key(mono: &MonoKey, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str("(")?;
+    if let ElvVal::Str(v) = &mono.val {
+        if v.eq(mono.name.as_ref()) {
+            fmt_elv_val(&mono.val, f)?;
+        } else {
+            fmt_elv_name_val(&mono, f)?;
+        }
+    } else {
+        fmt_elv_name_val(&mono, f)?;
+    }
+
+    f.write_str(")")
+}
+
+fn fmt_elv_name_val(mono: &&MonoKey, f: &mut Formatter) -> fmt::Result {
+    fmt_elv_val(&mono.val, f)?;
+    #[cfg(debug_assertions)]
+    f.write_str(",")?;
+
+    #[cfg(debug_assertions)]
+    write!(f, "{:?}", mono.name.as_ref())?;
+
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn fmt_mono_key(mono: &MonoKey, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str("(")?;
+    fmt_elv_val(&mono.val, f)?;
+    f.write_str(")")
 }
 
 impl SynKey {
@@ -137,6 +207,10 @@ impl SynKey {
 
     pub fn len(&self) -> usize {
         self.vals.len()
+    }
+
+    pub fn parent(&self) -> SynKey {
+        SynKey::new(&self.vals[..self.vals.len()])
     }
 }
 
@@ -202,6 +276,18 @@ impl Add<&MonoKey> for &SynKey {
         SynKey::from_vec(v)
     }
 }
+
+impl Add<MonoKey> for &SynKey {
+    type Output = SynKey;
+
+    fn add(self, rhs: MonoKey) -> Self::Output {
+        let mut v = Vec::with_capacity(self.vals.len() + 1);
+        v.extend(self.vals.iter().cloned());
+        v.push(rhs);
+        SynKey::from_vec(v)
+    }
+}
+
 
 impl Add<&MonoKey> for MonoKey {
     type Output = SynKey;

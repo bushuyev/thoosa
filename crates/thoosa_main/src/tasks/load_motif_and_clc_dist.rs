@@ -2,12 +2,13 @@ use std::cmp::Ordering;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-use crate::tasks::run_ctx_2::RunCtx2;
+use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use async_trait::async_trait;
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
 use thoosa_shared::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
@@ -182,7 +183,7 @@ where
     {
         let out_id = self.out_id(input.id());
         let mut ctx = ctx;
-        let motif_ctx = ctx.branch("load_motif_and_clc_dist_motif", false);
+        let motif_ctx = ctx.branch(Some("load_motif_and_clc_dist_motif"), false, false);
         let motif = Arc::clone(&self.motif_loader).run_cached(Arc::clone(&input), motif_ctx).await?;
 
         let motif_size = motif.size().clone();
@@ -190,7 +191,7 @@ where
         debug!("LoadMotifAndClcDistanceStage::run: out_id={out_id:?} motif_size={motif_size:?}");
 
 
-        let dist_ctx = ctx.branch("load_motif_and_clc_dist_dist", false);
+        let dist_ctx = ctx.branch(Some("load_motif_and_clc_dist_dist"), false, false);
         let dist = OOMHandler::new(
             vec![
                 Adjusters::Input(Box::new(SplitsAdjuster::<MotifSlicesSelector, MonoMetrics<0, 2>>::new([2, -1].into())))
@@ -208,7 +209,7 @@ where
             )
             .await?;
 
-        Ok(Arc::new(DevicesWrap::wrap(dist, 0)))
+        Ok(Arc::new(DevicesWrap::wrap(dist, CacheArea::default())))
     }
 }
 
@@ -273,6 +274,7 @@ impl OutputBuilder for DistOutputBuilder {
 mod tests {
     use super::LoadMotifAndClcDistanceStage;
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use thoosa_shared::runner::cache_areas::CacheArea;
     use crate::tasks::average_euclidean_distance::{mock_average_stage, AverageDistanceValue};
     use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
     use thoosa_shared::runner::common::{mock_run_ctx, RunCtx};
@@ -310,11 +312,11 @@ mod tests {
         let cache_area = ctx.read().cache_area();
         let num_devices = GlobalCtx::global().device_count();
         let input_id_value = DataId::from(&42u32);
-        let input_id = Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(input_id_value.clone()), 0));
-        let stage_ctx = ctx.write().branch("load_motif_and_clc_dist", false);
+        let input_id = Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(input_id_value.clone()), CacheArea::default()));
+        let stage_ctx = ctx.write().branch(Some("load_motif_and_clc_dist"), false, false);
         let result = stage.run_cached(Arc::clone(&input_id), stage_ctx).await?;
 
-        let mut ctx_for_data = ctx.write().branch("load_motif_and_clc_dist_data", false);
+        let mut ctx_for_data = ctx.write().branch(Some("load_motif_and_clc_dist_data"), false, false);
         let result_value: AverageDistanceValue = result.with_data_ref(0, &mut ctx_for_data, None, |val: &AverageDistanceValue, _ctx| Ok(val.clone())).await?;
 
         assert_eq!(result_value.value(), 20.0);

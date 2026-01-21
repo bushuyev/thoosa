@@ -1,12 +1,15 @@
 #![allow(unused_parens)]
 #![allow(async_fn_in_trait)]
+
+use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
+
 use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use mockall_double::double;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -17,10 +20,14 @@ use std::sync::atomic::Ordering::Relaxed;
 use crate::CopyToDevice;
 use crate::Cause;
 use tokio::sync::{Notify, RwLockReadGuard};
+use thoosa_shared::runner::cache_areas::CacheArea;
 use crate::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
+use crate::runner::cache_areas::CacheAreaId;
 use crate::traits::{Data, Named, Select};
 use crate::runner::common::{OutId, PermitsCtx, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage};
+#[cfg(test)]
+use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::ThoError;
 use crate::traits::WithId;
 
@@ -56,13 +63,17 @@ where
         let cache_area  = ctx.cache_area();
         let device_idx = ctx.device_idx();
 
-        debug!("Cached::run_cached: key={key:?} device_idx={device_idx}");
+        debug!("Cached::run_cached: key={key:?} device_idx={device_idx} ctx.id={:?}", ctx.id());
 
         let cache = Self::cache().await;
         let key_for_purger = key.clone();
 
         ctx.add_purge_gpu_closure(
             Box::new( move || {
+
+                #[cfg(test)]
+                let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
                 let key_for_purger = key_for_purger.clone();
                 debug!("Cachable::purge_gpu_cache_area: 1  key={key_for_purger:?}");
 
@@ -72,17 +83,17 @@ where
                         let shared_fut = value.value().clone();
                         if shared_fut.peek().is_some() { //to avoid locking on itself
                             let data: Arc<DevicesWrap<Self::Out>> = shared_fut.await?;
-                            let new_mask = data.remove_cache_area(cache_area);
+                            data.remove_cache_area(cache_area);
 
-                            debug!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} new_mask={new_mask} ");
-                            if new_mask == 0 {
+                            debug!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} data.cache_area={:?} ", data.cache_area);
+                            if data.cache_area.assigned_count() == 0 {
                                 data.dump_to_cpu(device_idx).await?;
 
                                 debug!("Cachable::purge_gpu_cache_area: 3  key={key_for_purger:?} done");
                             }
                         }
                     } else {
-                        debug!("Cachable::purge_gpu_cache_area: 4 key_for_purger={key_for_purger:?} ot found"); //warning
+                        warn!("Cachable::purge_gpu_cache_area: 4 key_for_purger={key_for_purger:?} not found"); //warning
                     }
 
                     Ok(())
@@ -91,10 +102,10 @@ where
 
        );
 
-        self.on_cached(input.as_ref(), &mut ctx);
-
         GlobalCtx::global().do_age();
 
+        #[cfg(debug_assertions)]
+        let debug_key = key.clone();
         match cache.entry(key) {
             Entry::Occupied(slot) => {
                 let shared = slot.get().clone();
@@ -102,6 +113,9 @@ where
                 shared
                     .map(|res| {
                         if let Ok(data) = &res {
+                            #[cfg(debug_assertions)]
+                            debug!("Cachable::run_cached, Entry::Occupied: key={debug_key:?} cache_area={cache_area:064b}");
+
                             data.add_cache_area(cache_area);
                         }
                         res
@@ -116,53 +130,14 @@ where
 
                 slot.insert(fut.clone()); //slot consumed, fut.await doesn't block it
 
-                fut.await
+                fut.await.map(|v| {
+                    #[cfg(debug_assertions)]
+                    debug!("Cachable::run_cached, Entry::Vacant: key={debug_key:?}  cache_area={cache_area:064b}");
+                    v.add_cache_area(cache_area);
+                    v
+                })
             }
         }
-    }
-
-    async fn purge_gpu_cache_area(
-        keys: Vec<<Self::Out as WithId>::ID>,
-        cache_area: u64,
-        device_idx: usize,
-    ) -> Result<(), ThoError>
-    where
-        Self: Sized + OutId,
-        Self::Out: Data + Sync + Send,
-    {
-        debug!("Cachable::purge_gpu_cache_area: 0  cache_area={cache_area} device_idx={device_idx} keys={keys:?}");
-
-        assert_ne!(device_idx, 0); //don't purge cpu
-
-        let map = Self::cache().await;
-
-        debug!("Cachable::purge_gpu_cache_area: 0  cache_area={cache_area} device_idx={device_idx} got map");
-
-        for key in keys {
-
-            debug!("Cachable::purge_gpu_cache_area: 1 key={key:?} cache_area={cache_area} device_idx={device_idx}");
-
-            if let Some(value) = map.get(&key) {
-                let shared_fut = value.value().clone();
-                if shared_fut.peek().is_some() {//to avoid locking on itself
-                    let data: Arc<DevicesWrap<Self::Out>> = shared_fut.await?;
-                    let new_mask = data.remove_cache_area(cache_area);
-
-                    debug!("Cachable::purge_gpu_cache_area: 2 key={key:?} new_mask={new_mask} ");
-                    if new_mask == 0 {
-                        data.dump_to_cpu(device_idx).await?;
-
-                        debug!("Cachable::purge_gpu_cache_area: 3  key={key:?} done");
-                    }
-                }
-            } else {
-                debug!("Cachable::purge_gpu_cache_area: 4 key={key:?} {cache_area} device_idx={device_idx} not found"); //warning
-            }
-        }
-
-        debug!("Cachable::purge_gpu_cache_area: 5 cache_area={cache_area} device_idx={device_idx}");
-
-        Ok(())
     }
 
 }
@@ -172,7 +147,7 @@ pub trait DevicesWrapCopyMode<O>: CopyMode + Debug + Send + Sync
 where
     O: Data + WithId + Send + Sync,
 {
-    fn wrap<'f>(o:O, cache_area: u64) -> DevicesWrap<O> where Self:Sized;
+    fn wrap<'f>(o:O, cache_area: CacheArea) -> DevicesWrap<O> where Self:Sized;
 
     async fn load_from_any_device_(
         wrap:&DevicesWrap<O>,
@@ -230,7 +205,7 @@ where
     O:Data<M=Self> + WithId + Send + Sync
 {
  
-    fn wrap(o:O, cache_area: u64) -> DevicesWrap<O> where Self:Sized {
+    fn wrap(o:O, cache_area: CacheArea) -> DevicesWrap<O> where Self:Sized {
         let size = o.size();
         let mem_size = o.mem_size();
         assert_eq!(o.device(), 0);
@@ -239,7 +214,7 @@ where
             id: o.id().clone(),
             cached_data: Box::new([tokio::sync::RwLock::new(Some(o))]),
             inflights: Box::new([]),
-            cache_area: AtomicU64::new(cache_area),
+            cache_area,
             size,
             on_cpu_since: Default::default(),
             mem_size,
@@ -365,7 +340,7 @@ where
     O:Data<M=Self> + CopyToDevice + WithId + Send + Sync
 {
 
-    fn wrap(o:O, cache_area: u64) -> DevicesWrap<O> where Self:Sized {
+    fn wrap(o:O, cache_area: CacheArea) -> DevicesWrap<O> where Self:Sized {
         let id = o.id().clone();
         let size = o.size();
         let device_ordinal = o.device();
@@ -397,7 +372,7 @@ where
             id,
             cached_data: device_futures,
             inflights,
-            cache_area: AtomicU64::new(cache_area),
+            cache_area,
             size,
             on_cpu_since: Default::default(),
             mem_size,
@@ -568,6 +543,7 @@ where
         async move {
             assert_ne!(device_idx, 0);
 
+
             debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx}",wrap.id);
 
             if let Some(Ok(mut lock)) = wrap.cached_data.get(device_idx).map(|v| v.try_write()) {
@@ -581,14 +557,18 @@ where
                 }
                 drop(lock.take());
             } else {
-                //if it's locked then it should be one of the parent futures being built, waiting on it will deadlock
-                //TODO log warning?
+                // If it's locked, assume it's the current task's input. DumpToCpu only runs with
+                // MAX_PERMITS or when cache_area.assigned_count() == 0 (from purge_gpu_closure added in run_cached), so no other tasks should be running; skipping avoids deadlock.
                 debug!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}",wrap.id, wrap.cached_data)
             }
 
             let is_all_on_cpu = wrap.is_all_on_cpu().await;
             if is_all_on_cpu {
                 //may rewrite previous Some, but shouldn't be a problem
+
+                #[cfg(test)]
+                let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
                 *wrap.on_cpu_since.write() = Some(GlobalCtx::global().cache_age());
             }
 
@@ -654,7 +634,7 @@ where
     //gpu_copied
     cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,
     inflights: Box<[tokio::sync::Mutex<Option<Arc<tokio::sync::Notify>>>]>,
-    cache_area: AtomicU64,
+    cache_area: CacheArea,
     size: O::Metrics,
     mem_size: u64,
     //contains cache age ( GlobalCtx::cache_age - increated when something is being cached from Cachable::run_cached). The smaller the value the longer it was in the cpu
@@ -743,21 +723,21 @@ where
     O: Data + WithId + Send + Sync,
     O::M: DevicesWrapCopyMode<O>,
 {
-    pub fn wrap(o: O, cache_area: u64) -> Self {
+    pub fn wrap(o: O, cache_area: CacheArea) -> Self {
         O::M::wrap(o, cache_area)
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="add_cache_area"))]
-    pub fn add_cache_area(&self, ca: u64) -> u64 {
-        self.cache_area.fetch_or(ca, Ordering::SeqCst) | ca
+    // #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="add_cache_area"))]
+    pub fn add_cache_area(&self, ca: CacheAreaId)  {
+        self.cache_area.add_cache_area(ca);
     }
 
-    pub fn remove_cache_area(&self, ca: u64) -> u64 {
-        self.cache_area.fetch_and(!ca, Ordering::AcqRel) & !ca
+    pub fn remove_cache_area(&self, ca: CacheAreaId)  {
+        self.cache_area.remove_cache_area(ca);
     }
 
-    pub fn cache_areas(&self) -> u64 {
-        self.cache_area.load(Ordering::Acquire)
+    pub fn cache_areas(&self) -> &CacheArea {
+        &self.cache_area
     }
 
     pub fn size(&self) -> &O::Metrics {
@@ -928,14 +908,27 @@ where
                         .as_ref()
                         .expect("src missing unexpectedly")
                         .copy_to_device(dst_idx)
-                        .await?
+                        .await
                 }
                 Some(v) => {
                     debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from src", self.id);
 
-                    v.copy_to_device(dst_idx).await?
-                },
+                    v.copy_to_device(dst_idx).await
+                }
             };
+
+            let produced = match produced {
+                Ok(v) => v,
+                Err(e) => {
+                    let notify = {
+                        let mut g = self.inflights[dst_idx].lock().await;
+                        g.take().expect("leader must have set inflight")
+                    };
+                    notify.notify_waiters();
+                    return Err(e);
+                }
+            };
+
 
             // Install into dst (short critical section)
             {
@@ -985,7 +978,7 @@ pub trait WithDataRef: WithId + Debug {
     ) -> Result<R, ThoError>
     where
        for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P:PermitsCtx;
+        P:RunCtx;
 
 
     //shouldn't be here, used only in ClcOOMRunner which is test-only util
@@ -997,9 +990,7 @@ pub trait WithDataRef: WithId + Debug {
         0
     }
 
-    fn cache_area(&self) -> u64 {
-        0
-    }
+    fn cache_area(&self) -> &CacheArea;
 }
 
 pub trait WithSelectDataRef<S>: WithDataRef
@@ -1016,7 +1007,7 @@ where
     ) -> Result<R, ThoError> where
      // Self::O<'o>: Select<S, Output = Self::O<'o>>,
      for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
-     P:PermitsCtx;
+     P:RunCtx;
 }
 
 impl <O> WithDataRef for DevicesWrap<O>
@@ -1029,7 +1020,7 @@ where
     async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: &mut P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
             for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-            P:PermitsCtx
+            P:RunCtx
     {
         O::M::with_data_ref(self, to_device_idx, permits_ctx, trace_ctx, do_run).await
     }
@@ -1042,8 +1033,8 @@ where
         self.size.clone()
     }
 
-    fn cache_area(&self) -> u64 {
-        self.cache_area.load(Relaxed)
+    fn cache_area(&self) -> &CacheArea {
+        &self.cache_area
     }
 
 }
@@ -1059,7 +1050,7 @@ where
     where
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
-        P:PermitsCtx
+        P:RunCtx
     {
         O::M::with_selected_data_ref(self, to_device_idx, permits_ctx, selector, trace_ctx, do_run).await
     }
@@ -1070,105 +1061,27 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
-    use parking_lot::RwLock;
+    use crate::runner::global_ctx::MockGlobalCtx;
     use thoosa_with_data::with_data;
     extern crate self as caching_runner;
     pub use thoosa_shared::runner::common::*;
+    use crate::runner::cache_areas::CacheArea;
+    use crate::runner::global_ctx::mock_global_ctx;
     use crate::runner::global_ctx;
     use crate::runner::common::cachable::{DevicesWrap, WithDataRef};
     use crate::runner::common::mock_run_ctx;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::test_utils::MockDataWithId;
 
-    #[tokio::test]
-    async fn test_cache_area() -> Result<(), ThoError> {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
-
-        let tested = super::DevicesWrap::wrap(MockDataWithId::whatever(), 0);
-
-        let ca = tested.add_cache_area(u64::from_str_radix(
-            "0000000000000000000000000000000000000000000000000000000000000001",
-            2,
-        )?);
-        assert_eq!(ca, tested.cache_areas());
-        assert_eq!(
-            "0000000000000000000000000000000000000000000000000000000000000001",
-            format!("{:064b}", tested.cache_areas())
-        );
-
-        let ca = tested.add_cache_area(u64::from_str_radix(
-            "0000001000000000000000000000000000000000000000000000000000000001",
-            2,
-        )?);
-        assert_eq!(ca, tested.cache_areas());
-
-        assert_eq!(
-            "0000001000000000000000000000000000000000000000000000000000000001",
-            format!("{:064b}", tested.cache_areas())
-        );
-
-        let ca = tested.remove_cache_area(u64::from_str_radix(
-            "0000000000000000000000000000000000000000000000000000000000000001",
-            2,
-        )?);
-        assert_eq!(ca, tested.cache_areas());
-
-        assert_eq!(
-            "0000001000000000000000000000000000000000000000000000000000000000",
-            format!("{:064b}", tested.cache_areas())
-        );
-
-        let ca = tested.remove_cache_area(u64::from_str_radix(
-            "0000001000000000000000000000000000000000000000000000000000000000",
-            2,
-        )?);
-        assert_eq!(ca, tested.cache_areas());
-        assert_eq!(
-            "0000000000000000000000000000000000000000000000000000000000000000",
-            format!("{:064b}", tested.cache_areas())
-        );
-
-        Ok(())
-    }
-
-    // #[tokio::test]
-    // async fn test_with_data() -> Result<(), ThoosaError> {
-    //     let ctx = MockGlobalCtx::global_context();
-    //     ctx.expect().returning(|| {
-    //         Box::leak(Box::new(
-    //             mock_global_ctx::build_default(),
-    //         )) as &'static global_ctx::MockGlobalCtx
-    //     });
-    //     let tested = super::DevicesWrap::wrap(MockDataWithId::whatever(), 0);
-    //
-    //     tested
-    //         .with_data_ref(0, None, |t| {
-    //             debug!("t={t:?}");
-    //             Ok(())
-    //         })
-    //         .await?;
-    //     //TODO test
-    //     Ok(())
-    // }
 
 
     #[tokio::test]
     async fn test_dump_to_cpu() -> Result<(), ThoError> {
 
-        let global_ctx = MockGlobalCtx::global_context();
-        global_ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let data = MockDataWithId::whatever();
-        let tested = super::DevicesWrap::wrap(data, 0);
+        let tested = super::DevicesWrap::wrap(data, CacheArea::default());
         assert!(tested.cached_data[1].read().await.is_none());
 
         let mut ctx_for_data = mock_run_ctx::default(1);
@@ -1198,15 +1111,15 @@ mod tests {
             )) as &'static global_ctx::MockGlobalCtx
         });
 
-        let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), 0));
-        let wrap_b = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "d"), 0));
+        let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), CacheArea::default()));
+        let wrap_b = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "d"), CacheArea::default()));
         let wrap_vec = vec![
-            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "b"), 0)),
-            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "c"), 0)),
+            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "b"), CacheArea::default())),
+            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "c"), CacheArea::default())),
         ];
         let wrap_vec_second = vec![
-            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "e"), 0)),
-            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "f"), 0)),
+            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "e"), CacheArea::default())),
+            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "f"), CacheArea::default())),
         ];
 
 
@@ -1214,7 +1127,7 @@ mod tests {
         //TODO ensure that asserts were actually invoked
         let ctx_for_data = mock_run_ctx::default(1);
         with_data!(ctx_for_data, wrap_a, [wrap_vec], wrap_b, [wrap_vec_second];
-            |a: &MockDataWithId, first: &[&MockDataWithId], b: &MockDataWithId, second: &[&MockDataWithId]|{
+            |_ctx, a: &MockDataWithId, first: &[&MockDataWithId], b: &MockDataWithId, second: &[&MockDataWithId]|{
                 assert_eq!(a.device(), &1);
                 assert_eq!(b.device(), &1);
                 assert_eq!(first.len(), 2);
@@ -1235,11 +1148,11 @@ mod tests {
             )) as &'static global_ctx::MockGlobalCtx
         });
 
-        let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), 0));
+        let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), 0.into()));
 
         let ctx_for_data = mock_run_ctx::default(1);
         with_data!(ctx_for_data, wrap_a;
-            |a: &MockDataWithId|{
+            |_ctx, a: &MockDataWithId|{
                 assert_eq!(a.device(), &1);
                 Ok::<(), ThoError>(())
         })?;

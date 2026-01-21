@@ -11,7 +11,7 @@ use polars::prelude::{LazyFrame, NamedFrom, ScanArgsParquet, Series};
 
 use tch::{Device, IndexOp, Tensor};
 
-use thoosa_common::utils::{from, load_tensor};
+use thoosa_common::utils::{from};
 use thoosa_shared::ThoError;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_store::Store;

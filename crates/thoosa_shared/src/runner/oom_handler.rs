@@ -8,7 +8,7 @@ use thoosa_shared::runner::global_ctx::GlobalCtx;
 use crate::runner::permits::MAX_PERMITS;
 use thoosa_shared::runner::statistics::Statistics;
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use mockall::automock;
 use mockall_double::double;
 use parking_lot::RwLock;
@@ -21,7 +21,14 @@ use crate::{os_thread_id, panic_to_err_async};
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
 use thoosa_shared::{Cause, ThoError};
+use crate::comp_id::SynKey;
 
+#[derive(Debug)]
+pub enum AdjusterError<A: Adjustable> {
+    AdjustFailed(A),
+    SomethingElse
+
+}
 #[async_trait]
 pub trait Adjuster<AC>: Debug + Send + Sync {
     type A: Adjustable;
@@ -30,7 +37,7 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
         &self,
         adjustable: Self::A,
         adjust_context: &mut AC,
-    ) -> Result<Self::A, ThoError>;
+    ) -> Result<Self::A, AdjusterError<Self::A>>;
 
     fn degrade(&self, _adjust_context: &mut AC) -> bool {
         false
@@ -374,7 +381,7 @@ where
                 debug!("AsyncOOMHandler::run: input_id={input_id:?} run_ctx={run_ctx:?}");
 
                 let cache_area = input.cache_area();
-                let mut run_ctx_for_data = run_ctx.branch("oom_handler_data", false);
+                let mut run_ctx_for_data = run_ctx.branch(Some("oom_handler_data"), false, false);
                 let prepared_input = if let Some(selector) = selector {
                     debug!("AsyncOOMHandler::run: input_id={input_id:?} selector={selector:?}");
 
@@ -382,7 +389,7 @@ where
                         .with_selected_data(device_idx, &mut run_ctx_for_data, selector.clone(), |data, _ctx| Ok(data))
                         .await?;
 
-                    Arc::new(DevicesWrap::wrap(selected, cache_area))
+                    Arc::new(DevicesWrap::wrap(selected, cache_area.clone()))
                 } else {
                     debug!("AsyncOOMHandler::run: input_id={input_id:?} no selector");
                     
@@ -449,11 +456,6 @@ where
             Arc::new(out_id) as Arc<dyn CachableIdTr>
         };
 
-        if run_context.acquired_permits() == 0 {
-            let permit = GlobalCtx::global().acquire_one(device_idx, Arc::clone(&out_key)).await?;
-            run_context.add_permit(permit);
-        }
-
         debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} acquired_permits={:?}", os_thread_id(), run_context.acquired_permits());
 
         let mut i = 0;
@@ -465,11 +467,8 @@ where
         let mut input_select_adjusted: Option<S> = None;
 
 
-
-    
         match panic_to_err_async!({
-            let run_ctx = run_context.branch("oom_handler_run_initial", false);
-            runner(Arc::clone(&task), Arc::clone(&input), None, device_idx, run_ctx).await
+            runner(Arc::clone(&task), Arc::clone(&input), None, device_idx, run_context.branch(Some("oom_handler_run_initial"), false, false)).await
         }) {
             Err(te) => {
                 debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  te={te:?}", os_thread_id());
@@ -497,8 +496,7 @@ where
                                             last_input_adjuster = None;
                                         }
 
-                                        let base_selector =
-                                            input_select_adjusted.clone().unwrap_or_default();
+                                        let base_selector = input_select_adjusted.clone().unwrap_or_default();
 
                                         match input_ad
                                             .adjust(base_selector, &mut contexts.input)
@@ -508,7 +506,20 @@ where
                                                 input_select_adjusted = Some(v);
                                                 Ok(())
                                             }
-                                            Err(te) => Err(te),
+                                            Err(v) => {
+                                                let msg = format!("adjuster failed: {te:?}");
+                                                error!("OOMHandler::run, Adjusters::Input: {msg:?}");
+
+                                                match v {
+                                                    AdjusterError::AdjustFailed(v) => {
+                                                        input_select_adjusted = Some(v);
+                                                        Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
+                                                    }
+                                                    AdjusterError::SomethingElse => {
+                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
 
@@ -516,11 +527,28 @@ where
                                         if last_task_adjuster.is_some() {
                                             last_task_adjuster = None;
                                         }
-                                        task = task_ad
+                                        match task_ad
                                             .adjust(task, &mut contexts.runnable)
-                                            .await?;
+                                            .await{
+                                            Ok(v) => {
+                                                task = v;
+                                                Ok(())
+                                            }
+                                            Err(v) => {
+                                                let msg = format!("adjuster failed: {te:?}");
+                                                error!("OOMHandler::run, Adjusters::Task: {msg:?}");
 
-                                        Ok(())
+                                                match v {
+                                                    AdjusterError::AdjustFailed(v) => {
+                                                        task = v;
+                                                        Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
+                                                    }
+                                                    AdjusterError::SomethingElse => {
+                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
 
                                     Adjusters::RunContext(context_ad) => {
@@ -528,20 +556,38 @@ where
                                             last_context_adjuster = None;
                                         }
 
-                                        run_context = context_ad
+                                        match context_ad
                                             .adjust(run_context, &mut contexts.run_ctx)
-                                            .await?;
+                                            .await{
+                                            Ok(v) => {
+                                                run_context = v;
+                                                Ok(())
+                                            }
+                                            Err(v) => {
+                                                let msg = format!("adjuster failed: {te:?}");
+                                                error!("OOMHandler::run, Adjusters::RunContext: {msg:?}");
 
-                                        Ok(())
+                                                match v {
+                                                    AdjusterError::AdjustFailed(v) => {
+                                                        run_context = v;
+                                                        Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
+                                                    }
+                                                    AdjusterError::SomethingElse => {
+                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 };
+                                debug!("OOMHandler::run: on adjust_result ={adjust_result:?} os_thread_id={} adjuster error ", os_thread_id());
 
                                 if let Err(te) = adjust_result {
-                                    debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} adjuster={adjuster:?} os_thread_id={} adjuster error te={te:?}", os_thread_id());
+                                    debug!("OOMHandler::run: on ctx_id={ctx_id:?} task={task:?} adjuster={adjuster:?} os_thread_id={} adjuster error te={te:?}", os_thread_id());
 
                                     match te.what() {
                                         Cause::OutOfMemory | Cause::AdjusterFailed => {
-                                            info!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+                                            debug!("OOMHandler::run: on adjust_result ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                             if !adjuster.degrade(&mut contexts) {
                                                 match adjuster {
@@ -555,6 +601,8 @@ where
                                                         last_context_adjuster.replace(v);
                                                     }
                                                 }
+
+                                                debug!("OOMHandler::run: on adjust_result moving to next adjuster adjust_result ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                 break;
                                             }
@@ -571,10 +619,10 @@ where
 
                                 debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} before acquire_one ",os_thread_id());
 
-                                if run_context.acquired_permits() == 0 {
-                                    let permit = GlobalCtx::global().acquire_one(device_idx, Arc::new(run_context.id().clone()) as Arc<dyn CachableIdTr>).await?;
-                                    run_context.add_permit(permit);
-                                }
+                                // if run_context.acquired_permits() == 0 {
+                                //     let permit = GlobalCtx::global().acquire_one(device_idx, Arc::new(run_context.id().clone()) as Arc<dyn CachableIdTr>).await?;
+                                //     run_context.add_permit(permit);
+                                // }
 
                                 debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",os_thread_id(), run_context.acquired_permits());
 
@@ -583,7 +631,7 @@ where
                                     Arc::clone(&input),
                                     input_select_adjusted.clone(),
                                     device_idx,
-                                    run_context.branch("attempt #n", false),
+                                    run_context.branch(None, false, true), //looses permits on ctx drop
                                 )
                                 .await;
 
@@ -608,17 +656,17 @@ where
                                     Err(te) => {
                                         debug!("OOMHandler::run: err te={te:?}");
 
-                                        if run_context.acquired_permits() == MAX_PERMITS {
-                                            GlobalCtx::global()
-                                                .dump_all_to_cpu(&HashMap::new(), device_idx)
-                                                .await?;
-                                        }
+                                        // if run_context.acquired_permits() == MAX_PERMITS {
+                                        //     GlobalCtx::global()
+                                        //         .dump_all_to_cpu(&HashMap::new(), device_idx)
+                                        //         .await?;
+                                        // }
 
-                                        run_context.drop_permits(DropIf::IfNotMax); //TODO config? - not needed for runner_semaphore
+                                        run_context.drop_permits(DropIf::IfNotMax);
 
                                         match te.what() {
                                             Cause::OutOfMemory | Cause::AdjusterFailed => {
-                                                info!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+                                                debug!("OOMHandler::run: on oom ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                 if !adjuster.degrade(&mut contexts) {
                                                     match adjuster {
@@ -632,6 +680,7 @@ where
                                                             last_context_adjuster.replace(v);
                                                         }
                                                     }
+                                                    debug!("OOMHandler::run: on oom moving to nexty adjuster adjust_result ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                     break;
                                                 }
@@ -897,7 +946,7 @@ pub mod mock_input_adjuster {
         #[async_trait]
         impl Adjuster<super::mock_input_context::MockInputContext> for InputAdjuster {
             type A = std::ops::Range<<TestInput as Data>::Metrics>;
-            async fn adjust(&self, adjustable: <Self as Adjuster<super::mock_input_context::MockInputContext>>::A, adjust_context: &mut super::mock_input_context::MockInputContext) -> Result<<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, ThoError>;
+            async fn adjust(&self, adjustable: <Self as Adjuster<super::mock_input_context::MockInputContext>>::A, adjust_context: &mut super::mock_input_context::MockInputContext) -> Result<<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, AdjusterError<<Self as Adjuster<super::mock_input_context::MockInputContext>>::A>>;
             fn degrade(&self, adjust_context: &mut super::mock_input_context::MockInputContext) -> bool;
         }
     }
@@ -935,7 +984,7 @@ pub mod mock_task_adjuster {
         #[async_trait]
         impl Adjuster<MockRunnableContext> for TaskAdjuster {
             type A = Arc<MockRunnable>;
-            async fn adjust(&self, adjustable: <Self as Adjuster<MockRunnableContext>>::A, adjust_context: &mut MockRunnableContext) -> Result<<Self as Adjuster<MockRunnableContext>>::A, ThoError>;
+            async fn adjust(&self, adjustable: <Self as Adjuster<MockRunnableContext>>::A, adjust_context: &mut MockRunnableContext) -> Result<<Self as Adjuster<MockRunnableContext>>::A, AdjusterError<<Self as Adjuster<MockRunnableContext>>::A>>;
             fn degrade(&self, adjust_context: &mut MockRunnableContext) -> bool;
         }
     }
@@ -973,7 +1022,7 @@ pub mod mock_context_adjuster {
         #[async_trait]
         impl Adjuster<MockRunCtxContext> for ContextAdjuster {
             type A = MockRunCtx;
-            async fn adjust(&self, adjustable: <Self as Adjuster<MockRunCtxContext>>::A, adjust_context: &mut MockRunCtxContext) -> Result<<Self as Adjuster<MockRunCtxContext>>::A, ThoError>;
+            async fn adjust(&self, adjustable: <Self as Adjuster<MockRunCtxContext>>::A, adjust_context: &mut MockRunCtxContext) -> Result<<Self as Adjuster<MockRunCtxContext>>::A, AdjusterError<<Self as Adjuster<MockRunCtxContext>>::A>>;
             fn degrade(&self, adjust_context: &mut MockRunCtxContext) -> bool;
         }
     }
@@ -1000,20 +1049,22 @@ mod tests {
     use super::mock_runnable::build as mock_runnable;
     use super::mock_task_adjuster::build as mock_task_adjuster;
     use super::test_types::{TestInput, TestOutput};
-    use super::{Adjusters, AsyncOOMHandler, Contexts, OOMHandler};
+    use super::{AdjusterError, Adjusters, AsyncOOMHandler, Contexts, OOMHandler};
     use crate::runner::common::cachable::DevicesWrap;
     // use crate::common::runnable::Runnable;
     use crate::runner::common::{DropIf, MockRunCtx, OutId};
     use crate::runner::common::runnable::{AsyncStage, Stage};
     use thoosa_shared::runner::global_ctx;
-    use thoosa_shared::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
+    use thoosa_shared::runner::global_ctx::MockGlobalCtx;
     use std::collections::VecDeque;
     use std::ops::Range;
     use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use async_trait::async_trait;
     use thoosa_shared::{Cause, ThoError};
+    use thoosa_shared::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::traits::{Adjustable, WithId};
+    use crate::runner::global_ctx::mock_global_ctx;
     use super::{Adjuster, InputContext};
     type Selector = Range<[usize; 1]>;
 
@@ -1052,7 +1103,7 @@ mod tests {
                 .unwrap_or_else(|| Err(Cause::SomethingElse("no more results".into()).into()));
 
             match next {
-                Ok(o) => Ok(Arc::new(DevicesWrap::wrap(o, input.cache_areas()))),
+                Ok(o) => Ok(Arc::new(DevicesWrap::wrap(o, input.cache_areas().clone()))),
                 Err(e) => Err(e),
             }
         }
@@ -1091,12 +1142,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_input_task_context_once() {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let input_adj_calls = Arc::new(AtomicUsize::new(0));
         let mut input_adj = MockInputAdjuster::new();
@@ -1144,7 +1190,7 @@ mod tests {
         let out: TestOutput = oom_handler
             .run(
                 &Arc::new(init_task),
-                Arc::new(DevicesWrap::wrap(TestInput::new(100), 0)),
+                Arc::new(DevicesWrap::wrap(TestInput::new(100), 0.into())),
                 ctx_mock,
                 Contexts::new(
                     super::mock_input_context::build()
@@ -1171,12 +1217,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_only_task_adjuster() {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let (init_task, init_calls) = mock_runnable([Err(ThoError::from(Cause::OutOfMemory))]);
         let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
@@ -1194,7 +1235,7 @@ mod tests {
         let out: TestOutput = oom_handler
             .run(
                 &Arc::new(init_task),
-                Arc::new(DevicesWrap::wrap(TestInput::new(1), 0)),
+                Arc::new(DevicesWrap::wrap(TestInput::new(1), 0.into())),
                 ctx_mock,
                 Contexts::new(
                     super::mock_input_context::build()
@@ -1216,12 +1257,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_only_input_adjuster() {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
+        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let (task, task_calls) = mock_runnable([
             Err(ThoError::from(Cause::OutOfMemory)),
@@ -1240,7 +1276,7 @@ mod tests {
         let out = oom_handler
             .run(
                 &Arc::new(task),
-                Arc::new(DevicesWrap::wrap(TestInput::new(1), 0)),
+                Arc::new(DevicesWrap::wrap(TestInput::new(1), 0.into())),
                 ctx_mock,
                 Contexts::new(
                     super::mock_input_context::build()
@@ -1261,12 +1297,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_only_run_ctx_adjuster() {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
+        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let (task, task_calls) = mock_runnable([
             Err(ThoError::from(Cause::OutOfMemory)),
@@ -1287,7 +1318,7 @@ mod tests {
         let out = oom_handler
             .run(
                 &Arc::new(task),
-                Arc::new(DevicesWrap::wrap(TestInput::new(1), 0)),
+                Arc::new(DevicesWrap::wrap(TestInput::new(1), 0.into())),
                 ctx_mock,
                 Contexts::new(
                     super::mock_input_context::build()
@@ -1308,12 +1339,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_async_handler_with_input_adjuster() {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
+        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let results = VecDeque::from([
             Err(ThoError::from(Cause::OutOfMemory)),
@@ -1334,7 +1360,7 @@ mod tests {
                 &self,
                 adjustable: <Self as Adjuster<AsyncInputCtx>>::A,
                 _adjust_context: &mut AsyncInputCtx,
-            ) -> Result<<Self as Adjuster<AsyncInputCtx>>::A, ThoError> {
+            ) -> Result<<Self as Adjuster<AsyncInputCtx>>::A, AdjusterError<<Self as Adjuster<AsyncInputCtx>>::A>> {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 Ok(adjustable.clone())
             }
@@ -1363,7 +1389,7 @@ mod tests {
         let out = oom_handler
             .run(
                 &async_task,
-                Arc::new(DevicesWrap::wrap(TestInput::new(2), 0)),
+                Arc::new(DevicesWrap::wrap(TestInput::new(2), 0.into())),
                 ctx_mock,
                 Contexts::new(
                     AsyncInputCtx { outputs: vec![] },
@@ -1380,12 +1406,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_parallel_tasks() {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let (init_task1, init_calls1) =
             mock_runnable([Err(ThoError::from(Cause::OutOfMemory))]);
@@ -1400,7 +1421,7 @@ mod tests {
         let (task_adj2, task_adj_calls2) = mock_task_adjuster([final_task2]);
 
         let init_task1_arc = Arc::new(init_task1);
-        let input_arc = Arc::new(DevicesWrap::wrap(TestInput::new(1), 0));
+        let input_arc = Arc::new(DevicesWrap::wrap(TestInput::new(1), 0.into()));
 
         let ctx_mock_1 = crate::runner::common::mock_run_ctx::build()
             .with_id(0)

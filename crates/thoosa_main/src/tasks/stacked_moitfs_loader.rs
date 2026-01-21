@@ -36,7 +36,6 @@ use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEucl
 use crate::tasks::cross_dims::{ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
-use crate::tasks::run_ctx_2::MotifsCtx;
 use thoosa_shared::comp_id::SynKey;
 use crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN;
 
@@ -138,7 +137,7 @@ impl Output for StackedMotifsOutput {}
 pub struct StackedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + MotifsCtx + Adjustable + 'static
+    C: RunCtx + Adjustable + 'static
 {
     motif_loader:Arc<ML>,
     load_and_clc_avg_dist:Arc<LoadMotifAndClcDistanceStage<ML, AverageEuclideanDistanceStage<C>, C>>,
@@ -151,7 +150,7 @@ where
 impl <ML, C> OutId for StackedMotifsLoader<ML, C>
 where
 ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
-C: RunCtx + MotifsCtx + Adjustable + 'static
+C: RunCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         // format!("BatchedMotifsLoader_{}",  input_id).into()
@@ -162,7 +161,7 @@ C: RunCtx + MotifsCtx + Adjustable + 'static
 impl <ML, C> StackedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + MotifsCtx + Adjustable + 'static
+    C: RunCtx + Adjustable + 'static
 {
     pub fn new(
         ws: Arc<RwLock<Box<dyn Workspace>>>,
@@ -184,7 +183,7 @@ where
 impl <ML, C> Stage for StackedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + MotifsCtx + Adjustable + 'static
+    C: RunCtx + Adjustable + 'static
 
 {
     type Ctx = C;
@@ -196,21 +195,21 @@ where
 impl <ML, C> AsyncStage for StackedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + MotifsCtx + Adjustable + 'static
+    C: RunCtx + Adjustable + 'static
 
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackedMotifsLoader::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let device_idx = ctx.device_idx();
         let cache_area = ctx.cache_area();
-        let mut ctx = ctx;
+
         let num_channels = self.ws.read().channels();
 
 
         let done_cnt = Arc::new(AtomicU32::new(0));
         let mut motif_avg_dists = Arc::new(parking_lot::RwLock::new(HashMap::new()));
 
-        let find_motifs_run_config = with_data!(ctx.branch("stacked_motifs_input", false), input; |input: &StackedMotifsInput|{
+        let find_motifs_run_config = with_data!(ctx.branch(Some("stacked_motifs_input"), false, false), input; |_ctx, input: &StackedMotifsInput|{
             Ok::<Arc<FindMotifsRunConfig>, ThoError>(Arc::clone(&input.find_motifs_run_config))
         })?;
 
@@ -219,7 +218,7 @@ where
 
         if motif_ids.is_empty() {
             warn!("no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}");
-            return Err(ThoError::new("no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}"))
+            return Err(ThoError::new(format!("no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}")))
         }
 
 
@@ -231,21 +230,20 @@ where
                 let motif_loader_clone = Arc::clone(&self.motif_loader);
                 let load_and_clc_avg_dist_clone = Arc::clone(&self.load_and_clc_avg_dist);
 
-                let ctx_for_task = ctx.branch("stacked_motifs_loader_task", false);
+                let mut ctx = ctx.branch(Some("stacked_motifs_loader_task"), false, false);
                 let motif_avg_dists = Arc::clone(&motif_avg_dists);
 
                 // let select_motifs_run_config_id = input.select_motifs_run_config.id;
 
                 async move {
-                    let mut ctx = ctx_for_task;
-                    let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id as u32).into()), cache_area));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
-                    let motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx.branch("stacked_motifs_loader_motif", false)).await?;
+                    let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id as u32).into()), cache_area.into()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
+                    let motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx.branch(Some("stacked_motifs_loader_motif"), false, false)).await?;
 
 
                     let avg_motif_dist = load_and_clc_avg_dist_clone
-                        .run_cached(Arc::clone(&motif_id_wrap), ctx.branch("stacked_motifs_loader_clc_run", false))
+                        .run_cached(Arc::clone(&motif_id_wrap), ctx.branch(Some("stacked_motifs_loader_clc_run"), false, false))
                         .await?
-                        .with_data_ref(0, &mut ctx.branch("stacked_motifs_loader_clc_data", false), None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
+                        .with_data_ref(0, &mut ctx, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
                         .await?;
 
                     debug!("StackedMotifsLoader::run: find_motifs_run_id={:?}  motif={motif:?} avg_motif_dist={avg_motif_dist}", find_motifs_run_config_id);
@@ -272,8 +270,7 @@ where
             .await;
 
         //TODO extract method stack_motifs
-        let ctx_for_data = ctx.branch("stacked_motifs_loaded", false);
-        with_data!(ctx_for_data, [loaded_motifs];|data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
+        with_data!(ctx.branch(Some("stacked_motifs_loaded"), false, false), [loaded_motifs];|_ctx, data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
 
             let channels_motifs = data.iter().fold(
 
@@ -408,16 +405,10 @@ where
                     (channels_motif_ids, Arc::clone(&find_motifs_run_config), vec![])
                 ),
                 motif_avg_dists,
-            ), cache_area)))
+            ), cache_area.into())))
 
         })
 
     }
 
-    fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &mut Self::Ctx)
-    where
-        Self: 'a
-    {
-        ctx.add_stacked_motifs_id(self.out_id(input.id()));
-    }
 }

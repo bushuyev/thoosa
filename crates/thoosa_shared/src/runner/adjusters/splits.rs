@@ -9,6 +9,7 @@ use std::ops::{AddAssign, DivAssign, Range};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, Data, Metrics};
 use crate::runner::common::runnable::Stage;
+use crate::runner::oom_handler::AdjusterError;
 
 ///A - Selector (range, etc), M - its metrics
 #[derive(Debug)]
@@ -70,7 +71,7 @@ where
         &self,
         _adjustable: A,
         adjust_context: &mut AC,
-    ) -> Result<A, ThoError> {
+    ) -> Result<A, AdjusterError<A>> {
 
         let split_start = adjust_context.done_to();
 
