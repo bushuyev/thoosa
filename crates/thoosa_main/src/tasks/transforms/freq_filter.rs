@@ -21,7 +21,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
 use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::run_ctx_2::RunCtx2;
+use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 
 #[derive(Debug, Clone)]
 struct BandPassDims;
@@ -124,16 +124,8 @@ where
             Arc::new(out_id) as Arc<dyn CachableIdTr>
         };
 
-        // if ctx.read().acquired_permits() == 0 {
-        //     let result = GlobalCtx::global()
-        //         .acquire_many(device_idx, 1, out_key.clone())
-        //         .await?;
-        //     ctx.write().add_permit(result);
-        // }
-
-
         let num_devices = GlobalCtx::global().device_count();
-        let mut ctx_for_data = ctx.branch("freq_filter_data", false);
+        let mut ctx_for_data = ctx.branch(Some("freq_filter_data"), false, false);
 
         let filtered = input
             .with_data_ref(
@@ -162,7 +154,7 @@ where
            })
             .await?;
 
-        Ok(Arc::new(DevicesWrap::wrap(filtered, cache_area)))
+        Ok(Arc::new(DevicesWrap::wrap(filtered, cache_area.into())))
     }
 }
 
@@ -174,6 +166,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
     use thoosa_shared::runner::common::cachable::DevicesWrap;
+    use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::InputFilter;
@@ -183,7 +176,7 @@ mod tests {
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use crate::tasks::run_ctx_2::RunCtx2;
+    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use crate::tasks::transforms::freq_filter::FreqFilter;
     use thoosa_shared::runner::common::RunCtx;
 
@@ -197,19 +190,19 @@ mod tests {
             stride: 1,
             padding: 0,
         });
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 20, 100, 10000)));
 
         let bf = FreqFilter::new(&filter_config, &ws)?;
 
-        let mut ctx = RunCtx2::new(1, "test");
+        let mut ctx = RunCtxWithPermits::new(1, "test");
 
         let r = Arc::new(bf).run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&[20, 100], FLOAT_CPU))?, 0)),
-            ctx.branch("freq_filter_test", false)
+            Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&[20, 100], FLOAT_CPU))?, CacheArea::default())),
+            ctx.branch(Some("freq_filter_test"), false, false)
         ).await?;
 
         println!("r={r:?}");
-
+        //TODO asserts
 
         Ok(())
     }

@@ -11,17 +11,14 @@ mod tests {
     use tch::IndexOp;
     use tch::{nn, nn::OptimizerConfig, Device, Kind, Tensor};
 
-    use ambassador::Delegate;
-    use thoosa_shared::runner::common::ambassador_impl_PermitsCtx;
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use thoosa_shared::runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
+    use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::runner::oom_handler::{
         Adjusters, Contexts, NoopRunnableContext, OOMHandler,
     };
-    use thoosa_shared::runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
-    use futures_util::future::BoxFuture;
+    use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 
     use crate::tho_tensor::ThoTensor;
     use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select};
@@ -33,18 +30,17 @@ mod tests {
     use std::sync::OnceLock;
     use crate::tho_device::ThoDevice;
     use crate::dims::Dims;
-    use thoosa_shared::{mono_key, simple_id, CopyToDevice};
+    use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Input;
-    use thoosa_shared::traits::{CachableIdTr, Metrics, Named, SimpleId, WithId};
+    use thoosa_shared::traits::{CachableIdTr, Metrics, SimpleId, WithId};
     use thoosa_shared::{Cause, ThoError};
-    use thoosa_shared::comp_id::{MonoKey, SynKey};
     use thoosa_shared::copy_mode::CpuOnly;
     use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
     use thoosa_shared::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
     use thoosa_shared::runner::test_utils::parse_numeric_part;
     use thoosa_with_data::with_data;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-    use crate::torch_runner::tests::TestTorchRunCtx;
+    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 
     #[ctor::ctor]
     fn init() {
@@ -62,86 +58,6 @@ mod tests {
         INIT.call_once(|| {
             let _ = GlobalCtx::init_devices(2);
         });
-    }
-
-    // ---------------- Run Context ----------------
-    #[derive(Debug, Delegate, Named)]
-    #[name = "n/a"]
-    #[delegate(PermitsCtx, target = "perms")]
-    struct TestCpuRunCtx {
-        id:MonoKey,
-        device_idx: usize,
-        cache_area: u64,
-        perms: CpuPermsCtx,
-    }
-
-    #[derive(Debug, Named)]
-    #[name = "n/a"]
-    struct CpuPermsCtx {
-        acquired: NumPermits,
-    }
-
-    impl CpuPermsCtx {
-        fn new() -> Self {
-            Self { acquired: 0 }
-        }
-    }
-
-    impl PermitsCtx for CpuPermsCtx {
-        fn add_permit(&mut self, permit: RunnerPerm) {
-            self.acquired = self.acquired.saturating_add(permit.num_permits());
-        }
-
-        fn drop_permits(&mut self, _drop_if: DropIf) {
-            self.acquired = 0;
-        }
-
-        fn acquired_permits(&self) -> NumPermits {
-            self.acquired
-        }
-    }
-
-    impl TestCpuRunCtx {
-        fn new(device_idx: usize, cache_area: u64) -> Self {
-            Self {
-                id: mono_key!(0, "cpu_run_ctx"),
-                device_idx,
-                cache_area,
-                perms: CpuPermsCtx::new(),
-            }
-        }
-    }
-
-    impl Adjustable for TestCpuRunCtx {}
-
-    impl WithId for TestCpuRunCtx {
-        type ID = MonoKey;
-
-        fn id(&self) -> &Self::ID {
-            &self.id
-        }
-    }
-
-    impl RunCtx for TestCpuRunCtx {
-        fn device_idx(&self) -> usize {
-            self.device_idx
-        }
-        fn purge_gpu_caches(&mut self) -> BoxFuture<'static, Result<(), ThoError>>
-        where
-            Self: Sized,
-        {
-            Box::pin(async { Ok(()) })
-        }
-        fn cache_area(&self) -> u64 {
-            self.cache_area
-        }
-
-        fn branch<I:Into<SynKey> + 'static>(&mut self, _new_name:I, with_new_cache_area: bool) -> Self
-        where
-            Self: Sized,
-        {
-            Self::new(self.device_idx, 0)
-        }
     }
 
     // ---------------- File Input / A/B Loader ----------------
@@ -193,7 +109,7 @@ mod tests {
     ) -> Arc<DevicesWrap<FileInput>> {
         Arc::new(DevicesWrap::wrap(
             value.into(),
-            cache_area,
+            cache_area.into(),
         ))
     }
 
@@ -359,7 +275,7 @@ mod tests {
     impl Stage for ABLoader {
         type In<'a> = FileInput;
         type Out = ThoTensor<ABData, SimpleId>;
-        type Ctx = TestTorchRunCtx;
+        type Ctx = RunCtxWithPermits;
     }
 
     // #[async_trait]
@@ -381,7 +297,7 @@ mod tests {
 
             Ok(Arc::new(DevicesWrap::wrap(
                 ThoTensor::new(id, x)?,
-                cache_area,
+                cache_area.into(),
             )))
         }
     }
@@ -466,7 +382,7 @@ mod tests {
     impl Stage for BatchBuilder {
         type In<'a> = FileListInput;
         type Out = ThoTensor<ABData, SimpleId>;
-        type Ctx = TestTorchRunCtx;
+        type Ctx = RunCtxWithPermits;
     }
 
     // #[async_trait]
@@ -530,7 +446,7 @@ mod tests {
                 let feat = Arc::clone(&self.loader)
                     .run_cached(
                         new_file_input_cache(f, loader_device_idx, loader_cache_area),
-                        ctx.branch(format!("batch_builder_loader_{fi}"), false),
+                        ctx.branch(Some(&format!("batch_builder_loader_{fi}")), false, false),
                     )
                     .await?;
                 feats.push(feat);
@@ -544,8 +460,8 @@ mod tests {
             // Materialize all features to the target device and build a single stacked batch
             // let feat_refs: Vec<&DataCacheWrapper<ThoTensor2<ABData, SimpleId>>> = feats.iter().map(|a| &**a).collect();
 
-            let ctx_for_data = ctx.branch("batch_builder_data", false);
-            let output = with_data!(ctx_for_data, [feats];|data:&[&ThoTensor<ABData, SimpleId>]|{
+            let ctx_for_data = ctx.branch(Some("batch_builder_data"), false, false);
+            let output = with_data!(ctx_for_data, [feats];|_ctx, data:&[&ThoTensor<ABData, SimpleId>]|{
 
                 let ax_id = SimpleId::from(format!("ax_{}", input.id()));
                 let first = data
@@ -587,7 +503,7 @@ mod tests {
 
             Ok(Arc::new(DevicesWrap::wrap(
                 output,
-                cache_area,
+                cache_area.into(),
             )))
         }
     }
@@ -694,7 +610,7 @@ mod tests {
     impl Stage for Classifier {
         type In<'a> = ThoTensor<ABData, SimpleId>;
         type Out = ThoTensor<ClsOut, SimpleId>;
-        type Ctx = TestTorchRunCtx;
+        type Ctx = RunCtxWithPermits;
     }
 
     impl SyncStage for Classifier {
@@ -728,6 +644,8 @@ mod tests {
                                     if acquired_permits < *min_permits {
                                         debug!("Err(MyError::OutOfMemory) MinPermits: acquired_permits={acquired_permits}");
                                         return Err(Cause::OutOfMemory.into());
+                                    } else {
+                                        debug!("Err(MyError::OutOfMemory) MinPermits: ok, acquired_permits={acquired_permits}");
                                     }
                                 }
                                 DumpedToCpu => {
@@ -788,7 +706,7 @@ mod tests {
 
             Ok(Arc::new(DevicesWrap::wrap(
                 output,
-                cache_area,
+                cache_area.into(),
             )))
         }
     }
@@ -843,7 +761,7 @@ mod tests {
     ) -> Arc<DevicesWrap<FileListInput>> {
         Arc::new(DevicesWrap::wrap(
             input,
-            cache_area,
+            cache_area.into(),
         ))
     }
 
@@ -875,7 +793,7 @@ mod tests {
     impl Stage for JoinAndClassifyTask {
         type In<'a> = FileListInput;
         type Out = ThoTensor<ClsOut, SimpleId>;
-        type Ctx = TestTorchRunCtx;
+        type Ctx = RunCtxWithPermits;
     }
 
     // #[async_trait]
@@ -892,7 +810,7 @@ mod tests {
 
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
-                .run_cached(Arc::clone(&input), ctx.branch("join_and_classify_batch", false))
+                .run_cached(Arc::clone(&input), ctx.branch(Some("join_and_classify_batch"), false, false))
                 .await?;
 
 
@@ -919,10 +837,6 @@ mod tests {
                     Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                         MAX_PERMITS,
                         *PermitStep::TEN,
-                        move |n| {
-
-                            GlobalCtx::global().acquire_many(device_idx, n, Arc::clone(&parmits_key) as Arc<dyn CachableIdTr>)
-                        },
                     ))),
                     Adjusters::Input(Box::new(
                         SplitsAdjuster::<ABRange, ABMetrics>::new(min_split_len),
@@ -933,7 +847,7 @@ mod tests {
             .run(
                 &self.clf,
                 batched,
-                ctx.branch("join_and_classify_clc", false),
+                ctx,
                 Contexts::new(
                     SplitsAdjusterContextImpl::new(
                         size,
@@ -956,7 +870,7 @@ mod tests {
 
             Ok(Arc::new(DevicesWrap::wrap(
                 result,
-                cache_area,
+                cache_area.into(),
             )))
             // todo!()
         }
@@ -971,7 +885,7 @@ mod tests {
         }
         // CPU-only global ctx
         init_ctx_once();
-        let mut ctx = TestTorchRunCtx::new(1, 0, "test");
+        let mut ctx = RunCtxWithPermits::new(1, "test");
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         let clf = Arc::new(Classifier::new(
@@ -997,13 +911,13 @@ mod tests {
         };
         let input_cache = new_file_list_input_cache(input, device_idx, cache_area);
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(input_cache, ctx.branch("join_and_classify_cpu", false))
+            .run_cached(input_cache, ctx.branch(Some("join_and_classify_cpu"), false, false))
             .await?;
 
         debug!("acc={acc:?}");
 
         acc.with_data_ref(0,
-                          &mut ctx.branch("join_and_classify_cpu_data", false), None, |acc_t: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+                          &mut ctx.branch(Some("join_and_classify_cpu_data"), false, false), None, |acc_t: &ThoTensor<ClsOut, SimpleId>, _ctx| {
                                       debug!("acc_t={acc_t:?} t=\n{}", acc_t.t_ref());
 
                                       // Dim impls are to define domain-specific operations on tensors
@@ -1023,7 +937,7 @@ mod tests {
         }
         // CPU-only global ctx
         init_ctx_once();
-        let ctx = Arc::new(RwLock::new(TestTorchRunCtx::new(0, 0, "test")));
+        let ctx = Arc::new(RwLock::new(RunCtxWithPermits::new(0, "test")));
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         let clf = Arc::new(Classifier::new(
@@ -1055,10 +969,10 @@ mod tests {
         };
         let input_cache = new_file_list_input_cache(input, device_idx, cache_area);
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(input_cache, ctx.write().branch("join_and_classify_cpu_many", false))
+            .run_cached(input_cache, ctx.write().branch(Some("join_and_classify_cpu_many"), false, false))
             .await?;
 
-        let mut ctx_for_data = ctx.write().branch("join_and_classify_cpu_many_data", false);
+        let mut ctx_for_data = ctx.write().branch(Some("join_and_classify_cpu_many_data"), false, false);
         acc.with_data_ref(1,
                           &mut ctx_for_data, None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
                                       let v = ClsOut::accuracy(acc);
@@ -1078,7 +992,7 @@ mod tests {
         }
 
         init_ctx_once();
-        let mut ctx = TestTorchRunCtx::new(1, 0, "test");
+        let mut ctx = RunCtxWithPermits::new(1, "test");
 
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
@@ -1117,13 +1031,13 @@ mod tests {
         let input_cache = new_file_list_input_cache(input, device_idx, cache_area);
 
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(input_cache, ctx.branch("join_and_classify_oom", false))
+            .run_cached(input_cache, ctx.branch(Some("join_and_classify_oom"), false, false))
             .await?;
 
         // ctx.add_permit(GlobalCtx::global().acquire_many(1, 1, Arc::new(simple_id!("zzz"))).await?);
 
         acc.with_data_ref(1,
-                          &mut ctx.branch("join_and_classify_oom_data", false), None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+                          &mut ctx.branch(Some("join_and_classify_oom_data"), false, false), None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
               debug!("acc={}", acc.t_ref());
 
               let v = ClsOut::accuracy(acc);

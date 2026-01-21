@@ -1,9 +1,10 @@
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::dists_tracker::DistsMask;
-use crate::tasks::run_ctx_2::RunCtx2;
+use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use async_trait::async_trait;
 use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
 use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
 use log::{debug, trace};
@@ -34,6 +35,7 @@ pub struct CrossInput<'a, R: AsRef<Resource>> {
     resources_1: &'a [R],
     resources_0_offsets: Vec<u32>,
     resources_1_offsets: Vec<u32>,
+    cache_area: CacheArea,
 }
 
 impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
@@ -95,6 +97,7 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
             resources_1: b_1,
             resources_0_offsets,
             resources_1_offsets,
+            cache_area: CacheArea::default(),
         }
     }
 
@@ -170,10 +173,14 @@ where
     ) -> Result<Rt, ThoError>
     where
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError> + Send,
-        P: PermitsCtx,
+        P: RunCtx,
     {
         debug!("CrossInput::with_data_ref: do_run");
         do_run(self, permits_ctx)
+    }
+
+    fn cache_area(&self) -> &CacheArea {
+        &self.cache_area
     }
 }
 
@@ -191,7 +198,7 @@ where
     ) -> Result<Rt, ThoError>
     where
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError>,
-        P: PermitsCtx,
+        P: RunCtx,
     {
         let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
         let batch_0_len = self.resources_0.len();
@@ -294,9 +301,9 @@ where
     F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, Arc<Resource>>, &CUC, &C) -> Result<R, ThoError>,
     C: RunCtx + 'static,
 {
-    pub fn new(batch_clc: F, cross_batch_ctx: CUC, unfold_params: UnfoldParams) -> Self {
+    pub fn new(batch_clc_fn: F, cross_batch_ctx: CUC, unfold_params: UnfoldParams) -> Self {
         Self {
-            batch_clc_fn: batch_clc,
+            batch_clc_fn,
             cross_batch_ctx,
             unfold_params,
             _ctx: PhantomData,
@@ -512,12 +519,13 @@ mod tests {
     use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClc, UnfoldParams};
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
     use crate::tasks::find_motifs::MeanDistsCtx;
-    use crate::tasks::run_ctx_2::RunCtx2;
+    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::runner::common::MockRunCtx;
     use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
     use log::debug;
     use parking_lot::RwLock;
     use std::sync::Arc;
+    use polars::prelude::RevMapping::Global;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Bool, Uint8};
     use tch::Tensor;
@@ -528,12 +536,14 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
 
-    #[test]
-    fn test_cross_batch_clc() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_cross_batch_clc() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
+        GlobalCtx::init_devices(2);
         let cross_batch_clc = Arc::new(CrossUnfoldClc::new(
             |t_0, t_1, input, ctx, _| {
                 debug!("t_0=\n{t_0}");
@@ -604,7 +614,7 @@ mod tests {
             chunk_0_resources.as_slice(),
             chunk_1_resources.as_slice(),
         );
-        let ctx = RunCtx2::new(1, "test");
+        let ctx = RunCtxWithPermits::new(1, "test");
         let out = cross_batch_clc.do_run(
             &input,
             &ctx,

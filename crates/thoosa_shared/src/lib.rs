@@ -164,7 +164,7 @@ pub struct ThoError {
     pub what: Cause,
 }
 
-pub type ThoosaError = ThoError;
+pub type ThoosaError = ThoError;//TODO used in macros, remove
 
 impl Clone for ThoError {
     fn clone(&self) -> Self {

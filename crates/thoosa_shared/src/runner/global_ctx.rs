@@ -1,3 +1,4 @@
+use std::backtrace::Backtrace;
 use crate::runner::permits::{NumPermits, MAX_PERMITS};
 use crate::runner::permits::runner_queue::Arbiter;
 use crate::runner::permits::{PermitSource, RunnerPerm};
@@ -10,249 +11,15 @@ use std::fmt::Debug;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use futures_util::future::BoxFuture;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{Cause, ThoError};
 use tokio::sync::RwLock as AsyncRwLock;
 use thoosa_shared::runner::purger::PurgeCmd;
+use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
-/// Public “area handle”: global bit index (0..n_areas).
-pub type CacheArea = u64;
 
-/// Convert CacheArea(bit_index) -> (word_index, mask_in_word)
-#[inline]
-fn area_to_word_mask(area: CacheArea) -> (usize, u64) {
-    let bit = area as usize;
-    let word = bit / 64;
-    let shift = (bit % 64) as u32;
-    (word, 1u64 << shift)
-}
-
-#[inline]
-fn valid_bits_mask_for_last_word(n_areas: usize) -> u64 {
-    let rem = n_areas % 64;
-    if rem == 0 { u64::MAX } else { (1u64 << rem) - 1 }
-}
-
-#[derive(Debug)]
-pub struct CacheAreasKeeper {
-    n_areas: usize,
-    words: Vec<u64>, // memory region of bits: 1 = used, 0 = free
-}
-
-impl CacheAreasKeeper {
-    pub fn new(n_areas: usize) -> Self {
-        let n_words = (n_areas + 63) / 64;
-        Self { n_areas, words: vec![0; n_words] }
-    }
-
-    /// Returns a u64 bit index (CacheArea).
-    pub fn next_available_cache_area(&mut self) -> Result<CacheArea, ThoError> {
-        debug!("CacheAreasKeeper::next_available_cache_area: self.n_areas={}", self.n_areas );
-        if self.n_areas == 0 {
-            return Err(Cause::SomethingElse("no cache areas available".into()).into());
-        }
-
-        let last = self.words.len() - 1;
-
-        for (wi, w) in self.words.iter_mut().enumerate() {
-            let valid = if wi == last { valid_bits_mask_for_last_word(self.n_areas) } else { u64::MAX };
-            let free = (!*w) & valid;
-            if free == 0 { continue; }
-
-            let bit_in_word = free.trailing_zeros();        // 0..63
-            let mask = 1u64 << bit_in_word;
-
-            *w |= mask;
-
-            let bit_index = (wi * 64 + bit_in_word as usize) as u64;
-            return Ok(bit_index);
-        }
-
-        Err(Cause::SomethingElse("no cache areas available".into()).into())
-    }
-
-    pub fn dispose_cache_area(&mut self, area: CacheArea) {
-
-        let bit = area as usize;
-        if bit >= self.n_areas {
-            debug!("dispose_cache_area: out-of-range area={area} n_areas={}", self.n_areas);
-            return;
-        }
-
-        let (word, mask) = area_to_word_mask(area);
-        debug!("dispose_cache_area: area={area} word={word} mask={mask:064b}");
-
-        self.words[word] &= !mask;
-    }
-
-    /// Only for tests / introspection.
-    pub fn words(&self) -> &[u64] { &self.words }
-}
-
-/// ---------- Atomic bitset for “SomeStruct holds many areas” ----------
-
-#[derive(Debug)]
-pub struct AtomicCacheAreas {
-    n_areas: usize,
-    words: Box<[AtomicU64]>,
-}
-
-impl AtomicCacheAreas {
-    pub fn new(n_areas: usize) -> Self {
-        let n_words = (n_areas + 63) / 64;
-        let mut v = Vec::with_capacity(n_words);
-        v.resize_with(n_words, || AtomicU64::new(0));
-        Self { n_areas, words: v.into_boxed_slice() }
-    }
-
-    pub fn add_cache_area(&self, area: CacheArea) {
-        let bit = area as usize;
-        debug_assert!(bit < self.n_areas);
-        let (word, mask) = area_to_word_mask(area);
-        self.words[word].fetch_or(mask, Ordering::AcqRel);
-    }
-
-    pub fn remove_cache_area(&self, area: CacheArea) {
-        let bit = area as usize;
-        debug_assert!(bit < self.n_areas);
-        let (word, mask) = area_to_word_mask(area);
-        self.words[word].fetch_and(!mask, Ordering::AcqRel);
-    }
-
-    pub fn snapshot_words(&self) -> Vec<u64> {
-        self.words.iter().map(|w| w.load(Ordering::Acquire)).collect()
-    }
-}
-
-#[cfg(test)]
-mod test_areas_keeper_tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use log::debug;
-    use crate::runner::global_ctx::{AtomicCacheAreas, CacheAreasKeeper};
-    use crate::ThoError;
-
-
-    #[test]
-    fn keeper_full_64_and_reuse() -> Result<(), ThoError> {
-        let mut k = CacheAreasKeeper::new(64);
-
-        for expected in 0..64u64 {
-            let a = k.next_available_cache_area()?;
-            assert_eq!(a, expected);
-        }
-        assert!(k.next_available_cache_area().is_err());
-        assert_eq!(k.words()[0], u64::MAX);
-
-        k.dispose_cache_area(0);
-        k.dispose_cache_area(31);
-        assert_eq!(k.words()[0], u64::MAX & !(1u64 << 0) & !(1u64 << 31));
-
-        assert_eq!(k.next_available_cache_area()?, 0);
-        assert_eq!(k.next_available_cache_area()?, 31);
-
-        Ok(())
-    }
-
-    #[test]
-    fn keeper_130_crosses_words() -> Result<(), ThoError> {
-        let mut k = CacheAreasKeeper::new(130);
-
-        for _ in 0..130 {
-            k.next_available_cache_area()?;
-        }
-        assert!(k.next_available_cache_area().is_err());
-
-        k.dispose_cache_area(0);
-        k.dispose_cache_area(64);
-
-        assert_eq!(k.next_available_cache_area()?, 0);
-        assert_eq!(k.next_available_cache_area()?, 64);
-
-        Ok(())
-    }
-
-    #[test]
-    fn atomic_add_remove() -> Result<(), ThoError> {
-        let mut k = CacheAreasKeeper::new(128);
-        let s = AtomicCacheAreas::new(128);
-
-        let a0 = k.next_available_cache_area()?;
-        let a1 = k.next_available_cache_area()?;
-        s.add_cache_area(a0);
-        s.add_cache_area(a1);
-        s.remove_cache_area(a0);
-        s.remove_cache_area(a1);
-
-        assert!(s.snapshot_words().into_iter().all(|w| w == 0));
-        Ok(())
-    }
-    struct SomeStruct {
-        cache_area: AtomicU64,
-    }
-
-    impl SomeStruct {
-        pub fn add_cache_area(&self, ca: u64) -> u64 {
-            self.cache_area.fetch_or(ca, Ordering::SeqCst) | ca
-        }
-
-        pub fn remove_cache_area(&self, ca: u64) -> u64 {
-            self.cache_area.fetch_and(!ca, Ordering::AcqRel) & !ca
-        }
-
-        pub fn cache_areas(&self) -> u64 {
-            self.cache_area.load(Ordering::Acquire)
-        }
-    }
-
-    #[test]
-    fn test_full()->Result<(), ThoError>{
-        let mut keeper = CacheAreasKeeper::new(1);
-
-        for i in 0..64 {
-            let area = keeper.next_available_cache_area()?;
-            debug!("area={area:064b} cache_areas={:064b}", keeper.words[0]);
-        }
-
-        // assert_eq!(0b1111111111111111111111111111111111111111111111111111111111111111, keeper.cache_areas);
-
-        // keeper.dispose_cache_area(0b0000000000000000000000000000000000000000000000000000000000000001);
-        //
-        // assert_eq!(0b1111111111111111111111111111111111111111111111111111111111111110, keeper.cache_areas);
-        //
-        // keeper.dispose_cache_area(0b0000000000000000000000000000000010000000000000000000000000000000);
-        //
-        // assert_eq!(0b1111111111111111111111111111111101111111111111111111111111111110, keeper.cache_areas);
-        //
-        // assert_eq!(0b0000000000000000000000000000000000000000000000000000000000000001, keeper.next_available_cache_area()?);
-        //
-        // assert_eq!(0b0000000000000000000000000000000010000000000000000000000000000000, keeper.next_available_cache_area()?);
-
-
-        Ok(())
-    }
-
-    #[test]
-    fn sample(){
-        let mut keeper = CacheAreasKeeper::new(3);
-
-        let mut ss = SomeStruct {
-            cache_area: AtomicU64::new(0)
-        };
-
-        let area_0 = keeper.next_available_cache_area().unwrap();
-        ss.add_cache_area(area_0);
-        let area_1 = keeper.next_available_cache_area().unwrap();
-        ss.add_cache_area(area_1);
-
-
-        ss.remove_cache_area(area_0);
-        ss.remove_cache_area(area_1);
-
-        assert_eq!(ss.cache_areas(), 0);
-
-    }
-}
 
 
 #[derive(Debug)]
@@ -270,7 +37,7 @@ pub struct GlobalCtx {
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
 
-#[cfg_attr(test, automock)]
+#[cfg_attr(any(test, feature = "mock_global_ctx"), automock)]
 impl GlobalCtx {
 
     fn new(num_devices: usize) -> Self {
@@ -299,7 +66,7 @@ impl GlobalCtx {
 
             is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
 
-            caches_areas: parking_lot::RwLock::new(CacheAreasKeeper::new(10_000)),
+            caches_areas: parking_lot::RwLock::new(CacheAreasKeeper::new(1000)),//100 * 64 cache areas
 
             cache_age: Default::default(),
             purge_lock: tokio::sync::Mutex::new(()),
@@ -339,6 +106,11 @@ impl GlobalCtx {
         GLOBAL_CTX.get().expect("call `init_devices` first")
     }
 
+    #[cfg(any(test, feature = "mock_global_ctx"))]
+    pub fn real_global() -> &'static GlobalCtx {
+        GLOBAL_CTX.get().expect("call `init_devices` first")
+    }
+
     pub fn device_count(&self) -> usize {
         self.num_devices
     }
@@ -357,32 +129,56 @@ impl GlobalCtx {
 
     pub async fn acquire_many(
         &self,
-        ordinal: usize,
+        device_idx: usize,
         num_permits: NumPermits,
         requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoError> {
-        self.semaphores[ordinal].acquire(num_permits, requester_id).await
+        debug!("GlobalCtx::acquire_many: requester_id={requester_id:?} asking for many permits, self.semaphores[{device_idx}]={:?} \nbacktrace={}", self.semaphores[device_idx], Backtrace::capture());
+        assert!(!requester_id.as_any().is::<()>(), "Got () requester_id backtrace={}", Backtrace::capture());
+
+        self.semaphores[device_idx].acquire(num_permits, requester_id).await
+    }
+
+    pub async fn wait_for_permits_hint(&self, device_idx:usize) {
+        self.semaphores[device_idx].wait_for_permits_hint().await;
     }
 
     pub async fn acquire_one(
         &self,
-        ordinal: usize,
+        device_idx: usize,
         requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoError> {
 
+        assert!(!requester_id.as_any().is::<()>(), "Got () requester_id backtrace={}", Backtrace::capture());
+
         let mut num_tries = 0;
+
+        debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} asking for one permit, self.semaphores[{device_idx}]={:?} \nbacktrace={}", self.semaphores[device_idx], Backtrace::capture());
+
+        //can't handle OutOfPermits in with_data! and similar calls - acquire_one is needed to ensure no other thread acquired 100 permits and can drop all to cpu.
         loop {
+            debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} asking for single permit, {num_tries} attempt");
 
-            if let Ok(permit) =self.semaphores[ordinal].acquire(1, Arc::clone(&requester_id)).await {
+            match self.semaphores[device_idx].acquire(1, Arc::clone(&requester_id)).await {
+                Ok(permit) => {
+                    debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} got single permit on {num_tries} attempt");
+                    return Ok(permit);
+                }
+                Err(e) => {
+                    match e.what {
+                        Cause::OutOfPermits => {
+                            num_tries+=1;
+                            if num_tries > 1000 {//TODO config
+                                return Err(ThoError::new("Can't get single permit"));
+                            }
+                            self.semaphores[device_idx].wait_for_permits_hint().await;
+                        }
 
-                debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} got single permit on {num_tries} attempt");
-
-
-                return Ok(permit);
-            }
-            num_tries+=1;
-            if num_tries > 1000 {//TODO config
-                return Err(ThoError::new("Can't get single permit"));
+                        e => {
+                            return Err(ThoError::new(format!("Can't get single permit, got {e:?}")));
+                        }
+                    }
+                }
             }
         }
     }
@@ -428,12 +224,11 @@ impl GlobalCtx {
         }
     }
 
-    pub fn next_cache_area(&self) -> Result<u64, ThoError> {
+    pub fn next_cache_area(&self) -> Result<CacheAreaId, ThoError> {
         self.caches_areas.write().next_available_cache_area()
     }
 
-    pub fn dispose_cache_area(&self, cache_area:u64) {
-        debug!("GlobalCtx::dispose_cache_area: cache_area={cache_area}");
+    pub fn dispose_cache_area(&self, cache_area:CacheAreaId) {
         self.caches_areas.write().dispose_cache_area(cache_area)
     }
 
@@ -447,46 +242,315 @@ impl GlobalCtx {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "mock_global_ctx"))]
 pub mod mock_global_ctx {
-    use crate::runner::global_ctx::{ MockGlobalCtx};
+    use std::sync::Arc;
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use crate::runner::permits::{NumPermits, PermitSource, RunnerPerm};
+    use crate::Cause;
+    use crate::ThoError;
+    use async_trait::async_trait;
+    use ctor::ctor;
+    use crate::traits::CachableIdTr;
+    use mockall::predicate::eq;
+    use tokio::sync::Semaphore;
+    use tokio::task::block_in_place;
+    use crate::comp_id::SynKey;
+    use crate::runner::global_ctx::MockGlobalCtx;
+
+    #[derive(Clone, Copy, Debug)]
+    pub enum AcquireBehavior {
+        Grant,
+        Deny,
+        Boom(&'static str)
+    }
+
+    #[derive(Debug)]
+    pub struct MockGlobalCtxBuildParams {
+        pub age: u64,
+        pub device_count: usize,
+        pub next_cache_areas: Vec<u64>,
+        pub acquire_many: AcquireBehavior,
+        pub acquire_one: AcquireBehavior,
+    }
+
+    impl Default for MockGlobalCtxBuildParams {
+        fn default() -> Self {
+            Self {
+                age: 0,
+                device_count: 2,
+                next_cache_areas: vec![1],
+                acquire_many: AcquireBehavior::Grant,
+                acquire_one: AcquireBehavior::Grant,
+            }
+        }
+    }
+
+    fn make_permit(num_permits: NumPermits) -> RunnerPerm {
+        let sem = Arc::new(Semaphore::new(num_permits as usize));
+        RunnerPerm::new(Arc::clone(&sem).try_acquire_many_owned(u32::from(num_permits)).expect("permit"))
+    }
+
+    #[derive(Debug)]
+    struct DummyPermitSource;
+
+    #[async_trait]
+    impl PermitSource for DummyPermitSource {
+        async fn acquire(
+            &self,
+            num_permits: NumPermits,
+            _out_id: Arc<dyn CachableIdTr>,
+        ) -> Result<RunnerPerm, ThoError> {
+            Ok(make_permit(num_permits))
+        }
+
+        async fn wait_for_permits_hint(&self) {}
+
+        fn move_permits(&self, from: &SynKey, to: &SynKey) {}
+    }
+
+    #[derive(Debug)]
+    struct DelegatingPermitSource {
+        real: &'static GlobalCtx,
+        device_idx: usize,
+    }
+
+    #[async_trait]
+    impl PermitSource for DelegatingPermitSource {
+        async fn acquire(
+            &self,
+            num_permits: NumPermits,
+            out_id: Arc<dyn CachableIdTr>,
+        ) -> Result<RunnerPerm, ThoError> {
+            self.real.debug_semaphore(self.device_idx).acquire(num_permits, out_id).await
+        }
+
+        async fn wait_for_permits_hint(&self) {
+            self.real.debug_semaphore(self.device_idx).wait_for_permits_hint().await;
+        }
+
+        fn move_permits(&self, from: &SynKey, to: &SynKey) {
+            self.real.debug_semaphore(self.device_idx).move_permits(from, to);
+        }
+    }
+
+    fn dummy_semaphore() -> Box<dyn PermitSource> {
+        Box::new(DummyPermitSource)
+    }
+
+    fn delegating_semaphore(real: &'static GlobalCtx, device_idx: usize) -> Box<dyn PermitSource> {
+        Box::new(DelegatingPermitSource { real, device_idx })
+    }
+
 
     pub struct MockGlobalCtxBuilder {
         mock: MockGlobalCtx,
+        real: Option<&'static GlobalCtx>
     }
 
     impl MockGlobalCtxBuilder {
         pub fn with_reset_all_on_cpu(mut self) -> Self {
-            let _ = self.mock.expect_reset_all_on_cpu();
+            if let Some(real) = self.real {
+
+                let _ = self.mock.expect_reset_all_on_cpu().returning({
+
+                    move |device_idx| {
+                        tokio::runtime::Handle::current().block_on(real.reset_all_on_cpu(device_idx));
+                    }
+                });
+            } else {
+                let _ = self.mock.expect_reset_all_on_cpu();
+            }
+
             self
         }
 
         pub fn with_age(mut self, out: u64) -> Self {
-            self.mock.expect_do_age();
-            self.mock.expect_cache_age().return_const(out);
+
+
+            if let Some(real) = self.real {
+
+                self.mock.expect_do_age().returning({
+
+                    move || {
+                        real.do_age();
+                    }
+                });
+
+                self.mock.expect_cache_age().returning({
+
+                    move || {
+                        real.cache_age()
+                    }
+                });
+
+            } else {
+                self.mock.expect_do_age();
+                self.mock.expect_cache_age().return_const(out);
+            }
+
 
             self
         }
 
         pub fn with_device_count(mut self, out: usize) -> Self {
-            self.mock.expect_device_count().return_const(out);
+            if let Some(real) = self.real {
+                self.mock.expect_device_count().returning(move || {
+                    real.device_count()
+                });
+            } else {
+                self.mock.expect_device_count().return_const(out);
+            }
 
             self
         }
         pub fn with_register_cache(mut self) -> Self {
-            self.mock.expect_register_cache();
+            if let Some(real) = self.real {
+                self.mock.expect_register_cache().returning({
+                    move |cache| {
+                        block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(real.register_cache(cache));
+                        })
+                    }
+                });
+            } else {
+                self.mock.expect_register_cache();
+            }
 
             self
         }
 
         pub fn with_remove_cache(mut self) -> Self {
-            self.mock.expect_remove_cache();
+            if let Some(real) = self.real {
+                self.mock.expect_remove_cache().returning({
+                    move |key| {
+                        tokio::task::block_in_place(move || {
+                            tokio::runtime::Handle::current().block_on(real.remove_cache(key));
+                        });
+                    }
+                });
+            } else {
+                self.mock.expect_remove_cache();
+            }
 
             self
         }
 
         pub fn with_dump_all_to_cpu(mut self) -> Self {
-            let _ = self.mock.expect_dump_all_to_cpu();
+            if let Some(real) = self.real {
+                let _ = self.mock.expect_dump_all_to_cpu().returning({
+                    move |required_ids, device_idx| {
+                        tokio::runtime::Handle::current().block_on(real.dump_all_to_cpu(required_ids, device_idx))
+                    }
+                });
+            } else {
+                let _ = self.mock.expect_dump_all_to_cpu();
+            }
+
+            self
+        }
+
+        pub fn with_acquire_many(mut self, behavior: AcquireBehavior) -> Self {
+            if let Some(real) = self.real {
+                self.mock.expect_acquire_many().times(0..).returning({
+                    move |device_idx, num_permits, requester_id| {
+                        tokio::runtime::Handle::current().block_on(real.acquire_many(device_idx, num_permits, requester_id))
+                    }
+                });
+            } else {
+                self.mock.expect_acquire_many().times(0..).returning({
+                    move |_device_idx, num_permits, _requester_id| {
+                        match behavior {
+                            AcquireBehavior::Grant => Ok(make_permit(num_permits)),
+                            AcquireBehavior::Deny => Err(Cause::OutOfPermits.into()),
+                            AcquireBehavior::Boom(msg) => Err(Cause::SomethingElse(msg.to_string()).into())
+                        }
+                    }
+                });
+            }
+
+            self
+        }
+
+        pub fn with_acquire_one(mut self, behavior: AcquireBehavior) -> Self {
+            if let Some(real) = self.real {
+                self.mock.expect_acquire_one().times(0..).returning({
+                    move |device_idx, requester_id| {
+                        tokio::runtime::Handle::current().block_on(real.acquire_one(device_idx, requester_id))
+                    }
+                });
+            } else {
+                self.mock.expect_acquire_one().times(0..).returning({
+                    move |_device_idx, _requester_id| {
+                        match behavior {
+                            AcquireBehavior::Grant => Ok(make_permit(1)),
+                            AcquireBehavior::Deny => Err(Cause::OutOfPermits.into()),
+                            AcquireBehavior::Boom(msg) => Err(Cause::SomethingElse(msg.to_string()).into())
+                        }
+                    }
+                });
+            }
+
+            self
+        }
+
+
+        pub fn with_wait_for_permits_hint(mut self) -> Self {
+            if let Some(real) = self.real {
+                let _ = self.mock.expect_wait_for_permits_hint().times(0..).returning({
+                    move |device_idx| {
+                        tokio::runtime::Handle::current().block_on(real.wait_for_permits_hint(device_idx));
+                    }
+                });
+            } else {
+                let _ = self.mock.expect_wait_for_permits_hint().times(0..).returning(|_device_idx| {});
+            }
+
+            self
+        }
+
+        pub fn with_run_purge_gpu(mut self) -> Self {
+            if let Some(real) = self.real {
+                self.mock.expect_run_purge_gpu().times(0..).returning({
+                    move |closures, cache_area| {
+                        real.run_purge_gpu(closures, cache_area)
+                    }
+                });
+            } else {
+                self.mock.expect_run_purge_gpu().times(0..).returning(|_closures, _cache_area| Ok(()));
+            }
+
+            self
+        }
+
+        pub fn with_debug_semaphore(mut self) -> Self {
+            if let Some(real) = self.real {
+                for device_idx in 0..real.device_count() {
+                    let sem = delegating_semaphore(real, device_idx);
+                    self.mock.expect_debug_semaphore()
+                        .with(eq(device_idx))
+                        .times(0..)
+                        .return_const(sem);
+                }
+            } else {
+                self.mock.expect_debug_semaphore().times(0..).return_const(dummy_semaphore());
+            }
+
+            self
+        }
+
+        pub fn with_next_cache_area(mut self, mut cache_areas:Vec<u64>) -> Self {
+            if let Some(real) = self.real {
+                let _ = self.mock.expect_next_cache_area().returning({
+                    move || {
+                        real.next_cache_area()
+                    }
+                });
+            } else {
+                let _ = self.mock.expect_next_cache_area().returning(move ||{
+                    Ok(cache_areas.pop().unwrap())
+                });
+            }
 
             self
         }
@@ -494,23 +558,80 @@ pub mod mock_global_ctx {
         pub fn finish(self) -> MockGlobalCtx {
             self.mock
         }
+
+        pub fn build(self) -> MockGlobalCtx {
+            build_with_params_inner(self, MockGlobalCtxBuildParams::default())
+        }
+
+        #[cfg(any(test, feature = "mock_global_ctx"))]
+        pub fn install_global_ctx_mock() -> impl Drop {
+            use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
+            let ctx = MockGlobalCtx::global_context();
+            if unsafe {USE_REAL_CTX} {
+                use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+
+                let real: &'static RealGlobalCtx = RealGlobalCtx::real_global();
+
+
+                ctx.expect().returning(move || {
+                    // NOTE: this leaks once per call to GlobalCtx::global() in the test.
+                    Box::leak(Box::new(from_real(real).build()))
+                });
+
+                return ctx;
+            }
+
+            ctx.expect().returning(|| {
+                Box::leak(Box::new(
+                    mock_global_ctx::build_default(),
+                )) as &'static MockGlobalCtx
+            });
+
+            ctx
+        }
+
+    }
+
+    fn build_with_params_inner(builder: MockGlobalCtxBuilder, params: MockGlobalCtxBuildParams) -> MockGlobalCtx {
+        builder
+            .with_age(params.age)
+            .with_dump_all_to_cpu()
+            .with_reset_all_on_cpu()
+            .with_device_count(params.device_count)
+            .with_register_cache()
+            .with_remove_cache()
+            .with_next_cache_area(params.next_cache_areas)
+            .with_acquire_many(params.acquire_many)
+            .with_acquire_one(params.acquire_one)
+            .with_wait_for_permits_hint()
+            .with_run_purge_gpu()
+            .with_debug_semaphore()
+            .finish()
+    }
+
+    pub fn build_with_params(params: MockGlobalCtxBuildParams) -> MockGlobalCtx {
+        build_with_params_inner(build(), params)
     }
 
     pub fn build() -> MockGlobalCtxBuilder {
         MockGlobalCtxBuilder {
-            mock: super::MockGlobalCtx::default(),
+            mock: MockGlobalCtx::default(),
+            real: None
         }
     }
 
-    pub fn build_default() -> MockGlobalCtx {
-        build()
-            .with_age(0)
-            .with_dump_all_to_cpu()
-            .with_reset_all_on_cpu()
-            .with_device_count(2)
-            .with_register_cache()
-            .with_remove_cache()
-            .finish()
+    pub fn from_real(global_ctx: &'static GlobalCtx) -> MockGlobalCtxBuilder {
+
+        MockGlobalCtxBuilder {
+            mock: MockGlobalCtx::default(),
+            real: Some(global_ctx)
+        }
     }
 
+
+    pub fn build_default() -> MockGlobalCtx {
+        build_with_params(MockGlobalCtxBuildParams::default())
+    }
+
+    pub static mut USE_REAL_CTX:bool = false;
 }

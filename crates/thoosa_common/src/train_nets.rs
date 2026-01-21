@@ -1322,7 +1322,7 @@ impl SavableResult for TrainMotifsNetResult {
     }
 }
 
-pub async fn opt_train_2<P, R, F, N: Debug + Default>(
+pub async fn opt_train<P, R, F, N: Debug + Default>(
     opt_config: Arc<OptConfig>, //N node parameters
     mut train: F,
     run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
@@ -1353,7 +1353,7 @@ where
     for grid_vals in grid_vals_sets.into_iter() {
         let const_vals = const_vals.clone();
         let grid_vals = grid_vals.clone();
-        let mut train_clone = &mut train;//.clone();
+        let train_clone = &mut train;
 
         let min_var_store_clone = Arc::clone(&min_var_store);
         let min_loss_moved = Arc::clone(&min_loss);
@@ -1374,10 +1374,10 @@ where
                 ); //motif_id ?
 
                 let (loss, node_params) = panic_to_err_async!(
-                    (train_clone)(
+                    train_clone(
                             &vs,
                             run_config.clone(),
-                            &mut listener /*Arc::new(Mutex::new(Box::new(listener)))*/
+                            &mut listener
                     ).await
                 ).unwrap_or_else(|e| {
                     warn!("opt_train failed with {e:?} on {run_config:?} ");
@@ -1411,75 +1411,6 @@ where
         .unwrap()
         .into_inner()
         .ok_or_else(|| ThoError::new("opt was not run"))
-}
-
-pub fn opt_train<P, R, F, N: Debug + Default>(
-    opt_config: &OptConfig, //N node parameters
-    mut train: F,
-    run_config_source: &OptRunConfigs<
-        Vec<NamedVal<P>>,
-        Vec<NamedRange<P>>,
-        Vec<Hyperparameter<P>>,
-        P,
-    >,
-    device: Device,
-    descr: &str,
-) -> Result<(VarStore, N, R, f32), ThoError>
-where
-    P: FieldName,
-    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>>,
-    F: FnMut(&VarStore, &R, &mut dyn TrainListener) -> Result<(f32, N), ThoError>,
-{
-    let const_vals = run_config_source.grid_run_config_source().const_params();
-    let mut min_loss = f32::MAX;
-    let mut min_var_store: Option<(VarStore, N, R, f32)> = None;
-    info!("opt_train: running opt train {descr} ");
-
-    run_config_source.grid_to_vals().into_iter().for_each(|grid_vals| {
-
-        let mut opt = TPEOptimizer::new(|opt_vals| {
-            let run_config = [
-                const_vals.as_slice(),
-                grid_vals.as_slice(),
-                opt_vals
-            ].concat().into_iter().into();
-
-            let vs = VarStore::new(device);
-
-            let mut listener = PlotVecf32::new(format!("_params_{:?}", "id"/*TODO run_config.get_id()*/).as_str()); //motif_id ?
-            let (loss, node_params) = match panic_to_err!(train(&vs, &run_config, &mut listener)) {
-                Ok(v) => {
-                    v
-                }
-                Err(e) => {
-                    warn!("opt_train failed with {e:?} on {run_config:?}");
-                    (f32::MAX, Default::default())
-                }
-            };
-            listener.plot();
-
-            debug!("opt_train: descr={descr} run_config_values={run_config:?} loss={loss}");
-            if loss < min_loss {
-                min_loss = loss;
-                min_var_store.replace((vs, node_params, run_config, min_loss));
-            }
-            print!(".");
-            loss
-        },
-            ConfigurationSpace::new(run_config_source.opt_params().clone()),
-            opt_config.opt_max_evals,
-            opt_config.opt_num_init,
-        );
-
-        let best_config = opt.optimize();
-
-        trace!("done opt {descr}");
-        info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={min_loss} min_var_store={min_var_store:?}");
-
-        // min_var_store.ok_or_else(||ThoosaError::new("opt was not run"))
-    });
-
-    min_var_store.ok_or_else(|| ThoError::new("opt was not run"))
 }
 
 pub fn slices_in_all_resources<ResourceId>(slices: Vec<(ResourceId, Vec<Tensor>)>) -> Vec<Tensor> {
@@ -1895,7 +1826,7 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{any_len_label_node, dummy_label_net, motif_node, opt_train, AnyLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MaxPaddingNetParams, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
+    use crate::train_nets::{any_len_label_node, dummy_label_net, motif_node, AnyLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MaxPaddingNetParams, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore,
     };

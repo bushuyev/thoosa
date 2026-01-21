@@ -12,6 +12,7 @@ use parking_lot::{Mutex, RwLock};
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Reduction, Tensor};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_common::batches::AsyncDataBatch;
@@ -36,7 +37,6 @@ use thoosa_with_data::with_data;
 use crate::tasks::apply_label_nets::ApplyLabelNets;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::run_ctx_2::MotifsCtx;
 use crate::tasks::stages_seq::ABStage;
 use crate::tasks::train_net::{TrainNet, TrainNetInput};
 
@@ -45,7 +45,7 @@ pub struct TrainFinalNet<L, LL, C>
 where
     L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     LL: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<LabelProbability, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     select_motifs_run_ids: Vec<RunId>,
     run_configs: Arc<OptRunConfigs<
@@ -74,14 +74,14 @@ pub async fn new_train_final_net_with_ml<L, C, R>(
 ) -> Result<TrainFinalNet<L, ABStage<L, ApplyLabelNets<C>, C>, C>, ThoError>
 where
     L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
-    R: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
+    R: RunCtx + Adjustable + 'static,
 {
     let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, select_motifs_run_ids.clone(), stage_ctx).await?);
 
     let label_loader = Arc::new(ABStage::new(
         SynKey::new([
-            mono_key!("Loader_with_label_nets", "stage"),
+            mono_key!("Loader_with_label_nets", "Loader_with_label_nets"),
             mono_key!(format!("{select_motifs_run_ids:?}"), "select_motifs_run_ids"),
         ]),
         Arc::clone(&loader),
@@ -104,7 +104,7 @@ impl<L, LL, C> TrainFinalNet<L, LL, C>
 where
     L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     LL: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<LabelProbability, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     pub async fn new(
         select_motifs_run_ids: Vec<RunId>,
@@ -184,7 +184,7 @@ impl<L, LL, C> Stage for TrainFinalNet<L, LL, C>
 where
     L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     LL: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<LabelProbability, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = ResourcesConfigInput<NetResources<Logits>>;
@@ -195,15 +195,14 @@ impl<L, LL, C> AsyncStage for TrainFinalNet<L, LL, C>
 where
     L: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     LL: for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<LabelProbability, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainFinalNet::run"))]
     fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
-        ctx: Self::Ctx,
+        mut ctx: Self::Ctx,
     ) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
-        let mut ctx = ctx;
         let cache_area = ctx.cache_area();
 
         let train_final_run_configs = Arc::clone(&self.run_configs);
@@ -212,10 +211,9 @@ where
         let num_label_nets = self.num_label_nets;
         let opt_config = Arc::clone(&self.opt_config);
         let store = Arc::clone(&self.store);
-        let cache_area = cache_area.clone();
 
         async move {
-            let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) = with_data!(ctx.branch("train_final_resources", false), input; |input:&ResourcesConfigInput<NetResources<Logits>>|{
+            let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) = with_data!(ctx.branch(Some("train_final_resources"), false, false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Logits>>|{
                 Ok::<_, ThoError>(input.resources_config().to_resources(&store)?)
             })?;
 
@@ -269,8 +267,10 @@ where
                 "final".to_string()
             ));
 
-            let train_net_ctx = ctx.branch("train_final_net", false);
-            let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])) , cache_area)), train_net_ctx).await?).unwrap().take_data(0).await?;
+            let result = Arc::into_inner(train_net.run(
+                Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])) , cache_area.into())),
+                ctx.branch(Some("train_final_net"), false, false)
+            ).await?).unwrap().take_data(0).await?;
 
             let final_result = TrainFinalNetsRunConfigResult::new(
                 Some(&label_net_run_ids),
@@ -282,7 +282,7 @@ where
 
             Ok(Arc::new(DevicesWrap::wrap(
                 TrainFinalNetOutput::new(SynKey::new([mono_key!("", "empty")]), final_result),
-                cache_area,
+                cache_area.into(),
             )))
         }
     }
@@ -363,11 +363,12 @@ where
                             let (resource, labels) = resources[index].clone();
                             let ctx_for_loader = {
                                 let mut guard = ctx.lock();
-                                guard.branch("final_net_batch_loader", false)
+                                guard.branch(Some("final_net_batch_loader"), false, false)
                             };
+
                             async move {
                                 let out = Arc::clone(&loader)
-                                    .run_cached(Arc::new(DevicesWrap::wrap(resource, 0)), ctx_for_loader)
+                                    .run_cached(Arc::new(DevicesWrap::wrap(resource, CacheArea::default())), ctx_for_loader)
                                     .await?;
                                 Ok::<_, ThoError>((out, labels))
                             }
@@ -382,15 +383,13 @@ where
                             a
                         });
 
-                    let device_idx = {
-                        let guard = ctx.lock();
-                        guard.device_idx()
-                    };
-                    let ctx_for_build = {
+
+                    let (device_idx, ctx_for_build) = {
                         let mut guard = ctx.lock();
-                        guard.branch("final_net_batch_build", false)
+                        (guard.device_idx(), guard.branch(Some("final_net_batch_build"), false, false))
                     };
-                    with_data!(ctx_for_build, [outputs]; |xs:&[&ThoTensor<LabelProbability, SynKey>]|{
+
+                    with_data!(ctx_for_build, [outputs]; |_ctx, xs:&[&ThoTensor<LabelProbability, SynKey>]|{
                         let x = Tensor::f_stack(
                             xs.iter()
                                 .map(|x| x.t_ref().f_flatten(0, 1))
@@ -465,6 +464,7 @@ mod tests {
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::runner::common::cachable::DevicesWrap;
+    use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::common::mock_run_ctx;
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
@@ -630,7 +630,7 @@ mod tests {
 
         let input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string()))),
-            0,
+            CacheArea::default(),
         ));
 
         train_final_net.run(input, mock_run_ctx::default(0)).await?;

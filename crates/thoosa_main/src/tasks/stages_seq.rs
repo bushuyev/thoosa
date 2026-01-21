@@ -145,11 +145,11 @@ where
         let input_id = input.id().clone();
         debug!("ABStage::run: input.id={input_id:?} ctx={ctx:?}");
 
-        let output_a = Arc::clone(&self.stage_a).run_cached(input, ctx.branch("ab_stage_a", false)).await?;
+        let output_a = Arc::clone(&self.stage_a).run_cached(input, ctx.branch(Some("ab_stage_a"), false, false)).await?;
 
         debug!("ABStage::run: input.id={input_id:?} a done");
 
-        let output_b = Arc::clone(&self.stage_b).run_cached(output_a, ctx.branch("ab_stage_b", false)).await?;
+        let output_b = Arc::clone(&self.stage_b).run_cached(output_a, ctx.branch(Some("ab_stage_b"), false, false)).await?;
 
         debug!("ABStage::run: input.id={input_id:?} b done");
 

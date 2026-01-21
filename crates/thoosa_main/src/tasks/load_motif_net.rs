@@ -20,11 +20,6 @@ use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{mono_key, simple_id, ThoError};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::comp_id::SynKey;
-use crate::tasks::run_ctx_2::MotifsCtx;
-
-
-
-
 #[derive(Debug, Clone, DummyData)]
 pub struct LoadMotifNetInput {
     id: SynKey,
@@ -63,7 +58,7 @@ impl WithId for  LoadMotifNetInput{
 #[derive(Debug, Cached, Named)]
 pub struct LoadMotifNet<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
 
     ws: Arc<RwLock<Box<dyn Workspace>>>,
@@ -72,7 +67,7 @@ where
 
 impl <C> LoadMotifNet<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
         Self {
@@ -109,7 +104,7 @@ impl MotifNetMeta {
 
 impl <C> Stage for LoadMotifNet<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = LoadMotifNetInput;
@@ -119,7 +114,7 @@ where
 // #[async_trait]
 impl <C> AsyncStage for LoadMotifNet<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifNet::run"))]
@@ -129,18 +124,18 @@ where
         let input = input.load_from_any_device_(0).await?;//TODO clone_from_cpu
         let mut motif_nets = self.ws.read().load_motif_nets(input.channel, input.motif_id, &ThoDevice::from(device_idx).into())?;
 
-        debug!("LoadMotifNet::run: motif_nets={motif_nets:?}");
+        debug!("LoadMotifNet::run: motif_nets.len={} motif_nets={motif_nets:?}", motif_nets.len());
 
         let (params, module) = motif_nets
             .pop().ok_or_else(|| ThoError::new(format!("no nets for input={input:?}")))?;//TODO select best net or select with run config
 
-        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, MotifNetMeta::new(input.motif_id, input.channel, params)), cache_area)))
+        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, MotifNetMeta::new(input.motif_id, input.channel, params)), cache_area.into())))
     }
 }
 
 impl <C> OutId for LoadMotifNet<C>
 where
-    C: RunCtx + MotifsCtx + Adjustable + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         mono_key!("MotifNet", "MotifNet") + input_id//TODO should be same as in Ws::load_motif_nets
@@ -154,6 +149,7 @@ mod tests {
     use parking_lot::RwLock;
     use tch::Device::Cuda;
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
+    use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx};
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::utils;
@@ -180,7 +176,7 @@ mod tests {
 
         let load_motif_net = Arc::new(LoadMotifNet::<MockRunCtx>::new(&ws));
 
-        load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(0, 0), 0)), mock_run_ctx::default(1)).await?;
+        load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(0, 0), CacheArea::default())), mock_run_ctx::default(1)).await?;
 
         Ok(())
     }

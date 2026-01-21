@@ -2,7 +2,7 @@ use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputB
 #[cfg(test)]
 use crate::tasks::cross_batch_clc::CrossUnfoldClc;
 use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::run_ctx_2::RunCtx2;
+use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
@@ -27,6 +27,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use thoosa_shared::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
+use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
@@ -200,7 +201,7 @@ where
 
     Ok(splits
         .into_iter()
-        .map(|(tensor, offset)| (Arc::new(DevicesWrap::wrap(tensor, cache_area)), offset))
+        .map(|(tensor, offset)| (Arc::new(DevicesWrap::wrap(tensor, cache_area.into())), offset))
         .collect())
 }
 
@@ -383,17 +384,15 @@ where
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
-        ctx: Self::Ctx,
+        mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let mut ctx = ctx;
         // let chunk_size = self.chunk_size;
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
         let device_idx = ctx.device_idx();
         let cache_area = ctx.cache_area();
         let output_merge_mode = self.output_merge_mode;
 
-        let mut ctx_for_data = ctx.branch("cross_loader_resources", false);
-        let resources = input.with_data_ref(0, &mut ctx_for_data, None, |input: &ResourcesConfigInput<ResC>, _ctx|{
+        let resources = input.with_data_ref(0, &mut ctx.branch(Some("cross_loader_resources"), false, false), None, |input: &ResourcesConfigInput<ResC>, _ctx|{
                 Ok(input
                     .resources_config
                     .to_resources(&self.store)?
@@ -419,10 +418,10 @@ where
 
 
             let t_0 = Arc::clone(&self.loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone(), 0)), ctx.branch("cross_loader_t_0", false))
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone(), CacheArea::default())), ctx.branch(Some("cross_loader_t_0"), false, false))
                 .await?;
 
-            let mut ctx_for_split = ctx.branch("cross_loader_split_t_0", false);
+            let mut ctx_for_split = ctx.branch(Some("cross_loader_split_t_0"), false, false);
             let t_0_slices = split_tensor_if_needed(
                 t_0,
                 &mut ctx_for_split,
@@ -454,13 +453,12 @@ where
                 .skip(skip_0_i)//skipping lower triangle
             {
                 let t_1 = Arc::clone(&self.loader)
-                    .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone(), 0)), ctx.branch("cross_loader_t_1", false))
+                    .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone(), CacheArea::default())), ctx.branch(Some("cross_loader_t_1"), false, false))
                     .await?;
 
-                let mut ctx_for_split = ctx.branch("cross_loader_split_t_1", false);
                 let t_1_slices = split_tensor_if_needed(
                     t_1,
-                    &mut ctx_for_split,
+                    &mut ctx.branch(Some(&format!("cross_loader_resource_{i_0}_{i_1}_for_split")), false, false),
                     cache_area,
                     max_batch,
                     self.step,
@@ -481,16 +479,16 @@ where
                 debug!("CrossLoader::run: t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}");
                 let batches_concated = [t_0_batch.clone(), t_1_batch].concat();
                 let batch_clc = Arc::clone(&self.batch_clc);
-                let ctx_for_clc = ctx.branch("cross_clc_output", false);
+
+
                 let t_0_batch_resources_cloned = t_0_batch_resources.clone();
                 let t_1_batch_resources_cloned = t_1_batch_resources.clone();
                 let t_0_batch_offsets_cloned = t_0_batch_offsets.clone();
                 let t_1_batch_offsets_cloned = t_1_batch_offsets.clone();
-                let ctx_for_data = ctx.branch("cross_clc_data", false);
-                let mut cross_clc_output = async_with_data!(
-                    ctx_for_data,
+
+                let mut cross_clc_output = async_with_data!(ctx.branch(Some(&format!("cross_clc_data_resource_{i_0}_{i_1}_for_split")), false, false),
                     [batches_concated];
-                    |data| async move {
+                    |ctx, data| async move {
                         let input = CrossInput::new_with_offsets(
                             data,
                             t_0_batch_resources_cloned.as_slice(),
@@ -512,13 +510,6 @@ where
                                 Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                                     MAX_PERMITS,
                                     *PermitStep::TWENTY,
-                                    move |n| {
-                                        GlobalCtx::global().acquire_many(
-                                            device_idx,
-                                            n,
-                                            Arc::new(simple_id!(ctx_name))
-                                        )
-                                    },
                                 ))),
                                 Adjusters::RunContext(Box::new(DumpToCpu::new())),
                                 Adjusters::Input(Box::new(SplitsAdjuster::<CrossInputBatch1Selector, i64>::new(1))),
@@ -528,7 +519,7 @@ where
                         .run(
                             &batch_clc,
                             Arc::new(input),
-                            ctx_for_clc,
+                            ctx,
                             Contexts::new(
                                 SplitsAdjusterContextImpl::new(
                                     input_len,
@@ -550,7 +541,7 @@ where
 
                 let receiver_arc = Arc::clone(&receiver);
 
-                receiver_arc.consume(cross_clc_output, ctx.branch("cross_loader_receiver", false)).await?;
+                receiver_arc.consume(cross_clc_output, ctx.branch(Some("cross_loader_receiver"), false, false)).await?;
 
 
                 t_1_batch = vec![];
@@ -570,7 +561,7 @@ where
 
         (self.on_all_done)(&receiver).await?;
 
-        Ok(Arc::new(DevicesWrap::wrap((), 0)))
+        Ok(Arc::new(DevicesWrap::wrap((), CacheArea::default())))
     }
 }
 
@@ -817,10 +808,11 @@ mod tests {
         CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
     };
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
-    use crate::tasks::run_ctx_2::RunCtx2;
+    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use crate::tasks::slices_iter::SlicesIter;
     use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx};
+    use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use futures_util::FutureExt;
     use log::debug;
@@ -985,8 +977,8 @@ mod tests {
             .map(|v| v.to_string())
             .collect();
 
-        // Exercise GPU path and copy mask/dists back to CPU for DistsTracker.
-        let mut ctx = RunCtx2::new(1, "aa");
+
+        let mut ctx = RunCtxWithPermits::new(1, "test_cross_clc");
 
         let resource_stats = resource_keys
             .iter()
@@ -1018,7 +1010,7 @@ mod tests {
         let oom_triggered = Arc::new(AtomicBool::new(false));
         let oom_triggered_cloned = Arc::clone(&oom_triggered);
 
-        let loader = Arc::new(RawTensorLoader::<RunCtx2>::new(
+        let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
             move |key, _| {
                 let i = resources_to_move
                     .iter()
@@ -1074,7 +1066,7 @@ mod tests {
                 let fixed_config = fixed_config.clone();
                 move |_resources: &[Arc<Resource>]| {
                     // Integration-style test to exercise CrossLoader + DistsTracker end-to-end.
-                    Arc::new(DistsTracker::<RunCtx2>::new(
+                    Arc::new(DistsTracker::<RunCtxWithPermits>::new(
                         &ws,
                         &store,
                         &run_config,
@@ -1095,11 +1087,11 @@ mod tests {
         let cache_area = ctx.cache_area();
         let input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(Simple::new(ResourceType::List(resource_keys))),
-            cache_area,
+            cache_area.into(),
         ));
 
         let output = cross_loader
-            .run(input, ctx.branch("cross_loader_run", false))
+            .run(input, ctx.branch(Some("cross_loader_run"), false, false))
             .await?;
 
         assert_eq!(output.id(), &());
@@ -1272,11 +1264,11 @@ mod tests {
                 "resource_a".to_string(),
                 "resource_b".to_string(),
             ]))),
-            cache_area,
+            cache_area.into(),
         ));
 
         let _ = cross_loader
-            .run(input, ctx.branch("cross_loader_run", false))
+            .run(input, ctx.branch(Some("cross_loader_run"), false, false))
             .await?;
 
         yield_now().await;
@@ -1429,10 +1421,10 @@ mod tests {
             ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
                 "resource_a".to_string(),
             ]))),
-            cache_area,
+            cache_area.into(),
         ));
 
-        let _ = cross_loader.run(input, ctx.branch("cross_loader_run", false)).await?;
+        let _ = cross_loader.run(input, ctx.branch(Some("cross_loader_run"), false, false)).await?;
 
         let observed = observations.lock().expect("observations.lock").clone();
         assert_eq!(observed.len(), 1);

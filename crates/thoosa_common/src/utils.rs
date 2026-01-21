@@ -468,14 +468,6 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tenso
     Ok(result.f_pad(pad_idx.as_slice(), "constant", 0.0)?)
 }
 
-pub fn load_tensor(
-    base_path: &str,
-    tensor_id: &str,
-    device: Device,
-) -> Result<Tensor, ThoError> {
-    Ok(Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", tensor_id)))?
-        .f_to_device(device)?)
-}
 
 pub fn clone(from: &Tensor) -> Tensor {
     let to = Tensor::zeros(from.size(), FLOAT_CPU); //TODO clone
@@ -685,25 +677,7 @@ pub mod tests {
 
         Ok(())
     }
-
-    #[test]
-    fn test_save_and_load() -> Result<(), ThoError> {
-        let base_path = format!("/tmp/test_test_save_and_load/{}", cdt_for_dir());
-        fs::create_dir_all(&base_path)?;
-
-        let id = "1000913311";
-
-        let sample = Tensor::rand(&[3, 3], (Float, Cpu));
-
-        sample.save(format!("{}/{}.pt", base_path.as_str(), id))?;
-
-        let loaded = super::load_tensor(base_path.as_str(), id, Cpu)?;
-
-        assert_eq!(sample, loaded);
-
-        Ok(())
-    }
-
+    
     #[test]
     fn test_devices() {
         let devices = vec!["dev1", "dev2"];

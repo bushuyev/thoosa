@@ -12,8 +12,9 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr};
 use crate::runner::common::{DropIf, RunCtx};
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::oom_handler::{Adjuster, RunCtxContext};
+use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
 use crate::runner::permits::MAX_PERMITS;
+use crate::runner::permits::runner_queue::Arbiter;
 use crate::simple_id;
 
 #[derive(Debug)]
@@ -82,7 +83,7 @@ where
         &self,
         mut adjustable: <Self as Adjuster<C>>::A,
         adjust_context: &mut C,
-    ) -> Result<<Self as Adjuster<C>>::A, ThoError> {
+    ) -> Result<<Self as Adjuster<C>>::A, AdjusterError<<Self as Adjuster<C>>::A>> {
 
 
         let (device_idx, acquired_permits)  = {
@@ -94,22 +95,23 @@ where
         if adjustable.acquired_permits() < MAX_PERMITS {
             // DumpToCpu is special: only dump when we hold MAX_PERMITS to avoid
             // dumping tensors still in use by other tasks.
+            let requested_permits = MAX_PERMITS - adjustable.acquired_permits();
             match GlobalCtx::global().acquire_many(
                 adjustable.device_idx(),
-                MAX_PERMITS - adjustable.acquired_permits(),
+                requested_permits,
                 Arc::new(adjustable.id().clone()) as Arc<dyn CachableIdTr>,
             ).await {
                 Ok(permits) => {
-                    debug!("DumpToCpu::adjust: acquired {permits:?}");
+                    debug!("DumpToCpu::adjust: acquired {permits:?} adjustable.id={:?}", adjustable.id());
                     adjustable.add_permit(permits);
                 }
                 Err(e) => {
-                    debug!("DumpToCpu::adjust: can't acquire {acquired_permits} permits, got {e:?}");
+                    debug!("DumpToCpu::adjust: can't acquire {requested_permits} permits, adjustable.id={:?} retry_count={} got {e:?}  ", adjustable.id(), adjust_context.dump_to_cpu_retry_count_mut());
                     adjustable.drop_permits(DropIf::Always);
-                    return Err(ThoError::new_with_error(
-                        "DumpToCpu::adjust: can't acquire MAX_PERMITS",
-                        Cause::AdjusterFailed,
-                    ));
+
+                    GlobalCtx::global().wait_for_permits_hint(adjustable.device_idx()).await;
+
+                    return Err(AdjusterError::AdjustFailed(adjustable));
                 }
             }
         }
@@ -117,21 +119,22 @@ where
         let ids_to_exclude = adjust_context.ids_to_exclude();
         GlobalCtx::global()
             .dump_all_to_cpu(ids_to_exclude, device_idx)
-            .await?;
+            .await.unwrap();
 
         *adjust_context.dump_to_cpu_retry_count_mut() = 10001;//TODO to force false from degrade and proceed to next adjuster
         // adjustable.write().drop_permits(DropIf::Always);
 
         debug!("DumpToCpu::adjust done: is_all_on_cpu={}",GlobalCtx::global().is_all_on_cpu(device_idx));
 
-        Ok(adjustable.branch("", false))
-        // todo!()
+        Ok(adjustable.branch(Some(""), false, false))
     }
 
     fn degrade(&self, adjust_context: &mut C) -> bool {
         // DumpToCpu can't reduce work; we just retry acquiring MAX_PERMITS.
         let retry_count = adjust_context.dump_to_cpu_retry_count_mut();
         *retry_count += 1;
+
+        debug!("DumpToCpu::degrade: retry_count={retry_count}");
 
         *retry_count <= 1000 //TODO config
     }
