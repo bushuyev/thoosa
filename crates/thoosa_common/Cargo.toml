@@ -13,7 +13,6 @@ path = "src/lib.rs"
 cust = "0.3.2"
 rand.workspace = true
 log.workspace = true
-simplelog.workspace = true
 tch.workspace = true
 torch-sys.workspace = true
 crossbeam-utils.workspace = true

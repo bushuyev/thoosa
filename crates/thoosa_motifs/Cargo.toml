@@ -12,7 +12,6 @@ thoosa_store = {path = "../thoosa_store" }
 thoosa_shared = {path = "../thoosa_shared" }
 rand.workspace = true
 log.workspace = true
-simplelog.workspace = true
 crossbeam-utils.workspace = true
 tch.workspace = true
 torch-sys.workspace = true

@@ -17,7 +17,6 @@ use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, error, info, trace, warn, Level, LevelFilter};
 use parking_lot::{RawRwLock, RwLock};
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
-use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
 use std::cmp::max;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -26,7 +25,6 @@ use std::io::Write;
 use std::ops::{Deref, Range};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
@@ -100,6 +98,12 @@ pub struct Cli {
 
     #[arg(long, default_value = "INFO")]
     pub write_logger_level: LevelFilter,
+
+    #[arg(long, default_value_t = false)]
+    pub term_logger_extra_fields: bool,
+
+    #[arg(long, default_value_t = false)]
+    pub write_logger_extra_fields: bool,
 
     #[arg(long)]
     pub loader_threads: Option<usize>,
@@ -255,25 +259,15 @@ where
         .join(format!("thoosa_perf_{}.log", cdt_for_dir).to_owned());
 
 
-    if let Err(e) = CombinedLogger::init(vec![
-        TermLogger::new(
-            LevelFilter::from_str(cli.term_logger_level.as_str())?,
-            Config::default(),
-            TerminalMode::Mixed,
-            ColorChoice::Auto,
-        ),
-        WriteLogger::new(
-            LevelFilter::from_str(cli.write_logger_level.as_str())?,
-            Config::default(),
-            logfile,
-        ),
-    ]) {
-        //attempted to set a logger after the logging system was already initialized - no #[cfg(test)] on tests mod
-        panic!("Can't init log: {:?}", e.to_string());
-    }
-
-    maybe_init_perf_tracing_stdout("info");
-    // maybe_init_perf_tracing_stdout_simplelog_like("info", perf_path)?;
+    let _logging_guards = maybe_init_perf_tracing_stdout_simplelog_like(
+        cli.term_logger_level,
+        cli.term_logger_extra_fields,
+        cli.write_logger_level,
+        cli.write_logger_extra_fields,
+        logfile,
+        "info",
+        perf_path,
+    )?;
 
     let store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
 
@@ -1350,7 +1344,6 @@ mod cli_tests {
     use rand::Rng;
     use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
     use rayon::prelude::IntoParallelIterator;
-    use simplelog::CombinedLogger;
     use std::cmp::{max, min};
     use std::collections::{HashMap, HashSet};
     use std::io::Read;
