@@ -1,44 +1,60 @@
+use std::cmp::max;
 use std::fmt::Debug;
 use std::fs::File;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering::Relaxed;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use dashmap::DashMap;
+use log::LevelFilter;
 use tracing::{error, Level};
-use tracing_subscriber::{fmt, fmt::{format::Writer, time::FormatTime}, layer::SubscriberExt, registry, EnvFilter, Layer};
+use tracing_log::LogTracer;
+use tracing_subscriber::{
+    filter::FilterFn,
+    fmt,
+    fmt::{format::Writer, time::FormatTime},
+    layer::SubscriberExt,
+    registry,
+    EnvFilter,
+    Layer,
+};
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::util::SubscriberInitExt;
 use crate::ThoError;
 
 #[derive(Clone)]
 pub struct SimplelogLikeEvent<T> {
     timer: T,
+    use_color: bool,
+    include_log_fields: bool,
 }
 
 impl<T> SimplelogLikeEvent<T> {
-    pub fn new(timer: T) -> Self {
-        Self { timer }
+    pub fn new(timer: T, use_color: bool, include_log_fields: bool) -> Self {
+        Self { timer, use_color, include_log_fields }
     }
 }
 
 
 
-fn write_level_colored(
+fn write_level(
     w: &mut fmt::format::Writer<'_>,
     level: &tracing::Level,
+    use_color: bool,
 ) -> std::fmt::Result {
-
-    let (start, end) = match *level {
-        Level::ERROR => ("\x1b[31m", "\x1b[0m"), // red
-        Level::WARN  => ("\x1b[33m", "\x1b[0m"), // yellow
-        Level::INFO  => ("\x1b[32m", "\x1b[0m"), // green
-        Level::DEBUG => ("\x1b[34m", "\x1b[0m"), // blue
-        Level::TRACE => ("\x1b[35m", "\x1b[0m"), // magenta
-    };
-    write!(w, "{}[{}]{} ", start, level.as_str(), end)
+    if use_color {
+        let (start, end) = match *level {
+            Level::ERROR => ("\x1b[31m", "\x1b[0m"), // red
+            Level::WARN  => ("\x1b[33m", "\x1b[0m"), // yellow
+            Level::INFO  => ("\x1b[32m", "\x1b[0m"), // green
+            Level::DEBUG => ("\x1b[34m", "\x1b[0m"), // blue
+            Level::TRACE => ("\x1b[35m", "\x1b[0m"), // magenta
+        };
+        write!(w, "{}[{}]{} ", start, level.as_str(), end)
+    } else {
+        write!(w, "[{}] ", level.as_str())
+    }
 
 }
 
@@ -61,7 +77,7 @@ where
         let meta = event.metadata();
 
         // level
-        write_level_colored(&mut w, meta.level())?;
+        write_level(&mut w, meta.level(), self.use_color)?;
 
         // thread name
         let thread = std::thread::current();
@@ -75,13 +91,15 @@ where
         struct Visitor {
             msg: Option<String>,
             rest: Vec<(String, String)>,
+            include_log_fields: bool,
         }
         impl tracing::field::Visit for Visitor {
             fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                let name = field.name();
                 if field.name() == "message" {
                     self.msg = Some(value.to_string());
-                } else {
-                    self.rest.push((field.name().to_string(), value.to_string()));
+                } else if self.include_log_fields || !name.starts_with("log.") {
+                    self.rest.push((name.to_string(), value.to_string()));
                 }
             }
             fn record_debug(
@@ -89,16 +107,17 @@ where
                 field: &tracing::field::Field,
                 value: &dyn std::fmt::Debug,
             ) {
+                let name = field.name();
                 if field.name() == "message" {
                     self.msg = Some(format!("{value:?}"));
-                } else {
+                } else if self.include_log_fields || !name.starts_with("log.") {
                     self.rest
-                        .push((field.name().to_string(), format!("{value:?}")));
+                        .push((name.to_string(), format!("{value:?}")));
                 }
             }
         }
 
-        let mut v = Visitor { msg: None, rest: vec![] };
+        let mut v = Visitor { msg: None, rest: vec![], include_log_fields: self.include_log_fields };
         event.record(&mut v);
 
         if let Some(msg) = v.msg {
@@ -112,35 +131,141 @@ where
     }
 }
 
-/// Perf-only tracing to stdout, but formatted like simplelog lines.
-pub fn maybe_init_perf_tracing_stdout_simplelog_like(perf_filter: &str, perf_file: PathBuf) -> Result<(), ThoError> {
-    if perf_filter.trim() == "off" {
-        return Ok(());
+fn level_filter_to_u8(filter: LevelFilter) -> u8 {
+    match filter {
+        LevelFilter::Off => 0,
+        LevelFilter::Error => 1,
+        LevelFilter::Warn => 2,
+        LevelFilter::Info => 3,
+        LevelFilter::Debug => 4,
+        LevelFilter::Trace => 5,
     }
+}
 
-    let perf_f = File::create(perf_file)?;
-    let (perf_writer, _perf_guard) = tracing_appender::non_blocking(perf_f);
+fn level_filter_from_u8(val: u8) -> LevelFilter {
+    match val {
+        1 => LevelFilter::Error,
+        2 => LevelFilter::Warn,
+        3 => LevelFilter::Info,
+        4 => LevelFilter::Debug,
+        5 => LevelFilter::Trace,
+        _ => LevelFilter::Off,
+    }
+}
+
+fn level_filter_allows(filter: LevelFilter, level: &Level) -> bool {
+    if filter == LevelFilter::Off {
+        return false;
+    }
+    let filter = level_filter_to_u8(filter);
+    let level = match *level {
+        Level::ERROR => 1,
+        Level::WARN => 2,
+        Level::INFO => 3,
+        Level::DEBUG => 4,
+        Level::TRACE => 5,
+    };
+    level <= filter
+}
+
+static PERF_LOG_LEVEL: AtomicU8 = AtomicU8::new(0);
+
+pub(crate) fn perf_log_level() -> LevelFilter {
+    level_filter_from_u8(PERF_LOG_LEVEL.load(Relaxed))
+}
+
+pub fn set_perf_log_level(perf_filter: &str) -> Result<LevelFilter, ThoError> {
+    let perf_filter = perf_filter.trim();
+    let level = if perf_filter.is_empty() {
+        LevelFilter::Off
+    } else {
+        LevelFilter::from_str(perf_filter)
+            .map_err(|e| ThoError::from_error("parse perf log level", e))?
+    };
+    PERF_LOG_LEVEL.store(level_filter_to_u8(level), Relaxed);
+    Ok(level)
+}
+
+pub(crate) fn perf_output_filter(meta: &tracing::Metadata<'_>) -> bool {
+    if !level_filter_allows(perf_log_level(), meta.level()) {
+        return false;
+    }
+    let fields = meta.fields();
+    fields.field("time.busy").is_some() || fields.field("time.idle").is_some()
+}
+
+fn level_filter_string(filter: LevelFilter) -> String {
+    filter.to_string().to_lowercase()
+}
+
+pub(crate) fn init_log_tracer(max_level: LevelFilter) {
+    let _ = LogTracer::builder().with_max_level(max_level).init();
+    log::set_max_level(max_level);
+}
+
+pub struct TracingGuards {
+    _log_guard: tracing_appender::non_blocking::WorkerGuard,
+    _perf_guard: tracing_appender::non_blocking::WorkerGuard,
+}
+
+/// Initialize tracing logging for stdout, log file, and perf output.
+pub fn maybe_init_perf_tracing_stdout_simplelog_like(
+    term_level: LevelFilter,
+    term_extra_fields: bool,
+    file_level: LevelFilter,
+    file_extra_fields: bool,
+    log_file: File,
+    perf_filter: &str,
+    perf_file: PathBuf,
+) -> Result<TracingGuards, ThoError> {
+    let max_level = max(term_level, file_level);
+
+    let _ = set_perf_log_level(perf_filter)?;
 
     // Local timestamp like: `2025-12-15 08:35:30`
     // (requires tracing-subscriber chrono support for ChronoLocal)
     let timer = tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S".to_string());
 
-    let layer = fmt::layer()
+    let stdout_layer = fmt::layer()
         .with_ansi(true)
+        .with_writer(std::io::stdout)
+        .event_format(SimplelogLikeEvent::new(timer.clone(), true, term_extra_fields))
+        .with_filter(EnvFilter::new(level_filter_string(term_level)));
+
+    let (log_writer, log_guard) = tracing_appender::non_blocking(log_file);
+    let file_layer = fmt::layer()
+        .with_ansi(false)
+        .with_writer(log_writer)
+        .event_format(SimplelogLikeEvent::new(timer.clone(), false, file_extra_fields))
+        .with_filter(EnvFilter::new(level_filter_string(file_level)));
+
+    let perf_f = File::create(perf_file)?;
+    let (perf_writer, perf_guard) = tracing_appender::non_blocking(perf_f);
+    let perf_layer = fmt::layer()
+        .with_ansi(false)
         .with_writer(perf_writer)
         .with_span_events(fmt::format::FmtSpan::CLOSE)
-        .event_format(SimplelogLikeEvent::new(timer))
-        .with_filter(EnvFilter::new(perf_filter));
+        .event_format(SimplelogLikeEvent::new(timer, false, false))
+        .with_filter(FilterFn::new(perf_output_filter));
 
-    registry()
-        .with(layer)
-        .with(PerfLayer::new())
-        .try_init().map_err(|e|{
+    let subscriber = registry()
+        .with(stdout_layer)
+        .with(file_layer)
+        .with(perf_layer)
+        .with(PerfLayer::new());
+
+    tracing::subscriber::set_global_default(subscriber)
+        .map_err(|e| {
             error!("Init tracing logging failed: {e:?}");//TODO print in CLI
             e
         })?;
 
-    Ok(())
+    init_log_tracer(max_level);
+
+    Ok(TracingGuards {
+        _log_guard: log_guard,
+        _perf_guard: perf_guard,
+    })
 }
 
 

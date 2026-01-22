@@ -33,7 +33,6 @@ plotters = { version = "0.3.5"}
 
 
 log.workspace = true
-simplelog.workspace = true
 
 #serde = "1"
 anyhow = "1.0.79"

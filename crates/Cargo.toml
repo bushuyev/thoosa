@@ -37,7 +37,6 @@ rayon = "1"
 rand = "0"
 rand_distr = "0"
 log = "0"
-simplelog = "0"
 chrono = { version = "0" }
 tch = "0.20"
 torch-sys = "0.20"
@@ -79,6 +78,7 @@ tokio-utils = "0"
 tracing = "0"
 tracing-subscriber = { version = "0", features = ["fmt", "env-filter", "chrono"] }
 tracing-appender = "0"
+tracing-log = "0"
 console-subscriber = "0"
 uuid = { version = "1.10", features = ["v4", "fast-rng"] }
 statrs = "0"
