@@ -42,6 +42,7 @@ use crate::tasks::average_euclidean_distance::AverageDistanceValue;
 use crate::tasks::motif_loader::MotifMeta;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_named_derive::Named;
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
@@ -110,7 +111,7 @@ impl MeanDistsCtx {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Named)]
 pub struct FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,

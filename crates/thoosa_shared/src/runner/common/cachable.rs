@@ -93,7 +93,7 @@ where
                             }
                         }
                     } else {
-                        warn!("Cachable::purge_gpu_cache_area: 4 key_for_purger={key_for_purger:?} not found"); //warning
+                        warn!("Cachable::purge_gpu_cache_area: 4 key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //warning
                     }
 
                     Ok(())

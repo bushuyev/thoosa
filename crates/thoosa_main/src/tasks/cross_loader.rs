@@ -294,21 +294,6 @@ where
     }
 }
 
-// impl<ResC, L, CLC, RSV, R, C> OutId for CrossLoader<ResC, L, CLC, RSV, R, C>
-// where
-//     C:RunCtx+'static,
-//     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-//     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, CompKey>, Ctx=C> + OutId + 'static,
-//     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Send + Sync + 'static,
-//     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
-//     R: Debug + Send + Sync + 'static,
-//     C: RunCtx + 'static,
-// {
-//     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-//         CompKey::from(format!("cross_{}", input_id))
-//     }
-// }
-
 //TODO move to lib
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
@@ -533,6 +518,7 @@ where
                             ),
                         )
                         .await?;
+                        
                         Ok::<_, ThoError>(out)
                     }
                 )?;

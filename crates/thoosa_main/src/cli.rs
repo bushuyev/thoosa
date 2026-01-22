@@ -31,7 +31,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use std::{fs, process};
-
+use std::marker::PhantomData;
 use plotters::prelude::BLACK;
 use tch::Device::Cpu;
 use tch::Kind::Float;
@@ -58,8 +58,8 @@ use thoosa_shared::applicables_runner::{Input};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
-use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
-use thoosa_shared::{mono_key, parse_resources, simple_id, RangeOrValue};
+use thoosa_shared::traits::{Adjustable, Data, DataId, SimpleId, WithId};
+use thoosa_shared::{mono_key, parse_resources, simple_id, CopyToDevice, RangeOrValue};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
@@ -72,13 +72,14 @@ use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::BandPassFilt
 use thoosa_common::transforms::filters::BandPassFilterParamsRangeOrValue;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use thoosa_shared::runner::cache_areas::CacheArea;
-use thoosa_shared::runner::common::RunCtx;
+use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::AsyncStage;
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::perf_logging::{format_perf_map, maybe_init_perf_tracing_stdout_simplelog_like, PERF};
+use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
@@ -338,7 +339,7 @@ where
                 serde_json5::from_str(&find_motifs_args.run_config_cnt)
                     .expect("FindMotifsRunConfig2");
 
-            debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}");
+            debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?} find_motifs_args.fixed_config={:?}", find_motifs_args.fixed_config);
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
                 ResourcesConfigInput::new(find_motifs_args.resource_config()),
@@ -554,21 +555,20 @@ where
 
             let find_motifs_run_config_range_or_value:FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue{
                 id: None,
-                step: RangeOrValue::Value(50), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-                window: RangeOrValue::Value(1000),
-                // window: RangeOrValue::Range { range: Range { start: 1000, end: 5001 }, step: Some((1000, 1)) },
-                min_tracker_step: None,
-                filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
-                    low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-                    band_hz: RangeOrValue::Value(100.),
-                    kernel_size: RangeOrValue::Value(1000),
-                    stride: RangeOrValue::Value(1),
-                    padding: RangeOrValue::Value(0),
-                })),
-                // filter: None,
+                step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+                // window: RangeOrValue::Value(1000),
+                window: RangeOrValue::Range { range: Range { start: 1000, end: 9001 }, step: Some((1000, 1)) },
+                // filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
+                //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
+                //     band_hz: RangeOrValue::Value(100.),
+                //     kernel_size: RangeOrValue::Value(1000),
+                //     stride: RangeOrValue::Value(1),
+                //     padding: RangeOrValue::Value(0),
+                // })),
+                filter: None,
                 slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ mean: RangeOrValue::Value(0.02)}),
             };
-            let max_chunk_size = 100_000;
+            let max_chunk_size = 20_000;
 
             let find_motif_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
                 None,
@@ -744,94 +744,6 @@ where
                 || root_ctx.branch( Some("train final nets"), true, false),
             ).await?;
 
-
-            /*if let Some(source_path) = run_all_params.import_source_path.as_ref() {
-                debug!("RunAll: init_resources");
-                import_resources(
-                    &ws,
-                    &store,
-                    labels,
-                    || labeled_resources(source_path),
-                    |key: String| resource_to_tensor(&source_path, key.as_str()),
-                    true,
-                )?;
-            }
-
-            //run_id - params set
-            //let find_motifs_run_ids = run_find_motifs_on_group(&ws, &store, devices.clone(), run_all_params, &loader)?;
-
-            let find_motifs_run_ids = run_step(
-                None,
-                run_all_params,
-                find_motifs_by_euc_dist,
-                &ws,
-                &store,
-                &loader,
-                devices.clone(),
-                "RunAll/FindMotifs",
-            )?;
-
-            info!(
-                "find_motifs done: find_motifs_run_ids={:?}",
-                find_motifs_run_ids
-            );
-
-            let select_motifs_run_ids = run_step(
-                Some(find_motifs_run_ids),
-                run_all_params,
-                select_motifs_for_label,
-                &ws,
-                &store,
-                &loader,
-                devices.clone(),
-                "RunAll/SelectMotifs",
-            )?;
-
-            info!(
-                "select_motifs done: select_motifs_run_ids={:?}",
-                select_motifs_run_ids
-            );
-            unsafe {
-                at_grad_set_enabled(1);
-            }
-            let train_motif_nodes_run_ids = run_step(
-                Some(select_motifs_run_ids.clone()),
-                run_all_params,
-                run_train_motif_nodes_on_motif_selection,
-                &ws,
-                &store,
-                &loader,
-                devices.clone(),
-                "Test/TrainMotifsNodes",
-            )?;
-
-            info!("run_train_on_motifs done: train_motif_nodes_run_ids={train_motif_nodes_run_ids:?}");
-
-            let train_label_nodes_run_ids = run_step(
-                Some(select_motifs_run_ids),
-                run_all_params,
-                run_train_label_nodes,
-                &ws,
-                &store,
-                &loader,
-                devices.clone(),
-                "Test/TrainLabelsNodes",
-            )?;
-
-            info!("run_train_on_label done: train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
-
-            let train_final_nodes_run_ids = run_step(
-                Some(train_label_nodes_run_ids),
-                run_all_params,
-                run_train_final_node,
-                &ws,
-                &store,
-                &loader,
-                devices.clone(),
-                "Test/TrainFinalNode",
-            )?;
-
-            info!("run_train_final done: train_final_nodes_run_ids={train_final_nodes_run_ids:?}");*/
         }
 
         Some(Infer(infer_params)) => {
@@ -1034,7 +946,7 @@ async fn run_plot_motif_slices(
     plot_motif_slices_params: &PlotMotifSlicesArgs,
     device: &Device,
 ) -> Result<(), ThoError> {
-    let ctx = Arc::new(parking_lot::RwLock::new(RunCtxWithPermits::new(1, "run_plot_motif_slices")));
+    let mut ctx = RunCtxWithPermits::new(1, "run_plot_motif_slices");
 
     let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::new(
         Arc::clone(store),
@@ -1055,9 +967,7 @@ async fn run_plot_motif_slices(
         }
 
         MotifsBy::RunId { find_motifs_run_id, select_motifs_run_ids } => {
-            debug!(
-                "run_plot_motif_slices: MotifsBy::RunId find_run_id={find_motifs_run_id} select_run_ids={select_motifs_run_ids:?}"
-            );
+            debug!("run_plot_motif_slices: MotifsBy::RunId find_run_id={find_motifs_run_id} select_run_ids={select_motifs_run_ids:?}");
 
             let motifs = store.read().list_motifs(find_motifs_run_id)?;
             let motifs_len = motifs.len();
@@ -1068,9 +978,10 @@ async fn run_plot_motif_slices(
                     let done_cnt = Arc::clone(&done_cnt);
                     let clc_dist = Arc::clone(&clc_dist);
                     let motif_loader_impl = Arc::clone(&motif_loader_impl);
-                    let ctx = Arc::clone(&ctx);
+                    let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true, false);
                     async move {
                         debug!("run_plot_motif_slices: motif_id={motif_id}");
+
                         if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None).await {
                             error!("motif {motif_id} failed: e={e:?}");
                         };
@@ -1113,9 +1024,10 @@ async fn run_plot_motif_slices(
                     let done_cnt = Arc::clone(&done_cnt);
                     let clc_dist = Arc::clone(&clc_dist);
                     let motif_loader_impl = Arc::clone(&motif_loader_impl);
-                    let ctx = Arc::clone(&ctx);
+
                     let ws = Arc::clone(&ws);
                     let suffix = suffix.clone();
+                    let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true, false);
                     async move {
                         debug!("run_plot_motif_slices: motif_id={motif_id}");
                         if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix).await {
@@ -1139,32 +1051,30 @@ async fn run_plot_motif_slices(
 
 async fn plot_motif(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    ctx: Arc<RwLock<RunCtxWithPermits>>,
+    mut ctx: RunCtxWithPermits,
     motif_id: usize,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>>,
     clc_dist: Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, AverageEuclideanDistanceStage<RunCtxWithPermits>, RunCtxWithPermits>>,
     select_motif_run_ids: Option<Vec<RunId>>,
 ) -> Result<(), ThoError> {
-    let cache_area = ctx.read().cache_area();
-    let num_devices = GlobalCtx::global().device_count();
     let select_motif_run_ids_sfx = select_motif_run_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
     let motif_id_arc = Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(DataId(motif_id as u32), select_motif_run_ids), CacheArea::default()));
 
     let motif = Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_arc),
-        ctx.write().branch(Some("plot_motif_loader"), false, false),
+        ctx.branch(Some("plot_motif_loader"), false, false),
     )
     .await?;
 
-    let mut ctx_for_dist = ctx.write().branch(Some("plot_motif_dist_value"), false, false);
+    let mut ctx_for_dist = ctx.branch(Some("plot_motif_dist_value"), false, false);
     let dist = clc_dist
-        .run_cached(Arc::clone(&motif_id_arc), ctx.write().branch(Some("plot_motif_clc_dist"), false, false))
+        .run_cached(Arc::clone(&motif_id_arc), ctx.branch(Some("plot_motif_clc_dist"), false, false))
         .await?
         .with_data_ref(0, &mut ctx_for_dist, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
         .await?;
 
 
-    let r = motif.with_data_ref(0, &mut ctx.write().branch(Some("plot_motif_data"), false, false), None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>, _ctx| {
+    let r = motif.with_data_ref(0, &mut ctx.branch(Some("plot_motif_data"), false, false), None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>, _ctx| {
             let run_id = motif.extra().find_motifs_run_id;
             let channel = motif.extra().channel;
 
@@ -1326,7 +1236,7 @@ where
     }
 }
 
-pub async fn run_grid</*ResConf, */RCRV, F, RC, ST, CtxF>(
+pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
 
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
