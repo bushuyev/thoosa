@@ -320,7 +320,7 @@ where
 #[derive(Debug)]
 pub struct AsyncOOMHandler<'a, 'z, R, IC, RC, RCC, S>
 where
-    R: AsyncStage + Adjustable + OutId,
+    R: AsyncStage + Adjustable,
     R::Ctx: Adjustable,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
@@ -340,7 +340,7 @@ where
 
 impl<'a, 'z, R, IC, RC, RCC, S> AsyncOOMHandler<'a, 'z, R, IC, RC, RCC, S>
 where
-    R: AsyncStage + Adjustable + OutId + 'a,
+    R: AsyncStage + Adjustable + 'a,
     R::Ctx: Adjustable,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
@@ -432,7 +432,7 @@ async fn run_with_runner<'a, 'z, R, IC, RC, RCC, S, W, Run, Fut>(
     runner: Run,
 ) -> Result<R::Out, ThoError>
 where
-    R: Adjustable + OutId + Stage + 'a,
+    R: Adjustable + Stage + 'a,
     R::Ctx: Adjustable,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
@@ -451,10 +451,7 @@ where
         debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} input.id={:?}", os_thread_id(), input.id());
 
         // Identify this task by its output id for Arbiter fairness.
-        let out_key = {
-            let out_id = task.out_id(input.id());
-            Arc::new(out_id) as Arc<dyn CachableIdTr>
-        };
+        let out_key = format!("stage_id={task:?} input_id={:?}", input.id());//TODO it's for all failed error
 
         debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} acquired_permits={:?}", os_thread_id(), run_context.acquired_permits());
 
@@ -615,15 +612,6 @@ where
                                     }
                                 }
 
-                                // let task_to_run = task_adjusted.clone().unwrap_or_else(|| Arc::clone(&task));
-
-                                debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} before acquire_one ",os_thread_id());
-
-                                // if run_context.acquired_permits() == 0 {
-                                //     let permit = GlobalCtx::global().acquire_one(device_idx, Arc::new(run_context.id().clone()) as Arc<dyn CachableIdTr>).await?;
-                                //     run_context.add_permit(permit);
-                                // }
-
                                 debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",os_thread_id(), run_context.acquired_permits());
 
                                 let run_result=  runner(
@@ -635,10 +623,8 @@ where
                                 )
                                 .await;
 
-
                                 match run_result {
                                     Ok(v) => {
-
 
                                         contexts.input.add_partial_output(v).await;
 
@@ -655,12 +641,6 @@ where
                                     }
                                     Err(te) => {
                                         debug!("OOMHandler::run: err te={te:?}");
-
-                                        // if run_context.acquired_permits() == MAX_PERMITS {
-                                        //     GlobalCtx::global()
-                                        //         .dump_all_to_cpu(&HashMap::new(), device_idx)
-                                        //         .await?;
-                                        // }
 
                                         run_context.drop_permits(DropIf::IfNotMax);
 

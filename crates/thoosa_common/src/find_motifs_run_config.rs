@@ -27,10 +27,6 @@ pub struct FindMotifsRunConfig {
 
     #[run_config]
     #[in_map]
-    pub min_tracker_step: Option<u32>,
-
-    #[run_config]
-    #[in_map]
     pub filter: Option<InputFilter>,
 
     #[run_config]
@@ -68,7 +64,6 @@ impl FindMotifsRunConfig {
             step,
             window,
             filter,
-            min_tracker_step: None,
             slices_filter: SlicesFilter::DistanceRunningMeanK(DistanceRunningMeanK {
                 mean: mean_k.unwrap_or(0.5),
             }),
@@ -156,7 +151,6 @@ mod tests {
             id: None,
             step: 100.into(),
             window: 200.into(),
-            min_tracker_step: None,
             filter: Some(InputFilterRangeOrValue::BandPassFilter(
                 BandPassFilterParamsRangeOrValue {
                     low_hz: 10f64.into(),
