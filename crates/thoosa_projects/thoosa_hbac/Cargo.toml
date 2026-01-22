@@ -27,7 +27,6 @@ plotters = { version = "0.3.5"}
 
 
 log = "0.4.20"
-simplelog = "0.12.1"
 #serde = "1"
 anyhow = "1.0.79"
 ctor = "0.2.6"
@@ -40,4 +39,3 @@ approx = "0.5.1"
 
 chrono.workspace = true
 [build-dependencies]
-
