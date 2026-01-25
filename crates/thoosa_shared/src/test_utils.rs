@@ -26,9 +26,10 @@ fn should_init_test_logging() -> bool {
 }
 
 pub fn init_test_logging() {
-    if !should_init_test_logging() {
-        return;
-    }
+    // let test_logging = should_init_test_logging();
+    // if !test_logging {
+    //     return;
+    // }
 
     if LOG_INIT.swap(true, Ordering::Relaxed) {
         return;
@@ -57,16 +58,16 @@ pub fn init_test_logging() {
         .event_format(SimplelogLikeEvent::new(timer.clone(), true, include_log_fields))
         .with_filter(EnvFilter::new("trace"));
 
-    let perf_layer = fmt::layer()
-        .with_ansi(true)
-        .with_writer(std::io::stdout)
-        .with_span_events(fmt::format::FmtSpan::CLOSE)
-        .event_format(SimplelogLikeEvent::new(timer, true, include_log_fields))
-        .with_filter(FilterFn::new(perf_output_filter));
+    // let perf_layer = fmt::layer()
+    //     .with_ansi(true)
+    //     .with_writer(std::io::stdout)
+    //     .with_span_events(fmt::format::FmtSpan::CLOSE)
+    //     .event_format(SimplelogLikeEvent::new(timer, true, include_log_fields))
+    //     .with_filter(FilterFn::new(perf_output_filter));
 
     let subscriber = tracing_subscriber::registry()
         .with(stdout_layer)
-        .with(perf_layer)
+        // .with(perf_layer)
         .with(PerfLayer::new());
 
     let _ = tracing::subscriber::set_global_default(subscriber);

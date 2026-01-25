@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use futures_util::future::BoxFuture;
+use tokio::join;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{Cause, ThoError};
 use tokio::sync::RwLock as AsyncRwLock;
@@ -105,6 +106,7 @@ impl GlobalCtx {
     pub fn global() -> &'static Self {
         GLOBAL_CTX.get().expect("call `init_devices` first")
     }
+
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
     pub fn real_global() -> &'static GlobalCtx {
@@ -239,6 +241,16 @@ impl GlobalCtx {
 
     pub fn cache_age(&self) -> u64 {
         self.cache_age.load(Relaxed)
+    }
+
+
+    pub async fn shutdown(&self) {
+        //TODO
+        self.purger.shutdown();
+        for a in &self.semaphores {
+            a.shutdown().await;
+        }
+
     }
 }
 

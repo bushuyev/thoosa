@@ -103,17 +103,17 @@ impl Arbiter {
         })?
     }
 
-    pub async fn shutdown(&mut self) {
+    pub async fn shutdown(&self) {
         debug!("Arbiter::shutdown: self.granted_counts={:?}", self.granted_counts);
 
         self.shutdown.store(true, Ordering::Release);
         self.notify.notify_waiters();
-        if let Some(tx) = self.tx.take() {
-            drop(tx);
-        }
-        if let Some(handle) = self.worker.take() {
-            let _ = handle.await;
-        }
+        // if let Some(tx) = self.tx.take() {
+        //     drop(tx);
+        // }
+        // if let Some(handle) = self.worker.take() {
+        //     let _ = handle.await;
+        // }
     }
 
     fn spawn(
@@ -508,6 +508,10 @@ impl PermitSource for Arbiter {
 
             debug!("PermitSource::move_permits:  from={from:?} to={to:?} val={from_val}");
         }
+    }
+
+    async fn shutdown(&self) {
+        Arbiter::shutdown(self).await;
     }
 }
 

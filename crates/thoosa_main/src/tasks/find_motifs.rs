@@ -216,10 +216,11 @@ where
                 let configured_loader = config_to_stage(&loader, &run_config, ws)?;
                 let run_config_clone = run_config.clone();
                 let step = cross_unfold_clc.unfold_params.step();
-
+                let find_motifs_run_config_id =run_config_clone.id.expect("find motif run config without id");
                 Ok(FindMotifsStages::new(
                     run_config,
                     Arc::new(CrossLoader::new(
+                        find_motifs_run_config_id,
                         configured_loader,
                         &store,
                         Arc::new(cross_unfold_clc),
@@ -300,6 +301,8 @@ where
 
         debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
         for stage in self.run_config_stages.iter() {
+            info!("running find motifs on run config {:?}", stage.run_config.id);
+
             let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.run_config.id.unwrap_or(0))), true, false);
             let input_arc = Arc::clone(&input);
             let cross_loader_arc = Arc::clone(&stage.cross_loader);
