@@ -3,6 +3,7 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use rayon::iter::ParallelBridge;
 // use rand_distr::{Uniform, Distribution};
 use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
@@ -197,7 +198,13 @@ impl TreeStructuredParzenEstimator {
     fn get_config_candidates(&self, n_samples: usize) -> Vec<Vec<Val>> {
         self.mvpe_lower
             .as_ref()
-            .map(|mvpe_lower| mvpe_lower.sample(true, n_samples))
+            .map(|mvpe_lower| {
+                debug!("TPEOptimizer::sample: mvpe_lower sample mvpe_lower={mvpe_lower:?} n_samples={n_samples}");
+
+                let r = mvpe_lower.sample(true, n_samples);
+                debug!("TPEOptimizer::sample: mvpe_lower sample r={r:?}");
+                r
+            })
             .unwrap_or(vec![])
     }
 
@@ -414,7 +421,7 @@ mod tree_structured_parzen_estimator_tests {
         );
     }
 }
-#[allow(dead_code)]
+#[allow(dead_code)]//TODO remove
 pub struct TPEOptimizer<F, T>
 where
     F: FnMut(&[NamedVal<T>]) -> f32,
@@ -567,27 +574,26 @@ where
                 self.sample()
             };
 
+            debug!("TPEOptimizer::optimize: i={i} eval_config={eval_config:?}");
+
             let loss = self
                 .obj_func
                 .async_call_mut((&eval_config
                     .iter()
                     .zip(self.cs.hyperparameters.iter())
                     .map(|(val, hp)| {
-                        // (hp.name(), val.clone()).into()
-                        // NamedVal::from((hp.name().into(), val.clone()))
                         NamedVal::from((hp.name().clone(), val.clone()))
                     })
                     .collect::<Vec<_>>()
                     .as_slice(),))
                 .await;
+            debug!("TPEOptimizer::optimize: i={i} loss={loss:?}");
+
             if loss < best_loss {
                 best_loss = loss;
                 best_config.replace(eval_config.clone());
             }
-            debug!(
-                "TPEOptimizer::optimize: i={i} eval_config={:?} loss={loss}",
-                eval_config
-            );
+            debug!("TPEOptimizer::optimize: i={i} eval_config={:?} loss={loss}",eval_config);
 
             for (_key, tpe) in &mut self.tpe_samplers {
                 tpe.update_observations(loss, &eval_config)
@@ -598,8 +604,10 @@ where
     }
 
     fn sample(&self) -> Vec<Val> {
+        debug!("TPEOptimizer::sample: self.tpe_samplers.len={}", self.tpe_samplers.len());
+
         //TODO if always loss only - merge get_config_candidates & compute_probability_improvement
-        let config_cands = stack_params(
+        let config_conds = stack_params(
             self.tpe_samplers
                 .values()
                 .map(|tpe| {
@@ -608,24 +616,26 @@ where
                 .collect::<Vec<Vec<Vec<Val>>>>(), //tpe(only loss)/params/candidates
         );
 
+        debug!("TPEOptimizer::sample: config_conds={config_conds:?}");
+
         //TODO weights? loss only
         let pi_config = Tensor::stack(
             self.tpe_samplers
                 .values()
-                .map(|tpe| tpe.compute_probability_improvement(&config_cands))
+                .map(|tpe| tpe.compute_probability_improvement(&config_conds))
                 .collect::<Vec<Tensor>>()
                 .as_slice(),
             0,
         );
 
-        trace!("sample: config_cands={config_cands:?}");
-        trace!("sample: pi_config={pi_config}");
+        trace!("TPEOptimizer::sample: config_cands={config_conds:?}");
+        trace!("TPEOptimizer::sample: pi_config={pi_config}");
 
-        debug!("sample: max={}", pi_config.max());
+        debug!("TPEOptimizer::sample: max={}", pi_config.max());
 
         let max_i = pi_config.argmax(1, true).i(0).double_value(&[]);
 
-        config_cands
+        config_conds
             .into_iter()
             .map(|p| p[max_i as usize].clone())
             .collect() // return weights @ pi_config_array

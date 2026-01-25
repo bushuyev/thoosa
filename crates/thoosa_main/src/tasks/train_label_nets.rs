@@ -365,7 +365,8 @@ where
                             let pred_y = pred;//.squeeze();
                             debug!("train_label_net: pred_y={:?} target={:?} kind={:?}",pred_y.size(),target.size(),target.kind());
                             trace!("train_label_net: pred_y=\n{pred_y} target=\n{target} kind={:?}",target.kind());
-                            Ok(pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean).set_requires_grad(true))
+                            // Ok(pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean).set_requires_grad(true)) - with sigmoid in any_len_label_node
+                            Ok(pred_y.binary_cross_entropy_with_logits::<Tensor>(&target, None, None, Reduction::Mean).set_requires_grad(true))
                         },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore|{
                             let o = AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e|e.into());
