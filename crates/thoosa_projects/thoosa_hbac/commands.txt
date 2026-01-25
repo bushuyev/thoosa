@@ -136,3 +136,65 @@ bu@bu-ml:~/dvl/rust/thoosa/crates$ cargo run --release --bin thoosa_hbac  -- --t
 650884 - without perf. logging
 1205871 - with spawn_blocking around tack
 677318 - with spawn_blocking around dump
+
+
+well, the tests really pass but the thing doesn't work (so the tests should be improved).
+here is output of
+ debug!("CrossInput::with_selected_batches: batch_0_range={batch_0_range:?} batch_1_range={batch_1_range:?}");
+
+ added to crates/thoosa_main/src/tasks/cross_batch_clc.rs:219:
+
+thoosa_for_codex/crates$ cargo nextest run tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom --no-capture 2>&1 | grep "CrossInput::with_selected_batches: batch_0_range"
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..4 batch_1_range=0..4
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..2 batch_1_range=0..4
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..1 batch_1_range=0..4
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..4 batch_1_range=0..4 <--------------- this doesn't make sens - batch_0_range should stay at its minimal split when switching to splitting batch 1
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..4 batch_1_range=0..2
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..4 batch_1_range=0..1
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..4 batch_1_range=1..2
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..4 batch_1_range=2..3
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..4 batch_1_range=3..4
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..4 batch_1_range=0..2
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..2 batch_1_range=0..2
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..1 batch_1_range=0..2
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..4 batch_1_range=0..2
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..4 batch_1_range=0..1
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..4 batch_1_range=1..2
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..2 batch_1_range=0..3
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..1 batch_1_range=0..3
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..2 batch_1_range=0..3
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..2 batch_1_range=0..1
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..2 batch_1_range=1..2
+2026-01-22 12:37:31 [DEBUG] (tasks::cross_loader::tests::test_cross_clc_with_indexes_mask_with_oom) log: CrossInput::with_selected_batches: batch_0_range=0..2 batch_1_range=2..3
+
+and when condition to trigger oom at crates/thoosa_main/src/tasks/cross_loader.rs:1331 changed to `if batch_0_len > limit || batch_1_len > limit {` tests fail.
+
+
+assuming it needs to be split to chunks of size 1 in both dimensions to pass, the log should look like
+
+batch_0_range=0..4 batch_1_range=0..4 //oom
+batch_0_range=0..2 batch_1_range=0..4 //oom
+batch_0_range=0..1 batch_1_range=0..4 //oom
+batch_0_range=0..1 batch_1_range=0..2 //oom
+
+batch_0_range=0..1 batch_1_range=0..1 // no more omm - each batch contains single elt
+batch_0_range=0..1 batch_1_range=1..2
+batch_0_range=0..1 batch_1_range=2..3
+batch_0_range=0..1 batch_1_range=3..4
+
+batch_0_range=1..2 batch_1_range=0..1
+batch_0_range=1..2 batch_1_range=1..2
+batch_0_range=1..2 batch_1_range=2..3
+batch_0_range=1..2 batch_1_range=3..4
+
+batch_0_range=2..3 batch_1_range=0..1
+batch_0_range=2..3 batch_1_range=1..2
+batch_0_range=2..3 batch_1_range=2..3
+batch_0_range=2..3 batch_1_range=3..4
+
+batch_0_range=3..4 batch_1_range=0..1
+batch_0_range=3..4 batch_1_range=1..2
+batch_0_range=3..4 batch_1_range=2..3
+batch_0_range=3..4 batch_1_range=3..4
+
+try to change the code so that log output is like above and tests pass
