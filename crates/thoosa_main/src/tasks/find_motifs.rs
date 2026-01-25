@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
-use futures_util::FutureExt;
-use log::{debug, error, info};
+use futures_util::{FutureExt, SinkExt, StreamExt, TryStreamExt};
+use log::{debug, error, info, warn};
 use parking_lot::{Mutex, RwLock};
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -47,6 +47,7 @@ use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use thoosa_shared::comp_id::SynKey;
+use crate::buffer_limits::FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT;
 
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
@@ -300,26 +301,35 @@ where
         let mut js: JoinSet<Result<Arc<DevicesWrap<()>>, ThoError>> = JoinSet::new();//TODO to stream + spawn
 
         debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
-        for stage in self.run_config_stages.iter() {
-            info!("running find motifs on run config {:?}", stage.run_config.id);
-
-            let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.run_config.id.unwrap_or(0))), true, false);
-            let input_arc = Arc::clone(&input);
-            let cross_loader_arc = Arc::clone(&stage.cross_loader);
-
-            js.spawn(async move {
-                cross_loader_arc.run(input_arc, ctx_for_stage).await
-            });
-        }
-
         let mut failed = AtomicU8::new(0);
+        futures::stream::iter(self.run_config_stages.iter())
+            .map(|stage|{
+                info!("running find motifs on run config {:?}", stage.run_config.id);
 
-        while let Some(res) = js.join_next().await {
-            if let Err(e) = res? {
-                failed.fetch_add(1, Ordering::Relaxed);
-                error!("Find motifs failed: {e:?}");
-            }
-        }
+                let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.run_config.id.unwrap_or(0))), true, false);
+                let input_arc = Arc::clone(&input);
+                let cross_loader_arc = Arc::clone(&stage.cross_loader);
+
+                async move {
+                    cross_loader_arc.run(input_arc, ctx_for_stage).await
+                }
+            })
+            .buffer_unordered(FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT)
+            .filter_map(|r| async {
+                match r {
+                    Ok(v) => {
+                        Some(v)
+                    }
+                    Err(e) => {
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        warn!("Find motifs failed: {e:?}");
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
 
         info!("failed {} out of {}",failed.load(Ordering::Relaxed),self.run_config_stages.len());
 

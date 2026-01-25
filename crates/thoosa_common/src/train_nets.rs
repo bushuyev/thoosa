@@ -960,26 +960,25 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
     debug!("any_len_label_node: num_features={num_features}");
 
     SeqBuilder::new(num_features/*30000*/, None)
-
-        // .closure(
-        //     Arc::new(Box::new(move |t: &Tensor| {
-        //         debug!("any_len_label_node: input={t:?}");
-        //         Ok(t.shallow_clone())
-        //     })),
-        //     None,
-        // )
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor| {
+                debug!("any_len_label_node: input={t:?}");
+                Ok(t.shallow_clone())
+            })),
+            None,
+        )
         .split1(
 
         {
             let mut seq_builder = SeqBuilder::new(num_features, None);
-            let mut builder = &mut seq_builder;
-            // .closure(
-            //     Arc::new(Box::new(move |t: &Tensor| {
-            //         debug!("any_len_label_node: motif input={t:?}");
-            //         Ok(t.shallow_clone())
-            //     })),
-            //     None,
-            // );
+            let mut builder = seq_builder
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor| {
+                    debug!("any_len_label_node: motif input={t:?}");
+                    Ok(t.shallow_clone())
+                })),
+                None,
+            );
             for _ in 0..params.motif_layers {
                 builder = builder.linear_s(
                     num_features,
@@ -1027,13 +1026,13 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
 
             })
         )
-        // .closure(
-        //     Arc::new(Box::new(move |t: &Tensor| {
-        //         debug!("any_len_label_node: final input={t:?}");
-        //         Ok(t.shallow_clone())
-        //     })),
-        //     None,
-        // )
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor| {
+                debug!("any_len_label_node: final input={t:?}");
+                Ok(t.shallow_clone())
+            })),
+            None,
+        )
         // .conv_1d("any_len_label_node conv", 1000)
         .linear_s(
             num_features,
@@ -1052,7 +1051,7 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
             #[cfg(debug_assertions)]
             "any_len_label_node 2".to_string(),
         )
-        .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
+        // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
 }
 
