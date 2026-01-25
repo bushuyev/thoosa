@@ -44,6 +44,10 @@ pub trait PermitSource: Debug + Send + Sync {
 
     //TODO #[cfg(debug_assertions)]
     fn move_permits(&self, from:&SynKey, to:&SynKey);
+
+    async fn shutdown(&self) {
+
+    }
 }
 
 pub type NumPermits = u8;

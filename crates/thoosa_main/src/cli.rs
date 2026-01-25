@@ -30,8 +30,9 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use std::{fs, process};
 use std::marker::PhantomData;
+use std::time::Instant;
 use plotters::prelude::BLACK;
-use tch::Device::Cpu;
+use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::nn::VarStore;
 use tch::{Device, Tensor};
@@ -66,6 +67,7 @@ use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Runtime;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
+use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::BandPassFilter;
 use thoosa_common::transforms::filters::BandPassFilterParamsRangeOrValue;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
@@ -551,15 +553,15 @@ where
                 id: None,
                 step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
                 // window: RangeOrValue::Value(1000),
-                window: RangeOrValue::Range { range: Range { start: 1000, end: 9001 }, step: Some((1000, 1)) },
-                // filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
-                //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-                //     band_hz: RangeOrValue::Value(100.),
-                //     kernel_size: RangeOrValue::Value(1000),
-                //     stride: RangeOrValue::Value(1),
-                //     padding: RangeOrValue::Value(0),
-                // })),
-                filter: None,
+                window: RangeOrValue::Range { range: Range { start: 1000, end: 5001 }, step: Some((1000, 1)) },
+                filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
+                    low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
+                    band_hz: RangeOrValue::Value(100.),
+                    kernel_size: RangeOrValue::Value(1000),
+                    stride: RangeOrValue::Value(1),
+                    padding: RangeOrValue::Value(0),
+                })),
+                // filter: None,
                 slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ mean: RangeOrValue::Value(0.02)}),
             };
             let max_chunk_size = 20_000;
@@ -627,11 +629,12 @@ where
             debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
             let common_training_args = CommonTrainingRunConfigRangeOrValue {
-                cycles: RangeOrValue::Value(50),
-                batch_size: RangeOrValue::Value(20),
+                cycles: RangeOrValue::Value(100),
+                // batch_size: RangeOrValue::Value(20),
+                batch_size: RangeOrValue::Range { range: Range { start: 5, end: 25 }, step: Some((5, 1)) },
                 lr: RangeOrValue::Value(0.0001),
             };
-            let opt_config = Arc::new(OptConfig::new(30, 10));
+            let opt_config = Arc::new(OptConfig::new(100, 10));
 
             let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
                 id: None,
@@ -778,22 +781,20 @@ where
 
             let dir = read_dir(ws.read().tensors_path())?;
 
-            let mut lengths = vec![];
+            // let mut lengths = vec![];
+            // for tensorfile in dir {
+            //     let path_buf = tensorfile?.path();
+            //     let t = Tensor::load(&path_buf);
+            //     let t_size = t?.size();
+            //     debug!("path_buf={path_buf:?} size={:?}", t_size);
+            //     lengths.push(t_size[1]);
+            // }
+            //
+            // info!("tensors: {} max={:?} avg={}",lengths.len(),lengths.iter().max(),lengths.iter().sum::<i64>() / lengths.len() as i64);
 
-            for tensorfile in dir {
-                let path_buf = tensorfile?.path();
-                let t = Tensor::load(&path_buf);
-                let t_size = t?.size();
-                debug!("path_buf={path_buf:?} size={:?}", t_size);
-                lengths.push(t_size[1]);
-            }
+            perf_unfold_concat_cuda_vs_cpu().await?;
 
-            info!(
-                "tensors: {} max={:?} avg={}",
-                lengths.len(),
-                lengths.iter().max(),
-                lengths.iter().sum::<i64>() / lengths.len() as i64
-            );
+            info!("Hello");
         }
 
         None => {
@@ -802,6 +803,8 @@ where
     }
 
     info!("\n{}", format_perf_map(&PERF));
+
+    GlobalCtx::global().shutdown().await;
 
     Ok(())
 }
@@ -1326,6 +1329,76 @@ where
     Ok(vec![])
 
 }
+
+async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
+    async fn load_tensors(dim_1: &i64, num_tensors: usize, cuda_first:bool) -> Result<u128, ThoError> {
+        let mut tensors = Vec::with_capacity(num_tensors);
+
+        let ctx = CopyCtx::instance(Cuda(0));
+
+        let t_0 = Instant::now();
+        for i in (0..num_tensors) {
+
+
+            let t = Tensor::stack(&[
+                make_t(&dim_1, &(i as i64), 0.1, ctx, cuda_first).await?,
+                make_t(&dim_1, &(i as i64), 0.2, ctx, cuda_first).await?,
+                make_t(&dim_1, &(i as i64), 0.3, ctx, cuda_first).await?,
+                make_t(&dim_1, &(i as i64), 0.4, ctx, cuda_first).await?,
+                make_t(&dim_1, &(i as i64), 0.5, ctx, cuda_first).await?,
+            ], 0)
+                .unfold(1, 1000, 100);
+
+            tensors.push(t);
+        }
+
+        let batch = Tensor::f_concat(tensors.as_slice(), 1)?;
+        let batch= if !cuda_first {
+            ctx.copy(&batch, 1, Float).await?
+        } else {
+            batch
+        };
+
+        assert_eq!(batch.device(), Cuda(0));
+
+        Ok(t_0.elapsed().as_millis())
+    }
+
+    async fn make_t(dim_1: &i64, i: &i64, x: f64, copy_ctx: &CopyCtx, cuda_first:bool) -> Result<Tensor, ThoError> {
+        let t = x + Tensor::arange_start(i * dim_1, (i + 1) * dim_1, FLOAT_CPU);
+
+        if cuda_first {
+            copy_ctx.copy(&t, 1, Float).await
+        } else {
+            Ok(t)
+        }
+    }
+
+    // log::set_max_level(Info);
+    // GlobalCtx::init_devices(2);
+
+    let num_tensors = 1000;
+
+    let mut cuda_first_time = 0;
+    let mut cpu_first_time = 0;
+
+    let rounds = 20;
+
+    for r in 0..rounds*2 {
+        if r % 2 == 0 {
+            cuda_first_time += load_tensors(&100_000, num_tensors, true).await?;
+        } else {
+            cpu_first_time += load_tensors(&100_000, num_tensors, false).await?;
+        }
+
+    }
+
+
+    println!("cuda_first_time in {} cpu_first_time={}", cuda_first_time/rounds, cpu_first_time/rounds);
+
+    Ok(())
+}
+
 
 
 #[cfg(test)]

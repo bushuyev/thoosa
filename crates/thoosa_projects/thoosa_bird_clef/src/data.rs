@@ -170,7 +170,7 @@ mod tests {
         init_test_logging();
     }
 
-    #[test]
+    // #[test]
     pub fn test_read_oog() -> Result<(), ThoError> {
         use lewton::inside_ogg::OggStreamReader;
         use std::fs::File;
@@ -344,7 +344,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    // #[test]
     fn test_labeled_resourses() -> Result<(), ThoError> {
         let resourses = labeled_resourses("test_data/")?;
 

@@ -381,12 +381,12 @@ where
                 debug!("AsyncOOMHandler::run: input_id={input_id:?} run_ctx={run_ctx:?}");
 
                 let cache_area = input.cache_area();
-                let mut run_ctx_for_data = run_ctx.branch(Some("oom_handler_data"), false, false);
+
                 let prepared_input = if let Some(selector) = selector {
                     debug!("AsyncOOMHandler::run: input_id={input_id:?} selector={selector:?}");
 
                     let selected = input
-                        .with_selected_data(device_idx, &mut run_ctx_for_data, selector.clone(), |data, _ctx| Ok(data))
+                        .with_selected_data(device_idx, &mut run_ctx.branch(Some("oom_handler_data"), false, false), selector.clone(), |data, _ctx| Ok(data))
                         .await?;
 
                     Arc::new(DevicesWrap::wrap(selected, cache_area.clone()))

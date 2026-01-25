@@ -144,8 +144,13 @@ where
                 Ok::<_, ThoError>(())
             })?;
         };
-        assert_eq!(motif_width.len(), 1);//TODO  group motif nets by width. all motifs should be of same width so that tensors can be batched for label training
-        assert_eq!(slice_step.len(), 1);
+
+        if motif_width.len() != 1 {//TODO  group motif nets by width. all motifs should be of same width so that tensors can be batched for label training
+            return Err(ThoError::new("ApplyMotifNets failed, motif_width={motif_width:?} should haven len=1 in ApplyMotifNets={select_motifs_run_id}"));
+        }
+        if slice_step.len() != 1 {
+            return Err(ThoError::new("ApplyMotifNets failed, slice_step={slice_step:?}  should haven len=1 in  ApplyMotifNets={select_motifs_run_id}"));
+        }
 
         let motif_width = motif_width.into_iter().next().expect("no motif_width");
         let slice_step = slice_step.into_iter().next().expect("no motif_width");
@@ -227,7 +232,7 @@ where
                              Adjusters::Input(Box::new(SplitsAdjuster::<ChannelsData2Selector, MonoMetrics<1,2>>::new_with_overlap(
                                  [-1, min_split_len].into(),
                                  [-1, overlap_len].into()
-                             ))), //MonoMetrics<0, 3> - 0 dim of 3-dimensional  Batch<ChannelsData>
+                             ))),
                          ], None)
                      .run(
                          &apply_motif_net,
