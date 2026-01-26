@@ -67,6 +67,7 @@ impl FindMotifsRunConfig {
             slices_filter: SlicesFilter::DistanceRunningMeanK(DistanceRunningMeanK {
                 mean: mean_k.unwrap_or(0.5),
             }),
+            // slices_filter: SlicesFilter::MaxDistance(MaxDistance{distance:f32::MAX}),
         }
     }
 

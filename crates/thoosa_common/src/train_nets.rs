@@ -188,7 +188,7 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
 #[derive(Debug)]
 pub struct TrainFinalNetsRunConfigResult {
     train_label_nodes_run_ids: Vec<RunId>,
-    loss: f32,
+    pub loss: f32,
     var_store: VarStore,
     final_node_params: FinalNetParams,
     train_final_net_run_config: TrainFinalNetRunConfig,
@@ -971,21 +971,21 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
 
         {
             let mut seq_builder = SeqBuilder::new(num_features, None);
-            let mut builder = seq_builder
-            .closure(
+            let  mut builder = &mut seq_builder
+            /*.closure(
                 Arc::new(Box::new(move |t: &Tensor| {
                     debug!("any_len_label_node: motif input={t:?}");
                     Ok(t.shallow_clone())
                 })),
                 None,
-            );
+            )*/;
             for _ in 0..params.motif_layers {
                 builder = builder.linear_s(
                     num_features,
                     #[cfg(debug_assertions)]
                     "any_len_label_node 0".to_string(),
                 )
-                    .func(|t|Tensor::f_relu(t).map_err(|e|e.into()));
+
             }
             builder
                 .end_seq()
@@ -1026,13 +1026,13 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
 
             })
         )
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor| {
-                debug!("any_len_label_node: final input={t:?}");
-                Ok(t.shallow_clone())
-            })),
-            None,
-        )
+        // .closure(
+        //     Arc::new(Box::new(move |t: &Tensor| {
+        //         debug!("any_len_label_node: final input={t:?}");
+        //         Ok(t.shallow_clone())
+        //     })),
+        //     None,
+        // )
         // .conv_1d("any_len_label_node conv", 1000)
         .linear_s(
             num_features,
@@ -1041,7 +1041,13 @@ pub fn any_len_label_node(params: &LabelNetParams) -> Node {
         )
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
-            num_features,
+            256,
+            #[cfg(debug_assertions)]
+            "any_len_label_node 1".to_string(),
+        )
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
+        .linear_s(
+            128,
             #[cfg(debug_assertions)]
             "any_len_label_node 1".to_string(),
         )

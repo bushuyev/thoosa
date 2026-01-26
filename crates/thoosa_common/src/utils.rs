@@ -20,7 +20,7 @@ use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::nn::{LinearConfig, Optimizer};
 use tch::nn::VarStore;
 use tch::Kind::Float;
-use tch::{nn, Device, Kind, Tensor};
+use tch::{nn, Device, IndexOp, Kind, Tensor};
 use thoosa_shared::{gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoError};
 use torch_sys::cuda::atc_cuda_device_count;
 use crate::my_tch::{LossFp, ThoModule};
@@ -29,6 +29,7 @@ use crate::builder::SeqBuilder;
 use crate::dims::{Batch, Dims, MotifProbability, Slice};
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
+use thoosa_shared::colors_iter::DistinctColorIter;
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -82,6 +83,36 @@ pub fn list_devices() -> Vec<Device> {
             .collect()
     }
 }
+
+pub fn plot_t(t_0: &Tensor, label: &str) -> Result<(), ThoError> {
+    plot_series(
+        (0..t_0.size()[0])
+            .into_iter()
+            .zip(DistinctColorIter::new())
+            .map(|(channel, color)| {
+                (
+                    format!("0"),
+                    color,
+                    t_0.i((channel, ..))
+                        .iter::<f64>()
+                        .unwrap()
+                        .enumerate()
+                        .map(|(i, v)| (i as f32, v as f32))
+                        .collect::<Vec<(f32, f32)>>(),
+                )
+            })
+            .collect(),
+        label,
+        (2000, 1000),
+        &format!(
+            "/tmp/plots/{label}_{:?}.png",
+            chrono::Utc::now().to_rfc3339()
+        )
+            .as_str(),
+    )?;
+    Ok(())
+}
+
 
 pub fn plot_series<S>(
     name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
@@ -1742,7 +1773,7 @@ pub fn reset_print_options() {
         let line_width_ptr =
             (printer_options_ptr as *mut u8).add(size_of::<usize>() * 3) as *mut usize;
 
-        ptr::write(threshold_ptr, 100_000);
+        ptr::write(threshold_ptr, usize::MAX);
         ptr::write(line_width_ptr, 10_000);
     }
     tch::display::set_print_options(printer_options);

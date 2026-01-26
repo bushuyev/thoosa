@@ -10,7 +10,7 @@ use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use futures_util::{FutureExt, SinkExt, StreamExt, TryStreamExt};
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -200,7 +200,8 @@ where
 
                         let (mask, dists) = clc_dist_d2_and_mask_result?;
 
-                        debug!("FindMotifsStage::new, batch_clc:  dists={dists:?}");
+                        trace!("FindMotifsStage::new, batch_clc: mask=\n{mask}");
+                        debug!("FindMotifsStage::new, batch_clc: mask={mask:?} dists={dists:?}");
                         let mask_type = if device_idx > 0 {
                             DistsMaskType::MaskIndexes(mask.size())
                         } else {
@@ -369,38 +370,45 @@ mod tests {
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_motifs::FindMotifsStage;
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
-    use crate::tasks::tensor_loader::RawTensorLoader;
-    use thoosa_shared::runner::common::{PermitsCtx, RunCtx};
+    use crate::tasks::tensor_loader::{mock_tensor_loader, RawTensorLoader};
+    use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx, PermitsCtx, RunCtx};
     use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef};
     use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
     use thoosa_shared::runner::global_ctx::GlobalCtx;
-    use log::debug;
+    use log::{debug, set_max_level};
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
+    use log::LevelFilter::Trace;
+    use rand::random_range;
     use tch::Device::Cuda;
-    use tch::{Device, Tensor};
+    use tch::{Device, IndexOp, Tensor};
+    use tch::display::set_print_options_full;
     use tch::kind::INT64_CPU;
     use thoosa_shared::runner::common::cachable::Cached;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Labeled, Simple};
-    use thoosa_common::utils::{lin_t, plot_series, three_sigs_tensor, vec_f32_from};
-    use thoosa_common::ws::FsWorkspace;
-    use thoosa_motifs::find::FixedFindMotifsConfig;
+    use thoosa_common::utils::{lin_t, plot_series, plot_t, reset_print_options, three_sigs_tensor, vec_f32_from};
+    use thoosa_common::ws::{mock_ws_simp, FsWorkspace};
+    use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::DataId;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::mono_key;
+    use thoosa_shared::{mono_key, MotifKind};
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::{cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoError};
-    use thoosa_store::SqlStore;
+    use thoosa_store::{MockStoreBuilder, SqlStore};
     use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_motifs::generators::noise;
+    use thoosa_properties_map::ToHashmap;
+    use thoosa_shared::ResourceType::Group;
+    use thoosa_with_data::with_data;
     use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
     use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
@@ -409,245 +417,94 @@ mod tests {
     use crate::tasks::select_motifs::SelectMotifsStage;
 
     #[ctor::ctor]
-    fn init() {
+    pub fn init() {
         thoosa_shared::test_utils::init_test_logging();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn test_find_motifs() -> Result<(), ThoError> {
-        unsafe {
-            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-        }
 
-        // log::set_max_level(log::LevelFilter::Trace);
-        let global_ctx = GlobalCtx::init_devices(2);
+        // set_max_level(Trace);
+        GlobalCtx::init_devices(2);
+        // reset_print_options();
 
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        debug!("test_motifs: test_dir={test_dir:?}");
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
+        let find_motifs_run_id = 1;
 
-        fs::create_dir_all(&test_dir)?;
-        let base_path = test_dir.to_string_lossy().to_string();
 
-        let n = 1234;
+        let resources = (0..3).map(|i|{
+            let size = random_range(2..5);
+            let resource = Resource::new(i, 1, format!("resource_{i}"), size*1000);
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
-            test_dir.clone(),
-            3,
-            n as u32,
-            100,
-        )?));
-        let ws_rc = Arc::clone(&ws);
-        let max_y = 30.0;
 
-        let sig_0_v = sig_one_imp(n, max_y, None, None, 0.1);
-        let sig_1_v = sig_two_imp(n, max_y, None, None, 0.1);
-        let sig_2_v = sig_three_imp(n, max_y, None, None);
+            let  (resource_t, resource_intervals) =   noise::resource_tensor(resource.length() as usize, &[
+                    vec![(size as usize, 100, MotifKind::Pulse)],
+                    vec![(size as usize, 100, MotifKind::Sin)],
+                    vec![(size as usize, 100, MotifKind::Triangle)]
+                ], 100)?;
 
-        let x = lin_t(n);
-        // plot_series(
-        //     vec![
-        //         (
-        //             format!("Sig0"),
-        //             plotters::prelude::RED,
-        //             vec_f32_from(&x)
-        //                 .into_iter()
-        //                 .zip(sig_0_v.clone())
-        //                 .collect::<Vec<(f32, f32)>>(),
-        //         ),
-        //         (
-        //             format!("Sig1"),
-        //             plotters::prelude::GREEN,
-        //             vec_f32_from(&x)
-        //                 .into_iter()
-        //                 .zip(sig_1_v.clone())
-        //                 .collect::<Vec<(f32, f32)>>(),
-        //         ),
-        //         (
-        //             format!("Sig2"),
-        //             plotters::prelude::BLACK,
-        //             vec_f32_from(&x)
-        //                 .into_iter()
-        //                 .zip(sig_2_v.clone())
-        //                 .collect::<Vec<(f32, f32)>>(),
-        //         ),
-        //     ],
-        //     "test_find_motifs_euc",
-        //     (2000, 1000),
-        //     &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str(),
-        // )?;
 
-        let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
-        debug!(
-            "t_0_0.size()={:?}, t_0_1.size()={:?}, t_1_0.size()={:?}, t_1_1.size()={:?}",
-            t_0_0.size(),
-            t_0_1.size(),
-            t_1_0.size(),
-            t_1_1.size()
+            // plot_t(&resource_t, &format!("resource_{i}"))?;
+
+            Ok((resource, resource_t, resource_intervals))
+
+        }).collect::<Result<Vec<_>, ThoError>>()?;
+
+        let resources_group = "group";
+
+        let mut store = Arc::new(RwLock::new(
+            MockStoreBuilder::new()
+                .with_list_run_config_values(
+                    find_motifs_run_id,
+                    Ok(FindMotifsRunConfig::new(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
+                )
+                .with_list_group_labeled_resources_sets([
+                    (resources_group, Ok(vec![
+                        ("X".to_string(), "set".to_string()),
+                    ])),
+                ])
+                .with_list_resource_set_group_sets(
+                    [(resources_group, Ok(vec![(1, "set".into())]))]
+                )
+                .with_list_resource_set_resources_by_descr([
+                    ("set", Ok(resources.iter().map(|(resource, _resource_t, _resource_intervals)| {
+                        resource.clone()
+                    }).collect())),
+
+                ])
+                .with_save_groups_as_motifs()//TODO check if resource_intervals are in found groups
+                .build()));
+
+        let loader = Arc::new(
+            mock_tensor_loader::build()
+                .with_out_id()
+                .with_run_cached(resources.iter().map(|(resource, resource_t, _resource_intervals)| {
+                    (resource.clone(), resource_t.shallow_clone())
+                }))
+                .finish(),
         );
 
-        t_0_0.save(ws.read().tensors_path().join(format!("t_0_0.pt")))?;
-        t_0_1.save(ws.read().tensors_path().join(format!("t_0_1.pt")))?;
-        t_1_0.save(ws.read().tensors_path().join(format!("t_1_0.pt")))?;
-        t_1_1.save(ws.read().tensors_path().join(format!("t_1_1.pt")))?;
 
-        // debug!("t_1_1 mean={} max-min={}", t_1_1.mean(None).double_value(&[]), t_1_1.max() - t_1_1.min());
-        let channels = 3;
-        let tensors_path = ws.read().tensors_path().clone();
-        let tensors_path_for_import = ws.read().tensors_path().clone();
-
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
-
-        let imported_ids = import_resources(
+       let stage:Arc<FindMotifsStage<Simple, _, _>> =  Arc::new(FindMotifsStage::new(
             &ws,
             &store,
-            &["label_0", "label_1"],
-            || {
-                Ok(HashMap::from([
-                    ("t_0_0".to_string(), vec![("label_0".to_string(), 1.0)]),
-                    ("t_0_1".to_string(), vec![("label_0".to_string(), 1.0)]),
-                    ("t_1_0".to_string(), vec![("label_1".to_string(), 1.0)]),
-                    ("t_1_1".to_string(), vec![("label_1".to_string(), 1.0)]),
-                ]))
-            },
-            // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
-            |key| {
-                Tensor::load(tensors_path_for_import.join(format!("{}.pt", key)))
-                    .map_err(ThoError::from)
-            },
-            true,
-        )?;
-
-        let resources = store.read().list_resources_by_ids(&imported_ids)?;
-
-        let resources_0_0 = resources
-            .iter()
-            .find(|r| r.file_stem().eq("t_0_0"))
-            .expect("t_0_0");
-        let resources_0_1 = resources
-            .iter()
-            .find(|r| r.file_stem().eq("t_0_1"))
-            .expect("t_0_1");
-        let resources_1_0 = resources
-            .iter()
-            .find(|r| r.file_stem().eq("t_1_0"))
-            .expect("t_1_0");
-        let resources_1_1 = resources
-            .iter()
-            .find(|r| r.file_stem().eq("t_1_1"))
-            .expect("t_1_1");
-
-        debug!("test_motifs: resources_0_0={resources_0_0:?}");
-
-        let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
-            move |key, _| {
-                let tensor = Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem())))?;
-                debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
-                Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
-            },
-            ThoDevice::from(Device::Cpu),
-        ));
-
-        let ctx = Arc::new(parking_lot::RwLock::new(RunCtxWithPermits::new(1, "aa")));
-        ctx.write().add_permit(global_ctx.acquire_many(0, 1, Arc::new(SynKey::new([mono_key!("test", "test")]))).await?);
-
-        let cache_area = ctx.read().cache_area();
-        let resources_input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(Simple::new(ResourceType::List(
-                vec!["t_0_0", "t_0_1", "t_1_0", "t_1_1"]
-                    .into_iter()
-                    .map(|v| v.to_string())
-                    .collect(),
-            ))),
-            CacheArea::default()
-        ));
-
-        let step_10_window_100 = r#"{
-            step:"10",
-            window:"100",
-            slices_filter: {'DistanceRunningMeanK':{'mean':'0.2'}}
-        }"#;
-
-
-        let step_10_window_100_with_filter = r#"{
-            step:'10',
-            window:'100',
-            'filter': {'BandPassFilter': {'low_hz':'20.', 'band_hz':'10.', kernel_size:'10', stride:'1', 'padding':'0'}},
-            'slices_filter':{'DistanceRunningMeanK':{'mean':'0.02'}}}
-        "#;
-        let run_ids = run_grid::<_, _, _, _, _>(
-            None,
-            serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(
-                // &step_10_window_100,
-                &step_10_window_100_with_filter,
-            )
-            .unwrap(),
-            resources_input,
-            &ws,
-            &store,
-            true,
-            |run_configs| {
-                Arc::new(
-                    FindMotifsStage::new(
-                        &ws,
-                        &store,
-                        Arc::clone(&loader),
-                        run_configs,
-                        FixedFindMotifsConfig::new(30000, false, None),
-                        ThoDevice::from(1),
-                    )
-                    .expect("FindMotifsStage::new failed in test"),
-                )
-            },
-            || ctx.write().branch(Some("find_motifs_test"), false, false),
-        )
-        .await?;
-
-        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::new(
-            Arc::clone(&store),
             Arc::clone(&loader),
-            &ws
-        ));
+            vec![
+                FindMotifsRunConfig::new(Some(1), 10, 100, None, Some(0.5))
+            ],
+            FixedFindMotifsConfig::new(30000, false, None),
+            ThoDevice::from(1),
+        ).expect("FindMotifsStage::new failed in test"));
 
-        let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
-            Arc::clone(&motif_loader_impl),
-            Arc::new(AverageEuclideanDistanceStage::<RunCtxWithPermits>::new())
-        ));
+        let mut ctx = mock_run_ctx::default(1);
+        let result = stage.run(
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(Group(resources_group.into()))), CacheArea::default())), ctx.branch(Some("run"), false, false),
+        ).await?;
 
-        let motifs = store.read().list_motifs(run_ids[0])?;
-
-        debug!("test_find_motifs: motifs={motifs:?}");
-
-        for motif_id_raw in motifs {
-            let cache_area_loop = ctx.read().cache_area();
-            let num_devices_loop = GlobalCtx::global().device_count();
-            let motif_id_value = DataId::from(&(motif_id_raw as u32));
-            let motif_id = Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(motif_id_value.clone()), CacheArea::default()));
-
-            let motif = Arc::clone(&motif_loader_impl).run(
-                Arc::clone(&motif_id),
-                ctx.write().branch(Some("find_motifs_motif_loader"), false, false),
-            )
-            .await?;
-
-            let mut ctx_for_data = ctx.write().branch(Some("find_motifs_motif_data"), false, false);
-            motif
-                .with_data_ref(1,
-                &mut ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, _ctx| {
-                   debug!("test_find_motifs: motif_id={motif_id_raw} slices={:?}", t.data());
-
-                   Ok(())
-               })
-                .await?;
-
-            let mut ctx_for_dist = ctx.write().branch(Some("find_motifs_dist_value"), false, false);
-            let dist = Arc::clone(&clc_dist)
-                .run_cached(Arc::clone(&motif_id), ctx.write().branch(Some("find_motifs_clc_dist"), false, false))
-                .await?
-                .with_data_ref(0, &mut ctx_for_dist, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
-                .await?;
-
-            debug!("test_find_motifs:  dist={dist:?} motif_id={motif_id_raw}");
-        }
+        with_data!(ctx.branch(Some("check"), false, false), result; |ctx, result:&FindMotifsSavableResult|{
+            debug!("result={result:?}");
+            Ok::<_, ThoError>(())
+        })?;
 
         Ok(())
     }

@@ -351,6 +351,7 @@ fn mean_mask(
     debug!("mean_mask: total_samples={total_samples:?} counts={counts_t:?}");
     debug!("mean_mask: total_samples.device={:?} counts.device={:?}",total_samples.lock().device(),counts_t.device());
 
+    //TODO remove or use copy_ctx
     let (mean_t, counts_t) = (
         mean_t.f_to_device(distances.device())?,
         counts_t.f_to_device(distances.device())?,

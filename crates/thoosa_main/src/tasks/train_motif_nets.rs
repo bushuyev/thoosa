@@ -574,14 +574,13 @@ mod tests {
             run_configs
         ));
 
-        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(100, 3))), CacheArea::default()));
+        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(10, 3))), CacheArea::default()));
 
-        let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
-        let run_ctx_branch = run_ctx.write().branch(Some("train_motif_nets_run"), false, false);
+        let mut run_ctx = mock_run_ctx::default(1);
+        let run_ctx_branch = run_ctx.branch(Some("train_motif_nets_run"), false, false);
         let r = train_motif_net.run(input, run_ctx_branch).await?;
 
-        let ctx_for_data = run_ctx.write().branch(Some("train_motif_nets_assert"), false, false);
-        with_data!(ctx_for_data, r; |_ctx, r:&TrainMotifsNetsResult|{
+        with_data!(run_ctx.branch(Some("train_motif_nets_assert"), false, false), r; |_ctx, r:&TrainMotifsNetsResult|{
 
             debug!("test_num_layers_opt: result={r:?}");
 

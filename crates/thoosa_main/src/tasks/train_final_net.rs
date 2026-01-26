@@ -451,6 +451,8 @@ where
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use log::debug;
+    use log::LevelFilter::Debug;
     use parking_lot::RwLock;
     use tch::{Device, Kind, Tensor};
     use tch::nn::{self, VarStore};
@@ -465,7 +467,7 @@ mod tests {
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::runner::common::cachable::DevicesWrap;
     use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::mock_run_ctx;
+    use thoosa_shared::runner::common::{mock_run_ctx, RunCtx};
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::resource::Resource;
@@ -476,9 +478,10 @@ mod tests {
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_store::MockStoreBuilder;
+    use thoosa_with_data::with_data;
     use crate::tasks::apply_motif_nets::motif_test_net_;
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::train_final_net::new_train_final_net_with_ml;
+    use crate::tasks::train_final_net::{new_train_final_net_with_ml, TrainFinalNetOutput};
     use crate::tasks::cross_loader::ResourcesConfigInput;
 
     fn const_label_net(
@@ -527,6 +530,7 @@ mod tests {
     async fn test_train_final_net_smoke() -> Result<(), ThoError> {
         reset_print_options();
         GlobalCtx::init_devices(2);
+
 
         let select_motifs_run_id: RunId = 2;
         let motif_width = 4;
@@ -618,14 +622,15 @@ mod tests {
             ],
         );
 
+        let mut run_ctx = mock_run_ctx::default(1);
         let train_final_net = Arc::new(new_train_final_net_with_ml(
             vec![select_motifs_run_id],
             loader,
             run_configs,
             &ws,
             &store,
-            mock_run_ctx::default(0),
-            Arc::new(OptConfig::new(1, 1)),
+            run_ctx.branch(Some("new_train_final_net_with_ml"), false, false),
+            Arc::new(OptConfig::new(10, 3)),
         ).await?);
 
         let input = Arc::new(DevicesWrap::wrap(
@@ -633,7 +638,15 @@ mod tests {
             CacheArea::default(),
         ));
 
-        train_final_net.run(input, mock_run_ctx::default(0)).await?;
+        let r = train_final_net.run(input, run_ctx.branch(Some("train_final_net"), false, false)).await?;
+        with_data!(run_ctx.branch(Some("train_final_nets_run"), false, false), r; |_ctx, r:&TrainFinalNetOutput|{
+
+            debug!("test_train_final_net_smoke: result={r:?}");
+
+            assert!(r.result.loss < 0.2);
+
+            Ok::<_, ThoError>(())
+        })?;
 
         Ok(())
     }

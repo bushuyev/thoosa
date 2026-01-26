@@ -41,7 +41,7 @@ fn level_filter_allows(filter: LevelFilter, level: &Level) -> bool {
     level <= filter
 }
 
-
+//TODO per mod filtering like in EnvFilter::new("warn,my_crate::some_mod=trace")
 pub fn init_test_logging() {
 
     if LOG_INIT.swap(true, Ordering::Relaxed) {
