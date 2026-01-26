@@ -7,15 +7,18 @@ use parking_lot::RwLock;
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::Rng;
 use tch::Tensor;
+use cached_derive::Cached;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::average_euclidean_distance;
+use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::resource::{Resource, ResourceId};
+use thoosa_shared::run_configs::RunId;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
@@ -27,25 +30,25 @@ use thoosa_with_data::with_data;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::motif_loader::load_motif_slices;
 
-const RANDOM_AVG_DIST_GROUP: &str = "random_avg_dist";
+const RANDOM_AVG_DIST_GROUP: &str = "random_avg_dist";//dummy group to load random resources, TODO - add proper method to SqlStore
 
 #[derive(Debug, Clone, DummyData)]
 pub struct RandomAvgDistInput {
     id: SynKey,
     max_slices: u32,
-    motif_width: u32,
+    find_motifs_run_id: RunId,
 }
 
 impl RandomAvgDistInput {
-    pub fn new(max_slices: u32, motif_width: u32) -> Self {
+    pub fn new(max_slices: u32, find_motifs_run_id: RunId) -> Self {
         Self {
             id: SynKey::new([
                 mono_key!("RandomAvgDistInput", "stage"),
                 mono_key!(max_slices, format!("max_slices={max_slices}")),
-                mono_key!(motif_width, format!("motif_width={motif_width}")),
+                mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
             ]),
             max_slices,
-            motif_width,
+            find_motifs_run_id,
         }
     }
 }
@@ -60,7 +63,7 @@ impl WithId for RandomAvgDistInput {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Named, Cached)]
 pub struct RandomAvgDist<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
@@ -116,17 +119,23 @@ where
         let cache_area = ctx.cache_area();
         let input_id = input.id().clone();
 
-        let (max_slices, motif_width) = with_data!(
+        let (max_slices, find_motifs_run_id) = with_data!(
             ctx.branch(Some("random_avg_dist_input"), false, false),
             input;
             |_ctx, input: &RandomAvgDistInput| {
-                Ok::<(u32, u32), ThoError>((input.max_slices, input.motif_width))
+                Ok::<(u32, RunId), ThoError>((input.max_slices, input.find_motifs_run_id))
             }
         )?;
 
         if max_slices < 2 {
             return Err(ThoError::new(format!("RandomAvgDist: max_slices must be >= 2, got {max_slices}")));
         }
+
+        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
+            find_motifs_run_id,
+            &self.store.read().list_run_config_values(find_motifs_run_id)?,
+        )?;
+        let motif_width = find_motifs_run_config.window;
         if motif_width == 0 {
             return Err(ThoError::new("RandomAvgDist: motif_width must be > 0"));
         }
@@ -141,8 +150,6 @@ where
             return Err(ThoError::new("RandomAvgDist: workspace reports 0 channels"));
         }
 
-        let find_motifs_run_config = Arc::new(FindMotifsRunConfig::new_with_running_mean(Some(0), 1, motif_width, None, None));
-
         let mut avg_dists = Vec::with_capacity(channels as usize);
         for channel in 0..channels {
             let mut channel_ctx = ctx.branch(Some(&format!("random_avg_dist_channel_{channel}")), false, false);
@@ -153,8 +160,7 @@ where
                 Some(max_slices),
                 None,
                 &mut channel_ctx,
-                0,
-                Some(Arc::clone(&find_motifs_run_config)),
+                find_motifs_run_id,
                 slices.clone(),
                 resources_map.clone(),
                 channel as i64,
@@ -270,6 +276,7 @@ mod tests {
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_store::MockStoreBuilder;
+    use thoosa_properties_map::ToHashmap;
     use crate::tasks::tensor_loader::mock_tensor_loader;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -282,9 +289,17 @@ mod tests {
             Resource::new(2, 1, "resource_b", 20),
         ];
 
+        let run_id = 42;
+        let motif_width = 4;
         let store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
                 .with_list_resources_not_in_group([(RANDOM_AVG_DIST_GROUP, Ok(resources.clone()))])
+                .with_list_run_config_values(
+                    run_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, motif_width, None, None)
+                        .to_properties_iter(None)
+                        .collect()),
+                )
                 .build(),
         ));
 
@@ -300,7 +315,7 @@ mod tests {
 
         let stage = Arc::new(RandomAvgDist::new(Arc::clone(&store), loader, &ws));
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
-        let input = Arc::new(DevicesWrap::wrap(RandomAvgDistInput::new(4, 4), CacheArea::default()));
+        let input = Arc::new(DevicesWrap::wrap(RandomAvgDistInput::new(4, run_id), CacheArea::default()));
 
         let output = stage
             .run(

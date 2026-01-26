@@ -82,6 +82,7 @@ use thoosa_shared::perf_logging::{format_perf_map, maybe_init_perf_tracing_stdou
 use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
+use crate::tasks::cross_dims::ChannelsMotifsDists;
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
@@ -341,6 +342,19 @@ where
                 ResourcesConfigInput::new(find_motifs_args.resource_config()),
                 CacheArea::default()
             ));
+
+            /*
+
+                let random_avg_dist = Arc::new(RandomAvgDist::new(Arc::clone(store), Arc::clone(&loader), ws));
+                match &filter {
+                    SlicesFilter::DistanceRunningMeanK(_) => {}
+                    SlicesFilter::MaxDistance(k) => {
+                        let avg_dist = random_avg_dist.run(
+                            Arc::new(DevicesWrap::wrap(RandomAvgDistInput::new(1000, run_config.id.unwrap()), CacheArea::default()))
+                        ).await;
+                    }
+                };
+             */
 
             let run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
                 None,
