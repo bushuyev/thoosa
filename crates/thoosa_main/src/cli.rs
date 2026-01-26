@@ -363,7 +363,7 @@ where
                 &ws,
                 &store,
                 true,
-                |run_configs| {
+                |run_configs| async {
                     Arc::new(
                         crate::tasks::find_motifs::FindMotifsStage::new(
                             &ws,
@@ -373,7 +373,7 @@ where
                             find_motifs_args.fixed_config.clone(), //FixedFindMotifsConfig::new(None, 10_000, false, None),
                             ThoDevice::from(1),
                         )
-                        .expect("FindMotifsStage::new failed"),
+                        .await.expect("FindMotifsStage::new failed"),
                     )
                 },
                 || root_ctx.branch( Some("find motifs"), true, false),
@@ -406,7 +406,7 @@ where
                 &ws,
                 &store,
                 true,
-                |run_configs| {
+                |run_configs| async {
 
                     Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
                         &ws,
@@ -587,7 +587,7 @@ where
                 &ws,
                 &store,
                 true,
-                |run_configs| {
+                async |run_configs| {
 
                     Arc::new(
                         crate::tasks::find_motifs::FindMotifsStage::new(
@@ -597,8 +597,7 @@ where
                             run_configs,
                             FixedFindMotifsConfig::new(max_chunk_size, false, None),
                             ThoDevice::from(1),
-                        )
-                        .expect("FindMotifsStage::new failed"),
+                        ).await.expect("FindMotifsStage::new failed"),
                     )
                 },
                 || root_ctx.branch( Some("find motifs"), true, false),
@@ -617,7 +616,7 @@ where
                 &ws,
                 &store,
                 true,
-                |run_configs| {
+                async |run_configs| {
 
                     Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
                         &ws,
@@ -1251,7 +1250,6 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
 
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
-    // fixed_config: FC,
     input: Arc<DevicesWrap<ST::In<'static>>>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
@@ -1260,7 +1258,7 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
     ctx_f: CtxF,
 ) -> Result<Vec<RunId>, ThoError>
 where
-    F: FnOnce(Vec<RC>) -> Arc<ST>,//TODO return Result
+    F: AsyncFnOnce(Vec<RC>) -> Arc<ST>,//TODO return Result
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
@@ -1287,7 +1285,7 @@ where
         vec![]
     };
 
-    let stage = f(run_configs);
+    let stage = f(run_configs).await;
 
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
 
@@ -1822,13 +1820,12 @@ mod cli_tests {
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(
                 // &step_10_window_100,
                 &step_10_window_100_with_filter,
-            )
-                .unwrap(),
+            ).unwrap(),
             resources_input,
             &ws,
             &store,
             true,
-            |run_configs| {
+            async |run_configs| {
                 Arc::new(
                     FindMotifsStage::new(
                         &ws,
@@ -1837,8 +1834,7 @@ mod cli_tests {
                         run_configs,
                         FixedFindMotifsConfig::new(30000, false, None),
                         ThoDevice::from(1),
-                    )
-                        .expect("FindMotifsStage::new failed in test"),
+                    ).await.expect("FindMotifsStage::new failed in test"),
                 )
             },
             || ctx.write().branch(Some("find_motifs_test"), false, false),
