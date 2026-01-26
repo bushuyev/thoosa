@@ -519,7 +519,7 @@ mod tests {
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new(Some(find_motifs_run_id), 50, 100, None, None).to_properties_iter(None).collect()),
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 50, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_motif_slices(motif_id, None, None, None, Ok((0i64, find_motifs_run_id, /*vec![
                     TensorIdSliceIdx(1, 100),

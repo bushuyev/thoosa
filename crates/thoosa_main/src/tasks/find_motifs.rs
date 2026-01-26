@@ -172,13 +172,17 @@ where
                                 ]
                             }
                             SlicesFilter::MaxDistance(v) => {
-                                vec![Le {
-                                    v: Tensor::full(
-                                        &[channels as i64, 1],
-                                        v.distance as f64,
-                                        (Float, t_0.device()),
-                                    ),
-                                }]
+                                vec![
+                                    LocalMin { dim: 1 },
+                                    LocalMin { dim: 2 },
+                                    Le {
+                                        v: Tensor::full(
+                                            &[channels as i64, 1, 1],
+                                            v.distance as f64,
+                                            (Float, t_0.device()),
+                                        ),
+                                    }
+                                ]
                             }
                         };
 
@@ -422,8 +426,20 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn test_find_motifs() -> Result<(), ThoError> {
+    async fn test_find_motifs_running_mean() -> Result<(), ThoError> {
+        setup_find_motifs(FindMotifsRunConfig::new_with_running_mean(Some(1), 10, 100, None, Some(0.5))).await?;
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
+    async fn test_find_motifs_max_dist() -> Result<(), ThoError> {
+        setup_find_motifs(FindMotifsRunConfig::new_with_max_dist(Some(1), 10, 100, None, 0.5)).await?;
+
+        Ok(())
+    }
+
+    async fn setup_find_motifs(find_motifs_run_config: FindMotifsRunConfig) -> Result<(), ThoError> {
         // set_max_level(Trace);
         GlobalCtx::init_devices(2);
         // reset_print_options();
@@ -432,22 +448,21 @@ mod tests {
         let find_motifs_run_id = 1;
 
 
-        let resources = (0..3).map(|i|{
+        let resources = (0..3).map(|i| {
             let size = random_range(2..5);
-            let resource = Resource::new(i, 1, format!("resource_{i}"), size*1000);
+            let resource = Resource::new(i, 1, format!("resource_{i}"), size * 1000);
 
 
-            let  (resource_t, resource_intervals) =   noise::resource_tensor(resource.length() as usize, &[
-                    vec![(size as usize, 100, MotifKind::Pulse)],
-                    vec![(size as usize, 100, MotifKind::Sin)],
-                    vec![(size as usize, 100, MotifKind::Triangle)]
-                ], 100)?;
+            let (resource_t, resource_intervals) = noise::resource_tensor(resource.length() as usize, &[
+                vec![(size as usize, 100, MotifKind::Pulse)],
+                vec![(size as usize, 100, MotifKind::Sin)],
+                vec![(size as usize, 100, MotifKind::Triangle)]
+            ], 100)?;
 
 
             // plot_t(&resource_t, &format!("resource_{i}"))?;
 
             Ok((resource, resource_t, resource_intervals))
-
         }).collect::<Result<Vec<_>, ThoError>>()?;
 
         let resources_group = "group";
@@ -456,7 +471,7 @@ mod tests {
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_group_labeled_resources_sets([
                     (resources_group, Ok(vec![
@@ -470,9 +485,8 @@ mod tests {
                     ("set", Ok(resources.iter().map(|(resource, _resource_t, _resource_intervals)| {
                         resource.clone()
                     }).collect())),
-
                 ])
-                .with_save_groups_as_motifs()//TODO check if resource_intervals are in found groups
+                .with_save_groups_as_motifs() //TODO check if resource_intervals are in found groups
                 .build()));
 
         let loader = Arc::new(
@@ -485,12 +499,12 @@ mod tests {
         );
 
 
-       let stage:Arc<FindMotifsStage<Simple, _, _>> =  Arc::new(FindMotifsStage::new(
+        let stage: Arc<FindMotifsStage<Simple, _, _>> = Arc::new(FindMotifsStage::new(
             &ws,
             &store,
             Arc::clone(&loader),
             vec![
-                FindMotifsRunConfig::new(Some(1), 10, 100, None, Some(0.5))
+                find_motifs_run_config
             ],
             FixedFindMotifsConfig::new(30000, false, None),
             ThoDevice::from(1),
@@ -505,8 +519,6 @@ mod tests {
             debug!("result={result:?}");
             Ok::<_, ThoError>(())
         })?;
-
         Ok(())
     }
-
 }

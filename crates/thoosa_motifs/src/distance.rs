@@ -83,9 +83,7 @@ impl<'a> MaskMaker<'a> {
                 };
                 _ = prev.f_diagonal(0, 1, 2)?.f_fill_(0)?;
 
-                trace!(
-                    "MaskMaker::make_mask Diagonal: 2. perv_mask.is_some()={has_prev} prev={prev}"
-                );
+                trace!("MaskMaker::make_mask Diagonal: 2. perv_mask.is_some()={has_prev} prev={prev}");
 
                 Ok(prev)
             }
@@ -338,6 +336,7 @@ fn mean_mask(
     } else {
         (
             distances.f_mean_dim(&[1i64, 2i64][..], false, Kind::Float)?,
+
             Tensor::f_from_slice(&[distances_size[1] * distances_size[2]])?
                 .f_to_device(distances.device())?
                 .f_broadcast_to(distances_size[0])?, //  Tensor of size [channels x 1] with values= distances[1] * distances[2] in each channel

@@ -52,7 +52,7 @@ impl FindMotifsRunConfig {
 }
 
 impl FindMotifsRunConfig {
-    pub fn new(
+    pub fn new_with_running_mean(
         id: Option<u32>,
         step: u32,
         window: u32,
@@ -67,9 +67,25 @@ impl FindMotifsRunConfig {
             slices_filter: SlicesFilter::DistanceRunningMeanK(DistanceRunningMeanK {
                 mean: mean_k.unwrap_or(0.5),
             }),
-            // slices_filter: SlicesFilter::MaxDistance(MaxDistance{distance:f32::MAX}),
         }
     }
+
+    pub fn new_with_max_dist(
+        id: Option<u32>,
+        step: u32,
+        window: u32,
+        filter: Option<InputFilter>,
+        distance: f32,
+    ) -> Self {
+        Self {
+            id,
+            step,
+            window,
+            filter,
+            slices_filter: SlicesFilter::MaxDistance(MaxDistance{distance}),
+        }
+    }
+
 
     pub fn window(&self) -> u32 {
         self.window
