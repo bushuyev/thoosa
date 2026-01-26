@@ -10,26 +10,39 @@ use std::env::VarError;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
-use tracing_subscriber::filter::FilterFn;
+use tracing::Level;
+use tracing_subscriber::filter::{DynFilterFn, FilterFn};
 use tracing_subscriber::{
     fmt,
     layer::SubscriberExt,
-    EnvFilter,
     Layer,
 };
 
-fn should_init_test_logging() -> bool {
-    if cfg!(test) {
-        return true;
+
+fn level_filter_allows(filter: LevelFilter, level: &Level) -> bool {
+    if filter == LevelFilter::Off {
+        return false;
     }
-    env::var("THOOSA_TEST_LOG").is_ok()
+    let filter = match filter {
+        LevelFilter::Error => 1,
+        LevelFilter::Warn => 2,
+        LevelFilter::Info => 3,
+        LevelFilter::Debug => 4,
+        LevelFilter::Trace => 5,
+        LevelFilter::Off => 0,
+    };
+    let level = match *level {
+        Level::ERROR => 1,
+        Level::WARN => 2,
+        Level::INFO => 3,
+        Level::DEBUG => 4,
+        Level::TRACE => 5,
+    };
+    level <= filter
 }
 
+
 pub fn init_test_logging() {
-    // let test_logging = should_init_test_logging();
-    // if !test_logging {
-    //     return;
-    // }
 
     if LOG_INIT.swap(true, Ordering::Relaxed) {
         return;
@@ -56,18 +69,24 @@ pub fn init_test_logging() {
         .with_ansi(true)
         .with_writer(std::io::stdout)
         .event_format(SimplelogLikeEvent::new(timer.clone(), true, include_log_fields))
-        .with_filter(EnvFilter::new("trace"));
+        .with_filter(DynFilterFn::new(|meta, _| {
+            let is_log_record = meta.fields().field("log.target").is_some();
+            if *meta.level() == Level::TRACE && !is_log_record {
+                return false;
+            }
+            level_filter_allows(log::max_level(), meta.level())
+        }));
 
-    // let perf_layer = fmt::layer()
-    //     .with_ansi(true)
-    //     .with_writer(std::io::stdout)
-    //     .with_span_events(fmt::format::FmtSpan::CLOSE)
-    //     .event_format(SimplelogLikeEvent::new(timer, true, include_log_fields))
-    //     .with_filter(FilterFn::new(perf_output_filter));
+    let perf_layer = fmt::layer()
+        .with_ansi(true)
+        .with_writer(std::io::stdout)
+        .with_span_events(fmt::format::FmtSpan::CLOSE)
+        .event_format(SimplelogLikeEvent::new(timer, true, include_log_fields))
+        .with_filter(FilterFn::new(perf_output_filter));
 
     let subscriber = tracing_subscriber::registry()
         .with(stdout_layer)
-        // .with(perf_layer)
+        .with(perf_layer)
         .with(PerfLayer::new());
 
     let _ = tracing::subscriber::set_global_default(subscriber);
@@ -93,10 +112,6 @@ pub fn maybe_init_perf_tracing_stdout(perf_filter: &str) -> bool {
     }
 
     if set_perf_log_level(perf_filter).is_err() {
-        return false;
-    }
-
-    if !should_init_test_logging() {
         return false;
     }
 
