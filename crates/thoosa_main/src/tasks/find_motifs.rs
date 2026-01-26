@@ -130,7 +130,7 @@ where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(
+    pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
         loader: Arc<L>,
@@ -509,7 +509,7 @@ mod tests {
             ],
             FixedFindMotifsConfig::new(30000, false, None),
             ThoDevice::from(1),
-        ).expect("FindMotifsStage::new failed in test"));
+        ).await.expect("FindMotifsStage::new failed in test"));
 
         let mut ctx = mock_run_ctx::default(1);
         let result = stage.run(
