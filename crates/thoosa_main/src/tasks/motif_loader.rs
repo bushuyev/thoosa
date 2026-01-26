@@ -344,13 +344,6 @@ where
 
 
     for (resource_id, slices) in resource_ids_slices {
-        let out_key = {
-            let out_id = SynKey::new([
-                mono_key!(motif_id.0, format!("motif_id={motif_id}")),
-                mono_key!(resource_id, format!("resource_id={resource_id}")),
-            ]);
-            Arc::new(out_id) as Arc<dyn CachableIdTr>
-        };
 
         let resource = resources_map
             .get(&resource_id)
