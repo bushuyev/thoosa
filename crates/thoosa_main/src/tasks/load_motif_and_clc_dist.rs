@@ -179,19 +179,16 @@ where
         > + Adjustable + OutId + Sync + Send + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifAndClcDistanceStage::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     {
         let out_id = self.out_id(input.id());
-        let mut ctx = ctx;
-        let motif_ctx = ctx.branch(Some("load_motif_and_clc_dist_motif"), false, false);
-        let motif = Arc::clone(&self.motif_loader).run_cached(Arc::clone(&input), motif_ctx).await?;
+        let motif = Arc::clone(&self.motif_loader).run_cached(Arc::clone(&input), ctx.branch(Some("load_motif_and_clc_dist_motif"), false, false)).await?;
 
         let motif_size = motif.size().clone();
 
         debug!("LoadMotifAndClcDistanceStage::run: out_id={out_id:?} motif_size={motif_size:?}");
 
 
-        let dist_ctx = ctx.branch(Some("load_motif_and_clc_dist_dist"), false, false);
         let dist = OOMHandler::new(
             vec![
                 Adjusters::Input(Box::new(SplitsAdjuster::<MotifSlicesSelector, MonoMetrics<0, 2>>::new([2, -1].into())))
@@ -199,7 +196,7 @@ where
             .run(
                 &self.clc_dist,
                 Arc::clone(&motif),
-                dist_ctx,
+                ctx.branch(Some("load_motif_and_clc_dist_dist"), false, false),
                 Contexts::new(
                     SplitsAdjusterContextImpl::new(motif_size.clone(), DistOutputBuilder::new(out_id.clone())),
                     // NoopInputContext(None),
