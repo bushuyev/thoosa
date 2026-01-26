@@ -48,6 +48,7 @@ use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use thoosa_shared::comp_id::SynKey;
 use crate::buffer_limits::FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT;
+use crate::tasks::random_avg_dist::{RandomAvgDist, RandomAvgDistInput};
 
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
