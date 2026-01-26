@@ -1,5 +1,5 @@
 mod cross_batch_clc;
-mod cross_dims;
+pub mod cross_dims;
 pub mod cross_loader;
 mod dists_tracker;
 pub mod find_motifs;

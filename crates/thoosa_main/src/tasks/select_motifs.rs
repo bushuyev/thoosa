@@ -682,7 +682,6 @@ pub mod tests {
     use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx};
     use thoosa_shared::runner::common::DropIf::IfNotMax;
-    use thoosa_shared::runner::common::mock_run_ctx::build;
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
@@ -883,6 +882,9 @@ pub mod tests {
         Ok(())
     }
 
+    fn build_mocks(){
+        
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_1_resource_1_label_1_channel_2_motifs() -> Result<(), ThoError> {
@@ -1073,18 +1075,19 @@ pub mod tests {
                 ])
                 .finish(),
         );
-        //
-        // MotifLoaderInput::all_slices(DataId(channel_0_motif_0 as u32))
 
+        let motif_0_0_t = motifs_tensor(100, 3, MotifKind::Pulse);
+        let motif_0_1_t = motifs_tensor(100, 2, MotifKind::Triangle);
+        let motif_1_0_t = motifs_tensor(100, 4, MotifKind::Sin);
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::all_slices(DataId(channel_0_motif_0 as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))),
-            (MotifLoaderInput::find_motif_slices_only(DataId(channel_0_motif_0 as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))),
+            (MotifLoaderInput::all_slices(DataId(channel_0_motif_0 as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_0_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(DataId(channel_0_motif_0 as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_0_t)),
 
-            (MotifLoaderInput::all_slices(DataId(channel_0_motif_1 as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motifs_tensor(100, 2, MotifKind::Triangle))),
-            (MotifLoaderInput::find_motif_slices_only(DataId(channel_0_motif_1 as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motifs_tensor(100, 2, MotifKind::Triangle))),
+            (MotifLoaderInput::all_slices(DataId(channel_0_motif_1 as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_1_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(DataId(channel_0_motif_1 as u32)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_1_t)),
 
-            (MotifLoaderInput::all_slices(DataId(channel_1_motif_0 as u32)), (MotifMeta { channel: 1, find_motifs_run_id, window: 100 }, motifs_tensor(100, 4, MotifKind::Sin))),
-            (MotifLoaderInput::find_motif_slices_only(DataId(channel_1_motif_0 as u32)), (MotifMeta { channel: 1, find_motifs_run_id, window: 100 }, motifs_tensor(100, 4, MotifKind::Sin))),
+            (MotifLoaderInput::all_slices(DataId(channel_1_motif_0 as u32)), (MotifMeta { channel: 1, find_motifs_run_id, window: 100 }, motif_1_0_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(DataId(channel_1_motif_0 as u32)), (MotifMeta { channel: 1, find_motifs_run_id, window: 100 }, motif_1_0_t)),
         ]).finish());
 
 
@@ -1428,13 +1431,7 @@ pub mod tests {
             None
         ));
 
-        let ctx =         build()
-            .with_device_idx(1)
-            .with_acquired_permits(MAX_PERMITS)
-            .with_add_permits()
-            .with_drop_permits(vec![IfNotMax])
-            .with_cache_area(0)
-            .finish();
+        let ctx =  mock_run_ctx::default(1);
 
         let result = select_motifs_stage.run(
             Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))), CacheArea::default())), ctx,

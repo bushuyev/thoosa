@@ -2879,7 +2879,7 @@ pub fn filter_groups_by_slices_count(max_slices_counts: Option<u32>, groups: Has
             if v.1.len() < max_slices_counts as usize {
                 a.insert(v.0, v.1);
             } else {
-                warn!("load_slices_into_groups: skipping group with {} slices",v.1.len());
+                warn!("skipping group with {} slices",v.1.len());
             }
             a
         }),
@@ -4176,6 +4176,17 @@ impl MockStoreBuilder {
         self
     }
 
+    pub fn with_list_resource_set_group_sets<D:IntoIterator<Item=(&'static str, Result<Vec<(usize, String)>, ThoError>)>>(mut self, data:D) ->Self {
+        let map :HashMap<&'static str, Result<Vec<(usize, String)>, ThoError>> = HashMap::from_iter(data);
+
+        self.store.expect_list_resource_set_group_sets()
+            .returning(move |group| {
+                map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()
+            });
+
+        self
+    }
+
     pub fn with_list_group_labeled_resources_sets<D:IntoIterator<Item=(&'static str, Result<Vec<(String, String)>, ThoError>)>>(mut self, data:D) -> Self {
         let map :HashMap<&'static str, Result<Vec<(String, String)>, ThoError>> = HashMap::from_iter(data.into_iter());
 
@@ -4233,10 +4244,19 @@ impl MockStoreBuilder {
         self
     }
 
+    pub fn with_save_groups_as_motifs(mut self)->Self{
+        self.store.expect_save_groups_as_motifs()
+            .withf(|run_id, channel, groups|{
+                debug!("with_save_groups_as_motifs: run_id={run_id:?}, channel={channel:?}, groups={groups:?}");
+                true
+            })
+            .return_const(Ok(()));
+        self
+    }
+
     pub fn build(self)->Box<dyn Store> {
         Box::new(self.store)
     }
-
 
 }
 

@@ -38,6 +38,7 @@ cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logge
 
 cargo nextest run --release --no-fail-fast --retries=0 --no-capture tasks::train_label_nets::tests::test_train_label_net_3x3 > /tmp/test.log 2>&1
 
+glare cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  say-hello
 with debug:
 07:29:30 [INFO] run_find_motifs_on_set done, run_id=[11, 12, 13, 14, 15]
 07:29:30 [INFO] All done in 64781452 mls

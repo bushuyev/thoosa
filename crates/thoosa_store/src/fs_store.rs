@@ -160,7 +160,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
                 (IdSlice(slice_id, slices.0.0, slices.0.1), IdSlice(slice_id, slices.1.0, slices.1.1))
             })
         }));
-        debug!("inserting {} groups {} slices", groups.len(), groups.values().map(|s| s.len()).sum::<usize>());
+        debug!("MotifTrackerStore::load_slices_into_groups: inserting {} groups {} slices", groups.len(), groups.values().map(|s| s.len()).sum::<usize>());
         let groups_len = groups.len();
         store.write().save_groups_as_motifs(self.run_id, self.channel as i64, filter_groups_by_slices_count(max_slices_counts, groups))?;
 
@@ -205,6 +205,8 @@ impl<T: AnyBitPattern> ChunkedSlicesReader<T> {
         let mut reserved = [0u8; 4];
         file.read_exact(&mut reserved)?;
 
+        debug!("ChunkedSlicesReader::new: file_path={file_path:?}");
+
         Ok(Self {
             reader: BufReader::new(file),
             _phantom: PhantomData,
@@ -217,16 +219,27 @@ impl<T: AnyBitPattern> Iterator for ChunkedSlicesReader<T> {
     type Item = io::Result<Vec<T>>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        debug!("ChunkedSlicesReader::next: next");
+
         let mut header = [0u8; CHUNK_HEADER_SIZE];
         let mut read = 0;
 
         while read < CHUNK_HEADER_SIZE {
             match self.reader.read(&mut header[read..]) {
-                Ok(0) if read == 0 => return None,
+                Ok(0) if read == 0 => {
+                    error!("ChunkedSlicesReader::next: empty file self.file_path={:?}", self.file_path);
+
+                    return None
+                },
                 Ok(0) => {
+
                     return Some(Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated chunk header")));
                 }
-                Ok(n) => read += n,
+                Ok(n) => {
+                    trace!("ChunkedSlicesReader::next: read {n} bytes from {:?}", self.file_path);
+
+                    read += n
+                },
                 Err(e) => return Some(Err(e)),
             }
         }
@@ -265,6 +278,8 @@ impl<T: AnyBitPattern> Iterator for ChunkedSlicesReader<T> {
                 return Some(Err(io::Error::new(io::ErrorKind::InvalidData, format!("ChunkedSlicesReader: file_path={:?} cast error: {e:?}", self.file_path))));
             }
         };
+
+        debug!("ChunkedSlicesReader::next: result.len={}", result.len());
 
         Some(Ok(result))
     }
