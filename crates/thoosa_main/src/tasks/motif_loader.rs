@@ -618,7 +618,7 @@ mod tests {
             ]))))
             .with_list_run_config_values(
                 run_id,
-                Ok(FindMotifsRunConfig::new(Some(run_id), 100, 100, None, None).to_properties_iter(None).collect())
+                Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 100, 100, None, None).to_properties_iter(None).collect())
             )
             .build();
 
@@ -684,7 +684,7 @@ mod tests {
             ]))))
             .with_list_run_config_values(
                 run_id,
-                Ok(FindMotifsRunConfig::new(Some(run_id), 100, motif_width, None, None).to_properties_iter(None).collect())
+                Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 100, motif_width, None, None).to_properties_iter(None).collect())
             )
             .with_get_motif_meta( [(motif_id, Ok((0usize, run_id)))])
             .build();

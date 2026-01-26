@@ -649,7 +649,7 @@ pub(crate) mod tests {
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
                 )
 
                 .with_get_input_run_ids([
@@ -764,7 +764,7 @@ pub(crate) mod tests {
             MockStoreBuilder::new()
             .with_list_run_config_values(
                 find_motifs_run_id,
-                Ok(FindMotifsRunConfig::new(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
+                Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
             )
 
             .with_get_input_run_ids([
