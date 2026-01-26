@@ -187,7 +187,7 @@ where
                 .read()
                 .list_motif_slices(motif_id_value, None, None, None)?;
 
-        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), None, None, &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "motif_loader").await?;
+        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), None, None, &mut ctx, find_motifs_run_id, None, slices, resources_map, channel, device_idx, cache_area, &self.ws, "motif_loader").await?;
 
 
         Ok(Arc::new(DevicesWrap::wrap(
@@ -298,7 +298,7 @@ where
                     find_motifs_run_config.window//it's assumed that filter's kernel is of same size as window
                 )?;
 
-        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), Some(limit), Some((0, 0)), &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "random loader").await?;
+        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), Some(limit), Some((0, 0)), &mut ctx, find_motifs_run_id, None, slices, resources_map, channel, device_idx, cache_area, &self.ws, "random loader").await?;
 
 
         Ok(Arc::new(DevicesWrap::wrap(
@@ -308,7 +308,7 @@ where
     }
 }
 
-async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &mut C, find_motifs_run_id: u32, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, channel: i64, device_idx: usize, cache_area: u64, ws: &Arc<RwLock<Box<dyn Workspace>>>, descr: &str) -> Result<(u32, ThoTensor<MotifSlices, DataId>), ThoError>
+pub(crate) async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &mut C, find_motifs_run_id: u32, find_motifs_run_config_override: Option<Arc<FindMotifsRunConfig>>, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, channel: i64, device_idx: usize, cache_area: u64, ws: &Arc<RwLock<Box<dyn Workspace>>>, descr: &str) -> Result<(u32, ThoTensor<MotifSlices, DataId>), ThoError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
@@ -317,10 +317,13 @@ where
 
     debug!("load_motif_slices: motif_id={motif_id} slices={slices:?} descr={descr}");
 
-    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-        find_motifs_run_id,
-        &store.read().list_run_config_values(find_motifs_run_id)?,
-    )?;
+    let find_motifs_run_config = match find_motifs_run_config_override {
+        Some(config) => config,
+        None => Arc::new(FindMotifsRunConfig::from_properties_map_with_id(
+            find_motifs_run_id,
+            &store.read().list_run_config_values(find_motifs_run_id)?,
+        )?),
+    };
 
     let resource_ids_slices = slices
         .iter()
