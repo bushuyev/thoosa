@@ -529,7 +529,7 @@ mod tests {
                                                                   resources_id_map.clone()
 
                 )))
-                .with_list_random_slices(motif_id, motif_width as u32, None, Ok((0i64, find_motifs_run_id, vec![
+                .with_list_random_motif_slices(motif_id, motif_width as u32, None, Ok((0i64, find_motifs_run_id, vec![
                     TensorIdSliceIdx(1, 100),
                     TensorIdSliceIdx(1, 200),
                     TensorIdSliceIdx(2, 100)
