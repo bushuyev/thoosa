@@ -176,7 +176,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         ThoError,
     >;
 
-    fn list_random_slices(
+    fn list_random_motif_slices(
         &self,
         motif_id: u32,
         motif_width: u32,
@@ -320,7 +320,7 @@ mock! {
             ),
             ThoError,
         >;
-        fn list_random_slices(
+        fn list_random_motif_slices(
             &self,
             motif_id: u32,
             motif_width: u32,
@@ -1863,8 +1863,8 @@ impl Store for SqlStore {
         Ok(channel_slices)
     }
 
-    //gpt
-    fn list_random_slices(
+    ///gpt generated, returns slices from same tensors and same channel as target motif but not belonging to the motif
+    fn list_random_motif_slices(
         &self,
         motif_id: u32,
         motif_width: u32,
@@ -3864,7 +3864,7 @@ mod store_tests {
 
         const WIDTH: u32 = 40;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_slices(motif_id, WIDTH, None, WIDTH)?;
+            store.list_random_motif_slices(motif_id, WIDTH, None, WIDTH)?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -3920,7 +3920,7 @@ mod store_tests {
         const WIDTH: u32 = 50;
         const MIN_DISTANCE: u32 = 300;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_slices(motif_id, WIDTH, Some(MIN_DISTANCE), WIDTH)?;
+            store.list_random_motif_slices(motif_id, WIDTH, Some(MIN_DISTANCE), WIDTH)?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4096,14 +4096,14 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_list_random_slices(
+    pub fn with_list_random_motif_slices(
         mut self,
         motif_id: u32,
         motif_width: u32,
         min_distance: Option<u32>,
         r: Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>
     ) -> Self {
-        self.store.expect_list_random_slices().returning(
+        self.store.expect_list_random_motif_slices().returning(
             move |p_motif_id, p_width, p_min_distance, crop_len| {
                 if p_motif_id == motif_id && p_width == motif_width && p_min_distance == min_distance {
                     r.clone()

@@ -291,7 +291,7 @@ where
         let (channel, find_motifs_run_id, slices, resources_map) =
             self.store
                 .read()
-                .list_random_slices(
+                .list_random_motif_slices(
                     motif_id_value,
                     find_motifs_run_config.window,
                     None,
@@ -667,7 +667,7 @@ mod tests {
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
         let resource_b = Resource::new(2, 1, "tensor_b", 1000);
         let mut store = MockStoreBuilder::new()
-            .with_list_random_slices(motif_id, motif_width, None, Ok((0i64, run_id, vec![
+            .with_list_random_motif_slices(motif_id, motif_width, None, Ok((0i64, run_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
                 TensorIdSliceIdx(2, 100)
