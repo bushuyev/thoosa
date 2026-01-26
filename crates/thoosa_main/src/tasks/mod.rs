@@ -6,6 +6,7 @@ pub mod find_motifs;
 pub mod slices_iter;
 pub mod tensor_loader;
 pub mod motif_loader;
+pub mod random_avg_dist;
 pub mod average_euclidean_distance;
 pub mod load_motif_and_clc_dist;
 pub mod transforms;
