@@ -30,7 +30,7 @@ use thoosa_with_data::with_data;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::motif_loader::load_motif_slices;
 
-const RANDOM_AVG_DIST_GROUP: &str = "random_avg_dist";//dummy group to load random resources, TODO - add proper method to SqlStore
+pub const RANDOM_AVG_DIST_GROUP: &str = "random_avg_dist";//dummy group to load random resources, TODO - add proper method to SqlStore
 
 #[derive(Debug, Clone, DummyData)]
 pub struct RandomAvgDistInput {

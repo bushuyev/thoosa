@@ -227,7 +227,7 @@ impl<T: AnyBitPattern> Iterator for ChunkedSlicesReader<T> {
         while read < CHUNK_HEADER_SIZE {
             match self.reader.read(&mut header[read..]) {
                 Ok(0) if read == 0 => {
-                    error!("ChunkedSlicesReader::next: empty file self.file_path={:?}", self.file_path);
+                    warn!("ChunkedSlicesReader::next: empty file self.file_path={:?}", self.file_path);
 
                     return None
                 },
