@@ -579,7 +579,7 @@ impl CrossInputSelectorWrap {
 
 #[derive(Debug)]
 struct CrossLoaderAdjuster {
-    // batch_0_adjuster: SplitsAdjuster<Range<i64>, i64>,//TODO
+
     batch_1_adjuster: SplitsAdjuster<Range<i64>, i64>,
     batch_1_slice_adjuster: SplitsAdjuster<Range<i64>, i64>,
 }

@@ -6,14 +6,17 @@ use log::{debug, warn};
 use parking_lot::RwLock;
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::Rng;
+use tch::Kind::Float;
 use tch::Tensor;
 use cached_derive::Cached;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::utils::z_norm_dims;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::average_euclidean_distance;
+use thoosa_motifs::pearson_corr::pearson_corr_distance_matrix_0_2_single;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
@@ -157,7 +160,6 @@ where
                 0u32.into(),
                 Arc::clone(&self.store),
                 Arc::clone(&self.loader),
-                Some(max_slices),
                 None,
                 &mut channel_ctx,
                 find_motifs_run_id,
@@ -175,6 +177,9 @@ where
                 return Err(ThoError::new(format!("RandomAvgDist: not enough slices for channel {channel}, got {slice_count}")));
             }
 
+            //TODO options for z_norm_dims and pearson_corr
+            // let dist = average_euclidean_distance(&z_norm_dims(motif.t_ref(), &[1], 1e-8)?)?;
+            // let dist = pearson_corr_distance_matrix_0_2_single(motif.t_ref(), 1e-8)?.mean_dim(&[0,1][..], false, Float).double_value(&[]) as f32;
             let dist = average_euclidean_distance(motif.t_ref())?;
             avg_dists.push(dist);
         }

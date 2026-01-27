@@ -282,9 +282,8 @@ impl Workspace for FsWorkspace {
 
                     debug!("load_all_label_models_ws: model={model_path:?} run_id={run_id} label_node_params={label_node_params:?}");
 
-                //TODO ChannelsMotifsFlattenData
-                // let module = LabelModule::ChannelsMotifsData(ThoModuleWithStore::load(LabelNetParams::label_net(&label_node_params), model_path.clone(), *device).expect(format!("can't load {model_path:?}").as_str()));
                 let params_for_builder = label_node_params.clone();
+
                 let module = ThoModuleWithStore::load(
                     mono_key!(run_id, format!("Label_model_{label}_{run_id}")).into(),
                       move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),

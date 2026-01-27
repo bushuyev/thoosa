@@ -28,7 +28,7 @@ use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SlicesFilter};
 use thoosa_common::loader::LoadRunner;
 use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
-use thoosa_motifs::distance::MaskMaker::{Le, LeRunningMean, LocalMin, Tril};
+use thoosa_motifs::distance::MaskMaker::{Le, LeQuantile, LeRunningMean, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
@@ -211,8 +211,17 @@ where
                                     vec![
                                         LocalMin { dim: 1 },
                                         LocalMin { dim: 2 },
+                                        // LeQuantile {
+                                        //     q: 0.1,
+                                        //     with_mask: false,
+                                        // }
                                         Le {
                                             v: dists.t.shallow_clone(),//TODO
+                                            // v: Tensor::full(
+                                            //     &[channels as i64, 1, 1],
+                                            //     0.01f64,
+                                            //     (Float, t_0.device()),
+                                            // ),//TODO
                                         }
                                     ]
                                 }

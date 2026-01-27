@@ -1434,6 +1434,22 @@ pub fn z_norm_2(t_0: &Tensor, _dim: i64) -> Result<Tensor, ThoError> {
     Ok(t_0.f_sub(&t_0.f_mean_dim(1, true, Float)?)?.f_div(&std)?)
 }
 
+pub fn z_norm_dims(x: &Tensor, dims: &[i64], eps: f64) -> Result<Tensor, ThoError> {
+    // Mean over dims (keepdim=true so it broadcasts back)
+    let mean = x.f_mean_dim(dims, /*keepdim=*/true, Kind::Float)?;
+
+    // Variance over dims (unbiased=false = "population" variance, typical for normalization)
+    let var = x.f_var_dim(dims, /*unbiased=*/false, /*keepdim=*/true)?;
+
+    // std = sqrt(var + eps)
+    // Prefer f_add_scalar if available in your tch version.
+    let std = var.f_add_scalar(eps)?.f_sqrt()?;
+
+    // (x - mean) / std
+    let centered = x.f_subtract(&mean)?;
+    Ok(centered.f_divide(&std)?)
+}
+
 pub fn skewness_kurtosis_1_dim(dists: &Tensor) -> (Tensor, Tensor) {
     let mean = dists.mean_dim(1, true, Kind::Float);
 

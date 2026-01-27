@@ -381,7 +381,6 @@ where
             .map(|(find_motifs_run_config, motif_data)| {
                 let resources = Arc::clone(&resources);
 
-                let stacked_motifs = Arc::clone(&motif_data);
                 let find_motifs_run_config = Arc::clone(&find_motifs_run_config);
                 let loader = Arc::clone(&self.loader);
 
@@ -424,7 +423,7 @@ where
 
                         let clc_stage = Arc::clone(&clc_resources_motifs_dist);
                         let ctx_select_motifs_clc_resources = ctx.branch(Some("select_motifs_clc_resources"), false, false);
-                        debug!("SelectMotifsStage::run: t_0_batch={t_1_batch:?} \n stacked_motifs={stacked_motifs:?}");
+                        debug!("SelectMotifsStage::run: t_0_batch={t_1_batch:?} \n motif_data={motif_data:?}");
 
                         // let t_1_batch_resources = t_1_batch_resources.clone();
                         let resource_ids = t_1_batch_resources
@@ -639,11 +638,11 @@ where
 
             debug!("SelectMotifsStage::run: 1. good_motif_ids.len={}", good_motif_ids.len());
 
-            let avg_dist = good_motif_ids.iter().map(|v|v.1).sum::<f64>()/good_motif_ids.len() as f64;
+            let avg_dist_05 = good_motif_ids.iter().map(|v|v.1).sum::<f64>()/good_motif_ids.len() as f64 / 0.5;//TODO config
 
-            debug!("SelectMotifsStage::run: avg_dist={avg_dist:?} good_motif_ids.len={}", good_motif_ids.len());
+            debug!("SelectMotifsStage::run: avg_dist={avg_dist_05:?} good_motif_ids.len={}", good_motif_ids.len());
 
-            let good_motif_ids = good_motif_ids.into_iter().filter(|v|v.1 <= avg_dist).collect::<Vec<_>>();
+            let good_motif_ids = good_motif_ids.into_iter().filter(|v|v.1 <= avg_dist_05).collect::<Vec<_>>();
 
             debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered good_motif_ids.len={}", good_motif_ids.len());
 
