@@ -518,7 +518,7 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params
 mod tests {
     use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClc, UnfoldParams};
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
-    use crate::tasks::find_motifs::MeanDistsCtx;
+    use crate::tasks::find_motifs::{MasksCtx, MeanDistsCtx};
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::runner::common::MockRunCtx;
     use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
@@ -579,7 +579,7 @@ mod tests {
                 };
                 Ok(DistsMask::new(mask, Some(dists), mask_type, None)?)
             },
-            MeanDistsCtx::new(3, Cuda(0)),
+            MasksCtx::Mean{k:1.0, ctx: MeanDistsCtx::new(3, Cuda(0))},
             UnfoldParams::new(1, 2, 1),
         ));
 

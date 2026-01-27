@@ -199,7 +199,6 @@ where
                 ctx.branch(Some("load_motif_and_clc_dist_dist"), false, false),
                 Contexts::new(
                     SplitsAdjusterContextImpl::new(motif_size.clone(), DistOutputBuilder::new(out_id.clone())),
-                    // NoopInputContext(None),
                     NoopRunnableContext {},
                     NoopRunCtxContext {}
                 ),

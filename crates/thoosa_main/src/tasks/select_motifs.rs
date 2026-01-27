@@ -366,8 +366,6 @@ where
         let stacked_motifs_loader = Arc::clone(&self.stacked_motifs_loader);
         let run_configs__stacked_motifs = Self::load_stacked_motifs(&self.store, &stacked_motifs_loader, &mut ctx, &self.find_motifs_run_ids).await?;
 
-
-
         let num_resources = resources.len();
         let total_size  = resources.iter().map(|resource|resource.length() as usize).sum::<usize>();
         let mut total_processed_size = 0;
@@ -400,7 +398,7 @@ where
                     let mut t_1_batch_dim_0_size = 0;
 
 
-                    for (i_0, resource_0) in resources.iter()/*.flat_map(|label_resources|label_resources.1.iter())*/.enumerate() {
+                    for (i_0, resource_0) in resources.iter().enumerate() {
                         debug!("SelectMotifsStage::run: on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
                         let configured_loader = config_to_stage(&loader, &find_motifs_run_config, &ws)?;
 
@@ -883,7 +881,7 @@ pub mod tests {
     }
 
     fn build_mocks(){
-        
+
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
