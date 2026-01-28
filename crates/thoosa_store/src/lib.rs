@@ -1267,15 +1267,11 @@ impl Store for SqlStore {
         t: &Transaction,
     ) -> Result<(), ThoError> {
         if train_coeff < 0.0 || valid_coeff < 0.0 {
-            return Err(ThoError::new(format!(
-                "train_coeff and valid_coeff must be >= 0.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})"
-            )));
+            return Err(ThoError::new(format!("train_coeff and valid_coeff must be >= 0.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
         }
 
         if train_coeff + valid_coeff > 1.0 {
-            return Err(ThoError::new(format!(
-                "train_coeff + valid_coeff must be <= 1.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})"
-            )));
+            return Err(ThoError::new(format!("train_coeff + valid_coeff must be <= 1.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
         }
 
         let labels = Self::list_labels(t)?;
@@ -1312,9 +1308,7 @@ impl Store for SqlStore {
 
         if let Some(limit_val) = limit {
             if limit_val > min_pure_resources {
-                return Err(ThoError::new(format!(
-                    "limit {limit_val} exceeds smallest number of pure resources {min_pure_resources}"
-                )));
+                return Err(ThoError::new(format!("limit {limit_val} exceeds smallest number of pure resources {min_pure_resources}")));
             }
         }
 
@@ -1325,7 +1319,12 @@ impl Store for SqlStore {
 
         debug!("save_pure_balanced_sets: prefix={prefix} target_count={target_count} train_count={train_count} valid_count={valid_count} test_count={test_count}");
 
-        let group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group"), t)?;
+        let train_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_train"), t)?;
+
+        let valid_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_validation"), t)?;
+
+        let test_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_test"), t)?;
+
         let labels_cnt = labels.len();
         let mut rng = rand::rng();
 
@@ -1343,24 +1342,24 @@ impl Store for SqlStore {
             Self::insert_resource_set_resources(
                 t,
                 labels_cnt,
-                group_id,
-                format!("{prefix}_balanced_set_{label}_train"),
+                train_group_id,
+                format!("{prefix}_balanced_set_{label}"),
                 Some(&label_id),
                 train_resources,
             )?;
             Self::insert_resource_set_resources(
                 t,
                 labels_cnt,
-                group_id,
-                format!("{prefix}_balanced_set_{label}_validation"),
+                valid_group_id,
+                format!("{prefix}_balanced_set_{label}"),
                 Some(&label_id),
                 valid_resources,
             )?;
             Self::insert_resource_set_resources(
                 t,
                 labels_cnt,
-                group_id,
-                format!("{prefix}_balanced_set_{label}_test"),
+                test_group_id,
+                format!("{prefix}_balanced_set_{label}"),
                 Some(&label_id),
                 test_resources,
             )?;
@@ -3339,12 +3338,22 @@ mod store_tests {
         init_test_store(&mut store)?;
 
         let labels_count = store.read().list_labels()?.len();
-        let group_sets = store
+        let train_sets = store
             .read()
-            .list_resource_set_group_sets("A_balanced_group")?;
+            .list_resource_set_group_sets("A_balanced_group_train")?;
+        let valid_sets = store
+            .read()
+            .list_resource_set_group_sets("A_balanced_group_validation")?;
+        let test_sets = store
+            .read()
+            .list_resource_set_group_sets("A_balanced_group_test")?;
 
-        assert_eq!(labels_count * 3, group_sets.len());
-        assert!(group_sets.iter().all(|(_, descr)| descr.starts_with("A_balanced_set_")));
+        assert_eq!(labels_count, train_sets.len());
+        assert_eq!(labels_count, valid_sets.len());
+        assert_eq!(labels_count, test_sets.len());
+        assert!(train_sets.iter().all(|(_, descr)| descr.starts_with("A_balanced_set_")));
+        assert!(valid_sets.iter().all(|(_, descr)| descr.starts_with("A_balanced_set_")));
+        assert!(test_sets.iter().all(|(_, descr)| descr.starts_with("A_balanced_set_")));
 
         Ok(())
     }

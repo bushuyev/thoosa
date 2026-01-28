@@ -13,11 +13,16 @@ retries = 3
 filter = 'all()'
 run-wrapper = 'systemd'
 
-# NEW: same as default, but no wrapper scripts (good for Codex / environments where systemd-run breaks).
+[scripts.wrapper.passthrough]
+command = ["bash", "-c", 'exec "$0" "$@"']
+
 [profile.codex]
-test-threads = 3
-default-filter = 'not test(/::heavy[^:]*$/)'
-retries = 3
+retries = 0
+
+# Override inherited wrapper script rule from profile.default.
+[[profile.codex.scripts]]
+filter = 'all()'
+run-wrapper = 'passthrough'
 
 [profile.heavy]
 default-filter = 'test(/::heavy[^:]*$/)'
