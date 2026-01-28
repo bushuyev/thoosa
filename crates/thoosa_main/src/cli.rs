@@ -955,7 +955,7 @@ where
     store_guard.save_pure_sets(50, true, &t)?;
     store_guard.save_pure_sets(100, true, &t)?;
     store_guard.save_pure_sets(150, true, &t)?;
-    store_guard.save_pure_sets(200, true, &t)?;
+    store_guard.save_pure_sets(10000, false, &t)?;
 
     store_guard.save_pure_balanced_sets("10", Some(10),  0.6, 0.2, &t)?;
     store_guard.save_pure_balanced_sets("100", Some(100),  0.6, 0.2, &t)?;
