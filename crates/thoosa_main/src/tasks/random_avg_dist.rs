@@ -160,6 +160,7 @@ where
                 0u32.into(),
                 Arc::clone(&self.store),
                 Arc::clone(&self.loader),
+                Some(max_slices),
                 None,
                 &mut channel_ctx,
                 find_motifs_run_id,
