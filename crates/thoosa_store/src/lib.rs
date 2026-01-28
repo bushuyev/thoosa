@@ -2591,6 +2591,7 @@ impl SqlStore {
                 (),
             )?;
 
+            //motif_id in UNIQUE constraint is needed when new slices are added from different find_motifs in same select_motifs run.
             t.execute(
                 "CREATE TABLE IF NOT EXISTS slices (
                 id              INTEGER PRIMARY KEY,
@@ -2599,7 +2600,7 @@ impl SqlStore {
                 channel_id      INTEGER NOT NULL,
                 resource_id     REFERENCES resources(id) ON DELETE CASCADE,
                 slice_idx       INTEGER NOT NULL,
-                UNIQUE(channel_id, run_id, resource_id, slice_idx)
+                UNIQUE(motif_id, run_id, resource_id, slice_idx)
             )",
                 (),
             )?;

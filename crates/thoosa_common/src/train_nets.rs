@@ -1308,7 +1308,7 @@ impl SavableResult for TrainMotifsNetResult {
         //TODO save loss to choose model
         debug!("TrainMotifsNetsRunConfigResult::save: self={:?}", self);
 
-        if self.loss < 0.3 {
+        if self.loss < 0.3 {//TODO config
             let run_config_id = store.write().save_run_config(
                 Some(&[self.find_motifs_run_id]),
                 &TrainMotifsNetsRunConfig::type_name(),
