@@ -3,7 +3,7 @@ use crate::runner::permits::{NumPermits, MAX_PERMITS};
 use crate::runner::permits::runner_queue::Arbiter;
 use crate::runner::permits::{PermitSource, RunnerPerm};
 use thoosa_shared::runner::purge::FuturesRunnerMapPurger;
-use log::debug;
+use log::{debug, error, info};
 #[allow(unused_imports)]
 use mockall::automock;
 use std::collections::{HashMap, HashSet};
@@ -191,15 +191,14 @@ impl GlobalCtx {
     }
 
     // #[cfg(debug_assertions)] TODO
-    pub async fn debug_caches(&self) {
+    pub async fn debug_caches(&self, device_idx:usize) {
         let maps = self.caches.read().await;
 
         for (type_name, map) in maps.iter() {
-            debug!("GlobalCtx::debug_caches: type_name={type_name}");
-            
-
-
-            debug!("GlobalCtx::debug_caches: type_name={type_name} done");
+            info!("GlobalCtx::debug_caches: type_name={type_name}");
+            if let Err(e) = map.debug_gpu(device_idx).await {
+                error!("GlobalCtx::debug_caches: failed with {e:?}");
+            }
         }
     }
 

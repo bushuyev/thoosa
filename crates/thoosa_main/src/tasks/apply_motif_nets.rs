@@ -239,7 +239,7 @@ where
                          Arc::clone(&input),
                          apply_motif_net_ctx,
                          Contexts::new(
-                             SplitsAdjusterContextImpl::new(input.size().into(), SingleDimTensorOutputBuilder::new(out_id.clone(), 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
+                             SplitsAdjusterContextImpl::new(input._size(), SingleDimTensorOutputBuilder::new(out_id.clone(), 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
                              NoopRunnableContext {},
                              PermitsAndDumpToCpuAdjustableContex::new(
                                  PermitsAdjustContextImpl::new(),

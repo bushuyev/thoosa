@@ -55,8 +55,9 @@ class MotifCNN(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+
         h = self.feat(x)  # [B, 2H, T_max]
-        print(f"h={h.size()}")
+        print(f"x={x.size()} h={h.size()}")
 
         mask = make_mask(lengths, h.shape[-1])
         pooled = torch.cat([masked_max(h, mask), masked_mean(h, mask)], dim=1)  # [B,4H]

@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use futures_util::StreamExt;
 use futures_util::future::{BoxFuture, Shared};
 use futures_util::stream;
-use log::debug;
+use log::{debug, warn};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -103,18 +103,28 @@ where
     }
 
     async fn debug_gpu(&self, device_idx: usize) -> Result<(), ThoError> {
+        warn!("debug_gpu: device_idx={device_idx}");
+        let items: Vec<(K, Arc<DevicesWrap<O>>)> = self
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .value()
+                    .peek()
+                    .and_then(|value| value.as_ref().ok())
+                    .map(|wrapper| (entry.key().clone(), Arc::clone(wrapper)))
+            })
+            .collect();
+
         let mut total_size = 0;
-        for entry in self.iter() {
-            if let Some(Ok(wrapper)) = entry.value().peek().as_ref() {
-                if !wrapper.is_all_on_cpu().await {
-                    let size = wrapper.mem_size();
-                    debug!("key={:?} size={:?}", entry.key(), size);
-                    total_size += size;
-                }
+        for (key, wrapper) in items {
+            if !wrapper.is_all_on_cpu().await {
+                let size = wrapper.mem_size();
+                warn!("key={key:?} size={size:?}");
+                total_size += size;
             }
         }
 
-        debug!("total_size: {total_size}");
+        warn!("total_size: {total_size}");
 
         Ok(())
     }
