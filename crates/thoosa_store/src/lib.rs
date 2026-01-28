@@ -118,6 +118,14 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         only_unused: bool,
         t: &'a Transaction<'a>,
     ) -> Result<(), ThoError>;
+    fn save_pure_balanced_sets<'a>(
+        &self,
+        prefix: &str,
+        limit: Option<usize>,
+        train_coeff: f32,
+        valid_coeff: f32,
+        t: &'a Transaction<'a>,
+    ) -> Result<(), ThoError>;
     fn save_set_by_labels(
         &mut self,
         conds: Vec<(String, SetCond)>,
@@ -238,6 +246,14 @@ mock! {
             &self,
             max_len: usize,
             only_unused: bool,
+            t: &'a Transaction<'a>,
+        ) -> Result<(), ThoError>;
+        fn save_pure_balanced_sets<'a>(
+            &self,
+            prefix: &str,
+            limit: Option<usize>,
+            train_coeff: f32,
+            valid_coeff: f32,
             t: &'a Transaction<'a>,
         ) -> Result<(), ThoError>;
         fn save_set_by_labels(
@@ -1091,10 +1107,7 @@ impl Store for SqlStore {
                 labels_cnt_labels_resources
             };
 
-            debug!(
-                "save_groups_by_label_cnt: labels_cnt_labels_resources.len={:?}",
-                labels_cnt_labels_resources.len()
-            );
+            debug!("save_groups_by_label_cnt: labels_cnt_labels_resources.len={:?}",labels_cnt_labels_resources.len());
             let mut rng = rand::rng();
 
             let labels_ids: HashMap<String, usize> =
@@ -1107,8 +1120,8 @@ impl Store for SqlStore {
 
             //labels_cnt number of labels a resource has - the fewer labels the more chances that resource is classified correctly
             for (labels_cnt, labels_resources) in labels_cnt_labels_resources {
-                let max_labels_resources =
-                    labels_resources.values().map(|r| r.len()).sum::<usize>();
+                let max_labels_resources = labels_resources.values().map(|r| r.len()).sum::<usize>();
+
                 debug!(
                     "save_groups_by_label_cnt: labels_cnt={} max_labels_resources={}, max_resources_in_set={}, max_labels_resources/max_resources_in_set={}",
                     labels_cnt,
@@ -1240,6 +1253,117 @@ impl Store for SqlStore {
             })?;
 
             resource_resources_set_stmt.execute(params![resource_set_id, label_id, max_len])?;
+        }
+
+        Ok(())
+    }
+
+    fn save_pure_balanced_sets(
+        &self,
+        prefix: &str,
+        limit: Option<usize>,
+        train_coeff: f32,
+        valid_coeff: f32,
+        t: &Transaction,
+    ) -> Result<(), ThoError> {
+        if train_coeff < 0.0 || valid_coeff < 0.0 {
+            return Err(ThoError::new(format!(
+                "train_coeff and valid_coeff must be >= 0.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})"
+            )));
+        }
+
+        if train_coeff + valid_coeff > 1.0 {
+            return Err(ThoError::new(format!(
+                "train_coeff + valid_coeff must be <= 1.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})"
+            )));
+        }
+
+        let labels = Self::list_labels(t)?;
+        let mut resources_by_label = labels
+            .iter()
+            .map(|(label_id, _)| (*label_id, Vec::new()))
+            .collect::<HashMap<usize, Vec<usize>>>();
+
+        {
+            let mut stmt = t.prepare(
+                "SELECT lr.label_id, lr.resource_id FROM labeled_resources lr GROUP BY lr.resource_id HAVING count(*)=1 ORDER BY lr.label_id, lr.resource_id",
+            )?;
+            let mut rows = stmt.query(())?;
+            while let Some(row) = rows.next()? {
+                let label_id = row.get::<usize, usize>(0)?;
+                let resource_id = row.get::<usize, usize>(1)?;
+                resources_by_label
+                    .entry(label_id)
+                    .or_insert_with(Vec::new)
+                    .push(resource_id);
+            }
+        }
+
+        let min_pure_resources = labels
+            .iter()
+            .map(|(label_id, _)| {
+                resources_by_label
+                    .get(label_id)
+                    .map(|resources| resources.len())
+                    .unwrap_or(0)
+            })
+            .min()
+            .unwrap_or(0);
+
+        if let Some(limit_val) = limit {
+            if limit_val > min_pure_resources {
+                return Err(ThoError::new(format!(
+                    "limit {limit_val} exceeds smallest number of pure resources {min_pure_resources}"
+                )));
+            }
+        }
+
+        let target_count = limit.unwrap_or(min_pure_resources);
+        let train_count = ((target_count as f64) * (train_coeff as f64)).floor() as usize;
+        let valid_count = ((target_count as f64) * (valid_coeff as f64)).floor() as usize;
+        let test_count = target_count.saturating_sub(train_count + valid_count);
+
+        debug!("save_pure_balanced_sets: prefix={prefix} target_count={target_count} train_count={train_count} valid_count={valid_count} test_count={test_count}");
+
+        let group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group"), t)?;
+        let labels_cnt = labels.len();
+        let mut rng = rand::rng();
+
+        for (label_id, label) in labels {
+            let mut resources = resources_by_label.remove(&label_id).unwrap_or_default();
+            resources.shuffle(&mut rng);
+            let selected = resources
+                .into_iter()
+                .take(target_count)
+                .collect::<Vec<usize>>();
+
+            let (train_resources, rest) = selected.split_at(min(train_count, selected.len()));
+            let (valid_resources, test_resources) = rest.split_at(min(valid_count, rest.len()));
+
+            Self::insert_resource_set_resources(
+                t,
+                labels_cnt,
+                group_id,
+                format!("{prefix}_balanced_set_{label}_train"),
+                Some(&label_id),
+                train_resources,
+            )?;
+            Self::insert_resource_set_resources(
+                t,
+                labels_cnt,
+                group_id,
+                format!("{prefix}_balanced_set_{label}_validation"),
+                Some(&label_id),
+                valid_resources,
+            )?;
+            Self::insert_resource_set_resources(
+                t,
+                labels_cnt,
+                group_id,
+                format!("{prefix}_balanced_set_{label}_test"),
+                Some(&label_id),
+                test_resources,
+            )?;
         }
 
         Ok(())
@@ -3209,6 +3333,23 @@ mod store_tests {
     }
 
     #[test]
+    fn test_save_pure_balanced_sets_group_created() -> Result<(), ThoError> {
+        let mut store = Arc::new(RwLock::new(SqlStore::in_mem()?));
+
+        init_test_store(&mut store)?;
+
+        let labels_count = store.read().list_labels()?.len();
+        let group_sets = store
+            .read()
+            .list_resource_set_group_sets("A_balanced_group")?;
+
+        assert_eq!(labels_count * 3, group_sets.len());
+        assert!(group_sets.iter().all(|(_, descr)| descr.starts_with("A_balanced_set_")));
+
+        Ok(())
+    }
+
+    #[test]
     fn test_save_slices() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
@@ -3662,6 +3803,7 @@ mod store_tests {
         debug!("resource_ids={resource_ids:?}");
 
         store_guard.save_pure_sets(10, false, &t)?;
+        store_guard.save_pure_balanced_sets("A", None, 0.6, 0.2, &t)?;
         t.commit()?;
         Ok(resource_ids)
     }
