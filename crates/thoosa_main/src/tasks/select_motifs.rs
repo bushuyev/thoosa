@@ -841,7 +841,6 @@ where
                         let ctx_select_motifs_clc_resources = ctx.branch(Some("select_motifs_clc_resources"), false, false);
                         debug!("SelectMotifsStage::run: t_0_batch={t_1_batch:?} \n motif_data={motif_data:?}");
 
-                        // let t_1_batch_resources = t_1_batch_resources.clone();
                         let resource_ids = t_1_batch_resources
                             .iter()
                             .map(|resource| resource.id())
@@ -869,7 +868,7 @@ where
                             let required_ids = HashMap::new();
 
                             let ClcResourcesMotifsDistOutput {
-                                find_motifs_run_id, //can be taken from motif_data, no need to trip through ClcResourcesMotifsDist?
+                                find_motifs_run_id, //TODO can be taken from motif_data, no need to go through ClcResourcesMotifsDist
                                 channel_masks_dists_ids,
                                 resources_iter,
                                 ..
@@ -922,7 +921,7 @@ where
                                         let mut added_slices = 0;
                                         let mut skipped_slices = 0;
 
-                                        // if slices.len() < 1000 { //TODO config
+
                                         for slice_1 in resources_iter {
                                             if let Some(mask) = mask_in_channel.next() {
                                                 trace!("SelectMotifsStage::run: motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} mask={mask}");
@@ -976,7 +975,7 @@ where
 
             let good_motif_ids = futures::stream::iter(
                 Arc::into_inner(channels_motifs_added_slices)
-                    .expect("still can't unwrap motif_added_slices")
+                    .expect("can't unwrap motif_added_slices")
                     .into_iter()
                     .enumerate()
 

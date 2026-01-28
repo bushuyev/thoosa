@@ -1604,10 +1604,7 @@ impl Store for SqlStore {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
-        debug!(
-            "save_slices_groups_as_motifs_from_tmp_db: run_id={run_id:?}, channel={channel:?} path={}",
-            as_ref.as_ref().to_string_lossy()
-        );
+        debug!("save_slices_groups_as_motifs_from_tmp_db: run_id={run_id:?}, channel={channel:?} path={}",as_ref.as_ref().to_string_lossy());
 
         {
             t.execute(
@@ -2775,8 +2772,7 @@ impl SqlStore {
         motif_id: i64,
         chunk: IntoIter<IdSlice, 500>,
     ) -> Result<(), ThoError> {
-        let sql =
-            "INSERT INTO slices (run_id, channel_id, motif_id, resource_id, slice_idx) VALUES";
+        let sql = "INSERT INTO slices (run_id, channel_id, motif_id, resource_id, slice_idx) VALUES";
 
         let (mut q, params) = chunk.into_iter().fold(
             (vec![sql], vec![]),
@@ -2805,10 +2801,7 @@ impl SqlStore {
                 debug!("insert_slices: slice_inserted={slice_inserted}");
             }
             Err(e) => {
-                debug!(
-                    "insert_slices: e={e} sqlite_error={:?} run_id={run_id}, channel={channel}, motif_id={motif_id}",
-                    e.sqlite_error()
-                );
+                debug!("insert_slices: e={e} sqlite_error={:?} run_id={run_id}, channel={channel}, motif_id={motif_id}",e.sqlite_error());
             }
         };
 

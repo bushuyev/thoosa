@@ -572,14 +572,14 @@ where
                 step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
                 // window: RangeOrValue::Value(1000),
                 window: RangeOrValue::Range { range: Range { start: 1000, end: 5001 }, step: Some((1000, 1)) },
-                // filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
-                //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-                //     band_hz: RangeOrValue::Value(100.),
-                //     kernel_size: RangeOrValue::Value(1000),
-                //     stride: RangeOrValue::Value(1),
-                //     padding: RangeOrValue::Value(0),
-                // })),
-                filter: None,
+                filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
+                    low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
+                    band_hz: RangeOrValue::Value(100.),
+                    kernel_size: RangeOrValue::Value(1000),
+                    stride: RangeOrValue::Value(1),
+                    padding: RangeOrValue::Value(0),
+                })),
+                // filter: None,
                 slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ k: RangeOrValue::Value(0.02)}),
             };
             let max_chunk_size = 20_000;

@@ -1308,23 +1308,27 @@ impl SavableResult for TrainMotifsNetResult {
         //TODO save loss to choose model
         debug!("TrainMotifsNetsRunConfigResult::save: self={:?}", self);
 
-        let run_config_id = store.write().save_run_config(
-            Some(&[self.find_motifs_run_id]),
-            &TrainMotifsNetsRunConfig::type_name(),
-            "TrainMotifsNetsRunConfigResult2",
-            "todo",
-            self.run_config_values.to_properties_iter(None).collect(),
-        )?;
+        if self.loss < 0.3 {
+            let run_config_id = store.write().save_run_config(
+                Some(&[self.find_motifs_run_id]),
+                &TrainMotifsNetsRunConfig::type_name(),
+                "TrainMotifsNetsRunConfigResult2",
+                "todo",
+                self.run_config_values.to_properties_iter(None).collect(),
+            )?;
 
-        ws.read().save_motif_net(
-            &self.channel,
-            &run_config_id,
-            &self.motif_id,
-            &self.vs,
-            &self.params,
-        )?;
+            ws.read().save_motif_net(
+                &self.channel,
+                &run_config_id,
+                &self.motif_id,
+                &self.vs,
+                &self.params,
+            )?;
 
-        Ok(run_config_id)
+            Ok(run_config_id)
+        } else {
+            Ok(0)
+        }
     }
 }
 
