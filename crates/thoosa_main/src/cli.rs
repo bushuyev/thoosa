@@ -928,6 +928,10 @@ where
     store_guard.save_pure_sets(150, true, &t)?;
     store_guard.save_pure_sets(200, true, &t)?;
 
+    store_guard.save_pure_balanced_sets("10", Some(10),  0.6, 0.2, &t)?;
+    store_guard.save_pure_balanced_sets("100", Some(100),  0.6, 0.2, &t)?;
+    store_guard.save_pure_balanced_sets("All", None,  0.6, 0.2, &t)?;
+
     store_guard.save_groups_by_label_cnt(100, &t)?;
     t.commit()?;
 
