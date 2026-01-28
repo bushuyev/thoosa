@@ -24,8 +24,8 @@ async engine is Tokio, rayon is used to parallel sync functions.
 ## Build, Test, and Development Commands
 - Build workspace: `cargo build`
 - Build a crate: `cargo build -p torch_runner`
-- Run tests (all): `cargo nextest run --no-fail-fast`
-- Run tests for a crate: `cargo nextest run -p caching_runner_test -- --nocapture`
+- Run tests (all): `cargo nextest run --profile codex --no-fail-fast`
+- Run tests for a crate: `cargo nextest run --profile codex -p [crate]`
 - Lint (if installed): `cargo clippy --all-targets -- -D warnings`
 Notes:
 - Requires nightly toolchain (`rust-toolchain.toml` is pinned). Install via `rustup toolchain install nightly`.

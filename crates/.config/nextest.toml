@@ -1,15 +1,11 @@
 # .config/nextest.toml
 experimental = ["wrapper-scripts"]
 
-# Optional: keep a dedicated group for true mutual-exclusion cases.
-# (Only matters if you actually assign tests to it via an override.)
 [test-groups]
-heavy = { max-threads = 1 }   # never run two heavy tests at once (if used)
+heavy = { max-threads = 1 }
 
-# Default profile: run all non-heavy tests with at most 3 concurrent threads,
-# and retry failures up to 3 times.
 [profile.default]
-test-threads = 3         # global concurrency for this profile
+test-threads = 3
 default-filter = 'not test(/::heavy[^:]*$/)'
 retries = 3
 
@@ -17,14 +13,24 @@ retries = 3
 filter = 'all()'
 run-wrapper = 'systemd'
 
-# Heavy profile: only heavy tests, each monopolizes all threads; also retries=3.
+[scripts.wrapper.passthrough]
+command = ["bash", "-c", 'exec "$0" "$@"']
+
+[profile.codex]
+retries = 0
+
+# Override inherited wrapper script rule from profile.default.
+[[profile.codex.scripts]]
+filter = 'all()'
+run-wrapper = 'passthrough'
+
 [profile.heavy]
 default-filter = 'test(/::heavy[^:]*$/)'
 retries = 3
 
 [[profile.heavy.overrides]]
 filter = 'test(/::heavy[^:]*$/)'
-threads-required = "num-cpus"  # occupy all scheduler slots when a heavy test runs
+threads-required = "num-cpus"
 
 [scripts.wrapper.systemd]
 command = [
