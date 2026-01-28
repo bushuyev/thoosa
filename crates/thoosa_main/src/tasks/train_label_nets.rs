@@ -29,7 +29,7 @@ use thoosa_common::batches::{AsyncDataBatch};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train, AnyLenNetParams, CommonTrainingRunConfig, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{lin_label_node, flat_label_node, opt_train, LinLenNetParams, CommonTrainingRunConfig, LinNetArgs, CnnNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -347,13 +347,13 @@ where
                                 LabelNetTypeArgs::MaxPadding(_) => {
                                     todo!()
                                 }
-                                LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs {
+                                LabelNetTypeArgs::LinNet(LinNetArgs {
                                     num_layers, slices_len
                                 }) => {
 
-                                    let net_params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::AnyLenNetParams(AnyLenNetParams::new()));
+                                    let net_params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::LinNetParams(LinLenNetParams::new()));
 
-                                    Ok((any_len_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
+                                    Ok((lin_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
                             }
 
@@ -710,7 +710,7 @@ mod tests {
     use thoosa_common::dims::{Batch, LabelProbability};
     use thoosa_common::runs::{Labeled, NetResources};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, FixedNumSlicesNetArgsFields, LabelNetTypeArgsFields, OptConfig, TrainLabelNetsRunConfigFields};
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, LabelNetTypeArgsFields, LinNetArgsFields, OptConfig, TrainLabelNetsRunConfigFields};
     use thoosa_common::utils::{mix_x_binary_with_labels, reset_print_options};
     use thoosa_common::ws::{mock_ws_simp, WsMockBuilder};
     use thoosa_motifs::generators::noise::resource_tensor;
@@ -893,7 +893,7 @@ mod tests {
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(100)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(8)),
                     // NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), Val::Int(3)),
-                    NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::SlicesLen)), Val::Int(1000)),//TODO used as num features in any_len_label_node
+                    NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::SlicesLen)), Val::Int(1000)),//TODO used as num features in any_len_label_node
                 ]),
                 vec![
                     // NamedRange::new(TrainLabelNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
@@ -901,7 +901,7 @@ mod tests {
             ),
             vec![
                 Hyperparameter::UniformFloat{name: TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.0001, upper: 0.001},
-                Hyperparameter::UniformInt{name: TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), lower: 1, upper: 10}
+                Hyperparameter::UniformInt{name: TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::NumLayers)), lower: 1, upper: 10}
             ],
         );
 

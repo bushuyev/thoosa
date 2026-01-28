@@ -356,7 +356,7 @@ impl SeqBuilder {
             init,
         });
 
-        self.num_features = clc_conv1d_out(self.num_features, kernel, config) as u32;
+        // self.num_features = clc_conv1d_out(self.num_features, kernel, config) as u32;
         self.kernel = Some(kernel);
 
         self

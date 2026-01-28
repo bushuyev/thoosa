@@ -681,7 +681,9 @@ where
                     }
                 }
 
-                // warn!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} all failed: input.mem_size={:?} semaphore={:?}", os_thread_id(), input.mem_size(), GlobalCtx::global().debug_semaphore(device_idx));
+                warn!("OOMHandler::run: ctx_id={ctx_id:?} out_key={out_key:?} os_thread_id={} all failed: input.mem_size={:?} semaphore={:?}", os_thread_id(), input.mem_size(), GlobalCtx::global().debug_semaphore(device_idx));
+
+                GlobalCtx::global().debug_caches().await;
 
                 Err(Cause::SomethingElse(format!("all failed: task.out_key={out_key:?}")).into())
                 // Err(Cause::SomethingElse(format!("XXX")).into())

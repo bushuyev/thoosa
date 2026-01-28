@@ -195,7 +195,7 @@ where
     async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoError>
         where Self:Sized;
 
-    async fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> bool
+    fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> impl Future<Output=bool> + Send
         where Self:Sized;
 }
 
@@ -782,8 +782,8 @@ where
         O::M::load_from_any_device_(self, to_device_idx).await
     }
 
-    pub async fn is_all_on_cpu(&self) -> bool {
-        O::M::is_all_on_cpu(self).await
+    pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {
+        O::M::is_all_on_cpu(self)
     }
 }
 

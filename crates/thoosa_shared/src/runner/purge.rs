@@ -13,6 +13,7 @@ use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::traits::{CachableIdTr, Data};
+use crate::runner::common::cachable::WithDataRef;
 
 pub const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
 
@@ -23,6 +24,14 @@ pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
         ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
         device_idx: usize,
     ) -> Result<(), ThoError>;
+
+    // #[cfg(debug_assertions)] TODO
+    async fn debug_gpu(
+        &self,
+        device_idx: usize,
+    ) -> Result<(), ThoError> {
+        Ok(())
+    }
 
     async fn purge_cpu(&self, i: u64);
 }
@@ -89,6 +98,23 @@ where
                 }
             })
             .await;
+
+        Ok(())
+    }
+
+    async fn debug_gpu(&self, device_idx: usize) -> Result<(), ThoError> {
+        let mut total_size = 0;
+        for entry in self.iter() {
+            if let Some(Ok(wrapper)) = entry.value().peek().as_ref() {
+                if !wrapper.is_all_on_cpu().await {
+                    let size = wrapper.mem_size();
+                    debug!("key={:?} size={:?}", entry.key(), size);
+                    total_size += size;
+                }
+            }
+        }
+
+        debug!("total_size: {total_size}");
 
         Ok(())
     }

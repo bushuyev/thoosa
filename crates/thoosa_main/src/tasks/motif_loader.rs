@@ -323,6 +323,7 @@ where
 
     let resource_ids_slices = slices
         .iter()
+        .take(100)
         .fold(HashMap::new(), |mut a, slice| {
             a.entry(slice.0.clone()) //TODO clone
                 .or_insert_with(|| vec![])

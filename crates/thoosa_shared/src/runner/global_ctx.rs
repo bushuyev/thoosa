@@ -190,6 +190,19 @@ impl GlobalCtx {
         &self.semaphores[device_idx]
     }
 
+    // #[cfg(debug_assertions)] TODO
+    pub async fn debug_caches(&self) {
+        let maps = self.caches.read().await;
+
+        for (type_name, map) in maps.iter() {
+            debug!("GlobalCtx::debug_caches: type_name={type_name}");
+            
+
+
+            debug!("GlobalCtx::debug_caches: type_name={type_name} done");
+        }
+    }
+
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
     pub async fn dump_all_to_cpu<'a>(

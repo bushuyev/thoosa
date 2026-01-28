@@ -638,7 +638,7 @@ impl WsMockBuilder {
 #[allow(unused_imports, unused_variables)]
 mod tests {
     use super::{FsWorkspace, Workspace};
-    use crate::train_nets::{LabelNetParams, MaxPaddingNetParams, MotifNetParams};
+    use crate::train_nets::{LinLenNetParams, LabelNetParams, MotifNetParams};
     use log::debug;
     use std::path::Path;
     use tch::Device::Cpu;
@@ -697,7 +697,7 @@ mod tests {
                 4,
                 10,
                 20,
-                crate::train_nets::LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new()),
+                crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new()),
             ),
         )?;
         ws.save_label_model(
@@ -709,7 +709,7 @@ mod tests {
                 4,
                 10,
                 20,
-                crate::train_nets::LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new()),
+                crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new()),
             ),
         )?;
         ws.save_label_model(
@@ -721,7 +721,7 @@ mod tests {
                 4,
                 10,
                 20,
-                crate::train_nets::LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new()),
+                crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new()),
             ),
         )?;
         ws.save_label_model(
@@ -733,7 +733,7 @@ mod tests {
                 4,
                 10,
                 20,
-                crate::train_nets::LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new()),
+                crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new()),
             ),
         )?;
 
