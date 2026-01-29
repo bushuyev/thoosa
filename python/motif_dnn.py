@@ -60,6 +60,8 @@ class MotifCNN(nn.Module):
         print(f"x={x.size()} h={h.size()}")
 
         mask = make_mask(lengths, h.shape[-1])
+        print(f"lengths={lengths} mask.size={mask.size()} mask=\n{mask}")
+
         pooled = torch.cat([masked_max(h, mask), masked_mean(h, mask)], dim=1)  # [B,4H]
         return self.head(pooled).squeeze(-1)  # [B]
 
@@ -67,7 +69,7 @@ class MotifCNN(nn.Module):
 def generate_batch(B: int, M: int, rng: random.Random):
     # fixed length choices (demo only). In real life: you already *have* xs with varying T.
     # T_choices = [10_000, 25_000, 60_000, 180_000]  # include 600_000 if you dare 🙂
-    T_choices = [100, 250, 600, 1800]  # include 600_000 if you dare 🙂
+    T_choices = [10, 25, 60, 80]  # include 600_000 if you dare 🙂
     xs, ys = [], []
 
     for _ in range(B):

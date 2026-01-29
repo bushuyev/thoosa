@@ -444,7 +444,7 @@ pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoError> {
         .map_err(ThoError::from)
 }
 
-pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tensor, ThoError> {
+pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool) -> Result<(Tensor, Option<Tensor>), ThoError> {
     debug!("pad_to: input.size={:?}, to_size={:?}", input.size(), to_size);
 
     if input.size().len() != to_size.len() {
@@ -496,7 +496,16 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tenso
         pad_idx.push(to - from);  // pad on the "right"
     }
 
-    Ok(result.f_pad(pad_idx.as_slice(), "constant", 0.0)?)
+    let padded = result.f_pad(pad_idx.as_slice(), "constant", 0.0)?;
+    let mask = if with_mask {
+        let base_mask = Tensor::zeros(cur_size.as_slice(), (Kind::Uint8, result.device()));
+        let padded_mask = base_mask.f_pad(pad_idx.as_slice(), "constant", 1.0)?;
+        Some(padded_mask.to_kind(Kind::Bool))
+    } else {
+        None
+    };
+
+    Ok((padded, mask))
 }
 
 
@@ -611,9 +620,6 @@ pub mod tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-
-
-
     #[test]
     fn test_clc_step() {
         let n = 10_000u32;
@@ -640,24 +646,20 @@ pub mod tests {
     #[test]
     fn test_pad_to() -> Result<(), ThoError> {
         let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.])]);
+        let expected = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 2., 0.]),
+            Tensor::from_slice(&[3., 4., 0.]),
+            Tensor::from_slice(&[0., 0., 0.]),
+        ]);
+        let expected_mask = Tensor::from_slice(&[0u8, 0, 1, 0, 0, 1, 1, 1, 1]).view([3, 3]).to_kind(Kind::Bool);
 
-        assert_eq!(
-            Tensor::vstack(&[
-                Tensor::from_slice(&[1., 2., 0.]),
-                Tensor::from_slice(&[3., 4., 0.]),
-                Tensor::from_slice(&[0., 0., 0.]),
-            ]),
-            super::pad_to_2(&t, &[3, 3], false)?
-        );
+        let (actual, mask) = super::pad_to_2(&t, &[3, 3], false, true)?;
+        assert_eq!(expected, actual);
+        assert_eq!(expected_mask, mask.expect("mask"));
 
-        assert_eq!(
-            Tensor::vstack(&[
-                Tensor::from_slice(&[1., 2., 0.]),
-                Tensor::from_slice(&[3., 4., 0.]),
-                Tensor::from_slice(&[0., 0., 0.]),
-            ]),
-            super::pad_to_2(&t, &[3, 3], true)?
-        );
+        let (actual, mask) = super::pad_to_2(&t, &[3, 3], true, true)?;
+        assert_eq!(expected, actual);
+        assert_eq!(expected_mask, mask.expect("mask"));
 
         Ok(())
     }
@@ -676,9 +678,11 @@ pub mod tests {
         ]);
 
         // from shape [2, 3] to [3, 2] with truncation enabled
-        let actual = pad_to_2(&t, &[3, 2], true)?;
+        let (actual, mask) = pad_to_2(&t, &[3, 2], true, true)?;
+        let expected_mask = Tensor::from_slice(&[0u8, 0, 0, 0, 1, 1]).view([3, 2]).to_kind(Kind::Bool);
 
         assert_eq!(expected, actual);
+        assert_eq!(expected_mask, mask.expect("mask"));
         Ok(())
     }
 

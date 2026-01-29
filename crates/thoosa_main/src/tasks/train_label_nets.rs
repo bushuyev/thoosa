@@ -319,11 +319,11 @@ where
                                                debug!("ResourcesBatch::train_batch_iter: max_input={max_input}");
 
                                                let x_1 = Tensor::f_stack(&x_1.into_iter().map(|v|{
-                                                   Ok(pad_to_2(v.t_ref(), &[channels, max_input], true)?.copy())//TODO
+                                                   Ok(pad_to_2(v.t_ref(), &[channels, max_input], true, false)?.0)//TODO
                                                }).collect::<Result<Vec<_>, ThoError >>()?, 0)?;
 
                                                let x_0 = Tensor::f_stack(&x_0.into_iter().map(|v|{
-                                                   Ok(pad_to_2(v.t_ref(), &[channels, max_input], true)?.copy())
+                                                   Ok(pad_to_2(v.t_ref(), &[channels, max_input], true, false)?.0)
                                                }).collect::<Result<Vec<_>, ThoError >>()?, 0)?;
 
                                                mix_x_binary_with_labels(&x_1, &x_0)
