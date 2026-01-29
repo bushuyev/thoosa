@@ -464,23 +464,27 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
     {
         let _ = trace_ctx;
 
-        assert_ne!(self.x.device_idx(), to_device_idx);
+        if self.x.device_idx() == to_device_idx {
+            do_run(self, permits_ctx)
 
-        let (x, mask) = (
-            self.x.copy_to_device(to_device_idx).await?,
-            match &self.mask {
-                None => None,
-                Some(mask) => {
-                    Some(mask.copy_to_device(to_device_idx).await?)
+        } else {
+
+            let (x, mask) = (
+                self.x.copy_to_device(to_device_idx).await?,
+                match &self.mask {
+                    None => None,
+                    Some(mask) => {
+                        Some(mask.copy_to_device(to_device_idx).await?)
+                    }
                 }
-            }
-        );
+            );
 
-        let expected_y = self.expected_y.copy_to_device(to_device_idx).await?;
+            let expected_y = self.expected_y.copy_to_device(to_device_idx).await?;
 
-        let input = TrainStepInput::new(x, mask, expected_y);
+            let input = TrainStepInput::new(x, mask, expected_y);
 
-        do_run(&input, permits_ctx)
+            do_run(&input, permits_ctx)
+        }
     }
 
     fn cache_area(&self) -> &CacheArea {

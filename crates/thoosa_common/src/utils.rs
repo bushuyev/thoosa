@@ -582,12 +582,58 @@ impl TrainListener for DummyListener {
     }
 }
 
+/// x:    [B, C, T] float
+/// mask: [B, 1, T] bool (true = keep, false = padding)
+/// out:  [B, C]
+pub fn masked_mean(x: &Tensor, mask: &Tensor) -> Result<Tensor, ThoError> {
+    // float mask in {0,1}
+    let mask_f = mask.f_to_kind(Kind::Float)?; // [B,1,T]
+
+    // sum(x * mask) over T
+    let xm = x.f_mul(&mask_f)?; // [B,C,T] (broadcast over C)
+    let sum = xm.f_sum_dim_intlist(2, false, Kind::Float)?; // [B,C]
+
+    // denom = count(valid) over T, clamp to avoid div-by-zero
+    let denom = mask_f
+        .f_sum_dim_intlist(2, false, Kind::Float)? // [B,1]
+        .f_clamp_min(1.0)?;                           // [B,1]
+
+    // broadcast denom over C
+    let mean = sum.f_div(&denom)?; // [B,C]
+    Ok(mean)
+}
+
+/// x:    [B, C, T] float
+/// mask: [B, 1, T] bool
+/// out:  [B, C]
+///
+/// Uses a large negative fill for masked timesteps (good if x is e.g. probabilities).
+pub fn masked_max(x: &Tensor, mask: &Tensor) -> Result<Tensor, ThoError> {
+    let mask_f = mask.f_to_kind(Kind::Float)?; // [B,1,T]
+    let neg: f64 = -1e9;
+
+    // x_keep = x * mask
+    let x_keep = x.f_mul(&mask_f)?; // [B,C,T]
+
+    // inv = (1 - mask) * neg
+    let ones = mask_f.f_ones_like()?;                 // [B,1,T]
+    let inv = ones.f_subtract(&mask_f)?;              // [B,1,T]
+    let inv_scaled = inv.f_multiply_scalar(neg)?;     // [B,1,T]
+
+    // x_masked = x_keep + inv_scaled  (broadcast over C)
+    let x_masked = x_keep.f_add(&inv_scaled)?;        // [B,C,T]
+
+    let (mx, _idx) = x_masked.f_max_dim(2, false)?;   // mx: [B,C]
+    Ok(mx)
+}
+
+
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
 pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{hist_1_dim, mix_x_binary_with_labels, pad_to_2, TrainListener};
+    use crate::utils::{hist_1_dim, masked_max, masked_mean, mix_x_binary_with_labels, pad_to_2, TrainListener};
     use clap::{Args, Parser, Subcommand};
 
     use log::debug;
@@ -618,6 +664,86 @@ pub mod tests {
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
+    }
+
+    fn assert_allclose(a: &Tensor, b: &Tensor, atol: f64) {
+        let ok = a.allclose(b, /*rtol=*/1e-5, /*atol=*/atol, /*equal_nan=*/false);
+        assert!(
+            ok,
+            "tensors not close:\n  a={:?}\n  b={:?}",
+            a,
+            b
+        );
+    }
+
+    #[test]
+    fn test_masked_mean_and_max_basic() {
+        // Shapes: B=2, C=2, T=4
+        // x[b,c,:]
+        // b0,c0: [1,2,3,4]   b0,c1: [10,20,30,40]
+        // b1,c0: [5,6,7,8]   b1,c1: [50,60,70,80]
+        let x = Tensor::from_slice(&[
+            1f32, 2., 3., 4.,      10., 20., 30., 40.,
+            5.,   6., 7., 8.,      50., 60., 70., 80.,
+        ])
+            .view([2i64, 2i64, 4i64])
+            .to_kind(Kind::Float);
+
+        // mask[b,1,:]
+        // b0 valid first 3: [1,1,1,0]
+        // b1 valid first 2: [1,1,0,0]
+        let mask = Tensor::from_slice(&[
+            1i64, 1, 1, 0,
+            1,    1, 0, 0,
+        ])
+            .view([2i64, 1i64, 4i64])
+            .to_kind(Kind::Bool);
+
+        // Expected masked mean:
+        // b0: c0=(1+2+3)/3=2,   c1=(10+20+30)/3=20
+        // b1: c0=(5+6)/2=5.5,   c1=(50+60)/2=55
+        let expected_mean = Tensor::from_slice(
+            &[
+                2f32, 20.,
+                5.5, 55.
+            ])
+            .view([2i64, 2i64]);
+
+        // Expected masked max:
+        // b0: c0=max(1,2,3)=3,   c1=max(10,20,30)=30
+        // b1: c0=max(5,6)=6,     c1=max(50,60)=60
+        let expected_max = Tensor::from_slice(&[3f32, 30., 6., 60.])
+            .view([2i64, 2i64]);
+
+        let mean = masked_mean(&x, &mask).unwrap();
+        let mx = masked_max(&x, &mask).unwrap();
+
+        assert_allclose(&mean, &expected_mean, 1e-5);
+        assert_allclose(&mx, &expected_max, 1e-5);
+    }
+
+    #[test]
+    fn test_all_masked_behavior() {
+        // If everything is masked:
+        // - masked_mean_f returns 0 (because x*mask = 0 and denom is clamped to 1)
+        // - masked_max_f returns neg fill value (-1e9) for every channel
+        let x = Tensor::from_slice(&[
+            1f32, 2., 3.,
+            10., 20., 30.,
+        ])
+            .view([1i64, 2i64, 3i64])
+            .to_kind(Kind::Float);
+
+        let mask = Tensor::zeros([1i64, 1i64, 3i64], (Kind::Bool, x.device()));
+
+        let mean = masked_mean(&x, &mask).unwrap();
+        let mx = masked_max(&x, &mask).unwrap();
+
+        let expected_mean = Tensor::zeros([1i64, 2i64], (Kind::Float, x.device()));
+        let expected_max = Tensor::full([1i64, 2i64], -1e9f64, (Kind::Float, x.device()));
+
+        assert_allclose(&mean, &expected_mean, 1e-5);
+        assert_allclose(&mx, &expected_max, 1e-5);
     }
 
     #[test]

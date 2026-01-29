@@ -777,7 +777,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
 
     builder = builder.conv_1d(
         "conv_1d 0",
-        10,
+        cnn_params.kernel,
         params.motif_nets,
         cnn_params.hidden_conv_channels,
         ConvConfig::default(),
@@ -787,7 +787,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
     for layer in 0..cnn_params.num_conv_layers {
         builder = builder.conv_1d(
             "conv_1d 0",
-            10,
+            cnn_params.kernel,
             cnn_params.hidden_conv_channels,
             cnn_params.hidden_conv_channels,
             ConvConfig::default(),
