@@ -411,7 +411,7 @@ mod tests {
 
     fn const_label_net(motif_nets: u32, slices_len: u32, k: f64, device: Device) -> (Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>> + Sync + Send + 'static>) {
         (
-            Box::new(move || LabelNetParams::new(1, motif_nets, 1, slices_len, LabelNetTypeParams::LinNetParams(LinLenNetParams::new()))),
+            Box::new(move || LabelNetParams::new(motif_nets, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(slices_len, 1)))),
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {

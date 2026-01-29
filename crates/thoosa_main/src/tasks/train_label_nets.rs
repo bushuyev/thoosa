@@ -29,7 +29,7 @@ use thoosa_common::batches::{AsyncDataBatch};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{lin_label_node, flat_label_node, opt_train, LinLenNetParams, CommonTrainingRunConfig, LinNetArgs, CnnNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, CnnNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{lin_label_node, opt_train, LinLenNetParams, CommonTrainingRunConfig, LinNetArgs, CnnNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, ConvNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -285,8 +285,6 @@ where
                 let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
                 let num_nets = self.num_nets;
                 async move {
-
-
                     debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
                     let resources_0 = labels_others_train_valid_resources.get(&label).expect(&format!("no resources not belonging to {label}"));
@@ -344,18 +342,17 @@ where
                        },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
                             match rc.net {
-                                LabelNetTypeArgs::CnnNet(CnnNetArgs{
-                                                             num_layers, hidden_channels
+                                LabelNetTypeArgs::CnnNet(ConvNetArgs {
+                                     num_conv_layers, hidden_conv_channels: hidden_channels, num_head_layers, kernel
                                 }) => {
-                                    let net_params = LabelNetParams::new(channels as u32, num_nets, num_layers, 0, LabelNetTypeParams::ConvNetParams(CnnNetParams::new(num_layers, hidden_channels)));
+                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(CnnNetParams::new(num_conv_layers, num_head_layers, hidden_channels, kernel)));
 
                                     Ok((lin_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
                                 LabelNetTypeArgs::LinNet(LinNetArgs {
-                                    num_layers, slices_len
+                                     num_layers, slices_len
                                 }) => {
-
-                                    let net_params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::LinNetParams(LinLenNetParams::new()));
+                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(slices_len, num_layers)));
 
                                     Ok((lin_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
@@ -742,7 +739,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_train_label_net_3x3() -> Result<(), ThoError>
+    async fn heavy_test_train_label_net_3x3() -> Result<(), ThoError>
     {
 
         let mut rand = rng();
@@ -919,7 +916,7 @@ mod tests {
             &ws,
             &store,
             mock_run_ctx::default(1),
-            Arc::new(OptConfig::new(10, 3))
+            Arc::new(OptConfig::new(30, 10))
         ).await?);
 
 

@@ -12,6 +12,9 @@ use crate::tho_tensor::ThoTensor;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out(l_in: u32, kernel: u32, c: ConvConfig) -> u32 {
+    if l_in == 0 { //convolution was first layer, num_features is not known
+        return  0;
+    }
     debug!("clc_conv1d_out: l_in={l_in} kernel={kernel} padding={} dilation={} stride={}", c.padding, c.dilation, c.stride);
 
     let r = (l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) - 1) / c.stride as u32 + 1;
@@ -220,10 +223,7 @@ impl Node {
                 assert!(out_feats > 0);
 
                 #[cfg(debug_assertions)]
-                debug!(
-                    "Node::Linear: descr={descr} in_feats={:?}, out_feats={:?}",
-                    in_feats, out_feats
-                );
+                debug!("Node::Linear: descr={descr} in_feats={:?}, out_feats={:?}",in_feats, out_feats);
 
                 Box::new(my_linear(
                     vs / "linear",

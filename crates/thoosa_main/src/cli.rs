@@ -324,6 +324,7 @@ where
                     resource_to_tensor(&import_resources_params.source_path, key.as_str())
                 },
                 true,
+                true,
             )?;
 
             info!("ImportResources done");
@@ -886,6 +887,7 @@ pub fn import_resources<F, R>(
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
     insert_label: bool,
+    save_pure_sets: bool,
 ) -> Result<Vec<ResourceId>, ThoError>
 where
     F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
@@ -950,16 +952,18 @@ where
         failed_tensors.len()
     );
 
-    store_guard.save_pure_sets(3, true, &t)?;
-    store_guard.save_pure_sets(10, true, &t)?;
-    store_guard.save_pure_sets(50, true, &t)?;
-    store_guard.save_pure_sets(100, true, &t)?;
-    store_guard.save_pure_sets(150, true, &t)?;
-    store_guard.save_pure_sets(10000, false, &t)?;
+    if save_pure_sets {
+        store_guard.save_pure_sets(3, true, &t)?;
+        store_guard.save_pure_sets(10, true, &t)?;
+        store_guard.save_pure_sets(50, true, &t)?;
+        store_guard.save_pure_sets(100, true, &t)?;
+        store_guard.save_pure_sets(150, true, &t)?;
+        store_guard.save_pure_sets(10000, false, &t)?;
 
-    store_guard.save_pure_balanced_sets("10", Some(10),  0.6, 0.2, &t)?;
-    store_guard.save_pure_balanced_sets("100", Some(100),  0.6, 0.2, &t)?;
-    store_guard.save_pure_balanced_sets("All", None,  0.6, 0.2, &t)?;
+        store_guard.save_pure_balanced_sets("10", Some(10), 0.6, 0.2, &t)?;
+        store_guard.save_pure_balanced_sets("100", Some(100), 0.6, 0.2, &t)?;
+        store_guard.save_pure_balanced_sets("All", None,  0.6, 0.2, &t)?;
+    }
 
     store_guard.save_groups_by_label_cnt(100, &t)?;
     t.commit()?;
@@ -1658,6 +1662,7 @@ mod cli_tests {
             },
             |_: String| Ok(Tensor::from_slice(&[0., 1., 2., 0., 10., 20.]).view((2, -1))),
             true,
+            false,
         )?;
 
         let imported_resources = store.read().list_resources_by_ids(&imported_ids)?;
@@ -1776,6 +1781,7 @@ mod cli_tests {
                     .map_err(ThoError::from)
             },
             true,
+            false,//TODO more resources
         )?;
 
         let resources = store.read().list_resources_by_ids(&imported_ids)?;
@@ -1825,7 +1831,7 @@ mod cli_tests {
         let step_10_window_100 = r#"{
             step:"10",
             window:"100",
-            slices_filter: {'DistanceRunningMeanK':{'mean':'0.2'}}
+            slices_filter: {'DistanceRunningMeanK':{'k':'0.2'}}
         }"#;
 
 
@@ -1833,7 +1839,7 @@ mod cli_tests {
             step:'10',
             window:'100',
             'filter': {'BandPassFilter': {'low_hz':'20.', 'band_hz':'10.', kernel_size:'10', stride:'1', 'padding':'0'}},
-            'slices_filter':{'DistanceRunningMeanK':{'mean':'0.02'}}}
+            'slices_filter':{'DistanceRunningMeanK':{'k':'0.02'}}}
         "#;
         let init_ctx = ctx.branch(Some("init find_motifs_test"), false, false);
         let run_ids = run_grid::<_, _, _, _, _>(

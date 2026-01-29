@@ -693,11 +693,8 @@ mod tests {
             &"label_0",
             &VarStore::new(Cpu),
             &LabelNetParams::new(
-                10,
                 4,
-                10,
-                20,
-                crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new()),
+                crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
             ),
         )?;
         ws.save_label_model(
@@ -705,11 +702,8 @@ mod tests {
             &"label_0",
             &VarStore::new(Cpu),
             &LabelNetParams::new(
-                20,
                 4,
-                10,
-                20,
-                crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new()),
+                crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
             ),
         )?;
         ws.save_label_model(
@@ -717,11 +711,8 @@ mod tests {
             &"label_1",
             &VarStore::new(Cpu),
             &LabelNetParams::new(
-                30,
                 4,
-                10,
-                20,
-                crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new()),
+                crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
             ),
         )?;
         ws.save_label_model(
@@ -729,11 +720,8 @@ mod tests {
             &"label_1",
             &VarStore::new(Cpu),
             &LabelNetParams::new(
-                40,
                 4,
-                10,
-                20,
-                crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new()),
+                crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
             ),
         )?;
 

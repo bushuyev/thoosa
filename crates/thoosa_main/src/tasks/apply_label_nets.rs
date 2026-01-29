@@ -371,11 +371,8 @@ mod tests {
         (
             Box::new(move || {
                 LabelNetParams::new(
-                    1,
                     motif_nets,
-                    1,
-                    slices_len,
-                    LabelNetTypeParams::LinNetParams(LinLenNetParams::new()),
+                    LabelNetTypeParams::LinNetParams(LinLenNetParams::new(slices_len, 1)),
                 )
             }),
             Box::new(move || {

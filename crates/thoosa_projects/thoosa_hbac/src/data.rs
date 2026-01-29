@@ -1018,6 +1018,7 @@ mod tests {
                     .map_err(|e| e.into())
             },
             true,
+            false,
         )?;
 
         let labels = store.read().list_labels()?;
