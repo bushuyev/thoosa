@@ -1467,7 +1467,7 @@ mod cli_tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{
-        motif_node, CommonTrainingRunConfig, InferArgs, MotifNetParams, OptConfig,
+        lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifNetParams, OptConfig,
         TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig,
         TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue,
         TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue,

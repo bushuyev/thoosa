@@ -1,7 +1,7 @@
 use crate::dims::{
     Batch, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice,
 };
-use crate::train_nets::{FinalNetParams, LabelNetParams, MotifNetParams, ThoModuleWithStore, motif_node_2};
+use crate::train_nets::{FinalNetParams, LabelNetParams, MotifNetParams, ThoModuleWithStore, conv_motif_node};
 use log::{debug, info, trace};
 use mockall::automock;
 use rayon::iter::ParallelIterator;
@@ -234,7 +234,7 @@ impl Workspace for FsWorkspace {
 
             let module = ThoModuleWithStore::load(
                 mono_key!("MotifNet", "MotifNet") + &mono_key!(motif_id, "motif_id"),
-                move |path: &nn::Path| motif_node_2(&params_for_builder).build_tch_module(path),
+                move |path: &nn::Path| conv_motif_node(&params_for_builder).build_tch_module(path),
                 model,
                 device.clone(),
             )?;

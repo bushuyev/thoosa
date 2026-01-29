@@ -29,7 +29,7 @@ use thoosa_common::batches::{AsyncDataBatch};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{lin_label_node, flat_label_node, opt_train, LinLenNetParams, CommonTrainingRunConfig, LinNetArgs, CnnNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{lin_label_node, flat_label_node, opt_train, LinLenNetParams, CommonTrainingRunConfig, LinNetArgs, CnnNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, CnnNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -344,8 +344,12 @@ where
                        },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
                             match rc.net {
-                                LabelNetTypeArgs::MaxPadding(_) => {
-                                    todo!()
+                                LabelNetTypeArgs::CnnNet(CnnNetArgs{
+                                                             num_layers, hidden_channels
+                                }) => {
+                                    let net_params = LabelNetParams::new(channels as u32, num_nets, num_layers, 0, LabelNetTypeParams::ConvNetParams(CnnNetParams::new(num_layers, hidden_channels)));
+
+                                    Ok((lin_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
                                 LabelNetTypeArgs::LinNet(LinNetArgs {
                                     num_layers, slices_len

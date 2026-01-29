@@ -23,7 +23,7 @@ cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logg
 cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="not_group:pure group 100" --run-config-cnt="{motif_selector: {ByLabelVariance:{"_dummy":"0"}}}"
 
 
-cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  train-motifs-nets --select-motifs-run-ids=3  --run-config-cnt="{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'max_loss': '0.1', 'opt_max_evals':'3', 'opt_n_init': '3'}, 'num_layers': '3..4', 'step':'10'}"
+cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  train-motifs-nets --select-motifs-run-ids=3  --run-config-cnt="{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'opt_max_evals':'3', 'opt_n_init': '3'}, 'num_layers': '3..4', 'step':'10'}"
 
 
 
