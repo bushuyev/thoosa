@@ -95,7 +95,7 @@ pub enum Node {
         padding: u32,
     },
     Closure {
-        cl: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoError>>>
+        cl: Arc<Box<dyn Fn(&Tensor, Option<&Tensor>) -> Result<Tensor, ThoError>>>
     },
 }
 
@@ -520,7 +520,7 @@ impl SeqBuilder {
 
     pub fn closure(
         &mut self,
-        cl: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoError>>>,
+        cl: Arc<Box<dyn Fn(&Tensor, Option<&Tensor>) -> Result<Tensor, ThoError>>>,
         num_features: Option<u32>,
     ) -> &mut Self {
         self.elts.push(Node::Closure { cl });

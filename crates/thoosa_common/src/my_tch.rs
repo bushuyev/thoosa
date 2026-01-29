@@ -402,14 +402,15 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyFuncModule {
 }
 
 pub struct MyClosureModule {
-    func: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoError>>>,
+    //TODO Tensor->ThoTensor
+    func: Arc<Box<dyn Fn(&Tensor, Option<&Tensor>) -> Result<Tensor, ThoError>>>,
 }
 
 unsafe impl Send for MyClosureModule {}
 unsafe impl Sync for MyClosureModule {}
 
 impl MyClosureModule {
-    pub fn new(func: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoError>>>) -> Self {
+    pub fn new(func: Arc<Box<dyn Fn(&Tensor, Option<&Tensor>) -> Result<Tensor, ThoError>>>) -> Self {
         Self { func }
     }
 }
@@ -422,7 +423,10 @@ impl Debug for MyClosureModule {
 
 impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyClosureModule {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        (self.func)(t.as_ref()).map(|v|v.into())
+        (self.func)(
+            t.as_ref(),
+            mask.map(|v|v.as_ref())
+        ).map(|v|v.into())
     }
 }
 
@@ -778,7 +782,7 @@ mod tch_tests {
         SeqBuilder::new(num_features, None)
             .batch_norm(BatchNormConfig::default())
             .closure(
-                Arc::new(Box::new(|t: &Tensor| {
+                Arc::new(Box::new(|t: &Tensor, _mask:Option<&Tensor>| {
                     Ok(t.view((t.size()[0], 1, t.size()[1]))) //channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
                 })),
                 None,

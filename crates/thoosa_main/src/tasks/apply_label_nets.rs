@@ -339,7 +339,7 @@ mod tests {
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor| {
+                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
                         let batch = t.size()[0];
                         let out = Tensor::f_ones(&[batch, 1], (Kind::Float, t.device()))?
                             .f_mul_scalar_(k)?;
@@ -378,7 +378,7 @@ mod tests {
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor| {
+                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
                         let sum = t.f_sum_dim_intlist(&[1, 2][..], false, None)?;
                         let mut sum = sum.f_unsqueeze(1)?;
                         let out = sum.f_mul_scalar_(k)?;

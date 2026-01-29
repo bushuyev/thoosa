@@ -576,7 +576,7 @@ pub fn conv_motif_node(params: &MotifNetParams) -> Node {
 
     let mut net = builder
         .closure(
-            Arc::new(Box::new(move |t: &Tensor| {
+            Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
 
                 let r = t.unsqueeze(1);
 
@@ -591,7 +591,7 @@ pub fn conv_motif_node(params: &MotifNetParams) -> Node {
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .adaptive_max_pool(1, 4)
         .closure(
-            Arc::new(Box::new(move |t: &Tensor| {
+            Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
 
                 let r = t.squeeze();
 
@@ -768,7 +768,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
     let mut seq_builder = SeqBuilder::new(0, None);
     let mut builder = seq_builder
         .closure(
-            Arc::new(Box::new(move |t: &Tensor| {
+            Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
                 debug!("cnn_label_node: input={t:?}");
                 Ok(t.shallow_clone())
             })),
@@ -796,7 +796,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
     }
 
     builder.closure(
-        Arc::new(Box::new(move |t: &Tensor| {
+        Arc::new(Box::new(move |t: &Tensor,_mask:Option<&Tensor>| {
             let mean = t.f_mean_dim(2, false, None)?;
             debug!("cnn_label_node: leaner input={t:?} mean={mean:?}");
             Ok(mean)
@@ -849,7 +849,7 @@ pub fn lin_label_node(params: &LabelNetParams) -> Node {
 
     SeqBuilder::new(num_features/*30000*/, None)
         .closure(
-            Arc::new(Box::new(move |t: &Tensor| {
+            Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
                 debug!("lin_label_node: input={t:?}");
                 Ok(t.shallow_clone())
             })),
@@ -1653,7 +1653,7 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 
     SeqBuilder::new(num_features, None)
         .closure(
-            Arc::new(Box::new(move |t: &Tensor| {
+            Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
                 debug!(
                         "test_label_net: merged final in flatten t.size()={:?}",
                         t.size()
