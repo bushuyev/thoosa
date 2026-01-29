@@ -60,7 +60,7 @@ class MotifCNN(nn.Module):
         print(f"x={x.size()} h={h.size()}")
 
         mask = make_mask(lengths, h.shape[-1])
-        print(f"lengths={lengths} mask.size={mask.size()} mask=\n{mask}")
+        print(f"lengths={lengths} mask.size={mask.size()}  masked_max(h, mask)=\n{masked_max(h, mask).size()}masked_mean(h, mask)=\n{masked_mean(h, mask).size()}")
 
         pooled = torch.cat([masked_max(h, mask), masked_mean(h, mask)], dim=1)  # [B,4H]
         return self.head(pooled).squeeze(-1)  # [B]

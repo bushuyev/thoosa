@@ -137,7 +137,7 @@ where
     loss_fn:LossFp,
     optimizer:FO,
     x_f:XF,
-    cycles:FC,
+    epochs:FC,
     descr:String,
     pd:PhantomData<(C, DX, DY, BF, P, RC)>
 }
@@ -176,7 +176,7 @@ where
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
     pub fn new(batch:BF, net:NF, opt_config:Arc<OptConfig>, run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >, loss_fn:LossFp, optimizer:FO, x_f:XF, cycles:FC, descr: String) -> Self {
-        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, cycles, descr }
+        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, epochs: cycles, descr }
     }
 
     fn run_inner(
@@ -197,7 +197,7 @@ where
         };
 
         let device = Device::from(ThoDevice::from(device_idx));
-        let cycles = (self.cycles)(&run_config);
+        let epochs = (self.epochs)(&run_config);
         let x_f = {
             let this = Arc::clone(&self);
             Arc::new(move |batch: ThoBatch<DX>| (this.x_f)(batch))
@@ -217,7 +217,7 @@ where
         Box::pin(async move {
 
             let batch = (self.batch)(ctx.branch(Some("train_batch"), false, false), &run_config).await?;
-            debug!("TrainNet::run_inner: device={:?} cycles={}", train_step.device(), cycles);
+            debug!("TrainNet::run_inner: device={:?} cycles={}", train_step.device(), epochs);
             {
                 let opt = train_step.opt.lock();
                 debug!("TrainNet::run_inner: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
@@ -236,7 +236,7 @@ where
 
             let mut last_valid_loss = [0f32; 3];
 
-            for idx in 1..cycles {
+            for idx in 1..epochs {
                 debug!("TrainNet::run_inner, train:  0. cuda_mem={:?}",maybe_cuda_mem(&device));
 
                 let mut batches = batch.train_batch_stream().await;
@@ -246,7 +246,6 @@ where
                     let input = Arc::new(TrainStepInput::new(x_t_0, expected_y));
 
                     debug!("TrainNet::run_inner, train:  before oom input.id={:?}", input.id());
-
 
                     oom_handler.run(
                         &train_step,
@@ -266,7 +265,8 @@ where
 
                 }
 
-                if idx % 10 == 0 || idx == cycles - 1 {
+                //TODO remove if idx  + last_valid_loss
+                if idx % 10 == 0 || idx == epochs - 1 {
 
                     debug!("TrainNet::run_inner, valid:  0. cuda_mem={:?}",maybe_cuda_mem(&device));
 

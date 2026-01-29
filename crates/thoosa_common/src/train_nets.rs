@@ -795,7 +795,6 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
         );
     }
 
-
     builder.closure(
         Arc::new(Box::new(move |t: &Tensor| {
             let mean = t.f_mean_dim(2, false, None)?;

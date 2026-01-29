@@ -1544,6 +1544,7 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
 use crate::dims::ThoBatch;
 use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
 
+//TODO remove?
 pub trait DataBatch<D: Dims> {
     /// returns (inputs, labels)
     fn train_batch(&self) -> (ThoBatch<D>, Tensor);
