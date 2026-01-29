@@ -424,7 +424,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
 
                 let out_id = self.out_id(input.id());
                 let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
-                let out = net.data().tho_forward(&slices_tensor, false)?;
+                let out = net.data().tho_forward(&slices_tensor, None, false)?;
                 let out = ThoTensor::new(out_id, out.t())?;
 
                 debug!("ApplyMotifNet::run, ok: motif_id={motif_id} out.size={:?}", out.size());
@@ -841,7 +841,7 @@ pub(crate) mod tests {
         let test_net = dummy_motif_net::<AnyDims, AnyDims>(100, 1., Cpu, "test", &motif_t.i((0, ..)), 1)?;
 
         let resource: ThoTensor<AnyDims, SimpleId> = resource_a_t.shallow_clone().into();
-        let out = test_net.tho_forward(&resource, false)?.t;//.i((0, .., 0));//channel[1], slices, vals[1]
+        let out = test_net.tho_forward(&resource, None, false)?.t;//.i((0, .., 0));//channel[1], slices, vals[1]
 
         /*plot_series_with_lanes(
             vec![

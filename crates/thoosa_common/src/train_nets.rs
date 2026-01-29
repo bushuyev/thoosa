@@ -290,8 +290,8 @@ unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO>
     for ThoModuleWithStore<DI, DO>
 {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        self.module.tho_forward(t, train)
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        self.module.tho_forward(t, None, train)
     }
 }
 
@@ -343,7 +343,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     }
 
     pub fn infer(&self, t: &ThoTensor<DI, SimpleId>) -> ThoTensor<DO, SimpleId> {
-        self.module.tho_forward(t, false).unwrap()
+        self.module.tho_forward(t, None, false).unwrap()
     }
 
     pub fn var_store(&self) -> &VarStore {
@@ -1829,14 +1829,14 @@ mod train_tests {
 
         //sums and multiplies by k
         let r_0: ThoTensor<AnyDims, SimpleId> =
-            utils::test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, true)?;
+            utils::test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, None, true)?;
         debug!("r_0.size={:?}", r_0.size());
 
         assert_eq!(Tensor::from_slice(&[4950.]), r_0.as_ref().i((0, 0, ..)));
         assert_eq!(
             Tensor::from_slice(&[9900.]),
             utils::test_net::<AnyDims, AnyDims>(100, 2., Cpu, "test_net")?
-                .tho_forward(&t, true)?
+                .tho_forward(&t, None, true)?
                 .as_ref()
                 .i((0, 0, ..))
         );
@@ -1897,6 +1897,7 @@ mod train_tests {
                     FLOAT_CPU,
                 )
                     .into(),
+                None,
                 false,
             )?;
         }
@@ -1960,6 +1961,7 @@ mod train_tests {
                     FLOAT_CPU,
                 )
                     .into(),
+                None,
                 false,
             )?;
         }
@@ -1994,6 +1996,7 @@ mod train_tests {
                 FLOAT_CUDA,
             )
                 .into(),
+            None,
             false,
         );
 

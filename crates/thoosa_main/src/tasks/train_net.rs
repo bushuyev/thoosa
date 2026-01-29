@@ -543,7 +543,7 @@ where
 
     fn forward(&self, x_t: &ThoBatch<DI>, train: bool) -> Result<ThoBatch<DO>, ThoError> {
         let net = self.net.lock();
-        net.tho_forward(x_t, train)
+        net.tho_forward(x_t, None, train)
     }
 
     fn x_f(&self) -> Arc<F> {

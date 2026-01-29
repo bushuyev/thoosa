@@ -1593,7 +1593,7 @@ where
 
         debug!("train: device={:?}  x_t.size={:?}",device,x_t.size());
 
-        let predicted_y = net.tho_forward(&x_t, true)?;
+        let predicted_y = net.tho_forward(&x_t, None, true)?;
         debug!("train: 1. cuda_mem={:?}", cuda_mem());
         trace!("train: x_t=\n{x_t}");
         x_t.drop();
@@ -1629,7 +1629,7 @@ where
 
                 let x_t = x_f(x_t_0);
 
-                let pred_y = net.tho_forward(&x_t, true)?;
+                let pred_y = net.tho_forward(&x_t, None, true)?;
 
                 let valid_loss = loss_fn(&pred_y.as_ref(), &y_t)?;
                 let valid_loss_f32 = valid_loss.double_value(&[]) as f32;

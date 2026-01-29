@@ -280,7 +280,7 @@ where
             with_data!(ctx, net_wrapper, input; |_ctx, net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, input:&ThoTensor<MotifProbability, SynKey>|{
                 let batch_input = input.t_ref().f_unsqueeze(0)?;
                 let batch_input: ThoTensor<MotifsNetsSelectionDims, thoosa_shared::traits::SimpleId> = batch_input.into();
-                let out = net.tho_forward(&batch_input, false)?;
+                let out = net.tho_forward(&batch_input, None/*TODO mask*/, false)?;
                 let out = out.t_ref().f_i(0)?;
                 let out = ThoTensor::new(out_id, out)?;
 
