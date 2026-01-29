@@ -289,7 +289,7 @@ where
         })
     }
 
-    fn build_batch_stream<'a>(loader: Arc<L>, ctx: &'a Mutex<C>, resources: Arc<Vec<(Resource, Vec<f32>)>>, batch_size: u32, labels_len: usize) -> BoxStream<'a, Result<(ThoBatch<LabelProbability>, ThoBatch<LabelsProbabilities>), ThoError>> {
+    fn build_batch_stream<'a>(loader: Arc<L>, ctx: &'a Mutex<C>, resources: Arc<Vec<(Resource, Vec<f32>)>>, batch_size: u32, labels_len: usize) -> BoxStream<'a, Result<(ThoBatch<LabelProbability>, Option<ThoBatch<LabelProbability>>, ThoBatch<LabelsProbabilities>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(resources.len(), batch_size, &mut rand::rng());
 
         futures_util::stream::iter(batches)
@@ -348,7 +348,7 @@ where
                                 .as_slice(),
                             0,
                         )?;
-                        Ok::<_, ThoError>((x.into(), y.into()))
+                        Ok::<_, ThoError>((x.into(), None, y.into()))
                     })
                 }
             })
@@ -363,11 +363,11 @@ where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + OutId + 'static,
     C: RunCtx + 'static,
 {
-    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, ThoBatch<LabelsProbabilities>), ThoError>> {
+    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, Option<ThoBatch<LabelProbability>>, ThoBatch<LabelsProbabilities>), ThoError>> {
         Self::build_batch_stream(Arc::clone(&self.loader), &self.ctx, Arc::clone(&self.train_resources), self.batch_size, self.labels_len)
     }
 
-    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, ThoBatch<LabelsProbabilities>), ThoError>> {
+    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, Option<ThoBatch<LabelProbability>>, ThoBatch<LabelsProbabilities>), ThoError>> {
         Self::build_batch_stream(Arc::clone(&self.loader), &self.ctx, Arc::clone(&self.valid_resources), self.batch_size, self.labels_len)
     }
 }

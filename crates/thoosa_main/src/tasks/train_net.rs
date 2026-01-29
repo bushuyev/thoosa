@@ -242,7 +242,7 @@ where
                 let mut batches = batch.train_batch_stream().await;
                 debug!("TrainNet::run_inner, train:  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
-                while let Some(Ok((x_t_0, expected_y))) = batches.next().await {
+                while let Some(Ok((x_t_0, mask, expected_y))) = batches.next().await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, None, expected_y));
 
                     debug!("TrainNet::run_inner, train:  before oom input.id={:?}", input.id());
@@ -273,7 +273,7 @@ where
                     let mut batches = batch.valid_batch_stream().await;
                     debug!("TrainNet::run_inner, valid:  1. cuda_mem={:?}",maybe_cuda_mem(&device));
 
-                    while let Some(Ok((x_t_0,y_t))) = batches.next().await {
+                    while let Some(Ok((x_t_0,mask, y_t))) = batches.next().await {
                         tch::no_grad(||{
 
                             let x_t = (train_step.x_f())(x_t_0);
@@ -702,9 +702,9 @@ mod tests {
         (x.into(), y.into())
     }
 
-    fn make_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, ThoBatch<DummyY>), ThoError>> {
+    fn make_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, Option<ThoBatch<DummyX>>,  ThoBatch<DummyY>), ThoError>> {
         let (x, y) = make_batch();
-        stream::iter(vec![Ok((x, y))]).boxed()
+        stream::iter(vec![Ok((x, None, y))]).boxed()
     }
 
     #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
