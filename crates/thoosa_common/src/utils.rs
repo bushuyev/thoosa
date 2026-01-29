@@ -601,7 +601,7 @@ pub mod tests {
     use tch::nn::VarStore;
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::{Device, Kind, Tensor};
+    use tch::{Device, IndexOp, Kind, Tensor};
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
@@ -1393,7 +1393,7 @@ pub mod tests {
         let a = Tensor::from_slice(&va).reshape(&[m, n]);
         let b = Tensor::from_slice(&vb).reshape(&[m, n]);
 
-        let (x, y) = mix_x_binary_with_labels(&a, &b)?;
+        let (x, _mask, y) = mix_x_binary_with_labels(&a, None, &b, None)?;
         debug!("mix_basic_shapes_and_labels: x=\n{x} y=\n{y}");
 
         // Shapes
@@ -1418,6 +1418,41 @@ pub mod tests {
                 assert_eq!(label, 0, "Row {i} came from B, expected label 0");
             } else {
                 assert_eq!(label, 1, "Row {i} came from A, expected label 1");
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn mix_masks_align_with_rows() -> Result<(), ThoError> {
+        let a = Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]).reshape(&[2, 3]);
+        let b = Tensor::from_slice(&[101., 102., 103., 104., 105., 106.]).reshape(&[2, 3]);
+        let mask_a = Tensor::from_slice(&[0u8, 1, 0, 1, 0, 1]).reshape(&[2, 3]).to_kind(Kind::Bool);
+        let mask_b = Tensor::from_slice(&[1u8, 1, 0, 0, 0, 1]).reshape(&[2, 3]).to_kind(Kind::Bool);
+
+        let (x, mask, y) = mix_x_binary_with_labels(&a, Some(&mask_a), &b, Some(&mask_b))?;
+        let mask = mask.expect("mask");
+
+        assert_eq!(x.size(), [4, 3], "X must be [2m, n]");
+        assert_eq!(mask.size(), [4, 3], "mask must be [2m, n]");
+        assert_eq!(y.size(), [4, 1], "Y must be [2m, 1]");
+
+        let x_cpu = x.to_device(Device::Cpu);
+        let mask_cpu = mask.to_device(Device::Cpu);
+        let y_cpu = y.to_kind(Kind::Int64).to_device(Device::Cpu);
+
+        for i in 0..4 {
+            let first_val = x_cpu.double_value(&[i, 0]) as i64;
+            let label = y_cpu.int64_value(&[i, 0]);
+            let mask_row = mask_cpu.i((i, ..));
+
+            match first_val {
+                1 => { assert_eq!(mask_row, mask_a.i((0, ..))); assert_eq!(label, 1); }
+                4 => { assert_eq!(mask_row, mask_a.i((1, ..))); assert_eq!(label, 1); }
+                101 => { assert_eq!(mask_row, mask_b.i((0, ..))); assert_eq!(label, 0); }
+                104 => { assert_eq!(mask_row, mask_b.i((1, ..))); assert_eq!(label, 0); }
+                _ => panic!("unexpected first_val={first_val}"),
             }
         }
 
@@ -1833,7 +1868,7 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
 }
 
 //TODO check GPT
-pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> Result<(Tensor, Tensor), ThoError> {
+pub fn mix_x_binary_with_labels(x_1: &Tensor, mask_1: Option<&Tensor>, x_0: &Tensor, mask_0: Option<&Tensor>) -> Result<(Tensor, Option<Tensor>, Tensor), ThoError> {
     let [ma, _na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
     let [mb, _nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
     // assert_eq!((na, nb), (na, na), "X1 and X0 must have same n");
@@ -1866,7 +1901,18 @@ pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> Result<(Tensor, T
     let x = x0.f_index_select(0, &perm)?;
     let y = y0.f_index_select(0, &perm)?;
 
-    Ok((x, y))
+    let mask = match (mask_1, mask_0) {
+        (None, None) => None,
+        (Some(mask_1), Some(mask_0)) => {
+            assert_eq!(mask_1.device(), device, "mask_1 must be on the same device as x");
+            assert_eq!(mask_0.device(), device, "mask_0 must be on the same device as x");
+            let mask0 = Tensor::f_cat(&[mask_1, mask_0], 0)?;
+            Some(mask0.f_index_select(0, &perm)?)
+        }
+        _ => return Err(ThoError::new("mask_1 and mask_0 must both be Some or None")),
+    };
+
+    Ok((x, mask, y))
 }
 
 

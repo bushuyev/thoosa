@@ -75,6 +75,21 @@ where
 
 }
 
+fn pad_stack_with_mask(tensors: &[&ThoTensor<MotifProbability, SynKey>], channels: i64, max_input: i64) -> Result<(Tensor, Tensor), ThoError> {
+    let (stack, masks) = tensors.iter().try_fold((Vec::with_capacity(tensors.len()), Vec::with_capacity(tensors.len())), |mut acc, v| {
+        let (t, mask) = pad_to_2(v.t_ref(), &[channels, max_input], true, true)?;
+        acc.0.push(t);
+        acc.1.push(mask.expect("no mask"));
+
+        Ok::<_, ThoError>(acc)
+    })?;
+
+    let stack = Tensor::f_stack(stack.as_slice(), 0)?;
+    let masks = Tensor::f_stack(masks.as_slice(), 0)?;
+
+    Ok((stack, masks))
+}
+
 pub async fn new_train_label_nets_with_ml<L, C, R>(
     select_motifs_run_ids: Vec<RunId>,
     loader: Arc<L>,
@@ -311,43 +326,23 @@ where
                                    Arc::clone(&resources_0_valid),
                                    Box::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SynKey>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SynKey>>>>, mut ctx: C| {
                                        async move {
-                                           let (x, /*mask,*/ y) = with_data!(ctx.branch(Some("train_label_nets_batch_data"), false, false), [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<MotifProbability, SynKey>], x_0:&[&ThoTensor<MotifProbability, SynKey>]|{
+                                           let (x, mask, y) = with_data!(ctx.branch(Some("train_label_nets_batch_data"), false, false), [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<MotifProbability, SynKey>], x_0:&[&ThoTensor<MotifProbability, SynKey>]|{
                                                debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
 
                                                let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.t_ref().size()[1]).max().expect("no max_input");
 
                                                debug!("ResourcesBatch::train_batch_iter: max_input={max_input}");
 
+                                               let (x_1, mask_1) = pad_stack_with_mask(x_1, channels, max_input)?;
+                                               let (x_0, mask_0) = pad_stack_with_mask(x_0, channels, max_input)?;
 
-                                               let (x_1, mask_1) = x_1.into_iter().try_fold((Vec::with_capacity(x_1.len()), Vec::with_capacity(x_1.len())), |mut a, v|{
-                                                   let (t, mask) = pad_to_2(v.t_ref(), &[channels, max_input], true, true)?;
-                                                   a.0.push(t);
-                                                   a.1.push(mask.expect("no mask"));
-
-                                                   Ok::<_, ThoError>(a)
-                                               })?;
-
-                                               let x_1 = Tensor::f_stack(x_1.as_slice(), 0)?;
-                                               let mask_1 = Tensor::f_stack(mask_1.as_slice(), 0)?;
-
-                                                let (x_0, mask_0) = x_0.into_iter().try_fold((Vec::with_capacity(x_0.len()), Vec::with_capacity(x_0.len())), |mut a, v|{
-                                                   let (t, mask) = pad_to_2(v.t_ref(), &[channels, max_input], true, true)?;
-                                                   a.0.push(t);
-                                                   a.1.push(mask.expect("no mask"));
-
-                                                   Ok::<_, ThoError>(a)
-                                               })?;
-
-                                               let x_0 = Tensor::f_stack(x_0.as_slice(), 0)?;
-                                               let mask_0 = Tensor::f_stack(mask_0.as_slice(), 0)?;
-
-                                               mix_x_binary_with_labels(&x_1, &x_0)
+                                               mix_x_binary_with_labels(&x_1, Some(&mask_1), &x_0, Some(&mask_0))
                                            })?;
 
                                            debug!("ResourcesBatch::train_batch_iter: x.size={:?} y.size={:?}", x.size(), y.size());
 
 
-                                           Ok((x.into(), /*mask*/None, y.into()))
+                                           Ok((x.into(), mask.map(|mask| mask.into()), y.into()))
                                        }.boxed()
                                    }),
                                    ctx_for_batch
@@ -1030,7 +1025,7 @@ mod tests {
                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
                         let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
 
-                        let (x,y) = mix_x_binary_with_labels(&x_1, &x_0)?;
+                        let (x, _mask, y) = mix_x_binary_with_labels(&x_1, None, &x_0, None)?;
 
                          Ok((x.into(), None, y.into()))
                     })
