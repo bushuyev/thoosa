@@ -14,12 +14,11 @@ use crate::tho_tensor::ThoTensor;
 pub fn clc_conv1d_out(l_in: u32, kernel: u32, c: ConvConfig) -> u32 {
     debug!("clc_conv1d_out: l_in={l_in} kernel={kernel} padding={} dilation={} stride={}", c.padding, c.dilation, c.stride);
 
-    // let r = (l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) - 1) / c.stride as u32 + 1;
+    let r = (l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) - 1) / c.stride as u32 + 1;
 
-    // debug!("clc_conv1d_out: r={r}");
+    debug!("clc_conv1d_out: r={r}");
 
-    // r
-    0
+    r
 }
 
 pub fn clc_max_pool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, stride: u32) -> u32 {
