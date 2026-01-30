@@ -174,7 +174,7 @@ where
 
             selected_motifs.into_iter()
                 .flat_map(move |channels_motifs|
-                    channels_motifs.into_iter().map(move |v| (v, select_motifs_run_id)))
+                    channels_motifs.into_iter().map(move |motif_id_rate| (motif_id_rate, select_motifs_run_id)))
         }))
         .map(|(motif_id_rate, select_motifs_run_id)|{
             let motif_loader = Arc::clone(&self.motif_loader);
@@ -187,9 +187,9 @@ where
             async move {
 
                 let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>> = motif_loader.run(
-                                Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(motif_id_rate.0.into()), CacheArea::default())),
-                                ctx.branch(Some("train_motif_nets_motif_loader"), false, false),
-                        ).await?;
+                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(motif_id_rate.0.into()), CacheArea::default())),
+                    ctx.branch(Some("train_motif_nets_motif_loader"), false, false),
+                ).await?;
 
                 let random_slices = random_slices_loader
                     .run(

@@ -1163,27 +1163,25 @@ impl SavableResult for TrainMotifsNetResult {
         //TODO save loss to choose model
         debug!("TrainMotifsNetsRunConfigResult::save: self={:?}", self);
 
-        if self.loss < 0.3 {//TODO config
-            let run_config_id = store.write().save_run_config(
-                Some(&[self.find_motifs_run_id]),
-                &TrainMotifsNetsRunConfig::type_name(),
-                "TrainMotifsNetsRunConfigResult2",
-                "todo",
-                self.run_config_values.to_properties_iter(None).collect(),
-            )?;
 
-            ws.read().save_motif_net(
-                &self.channel,
-                &run_config_id,
-                &self.motif_id,
-                &self.vs,
-                &self.params,
-            )?;
+        let run_config_id = store.write().save_run_config(
+            Some(&[self.find_motifs_run_id]),
+            &TrainMotifsNetsRunConfig::type_name(),
+            "TrainMotifsNetsRunConfigResult2",
+            "todo",
+            self.run_config_values.to_properties_iter(None).collect(),
+        )?;
 
-            Ok(run_config_id)
-        } else {
-            Ok(0)
-        }
+        ws.read().save_motif_net(
+            &self.channel,
+            &run_config_id,
+            &self.motif_id,
+            &self.vs,
+            &self.params,
+        )?;
+
+        Ok(run_config_id)
+
     }
 }
 
@@ -2000,11 +1998,11 @@ mod train_tests {
 
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
-                                                                                           thoosa_shared::replace_extension(&model_path, "safetensors")
-                                                                                               .1
-                                                                                               .into(),
-                                                                                           Cpu,
+           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
+           thoosa_shared::replace_extension(&model_path, "safetensors")
+               .1
+               .into(),
+           Cpu,
         )?;
 
         assert!(vs_0.variables().len() > 0);

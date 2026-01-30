@@ -2618,10 +2618,18 @@ impl SqlStore {
 
             //labels_motifs on resource_set
             t.execute(
-                //todo label
                 "CREATE TABLE IF NOT EXISTS selected_motifs (
                 motif_id   REFERENCES motifs(id),
                 run_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                rate    FLOAT NOT NULL
+            )",
+                (),
+            )?;
+
+            t.execute(
+                "CREATE TABLE IF NOT EXISTS selected_nets (
+                net_id  REFERENCES motifs(id),
+                run_id  NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 rate    FLOAT NOT NULL
             )",
                 (),
