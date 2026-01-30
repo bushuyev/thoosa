@@ -579,7 +579,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use log::{debug, trace};
     use log::LevelFilter::{Debug, Trace};
@@ -665,19 +665,19 @@ pub(crate) mod tests {
         let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), motifs_tensor(100, 3, MotifKind::Triangle))?);
         let motif_1_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Sin))?);
 
+        let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_id));
+        let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_id));
+        let net_id_1_0 = PathBuf::from(format!("1/{}_{}", motif_1_0_id, train_motifs_run_id));
+        let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step);
+        let (params_0_1, module_0_1) = motif_test_net_(Cpu, Arc::clone(&motif_0_1), step);
+        let (params_1_0, module_1_0) = motif_test_net_(Cpu, Arc::clone(&motif_1_0), step);
+
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 3, 100, input_n_0 as u32)
-                .with_load_motif_nets(vec![
-                    vec![
-                        //channel 0
-                        motif_test_net_(Cpu, Arc::clone(&motif_0_0), step),
-                        motif_test_net_(Cpu, Arc::clone(&motif_0_1), step),
-                    ],
-                    vec![
-                        //channel 1
-                        motif_test_net_(Cpu, Arc::clone(&motif_1_0), step),
-                    ],
-                    vec![],
+                .with_load_motif_net(vec![
+                    (net_id_0_0.clone(), params_0_0, module_0_0),
+                    (net_id_0_1.clone(), params_0_1, module_0_1),
+                    (net_id_1_0.clone(), params_1_0, module_1_0),
                 ])
                 .build(),
         ));
@@ -702,6 +702,13 @@ pub(crate) mod tests {
                             vec![]//channel 2
                         ]
                     ))
+                ])
+                .with_list_selected_nets([
+                    (select_motifs_run_id, Some(0.3), Ok(vec![
+                        (net_id_0_0.clone(), 0.1f32),
+                        (net_id_0_1.clone(), 0.2f32),
+                        (net_id_1_0.clone(), 0.25f32),
+                    ]))
                 ])
                 .build()
         ));
@@ -786,13 +793,13 @@ pub(crate) mod tests {
 
         let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Pulse))?);
 
+        let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_id));
+        let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step);
+
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 1, 100, input_n_0 as u32)
-                .with_load_motif_nets(vec![
-                    vec![
-                        //channel 0
-                        motif_test_net_(Cpu, Arc::clone(&motif_0_0), step),
-                    ],
+                .with_load_motif_net(vec![
+                    (net_id_0_0.clone(), params_0_0, module_0_0),
                 ])
                 .build(),
         ));
@@ -815,6 +822,11 @@ pub(crate) mod tests {
                         vec![(motif_0_0_id, 1.0f64)], //channel 0
                     ]
                 ))
+            ])
+            .with_list_selected_nets([
+                (select_motifs_run_id, Some(0.3), Ok(vec![
+                    (net_id_0_0.clone(), 0.1f32),
+                ]))
             ])
             .build()
         ));
