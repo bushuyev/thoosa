@@ -310,7 +310,7 @@ mod tests {
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets;
-    use thoosa_common::train_nets::{LinLenNetParams, CnnNetParams, LabelNetParams, LabelNetTypeParams, MotifNetParams, ThoModuleWithStore};
+    use thoosa_common::train_nets::{LinLenNetParams, ConvNetParams, LabelNetParams, LabelNetTypeParams, MotifNetParams, ThoModuleWithStore};
     use thoosa_common::utils::{assert_close, vec_f32_from};
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_shared::runner::common::cachable::DevicesWrap;

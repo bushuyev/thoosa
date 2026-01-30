@@ -154,7 +154,7 @@ where
 
         let motif_width = motif_width.into_iter().next().expect("no motif_width");
         let slice_step = slice_step.into_iter().next().expect("no motif_width");
-        debug!("ApplyMotifNets::new: motif_width={motif_width:?} slice_step={slice_step:?}");
+        debug!("ApplyMotifNets::new: motif_width={motif_width:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets.len());
 
         let mut select_motifs_run_id_sorted = select_motifs_run_id.clone();//TODO move to util CompKey::from Vec
         select_motifs_run_id_sorted.sort();

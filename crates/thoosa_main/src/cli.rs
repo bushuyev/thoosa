@@ -307,7 +307,7 @@ where
         ThoDevice::from(Device::Cpu),//it's always cpu
     ));
 
-    let mut root_ctx = RunCtxWithPermits::new(1, "find motifs");
+    let mut root_ctx = RunCtxWithPermits::new(1, "root_ctx");
 
     match &cli.command {
         Some(ImportResources(import_resources_params)) => {
@@ -356,7 +356,7 @@ where
                     }
                 };
              */
-            let init_ctx = root_ctx.branch( Some("find motifs"), true, false);
+            let init_ctx = root_ctx.branch( Some("find motifs init ctx"), true, false);
             let init_loader = Arc::clone(&loader_2);
             let init_ws = Arc::clone(&ws);
             let init_store = Arc::clone(&store);
@@ -1867,8 +1867,15 @@ mod cli_tests {
                 )
             },
             || ctx.branch(Some("find_motifs_test"), false, false),
-        )
-            .await?;
+        ).await?;
+
+        let train_label_net_run_config =
+        serde_json5::from_str::<TrainLabelNetsRunConfigRangeOrValue>(
+            r#"{
+                'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'opt_max_evals':'3', 'opt_n_init': '3'},
+                'net': {ConvNet:{'num_conv_layers':'3..10','hidden_conv_channels':'64', 'num_head_layers':'10',  'kernel':'100'}}
+            }"#,
+        )?;
 
         let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::new(
             Arc::clone(&store),

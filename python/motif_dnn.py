@@ -60,9 +60,12 @@ class MotifCNN(nn.Module):
         print(f"x={x.size()} h={h.size()}")
 
         mask = make_mask(lengths, h.shape[-1])
-        print(f"lengths={lengths} mask.size={mask.size()}  masked_max(h, mask)=\n{masked_max(h, mask).size()}masked_mean(h, mask)=\n{masked_mean(h, mask).size()}")
+
 
         pooled = torch.cat([masked_max(h, mask), masked_mean(h, mask)], dim=1)  # [B,4H]
+
+        print(f"lengths={lengths} mask.size={mask.size()}  masked_max(h, mask)=\n{masked_max(h, mask).size()}masked_mean(h, mask)=\n{masked_mean(h, mask).size()} pooled.size={pooled.size()}")
+
         return self.head(pooled).squeeze(-1)  # [B]
 
 
@@ -140,4 +143,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    # rng = random.Random(42)
+    # xs, ys = generate_batch(5, args.n_motifs, rng)
+
+    h = torch.rand([4, 128, 60])
+    print(f"h.shape[-1]={h.shape}")
+    # mask = make_mask(h, [10, 25, 60, 80] )
+    # masked_max(h, mask)

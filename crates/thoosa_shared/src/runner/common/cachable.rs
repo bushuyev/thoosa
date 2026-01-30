@@ -81,19 +81,21 @@ where
 
                     if let Some(value) = Self::cache().await.get_mut(&key_for_purger) {
                         let shared_fut = value.value().clone();
-                        if shared_fut.peek().is_some() { //to avoid locking on itself
-                            let data: Arc<DevicesWrap<Self::Out>> = shared_fut.await?;
+                        debug!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
+
+                        if let Some( Ok(data)) = shared_fut.peek()  { //to avoid locking on itself
+
                             data.remove_cache_area(cache_area);
 
-                            debug!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} data.cache_area={:?} ", data.cache_area);
+                            debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} data.cache_area={:?} ", data.cache_area);
                             if data.cache_area.assigned_count() == 0 {
                                 data.dump_to_cpu(device_idx).await?;
 
-                                debug!("Cachable::purge_gpu_cache_area: 3  key={key_for_purger:?} done");
+                                debug!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
                             }
                         }
                     } else {
-                        warn!("Cachable::purge_gpu_cache_area: 4 key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //warning
+                        warn!("Cachable::purge_gpu_cache_area: 5 key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //warning
                     }
 
                     Ok(())

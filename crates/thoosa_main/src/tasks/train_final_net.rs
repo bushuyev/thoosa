@@ -389,7 +389,7 @@ mod tests {
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
     use thoosa_common::runs::{Logits, NetResources};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{LinLenNetParams, CnnNetParams, LabelNetParams, LabelNetTypeParams, ThoModuleWithStore};
+    use thoosa_common::train_nets::{LinLenNetParams, ConvNetParams, LabelNetParams, LabelNetTypeParams, ThoModuleWithStore};
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, FinalNetArgsFields, OptConfig, TrainFinalNetRunConfigFields};
     use thoosa_common::utils::reset_print_options;
     use thoosa_common::ws::WsMockBuilder;

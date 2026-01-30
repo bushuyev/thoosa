@@ -29,7 +29,7 @@ use thoosa_common::batches::{AsyncDataBatch};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{lin_label_node, opt_train, LinLenNetParams, CommonTrainingRunConfig, LinNetArgs, CnnNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, ConvNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{lin_label_node, opt_train, LinLenNetParams, CommonTrainingRunConfig, LinNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, ConvNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult, conv_label_node};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -49,7 +49,7 @@ use thoosa_shared::runner::permits::{RunnerPerm, MAX_PERMITS};
 use thoosa_dummy_data_derive::DummyData;
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::stages_seq::ABStage;
-use crate::tasks::train_net::{TrainNet, TrainNetInput};
+use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainNetOutput};
 use thoosa_shared::comp_id::SynKey;
 
 #[derive(Debug)]
@@ -276,7 +276,6 @@ where
         let channels = self.ws.read().channels() as i64;
 
 
-
         debug!("TrainLabelNets::run: channels={channels} num_nets={}", self.num_nets);
 
         async move {
@@ -333,8 +332,8 @@ where
 
                                                debug!("ResourcesBatch::train_batch_iter: max_input={max_input}");
 
-                                               let (x_1, mask_1) = pad_stack_with_mask(x_1, channels, max_input)?;
-                                               let (x_0, mask_0) = pad_stack_with_mask(x_0, channels, max_input)?;
+                                               let (x_1, mask_1) = pad_stack_with_mask(x_1, num_nets as i64, max_input)?;
+                                               let (x_0, mask_0) = pad_stack_with_mask(x_0, num_nets as i64, max_input)?;
 
                                                mix_x_binary_with_labels(&x_1, Some(&mask_1), &x_0, Some(&mask_0))
                                            })?;
@@ -352,12 +351,12 @@ where
                        },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
                             match rc.net {
-                                LabelNetTypeArgs::CnnNet(ConvNetArgs {
+                                LabelNetTypeArgs::ConvNet(ConvNetArgs {
                                      num_conv_layers, hidden_conv_channels: hidden_channels, num_head_layers, kernel
                                 }) => {
-                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(CnnNetParams::new(num_conv_layers, num_head_layers, hidden_channels, kernel)));
+                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(ConvNetParams::new(num_conv_layers, num_head_layers, hidden_channels, kernel)));
 
-                                    Ok((lin_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
+                                    Ok((conv_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
                                 LabelNetTypeArgs::LinNet(LinNetArgs {
                                      num_layers, slices_len
@@ -394,15 +393,15 @@ where
                         "label".to_string()
                     ));
 
-                    let result = Arc::into_inner(
-                        train_net.run(
-
-                            Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), cache_area.into())),
-                            ctx_for_task
-
-                        ).await?).unwrap().take_data(0).await?;
-
+                    let result = train_net.run(
+                        Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), cache_area.into())),
+                        ctx_for_task
+                    ).await?;
                     debug!("train_label_net: label={label_} result={result:?}");
+
+                    let result = Arc::into_inner(result).expect("can't get result from train_net").take_data(0).await?;
+
+
                     Ok::<_, ThoError>(
                         TrainLabelNetsRunConfigResult::new(
                             select_motifs_run_ids,//TODO

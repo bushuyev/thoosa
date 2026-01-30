@@ -41,10 +41,16 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
         }
     }
 
-    fn run_layers(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn run_layers(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}",t.as_ref().size(),t.device_idx(),self.layers[0]);
+        let mask = match mask {
+            None => None,
+            Some(v) => {
+                Some(ThoTensor::<AnyDims, SimpleId>::new(t.id().clone(), mask.unwrap().t.shallow_clone())?)//FIXME
+            }
+        };
 
-        let output_t = self.layers[0].tho_forward(&t.as_ref().into(), None, train)?;
+        let output_t = self.layers[0].tho_forward(&t.as_ref().into(), mask.as_ref(), train)?;
 
         Ok(self.layers
             .iter()
@@ -53,7 +59,7 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
             .try_fold(output_t, |output_t, (i, layer)| {
                 debug!("MySequential::run_layers={i} output_t.size={:?} output_t.device={:?} layer={:?}",output_t.size(),output_t.device_idx(),layer);
 
-                layer.tho_forward(&output_t, None, train)
+                layer.tho_forward(&output_t, mask.as_ref(), train)
             })?
             .as_ref()
             .into())
@@ -72,7 +78,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
             Ok(t.shallow_clone())
         } else {
             match self.split_input {
-                None => self.run_layers(t, train),
+                None => self.run_layers(t, mask, train),
                 Some((dim, num_features)) => {
                     let splits = t.as_ref().f_split(num_features, dim)?;
                     debug!("MySequential::tho_forward splits.sizes={:?} num_features={num_features} dim={dim}",splits.iter().map(|t| t.size()).collect::<Vec<_>>());
@@ -85,7 +91,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
                                 if split.size()[dim as usize] == num_features {
                                     debug!("MySequential::tho_forward i={i} split={:?}",split.size());
 
-                                    let r = self.run_layers(&split.into(), train)?;
+                                    let r = self.run_layers(&split.into(), mask, train)?;
                                     debug!("MySequential::tho_forward i={i} r.size()={:?}",r.size());
 
                                     Ok(r)

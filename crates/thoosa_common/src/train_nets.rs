@@ -9,7 +9,7 @@ use crate::builder::{Node, SeqBuilder};
 use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace, TPEOptimizer};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
-use crate::utils::tensor_mem_size;
+use crate::utils::{masked_max, masked_mean, tensor_mem_size};
 use crate::utils::{pad_to, plot_series, DataBatch, ListenerResponse, TrainListener};
 use crate::ws::Workspace;
 use clap::clap_derive::Args;
@@ -683,7 +683,7 @@ pub struct LabelNetParams {
 pub enum LabelNetTypeParams {
 
     LinNetParams(LinLenNetParams),
-    ConvNetParams(CnnNetParams)
+    ConvNetParams(ConvNetParams)
 }
 
 impl Default for LabelNetTypeParams {
@@ -694,7 +694,7 @@ impl Default for LabelNetTypeParams {
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CnnNetParams {
+pub struct ConvNetParams {
     num_conv_layers:u32,
     num_head_layers:u32,
     kernel:u32,
@@ -714,7 +714,7 @@ impl LinLenNetParams {
     }
 }
 
-impl CnnNetParams {
+impl ConvNetParams {
     pub fn new(num_conv_layers:u32, num_head_layers: u32, hidden_conv_channels:u32, kernel: u32) -> Self {
         Self {
             num_conv_layers,
@@ -797,6 +797,12 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
 
     builder.closure(
         Arc::new(Box::new(move |t: &Tensor,_mask:Option<&Tensor>| {
+            // let mean = t.f_mean_dim(2, false, None)?;
+            // let max = t.f_max_dim(2, false)?;
+            // let mean = masked_mean(t, mask.expect("no mask"))?;
+            // let max = masked_max(t, mask.expect("no mask"))?;
+
+            // Tensor::f_cat(&[mean, max.0], 1).map_err(|e|e.into())
             let mean = t.f_mean_dim(2, false, None)?;
             debug!("cnn_label_node: leaner input={t:?} mean={mean:?}");
             Ok(mean)
@@ -804,7 +810,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
         None,
     )
         .linear_feats(
-            cnn_params.hidden_conv_channels, 256,
+            cnn_params.hidden_conv_channels, 2* 256,
             #[cfg(debug_assertions)]
             "linear_feats".to_string(),
         )
@@ -1583,7 +1589,7 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoError> {
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum LabelNetTypeArgs {
-    CnnNet(ConvNetArgs),
+    ConvNet(ConvNetArgs),
 
     LinNet(LinNetArgs),
 }
@@ -1591,7 +1597,7 @@ pub enum LabelNetTypeArgs {
 //TODO remove
 impl Default for LabelNetTypeArgs {
     fn default() -> LabelNetTypeArgs {
-        LabelNetTypeArgs::CnnNet(ConvNetArgs { num_conv_layers: 16, hidden_conv_channels: 64, num_head_layers: 3, kernel: 100 })
+        LabelNetTypeArgs::ConvNet(ConvNetArgs { num_conv_layers: 16, hidden_conv_channels: 64, num_head_layers: 3, kernel: 100 })
     }
 }
 
@@ -1697,7 +1703,7 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, LinNetArgs, CnnNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node};
+    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, LinNetArgs, ConvNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore,
     };
@@ -1732,7 +1738,7 @@ mod train_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::nn::{init, AdamW, BatchNormConfig, LinearConfig, Module, OptimizerConfig, VarStore};
     use tch::Device::{Cpu, Cuda};
-    use tch::Kind::{Float, Half};
+    use tch::Kind::{Bool, Float, Half};
     use tch::{nn, Device, Tensor};
     use tch::{IndexOp, Kind, Reduction};
     use thoosa_properties_map::ToHashmap;
@@ -1928,40 +1934,60 @@ mod train_tests {
 
     #[tokio::test]
     async fn test_save_load_cnn_label_node() -> Result<(), ThoError> {
+        _test_save_load_cnn_label_node(
+            3, 19, &[2000, 12030, 17000], 11i64,
+            ConvNetParams::new(3, 10, 64, 10)
+        ).await?
+    }
+
+    #[tokio::test]
+    async fn test_save_load_cnn_label_node_1() -> Result<(), ThoError> {
+        _test_save_load_cnn_label_node(
+            360, 1541, &[1541], 101i64,
+            ConvNetParams::new(7, 10, 64, 100)
+        ).await?
+    }
+
+    async fn _test_save_load_cnn_label_node(motif_nets: u32, max_motif_nodes: i32, all_slices: &[i32], batch: i64, conv_net_params: ConvNetParams) -> Result<Result<(), ThoError>, ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_dir={test_dir:?}");
-        let motif_nets = 3;
-        let max_motif_nodes = 19;
-        let slices_len = 2000;
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
-            motif_nets as u32,
-            1000,
+            motif_nets,
+            1000,//not used
             32000,
         )?));
         let params = LabelNetParams::new( //not used
-                                          motif_nets,
-                                          LabelNetTypeParams::ConvNetParams(CnnNetParams::new(3, 10, 64, 10)),
+          motif_nets,
+          LabelNetTypeParams::ConvNetParams(conv_net_params),
         );
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = conv_label_node(&params).build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
-        let batch = 11i64;
-        for slices in [slices_len, 12030, 17000] {
+        for slices in all_slices {
             let _ = net.tho_forward(
                 &Tensor::rand(
                     [
                         batch,
                         motif_nets as i64,
-                        slices as i64,
+                        *slices as i64,
                     ],
                     FLOAT_CPU,
-                )
-                    .into(),
-                None,
+                ).into(),
+
+                Some(
+                    &Tensor::rand(
+                        [
+                            batch,
+                            motif_nets as i64,
+                            *slices as i64,
+                        ],
+                        (Float, Cpu),
+                    ).le(0.5).into()
+                ),
                 false,
             )?;
         }
@@ -1974,37 +2000,46 @@ mod train_tests {
 
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
-           thoosa_shared::replace_extension(&model_path, "safetensors")
-               .1
-               .into(),
-           Cpu,
+                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
+                                                                                           thoosa_shared::replace_extension(&model_path, "safetensors")
+                                                                                               .1
+                                                                                               .into(),
+                                                                                           Cpu,
         )?;
 
         assert!(vs_0.variables().len() > 0);
         assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
 
 
-        let cuda_module = loaded_module.copy_to_device(1).await?;
-        let _ = cuda_module.tho_forward(
-            &Tensor::rand(
-                [
-                    batch,
-                    motif_nets as i64,
-                    123i64,
-                ],
-                FLOAT_CUDA,
-            )
-                .into(),
-            None,
-            false,
-        );
+        let cuda_net = loaded_module.copy_to_device(1).await?;
+        for slices in all_slices {
+            let _ = cuda_net.tho_forward(
+                &Tensor::rand(
+                    [
+                        batch,
+                        motif_nets as i64,
+                        *slices as i64,
+                    ],
+                    FLOAT_CUDA,
+                ).into(),
 
-        Ok(())
+                Some(
+                    &Tensor::rand(
+                        [
+                            batch,
+                            motif_nets as i64,
+                            *slices as i64,
+                        ],
+                        (Float, Cuda(0)),
+                    ).le(0.5).into()
+                ),
+                false,
+            )?;
+        }
+
+
+        Ok(Ok(()))
     }
-
-
-
 
     fn dummy_0(data: &mut [f64; 11]) -> (Tensor, f32) {
         (Tensor::from_slice(data).to_kind(Float), 0.0)

@@ -33,7 +33,7 @@ pub struct RunCtxWithPermits {
     return_to: Option<(SynKey, Arc<Mutex<Vec<RunnerPerm>>>)>,
 
     purge_gpu_closures:Option<Arc<Mutex<Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>>>>,
-    branches:u32
+    branches:u32//for unique branch ids, never decreased
 }
 
 impl Debug for RunCtxWithPermits {
@@ -138,7 +138,6 @@ impl RunCtx for RunCtxWithPermits {
 
         self.branches+=1;
 
-        self.branches+=1;
         let branch_full_id = match new_name {
             None => {
                 self.id.clone()
@@ -157,7 +156,7 @@ impl RunCtx for RunCtxWithPermits {
             debug!("RunCtx2::branch: branch_name={:?}  new_cache_area={new_cache_area}", branched_ctx.id);
 
             branched_ctx.cache_area = new_cache_area;
-            branched_ctx.purge_gpu_closures = Some(Arc::new(Mutex::new(vec![])));//this causes it to purge gpu caches on Drop
+            branched_ctx.purge_gpu_closures = Some(Arc::new(Mutex::new(vec![])));//Arc::strong_count == 1 causes it to purge gpu caches on Drop
 
             branched_ctx
 
@@ -169,11 +168,11 @@ impl RunCtx for RunCtxWithPermits {
             branched_ctx
         };
 
-        // branched_ctx.id = &self.id + &branched_ctx.id;
 
         let parent_permits = mem::replace(&mut self.permits, Arc::new(Mutex::new(Vec::new())));
 
         branched_ctx.permits = parent_permits;
+
         if give_permits_back_to_parent {
             branched_ctx.set_return_to((self.id.clone(), Arc::clone(&self.permits)));
         }

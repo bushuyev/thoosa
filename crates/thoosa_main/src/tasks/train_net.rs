@@ -27,7 +27,7 @@ use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{opt_train, LinNetArgs, CnnNetParams, LabelNetTypeArgs, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{opt_train, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{optimizer_mem_size, TrainListener};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -342,14 +342,12 @@ where
         let run_config_source = Arc::clone(&self.run_config_source);
         let device_idx = ctx.device_idx();
 
-        debug!("TrainNet::run: input.size={:?}", input.size());
+        debug!("TrainNet::run: self.descr={:?}", self.descr);
 
         async move {
-            // let ctx_for_train = Arc::clone(&ctx);
             let self_for_train = Arc::clone(&self);
             let device_idx_for_train = device_idx;
 
-            // let mut c = ctx.branch(Some("z"), false, false);
 
             let (var_store, node_params, run_config, loss) = opt_train::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),
