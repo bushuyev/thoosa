@@ -1923,16 +1923,17 @@ mod train_tests {
 
 
 
-        let model_path = ws
+        let net_id = ws
             .write()
             .save_label_net(1, &"test_label", &vs_0, &params)?;
 
-        debug!("model_path={model_path:?} vs_0.variables().len()={}",vs_0.variables().len());
+        debug!("net_id={net_id:?} vs_0.variables().len()={}",vs_0.variables().len());
 
+        let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
-           model_path.join(NET_WEIGHTS_FILE),
+           model_base_path.join(NET_WEIGHTS_FILE),
            Cpu,
         )?;
 
@@ -2003,16 +2004,17 @@ mod train_tests {
             )?;
         }
 
-        let model_path = ws
+        let net_id = ws
             .write()
             .save_label_net(1, &"test_label", &vs_0, &params)?;
 
-        debug!("model_path={model_path:?} vs_0.variables().len()={}",vs_0.variables().len());
+        debug!("net_id={net_id:?} vs_0.variables().len()={}",vs_0.variables().len());
 
+        let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
-           model_path.join(NET_WEIGHTS_FILE),
+           model_base_path.join(NET_WEIGHTS_FILE),
            Cpu,
         )?;
 

@@ -102,7 +102,7 @@ where
                     // debug!("ApplyMotifNets::new: channel={channel} motif_id={motif_id} load_motif_net={load_motif_net:?}");
 
 
-                    load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(0, 0 as u32), CacheArea::default())), load_ctx).await
+                    load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path), CacheArea::default())), load_ctx).await
                 }
             }))
             .buffered(crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT)//order is important to keep output tensor same
