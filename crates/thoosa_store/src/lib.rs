@@ -208,6 +208,10 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     fn list_selected_motifs(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
 
+    fn save_selected_net(&mut self, run_id: RunId, path: PathBuf, loss: f32) -> Result<(), ThoError>;
+
+    fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError>;
+
     fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError>;
     fn conn(&self) -> &parking_lot::Mutex<Connection>; //parking_lot:: for mockall
 }
@@ -364,6 +368,17 @@ mock! {
             motif_selection_id: RunId,
             channels: u32,
         ) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
+        fn save_selected_net(
+            &mut self,
+            run_id: RunId,
+            path: PathBuf,
+            loss: f32,
+        ) -> Result<(), ThoError>;
+        fn list_selected_nets(
+            &self,
+            run_id: RunId,
+            loss: Option<f32>,
+        ) -> Result<Vec<(PathBuf, f32)>, ThoError>;
         fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError>;
         fn conn(&self) -> &parking_lot::Mutex<Connection>;
     }
@@ -2423,6 +2438,56 @@ impl Store for SqlStore {
         Ok(channels_motifs)
     }
 
+    fn save_selected_net(
+        &mut self,
+        run_id: RunId,
+        path: PathBuf,
+        loss: f32,
+    ) -> Result<(), ThoError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        t.execute(
+            "INSERT INTO selected_nets (net_path, run_id, loss) VALUES (?, ?, ?)",
+            rusqlite::params![path.to_string_lossy().to_string(), run_id, loss],
+        )?;
+
+        t.commit()?;
+
+        Ok(())
+    }
+
+    fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        let selected_nets = {
+            let (query, params): (&str, Vec<rusqlite::types::Value>) = match loss {
+                Some(loss) => (
+                    "SELECT net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC, net_path ASC",
+                    vec![rusqlite::types::Value::Integer(run_id as i64), rusqlite::types::Value::Real(loss as f64)],
+                ),
+                None => (
+                    "SELECT net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC, net_path ASC",
+                    vec![rusqlite::types::Value::Integer(run_id as i64)],
+                ),
+            };
+            let mut stmt = t.prepare(query)?;
+            stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
+                Ok((
+                    PathBuf::from(row.get::<usize, String>(0)?),
+                    row.get::<usize, f32>(1)?,
+                ))
+            })?
+            .map(|v| v.unwrap())
+            .collect::<Vec<_>>()
+        };
+
+        t.commit()?;
+
+        Ok(selected_nets)
+    }
+
     fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
@@ -3126,6 +3191,7 @@ mod store_tests {
     use crate::{
         MotifTrackerStore, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoError,
     };
+    use std::path::PathBuf;
 
     #[ctor::ctor]
     fn init() {
@@ -3616,6 +3682,37 @@ mod store_tests {
         // );
         //
         // store.lock().delete_slices_without_matches(run_id)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_save_list_selected_nets() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem()?;
+
+        let run_id = store.save_run_config(
+            None,
+            &"selected_nets",
+            "selected_nets",
+            "",
+            HashMap::new(),
+        )?;
+
+        store.save_selected_net(run_id, PathBuf::from("nets/a"), 0.2)?;
+        store.save_selected_net(run_id, PathBuf::from("nets/b"), 0.1)?;
+
+        let selected = store.list_selected_nets(run_id, None)?;
+
+        assert_eq!(2, selected.len());
+        assert_eq!(PathBuf::from("nets/b"), selected[0].0);
+        assert!((selected[0].1 - 0.1).abs() < 1e-6);
+        assert_eq!(PathBuf::from("nets/a"), selected[1].0);
+        assert!((selected[1].1 - 0.2).abs() < 1e-6);
+
+        let filtered = store.list_selected_nets(run_id, Some(0.15))?;
+        assert_eq!(1, filtered.len());
+        assert_eq!(PathBuf::from("nets/b"), filtered[0].0);
+        assert!((filtered[0].1 - 0.1).abs() < 1e-6);
 
         Ok(())
     }
@@ -4277,6 +4374,42 @@ impl MockStoreBuilder {
         self.store.expect_list_selected_motifs().returning(
             move |run_id, channels|{
                 map.get(&run_id).cloned().expect(&format!("mock is not configured to return selected motifs for run id {run_id}"))
+            }
+        );
+        self
+    }
+
+    pub fn with_save_selected_net(
+        mut self,
+        inputs: impl IntoIterator<Item = (RunId, PathBuf, f32)> + Debug,
+    ) -> Self {
+        debug!("with_save_selected_net: inputs={inputs:?}");
+        for (run_id, path, loss) in inputs {
+            self.store
+                .expect_save_selected_net()
+                .with(eq(run_id), eq(path), eq(loss))
+                .times(1)
+                .return_const(Ok(()));
+        }
+        self
+    }
+
+    pub fn with_list_selected_nets<I>(
+        mut self,
+        inputs: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = (RunId, Option<f32>, Result<Vec<(PathBuf, f32)>, ThoError>)> + Debug,
+    {
+        let data = inputs.into_iter().collect::<Vec<_>>();
+        debug!("with_list_selected_nets: inputs={data:?}");
+        let data = Arc::new(data);
+        self.store.expect_list_selected_nets().returning(
+            move |run_id, loss| {
+                data.iter()
+                    .find(|(expected_run_id, expected_loss, _)| *expected_run_id == run_id && *expected_loss == loss)
+                    .map(|(_, _, result)| result.clone())
+                    .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return selected nets for run id {run_id} loss={loss:?}"))))
             }
         );
         self

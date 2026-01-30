@@ -91,7 +91,7 @@ fn pad_stack_with_mask(tensors: &[&ThoTensor<MotifProbability, SynKey>], channel
 }
 
 pub async fn new_train_label_nets_with_ml<L, C, R>(
-    select_motifs_run_ids: Vec<RunId>,
+    train_motif_nets_run_ids: Vec<RunId>,
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -107,7 +107,7 @@ where
     let apply_motif_nets = Arc::new(ApplyMotifNets::new(
         ws,
         store,
-        select_motifs_run_ids.clone(),
+        train_motif_nets_run_ids.clone(),
         stage_ctx,
         #[cfg(test)]
         None
@@ -118,14 +118,14 @@ where
     let motif_loader = Arc::new(ABStage::new(
         SynKey::new([
             mono_key!("Loader_with_motifs", "stage"),
-            mono_key!(format!("{select_motifs_run_ids:?}"), "select_motifs_run_ids"),
+            mono_key!(format!("{train_motif_nets_run_ids:?}"), "train_motif_nets_run_ids"),
         ]),
         loader,
         apply_motif_nets
     ));
 
     TrainLabelNets::new(
-        select_motifs_run_ids,
+        train_motif_nets_run_ids,
         motif_loader,
         num_nets,
         run_configs,

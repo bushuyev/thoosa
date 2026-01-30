@@ -1067,23 +1067,24 @@ impl TrainListener for PlotVecf32 {
 }
 
 #[derive(Debug)]
-pub struct TrainMotifsNetResult {
+pub struct TrainMotifNetResult {
     pub loss: f32, //TODO pub
     channel: u32,
     motif_id: u32,
     vs: VarStore,
     params: MotifNetParams,
     run_config_values: TrainMotifsNetsRunConfig,
-    find_motifs_run_id: RunId,
+    select_motifs_run_id: RunId,
+    train_motifs_nets_run_id: Option<RunId>,
 }
 
-impl TrainMotifsNetResult {
+impl TrainMotifNetResult {
     pub fn new(
         loss: f32,
         channel: u32,
         motif_id: u32,
         vs: VarStore,
-        find_motifs_run_id: RunId,
+        select_motifs_run_id: RunId,
         params: MotifNetParams,
         run_config_values: TrainMotifsNetsRunConfig,
     ) -> Self {
@@ -1094,7 +1095,8 @@ impl TrainMotifsNetResult {
             vs,
             params,
             run_config_values,
-            find_motifs_run_id,
+            select_motifs_run_id,
+            train_motifs_nets_run_id: None
         }
     }
 
@@ -1104,12 +1106,13 @@ impl TrainMotifsNetResult {
 #[dummy_data(no_clone)]
 pub struct TrainMotifsNetsResult {
     id:RunId,
-    pub train_motif_nets_results:Vec<TrainMotifsNetResult>
+    select_motifs_run_ids: Vec<RunId>,
+    pub train_motif_nets_results:Vec<TrainMotifNetResult>
 }
 
 impl TrainMotifsNetsResult {
-    pub fn new(id: RunId, train_motif_nets_results: Vec<TrainMotifsNetResult>) -> Self {
-        Self { id, train_motif_nets_results }
+    pub fn new(select_motifs_run_ids: Vec<RunId>, train_motif_nets_results: Vec<TrainMotifNetResult>) -> Self {
+        Self { id: 0, select_motifs_run_ids, train_motif_nets_results }
     }
 }
 
@@ -1119,11 +1122,20 @@ impl SavableResult for TrainMotifsNetsResult {
     }
 
     fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
+        self.id = store.write().save_run_config(
+            Some(&self.select_motifs_run_ids),
+            &TrainMotifsNetsRunConfig::type_name(),
+            "TrainMotifsNetResult",
+            "todo",
+            HashMap::new(),
+        )?;
+
         for r in self.train_motif_nets_results.iter_mut() {
+            r.train_motifs_nets_run_id = Some(self.id);
             r.save(store, ws)?;
         }
 
-        Ok(0)
+        Ok(self.id)
     }
 }
 
@@ -1150,7 +1162,7 @@ impl Output for TrainMotifsNetsResult {
 }
 
 
-impl SavableResult for TrainMotifsNetResult {
+impl SavableResult for TrainMotifNetResult {
     fn value(&self) -> f32 {
         self.loss
     }
@@ -1164,21 +1176,24 @@ impl SavableResult for TrainMotifsNetResult {
         debug!("TrainMotifsNetsRunConfigResult::save: self={:?}", self);
 
 
+        let train_motifs_nets_run_id = self.train_motifs_nets_run_id.expect("no train_motifs_nets_run_id");
         let run_config_id = store.write().save_run_config(
-            Some(&[self.find_motifs_run_id]),
-            &TrainMotifsNetsRunConfig::type_name(),
-            "TrainMotifsNetsRunConfigResult2",
+            Some(&[train_motifs_nets_run_id]),
+            &TrainMotifsNetsRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
+            "TrainMotifNetResult",
             "todo",
             self.run_config_values.to_properties_iter(None).collect(),
         )?;
 
         let path = ws.read().save_motif_net(
             &self.channel,
-            &run_config_id,
+            &train_motifs_nets_run_id,
             &self.motif_id,
             &self.vs,
             &self.params,
         )?;
+
+        store.write().save_selected_net(train_motifs_nets_run_id, path, self.loss)?;
 
         Ok(run_config_id)
 

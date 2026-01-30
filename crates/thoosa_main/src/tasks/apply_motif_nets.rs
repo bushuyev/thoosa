@@ -76,7 +76,7 @@ where
     pub async fn new<R>(
         ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
         store: &Arc<parking_lot::RwLock<Box<dyn Store>>>,
-        select_motifs_run_id: Vec<RunId>,
+        train_motif_nets_run_ids: Vec<RunId>,
         mut stage_ctx:R,
         #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>
@@ -86,37 +86,26 @@ where
     {
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));
 
-        let loaded_motif_nets = futures::stream::iter(
+        let loaded_motif_nets = futures::stream::iter(train_motif_nets_run_ids
+            .iter()
+            .flat_map(|train_motif_nets_run_id| {
 
-            select_motifs_run_id
-                .iter()
-                .flat_map(|select_motifs_run_id| {
-                    debug!("ApplyMotifNets::run: select_motifs_run_id={select_motifs_run_id}");
+                store.read().list_selected_nets(*train_motif_nets_run_id, Some(0.3)).unwrap()
 
-                    store.read()
-                        .list_selected_motifs(*select_motifs_run_id, ws.read().channels()).expect("list_selected_motifs")
-                        .into_iter()
-                        .enumerate()
-                        .flat_map(|(channel, channels_motifs)| {
-                            channels_motifs
-                                .into_iter()
-                                .map(move |(motif_id, _)| (channel, motif_id))
-                        })
-                })
+            })
+            .map(|(path, losss)|{
+                let ws = Arc::clone(&ws);
+                let load_motif_net = Arc::clone(&load_motif_net);
+                let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false, false);
+                async move {
 
-        ).map( |(channel, motif_id)| {
-            let ws = Arc::clone(&ws);
-            let load_motif_net = Arc::clone(&load_motif_net);
-            let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false, false);
-            async move {
-
-                debug!("ApplyMotifNets::new: channel={channel} motif_id={motif_id} load_motif_net={load_motif_net:?}");
+                    // debug!("ApplyMotifNets::new: channel={channel} motif_id={motif_id} load_motif_net={load_motif_net:?}");
 
 
-                load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(motif_id, channel as u32), CacheArea::default())), load_ctx).await
-            }
-        })
-        .buffered(crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT)//order is important to keep output tensor same
+                    load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(0, 0 as u32), CacheArea::default())), load_ctx).await
+                }
+            }))
+            .buffered(crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT)//order is important to keep output tensor same
             .filter_map(|r|async {
                 match r {
                     Ok(net) => {
@@ -130,7 +119,55 @@ where
                     }
                 }
             })
-        .collect::<Vec<_>>().await;
+            .collect::<Vec<_>>().await;
+
+
+        // let loaded_motif_nets = futures::stream::iter(
+        //
+        //     train_motif_nets_run_ids
+        //         .iter()
+        //         .flat_map(|select_motifs_run_id| {
+        //             debug!("ApplyMotifNets::run: select_motifs_run_id={select_motifs_run_id}");
+        //
+        //
+        //             store.read()
+        //                 .list_selected_motifs(*select_motifs_run_id, ws.read().channels()).expect("list_selected_motifs")
+        //                 .into_iter()
+        //                 .enumerate()
+        //                 .flat_map(|(channel, channels_motifs)| {
+        //                     channels_motifs
+        //                         .into_iter()
+        //                         .map(move |(motif_id, _)| (channel, motif_id))
+        //                 })
+        //         })
+        //
+        // ).map( |(channel, motif_id)| {
+        //     let ws = Arc::clone(&ws);
+        //     let load_motif_net = Arc::clone(&load_motif_net);
+        //     let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false, false);
+        //     async move {
+        //
+        //         debug!("ApplyMotifNets::new: channel={channel} motif_id={motif_id} load_motif_net={load_motif_net:?}");
+        //
+        //
+        //         load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(motif_id, channel as u32), CacheArea::default())), load_ctx).await
+        //     }
+        // })
+        // .buffered(crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT)//order is important to keep output tensor same
+        //     .filter_map(|r|async {
+        //         match r {
+        //             Ok(net) => {
+        //                 debug!("ApplyMotifNets::new: loaded net={net:?}");
+        //
+        //                 Some(net)
+        //             },
+        //             Err(e) => {
+        //                 error!("ApplyMotifNets::new: can't load net for motif; there must have been an error while training the net: e={e:?}");
+        //                 None
+        //             }
+        //         }
+        //     })
+        // .collect::<Vec<_>>().await;
 
 
         //TODO all motif nets should have same width/step, handle different ones?
@@ -156,7 +193,7 @@ where
         let slice_step = slice_step.into_iter().next().expect("no motif_width");
         debug!("ApplyMotifNets::new: motif_width={motif_width:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets.len());
 
-        let mut select_motifs_run_id_sorted = select_motifs_run_id.clone();//TODO move to util CompKey::from Vec
+        let mut select_motifs_run_id_sorted = train_motif_nets_run_ids.clone();//TODO move to util CompKey::from Vec
         select_motifs_run_id_sorted.sort();
         Ok(Self {
             id: SynKey::new(select_motifs_run_id_sorted.into_iter().map(|run_id| mono_key!(run_id, format!("select_motifs_run_id_{run_id}"))).collect::<Vec<_>>()),

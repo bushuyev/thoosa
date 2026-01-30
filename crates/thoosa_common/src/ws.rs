@@ -1003,6 +1003,7 @@ mod tests {
         vs.freeze();
 
         let base_path = ws.save_motif_net(&0, &0, &0, &vs, &params)?;
+        debug!("base_path={base_path:?}");
         let relative = base_path.strip_prefix(ws.motifs_nets_path()).expect("motifs_nets_path").to_path_buf();
 
         let (loaded_params, loaded_module) = ws.load_motif_net(&relative, &Cpu)?;

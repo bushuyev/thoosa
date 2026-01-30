@@ -24,7 +24,7 @@ use thoosa_common::batches::AsyncDataBatch;
 use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
-use thoosa_common::train_nets::{opt_train, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsResult, TrainMotifsNetResult, lin_motif_node, conv_motif_node};
+use thoosa_common::train_nets::{opt_train, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsResult, TrainMotifNetResult, lin_motif_node, conv_motif_node};
 use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, vec_f32_from, DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -167,8 +167,8 @@ where
 
         let channels = self.ws.read().channels();
 
-        let results = futures::stream::iter(select_motifs_run_ids.into_iter().flat_map(|select_motifs_run_id|{
-            let selected_motifs = self.store.read().list_selected_motifs(select_motifs_run_id, channels).unwrap();
+        let results = futures::stream::iter(select_motifs_run_ids.iter().flat_map(|select_motifs_run_id|{
+            let selected_motifs = self.store.read().list_selected_motifs(*select_motifs_run_id, channels).unwrap();
 
             debug!("TrainMotifNets::run: select_motifs_run_id={select_motifs_run_id} selected_motifs={selected_motifs:?}");
 
@@ -244,12 +244,12 @@ where
                 let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), CacheArea::default())), ctx.branch(Some("train_motif_net"), false, false)).await?).unwrap().take_data(0).await?;
 
                 store.read().get_motif_meta(motif_id_rate.0).map(|(channel, find_motifs_run_id)|{
-                    TrainMotifsNetResult::new(
+                    TrainMotifNetResult::new(
                         result.min_loss,
                         channel as u32,
                         motif_id_rate.0,
                         result.var_store,
-                        select_motifs_run_id,
+                        *select_motifs_run_id,
                         result.node_params,
                         result.run_config,
                     )
@@ -271,7 +271,7 @@ where
         .await;
 
 
-        Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(0, results), CacheArea::default())))
+        Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(select_motifs_run_ids, results), CacheArea::default())))
     }
 
 }
