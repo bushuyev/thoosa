@@ -173,13 +173,13 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
         )?;
 
         ws.read()
-            .save_label_model(
+            .save_label_net(
                 run_config_id,
                 &self.label,
                 &self.var_store,
                 &self.label_node_params,
             )
-            .expect("save_label_model failed");
+            .expect("save_label_net failed");
 
         Ok(run_config_id)
     }
@@ -1910,7 +1910,7 @@ mod train_tests {
 
         let model_path = ws
             .write()
-            .save_label_model(1, &"test_label", &vs_0, &params)?;
+            .save_label_net(1, &"test_label", &vs_0, &params)?;
 
         debug!("model_path={model_path:?} vs_0.variables().len()={}",vs_0.variables().len());
 
@@ -1992,7 +1992,7 @@ mod train_tests {
 
         let model_path = ws
             .write()
-            .save_label_model(1, &"test_label", &vs_0, &params)?;
+            .save_label_net(1, &"test_label", &vs_0, &params)?;
 
         debug!("model_path={model_path:?} vs_0.variables().len()={}",vs_0.variables().len());
 
@@ -2410,7 +2410,7 @@ mod train_tests {
         );
 
         ws.write()
-            .save_label_model(run_id, &label, &vs_0, &label_node_params)?;
+            .save_label_net(run_id, &label, &vs_0, &label_node_params)?;
         Ok(())
     }
 

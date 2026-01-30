@@ -333,7 +333,7 @@ impl Workspace for FsWorkspace {
         })
     }
 
-    fn save_label_model(
+    fn save_label_net(
         &self,
         label_node_run_id: u32,
         label: &dyn Display,
@@ -346,14 +346,14 @@ impl Workspace for FsWorkspace {
 
         let vs_path = label_models_path.join(format!("{label_node_run_id}.safetensors"));
 
-        info!("save_label_model:  run_id={label_node_run_id} label={label} saved to {vs_path:?}");
+        info!("save_label_net:  run_id={label_node_run_id} label={label} saved to {vs_path:?}");
 
         vs.save(vs_path)?;
 
         let path = label_models_path.join(format!("{}.json", label_node_run_id));
         fs::write(&path, serde_json5::to_string(params)?)?;
 
-        debug!("save_label_model: all saved, path={path:?}");
+        debug!("save_label_net: all saved, path={path:?}");
 
         Ok(path)
     }
@@ -508,7 +508,7 @@ pub trait Workspace: Sync + Send + Debug {
         channel: u32,
         motif_id: u32,
     ) -> Result<Vec<(PathBuf, PathBuf)>, ThoError>;
-    fn save_label_model(
+    fn save_label_net(
         &self,
         label_node_run_id: u32,
         label: &dyn Display,
@@ -688,7 +688,7 @@ mod tests {
 
         let ws = FsWorkspace::new(test_dir, 20, 684400, 32000)?;
 
-        ws.save_label_model(
+        ws.save_label_net(
             1,
             &"label_0",
             &VarStore::new(Cpu),
@@ -697,7 +697,7 @@ mod tests {
                 crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
             ),
         )?;
-        ws.save_label_model(
+        ws.save_label_net(
             2,
             &"label_0",
             &VarStore::new(Cpu),
@@ -706,7 +706,7 @@ mod tests {
                 crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
             ),
         )?;
-        ws.save_label_model(
+        ws.save_label_net(
             3,
             &"label_1",
             &VarStore::new(Cpu),
@@ -715,7 +715,7 @@ mod tests {
                 crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
             ),
         )?;
-        ws.save_label_model(
+        ws.save_label_net(
             4,
             &"label_1",
             &VarStore::new(Cpu),
