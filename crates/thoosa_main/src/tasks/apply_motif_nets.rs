@@ -604,7 +604,7 @@ pub(crate) mod tests {
     use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
     use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, reset_print_options, test_net, vec_f32_from};
     use thoosa_common::ws::WsMockBuilder;
-    use thoosa_motifs::generators::noise::resource_tensor;
+    use thoosa_motifs::generators::non_overlapping::Interval;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
@@ -616,8 +616,83 @@ pub(crate) mod tests {
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
     use crate::tasks::apply_motif_nets::{dummy_motif_net, motif_test_net_, ApplyMotifNets};
-    use crate::tasks::select_motifs::tests::motifs_tensor;
     use crate::tasks::tensor_loader::mock_tensor_loader;
+
+    fn deterministic_noise(len: usize, seed: u32, amp: f32) -> Vec<f32> {
+        let mut out = Vec::with_capacity(len);
+        let mut state = seed;
+        for _ in 0..len {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            let u = (state >> 8) as f32 / ((u32::MAX >> 8) as f32);
+            out.push((u * 2.0 - 1.0) * amp);
+        }
+        out
+    }
+
+    fn resource_tensor_from_patterns(resource_len: usize, channels_patterns: &[Vec<Tensor>], gap: usize, step: usize) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+        let step = step.max(1);
+        let mut channels_signals = Vec::with_capacity(channels_patterns.len());
+        let mut channels_intervals = Vec::with_capacity(channels_patterns.len());
+        for (channel_idx, channel_patterns) in channels_patterns.iter().enumerate() {
+            let seed = 0x9E37_79B9u32 ^ (channel_idx as u32).wrapping_mul(0x85EB_CA6B);
+            let mut signal = deterministic_noise(resource_len, seed, 0.2);
+            if channel_patterns.is_empty() {
+                channels_signals.push(signal);
+                channels_intervals.push(Vec::new());
+                continue;
+            }
+            let start = gap.saturating_sub(gap % step);
+            let mut current = start;
+            let mut motif_intervals = Vec::with_capacity(channel_patterns.len());
+            for pattern in channel_patterns.iter() {
+                assert_eq!(pattern.size().len(), 1, "pattern must be 1-D");
+                let motif_len = pattern.size()[0] as usize;
+                if motif_len == 0 {
+                    motif_intervals.push(Vec::new());
+                    continue;
+                }
+                let end = current.checked_add(motif_len).ok_or_else(|| ThoError::new("motif placement exceeds resource length"))?;
+                if end > resource_len {
+                    return Err(ThoError::new("motif placement exceeds resource length"));
+                }
+                let values = vec_f32_from(pattern);
+                for (offset, value) in values.iter().enumerate() {
+                    signal[current + offset] = *value;
+                }
+                motif_intervals.push(vec![Interval { start: current, end }]);
+                current = end + gap;
+            }
+            channels_signals.push(signal);
+            channels_intervals.push(motif_intervals);
+        }
+        let t = Tensor::f_stack(
+            channels_signals
+                .into_iter()
+                .map(|data| Tensor::f_from_slice(data.as_slice()))
+                .collect::<Result<Vec<Tensor>, _>>()?
+                .as_slice(),
+            0,
+        )?;
+        Ok((t, channels_intervals))
+    }
+
+    fn motifs_tensor_fixed(motif_len: usize, num_slices: usize, motif_kind: MotifKind) -> Tensor {
+        let mut motif = vec![0.0f32; motif_len];
+        let width = (motif_len / 10).max(1);
+        let (start, end) = match motif_kind {
+            MotifKind::Pulse => (0, width),
+            MotifKind::Triangle => (motif_len / 3, (motif_len / 3 + width).min(motif_len)),
+            MotifKind::Sin => (2 * motif_len / 3, (2 * motif_len / 3 + width).min(motif_len)),
+            _ => (0, width),
+        };
+        for v in motif.iter_mut().take(end).skip(start) {
+            *v = 1.0;
+        }
+        let slices = (0..num_slices)
+            .map(|_| Tensor::from_slice(motif.as_slice()))
+            .collect::<Vec<_>>();
+        Tensor::stack(slices.as_slice(), 0)
+    }
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -661,9 +736,9 @@ pub(crate) mod tests {
         let motif_0_1_id = 1; //channel 0 motif 1
         let motif_1_0_id = 0; //channel 1 motif 0
 
-        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Pulse))?);
-        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), motifs_tensor(100, 3, MotifKind::Triangle))?);
-        let motif_1_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Sin))?);
+        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), motifs_tensor_fixed(100, 3, MotifKind::Pulse))?);
+        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), motifs_tensor_fixed(100, 3, MotifKind::Triangle))?);
+        let motif_1_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), motifs_tensor_fixed(100, 3, MotifKind::Sin))?);
 
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_id));
         let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_id));
@@ -722,11 +797,12 @@ pub(crate) mod tests {
             trigger_oom_len
         ).await?);
 
-        let (resource_a_t, resource_a_intervals) = resource_tensor(input_n_0, &[
-            vec![(1, 100, MotifKind::Pulse), (1, 100, MotifKind::Triangle)],
-            vec![(1, 100, MotifKind::Sin)],
-            vec![]
-        ], 200)?;
+        let channels_patterns = vec![
+            vec![motif_0_0.t_ref().i((0, ..)), motif_0_1.t_ref().i((0, ..))],
+            vec![motif_1_0.t_ref().i((0, ..))],
+            Vec::new(),
+        ];
+        let (resource_a_t, resource_a_intervals) = resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 200, step as usize)?;
 
 
         debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_t={resource_a_t:?}");// resource_b_t={resource_b_t:?} resource_c_t={resource_c_t:?}
@@ -749,13 +825,15 @@ pub(crate) mod tests {
 
         let sin_interval_starts_in_resources_a = resource_a_intervals[1][0][0].start;
 
+        let motif_width = motif_0_0.t_ref().size()[1] as i64;
+        let slices = ((input_n_0 as i64 - motif_width) / step as i64) + 1;
         let ctx_for_data = mock_run_ctx::default(1);
         with_data!(ctx_for_data, out; |_ctx, r:&ThoTensor<MotifProbability, SynKey>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
 
-            let (pulse_matches_vals, pulse_matches_idx) = &r.t.i((0, ..)).topk(1i64, 0, true, true);
-            let (triangle_matches_vals, triangle_matches_idx) = &r.t.i((1, ..)).topk(1i64, 0, true, true);
-            let (sin_matches_vals, sin_matches_idx) = &r.t.i((2, ..)).topk(1i64, 0, true, true);
+            let (pulse_matches_vals, pulse_matches_idx) = &r.t.i((0, 0..slices)).topk(1i64, 0, true, true);
+            let (triangle_matches_vals, triangle_matches_idx) = &r.t.i((1, 0..slices)).topk(1i64, 0, true, true);
+            let (sin_matches_vals, sin_matches_idx) = &r.t.i((2, 0..slices)).topk(1i64, 0, true, true);
 
             assert_close(pulse_interval_starts_in_resources_a as f64, step as f64 * pulse_matches_idx.double_value(&[0]), step as f64 * 3.);
             assert_close(triangle_interval_starts_in_resources_a as f64, step as f64 * triangle_matches_idx.double_value(&[0]), step as f64 * 3.);
@@ -791,7 +869,7 @@ pub(crate) mod tests {
         let train_motifs_run_id:RunId = 3;
         let motif_0_0_id = 0; //channel 0 motif 0
 
-        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Pulse))?);
+        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), motifs_tensor_fixed(100, 3, MotifKind::Pulse))?);
 
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_id));
         let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step);
@@ -840,9 +918,8 @@ pub(crate) mod tests {
             trigger_oom_len //Some(1000)
         ).await?);
 
-        let (resource_a_t, resource_a_intervals) = resource_tensor(input_n_0, &[
-            vec![(1, 100, MotifKind::Pulse)],
-        ], 200)?;
+        let channels_patterns = vec![vec![motif_0_0.t_ref().i((0, ..))]];
+        let (resource_a_t, resource_a_intervals) = resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 200, step as usize)?;
 
 
         debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_t={resource_a_t:?}");// resource_b_t={resource_b_t:?} resource_c_t={resource_c_t:?}
@@ -863,11 +940,13 @@ pub(crate) mod tests {
         let pulse_interval_starts_in_resources_a = resource_a_intervals[0][0][0].start;
 
 
+        let motif_width = motif_0_0.t_ref().size()[1] as i64;
+        let slices = ((input_n_0 as i64 - motif_width) / step as i64) + 1;
         let ctx_for_data = run_ctx.write().branch(Some("apply_motif_nets_assert"), false, false);
         with_data!(ctx_for_data, out; |_ctx, r:&ThoTensor<MotifProbability, SynKey>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
 
-            let (pulse_matches_vals, pulse_matches_idx) = &r.t.i((0, ..)).topk(1i64, 0, true, true);
+            let (pulse_matches_vals, pulse_matches_idx) = &r.t.i((0, 0..slices)).topk(1i64, 0, true, true);
 
             assert_close(pulse_interval_starts_in_resources_a as f64, step as f64 * pulse_matches_idx.double_value(&[0]), step as f64 * 3.);
 
@@ -879,8 +958,9 @@ pub(crate) mod tests {
 
     #[test]
     fn test_test_net() -> Result<(), ThoError> {
-        let motif_t = motifs_tensor(100, 3, MotifKind::Pulse);
-        let (resource_a_t, resource_a_intervals) = resource_tensor(2000, &[vec![(3, 100, MotifKind::Pulse)]], 200)?;
+        let motif_t = motifs_tensor_fixed(100, 3, MotifKind::Pulse);
+        let channels_patterns = vec![vec![motif_t.i((0, ..))]];
+        let (resource_a_t, resource_a_intervals) = resource_tensor_from_patterns(2000, channels_patterns.as_slice(), 200, 1)?;
 
         debug!("test_test_net: resource_a_t.size={:?}", resource_a_t.size());
 
