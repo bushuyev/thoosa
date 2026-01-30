@@ -2628,9 +2628,9 @@ impl SqlStore {
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS selected_nets (
-                net_id  REFERENCES motifs(id),
+                net_path  VARCHAR(1024),
                 run_id  NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
-                rate    FLOAT NOT NULL
+                loss    FLOAT NOT NULL
             )",
                 (),
             )?;

@@ -1172,7 +1172,7 @@ impl SavableResult for TrainMotifsNetResult {
             self.run_config_values.to_properties_iter(None).collect(),
         )?;
 
-        ws.read().save_motif_net(
+        let path = ws.read().save_motif_net(
             &self.channel,
             &run_config_id,
             &self.motif_id,
@@ -1714,7 +1714,7 @@ mod train_tests {
         lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size, DataBatch,
     };
     use crate::ws::mock_ws_simp;
-    use crate::ws::{FsWorkspace, Workspace, WsMockBuilder};
+    use crate::ws::{FsWorkspace, Workspace, WsMockBuilder, NET_WEIGHTS_FILE};
     use crate::{train_nets, utils};
     use async_trait::async_trait;
     use futures::executor::block_on;
@@ -1917,9 +1917,7 @@ mod train_tests {
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
-           thoosa_shared::replace_extension(&model_path, "safetensors")
-               .1
-               .into(),
+           model_path.join(NET_WEIGHTS_FILE),
            Cpu,
         )?;
 
@@ -1999,9 +1997,7 @@ mod train_tests {
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
-           thoosa_shared::replace_extension(&model_path, "safetensors")
-               .1
-               .into(),
+           model_path.join(NET_WEIGHTS_FILE),
            Cpu,
         )?;
 
