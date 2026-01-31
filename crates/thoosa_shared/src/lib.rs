@@ -1978,9 +1978,7 @@ pub trait CopyToDevice {
 macro_rules! panic_to_err_async {
     ($expr:expr) => {{
         let x = std::panic::catch_unwind(core::panic::AssertUnwindSafe(async || $expr));
-
-        log::debug!("panic_to_err_async");
-
+        
         match x {
             //no panic
             Ok(inner_result) => {
