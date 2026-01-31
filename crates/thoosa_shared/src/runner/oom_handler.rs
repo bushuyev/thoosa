@@ -610,14 +610,16 @@ where
 
                                 debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",os_thread_id(), run_context.acquired_permits());
 
-                                let run_result=  runner(
-                                    Arc::clone(&task),
-                                    Arc::clone(&input),
-                                    input_select_adjusted.clone(),
-                                    device_idx,
-                                    run_context.branch(None, false, true), //looses permits on ctx drop
-                                )
-                                .await;
+                                let run_result = panic_to_err_async!({
+                                    runner(
+                                        Arc::clone(&task),
+                                        Arc::clone(&input),
+                                        input_select_adjusted.clone(),
+                                        device_idx,
+                                        run_context.branch(None, false, true), //looses permits on ctx drop
+                                    )
+                                    .await
+                                });
 
                                 match run_result {
                                     Ok(v) => {
