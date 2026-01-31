@@ -497,7 +497,7 @@ mod tests {
         let run_configs = OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
-                    NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(1)),
+                    NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(2)),
                     NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(2)),
                     NamedVal::new(TrainFinalNetRunConfigFields::Net(FinalNetArgsFields::NumLayers), Val::Int(1)),
                 ]),

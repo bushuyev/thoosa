@@ -1,13 +1,11 @@
 use std::borrow::Borrow;
 use crate::tho_device::ThoDevice;
 use crate::copy_ctx::CopyCtx;
-use crate::cuda_utils::tensor_mem_size;
 use crate::dims::{AnyDims, Dimensional, Dims};
 use thoosa_shared::{panic_to_err, simple_id};
 use async_trait::async_trait;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
-use std::ops::Deref;
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -396,24 +394,17 @@ where
         };
 
         let copy_ctx = CopyCtx::instance(ctx_device);
-        let copy = if tensor_mem_size(self.t.kind(), &self.t.size()) < copy_ctx.buf_size() {
-            let device = dst_device.deref().clone();
-            debug!("CopyToDevice for ThoTensor: self.id={:?} copy f_to_device, device={device:?}", self.id);
+        let src = if self.t.is_contiguous() { None } else { Some(self.t.contiguous()) };
+        let src_ref = src.as_ref().unwrap_or(&self.t);
+        debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?} src_contiguous={}", self.id, dst_device.ordinal(), src.is_none());
 
-            self.t.f_to_device(device)?
-        } else {
-            debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?}", self.id, dst_device.ordinal());
-
-            assert!(self.t.is_contiguous());
-
-            copy_ctx
-                .copy_from_ptr(
-                    self.t.data_ptr() as usize,
-                    &self.t.size(),
-                    dst_device.ordinal(),
-                    self.t.kind(),
-                ).await?
-        };
+        let copy = copy_ctx
+            .copy_from_ptr(
+                src_ref.data_ptr() as usize,
+                &src_ref.size(),
+                dst_device.ordinal(),
+                src_ref.kind(),
+            ).await?;
 
         debug!("CopyToDevice for ThoTensor: self.id={:?} self.t.size={:?} self.t.device={:?} dst_device={dst_device:?} copy.device={:?}",self.id,  self.t.size(), self.t.device(), copy.device());
         trace!("CopyToDevice for ThoTensor: self.id={:?} self.t=\n{} copy=\n{copy}", self.id, self.t);

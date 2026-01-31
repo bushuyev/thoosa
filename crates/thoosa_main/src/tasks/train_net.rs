@@ -13,10 +13,12 @@ use thoosa_shared::mono_key;
 use futures_util::{future::BoxFuture, StreamExt};
 use log::{debug, info, trace};
 use parking_lot::Mutex;
+use rand::random;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::io::Write;
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tch::nn::{Optimizer, VarStore};
@@ -183,17 +185,23 @@ where
         self: Arc<Self>,
         mut ctx: C,
         device_idx: usize,
-        vs: &VarStore,
+        vs: Arc<Mutex<VarStore>>,
         run_config: RC,
     ) -> BoxFuture<'static, Result<(f32, NP), ThoError>> {
 
-        let (node, params) = match (self.net)(&run_config, vs) {
-            Ok(v) => v,
-            Err(e) => return Box::pin(async { Err(e) }),
+        let (node, params) = {
+            let vs_guard = vs.lock();
+            match (self.net)(&run_config, &vs_guard) {
+                Ok(v) => v,
+                Err(e) => return Box::pin(async { Err(e) }),
+            }
         };
-        let optimizer = match (self.optimizer)(&run_config, vs) {
-            Ok(v) => v,
-            Err(e) => return Box::pin(async { Err(e) }),
+        let optimizer = {
+            let vs_guard = vs.lock();
+            match (self.optimizer)(&run_config, &vs_guard) {
+                Ok(v) => v,
+                Err(e) => return Box::pin(async { Err(e) }),
+            }
         };
 
         let device = Device::from(ThoDevice::from(device_idx));
@@ -213,7 +221,7 @@ where
 
         let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
-
+        let validation_step = 10;//TODO config
         Box::pin(async move {
 
             let batch = (self.batch)(ctx.branch(Some("train_batch"), false, false), &run_config).await?;
@@ -234,7 +242,12 @@ where
                 None,
             );
 
-            let mut last_valid_loss = [0f32; 3];
+            let best_checkpoint_path = PathBuf::from("/tmp").join(format!("thoosa_train_net_best_{}.safetensors", random::<u64>()));
+            let mut best_valid_loss = f32::MAX;
+            let mut bad_epochs = 0u32;
+            let patience = 5u32;
+            let min_delta = 1e-4_f32;
+            let mut saved_best = false;
 
             for idx in 1..epochs {
                 debug!("TrainNet::run_inner, train:  0. cuda_mem={:?}",maybe_cuda_mem(&device));
@@ -265,13 +278,16 @@ where
 
                 }
 
-                //TODO remove if idx  + last_valid_loss
-                if idx % 10 == 0 || idx == epochs - 1 {
+                //TODO config validation_step
+
+                if idx % validation_step == 0 || idx == epochs - 1 {
 
                     debug!("TrainNet::run_inner, valid:  0. cuda_mem={:?}",maybe_cuda_mem(&device));
 
                     let mut batches = batch.valid_batch_stream().await;
                     debug!("TrainNet::run_inner, valid:  1. cuda_mem={:?}",maybe_cuda_mem(&device));
+                    let mut valid_loss_sum = 0f32;
+                    let mut valid_loss_count = 0u32;
 
                     while let Some(Ok((x_t_0,mask, y_t))) = batches.next().await {
                         tch::no_grad(||{
@@ -282,21 +298,47 @@ where
 
                             let valid_loss = (train_step.loss_fn())(&pred_y.as_ref(), &y_t.as_ref())?;
                             let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
-
-                            last_valid_loss[(idx % last_valid_loss.len() as u32) as usize] = valid_loss_f32;
-                            debug!("train: last_valid_loss={last_valid_loss:?}  valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+                            valid_loss_sum += valid_loss_f32;
+                            valid_loss_count += 1;
 
                             Ok::<_, ThoError>(())
                         })?;
                     }
+                    if valid_loss_count > 0 {
+                        let valid_loss = valid_loss_sum / valid_loss_count as f32;
+                        if valid_loss < best_valid_loss - min_delta {
+                            best_valid_loss = valid_loss;
+                            bad_epochs = 0;
+                            {
+                                let mut vs_guard = vs.lock();
+                                vs_guard.save(&best_checkpoint_path)?;
+                            }
+                            saved_best = true;
+                        } else {
+                            bad_epochs += 1;
+                            if bad_epochs >= patience {
+                                debug!("train: early stopping triggered valid_loss={valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
+                                break;
+                            }
+                        }
+                        debug!("train: valid_loss={valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
+                    } else {
+                        debug!("train: valid_loss skipped, no validation batches");
+                    }
 
                 }
+
+
                 print!(".");
                 std::io::stdout().flush()?;
             }
-            debug!("train: final valid last_valid_loss={last_valid_loss:?} avg_valid_loss={}",last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+            if saved_best {
+                let mut vs_guard = vs.lock();
+                vs_guard.load(&best_checkpoint_path)?;
+            }
+            debug!("train: final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
 
-            Ok((last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32, params))
+            Ok((best_valid_loss, params))
         })
     }
 }
@@ -351,7 +393,7 @@ where
 
             let (var_store, node_params, run_config, loss) = opt_train::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),
-                move |vs: &VarStore, run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
+                move |vs: Arc<Mutex<VarStore>>, run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
                     debug!("TrainNet::run, about to call run_inner: run_config={:?}", run_config);
 
                     let self_arc = Arc::clone(&self_for_train);
