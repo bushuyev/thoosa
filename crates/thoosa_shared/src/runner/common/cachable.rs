@@ -10,6 +10,7 @@ use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
 use log::{debug, trace, warn};
 use mockall_double::double;
+use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -362,7 +363,7 @@ where
             .into_boxed_slice();
 
         let inflights = (0..num_devices)
-            .map(|_device| tokio::sync::Mutex::new(None))
+            .map(|_device| Mutex::new(None))
             .collect::<Vec<_>>()
             .into_boxed_slice();
 
@@ -632,7 +633,7 @@ where
     //cpu_only
     //gpu_copied
     cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,
-    inflights: Box<[tokio::sync::Mutex<Option<Arc<tokio::sync::Notify>>>]>,
+    inflights: Box<[Mutex<Option<Arc<Notify>>>]>,
     cache_area: CacheArea,
     size: O::Metrics,
     mem_size: u64,
@@ -845,6 +846,46 @@ where
         src: Option<&O>,
         do_return: bool,
     ) -> Result<Option<RwLockReadGuard<'_, O>>, ThoError> {
+        // Ensures inflight slot is cleared and waiters are notified even if the leader is canceled or panics.
+        struct InflightGuard<'a> {
+            inflight: &'a Mutex<Option<Arc<Notify>>>,
+            notify: Arc<Notify>,
+            cleared: bool,
+        }
+
+        impl<'a> InflightGuard<'a> {
+            fn new(inflight: &'a Mutex<Option<Arc<Notify>>>, notify: Arc<Notify>) -> Self {
+                Self {
+                    inflight,
+                    notify,
+                    cleared: false,
+                }
+            }
+
+            fn clear(&mut self) {
+                if self.cleared {
+                    return;
+                }
+                self.cleared = true;
+                let mut g = self.inflight.lock();
+                if g
+                    .as_ref()
+                    .map(|n| Arc::ptr_eq(n, &self.notify))
+                    .unwrap_or(false)
+                {
+                    *g = None;
+                }
+                drop(g);
+                self.notify.notify_waiters();
+            }
+        }
+
+        impl Drop for InflightGuard<'_> {
+            fn drop(&mut self) {
+                self.clear();
+            }
+        }
+
         debug!("DevicesWrap::ensure_copied: self.id={:?} src_idx={src_idx} dst_idx={dst_idx} do_return={do_return} src={src:?}", self.id);
 
         loop {
@@ -865,16 +906,16 @@ where
 
             // ---- Try to join or become the leader
             // (Do not hold this lock while awaiting other locks, except briefly to set or read the notify)
-            let maybe_notify = {
-                let mut g = self.inflights[dst_idx].lock().await;
+            let (maybe_notify, leader_notify) = {
+                let mut g = self.inflights[dst_idx].lock();
                 if let Some(n) = &*g {
                     // someone is already copying → wait on their notify
-                    Some(n.clone())
+                    (Some(n.clone()), None)
                 } else {
                     // become the leader: install a notify and proceed
                     let n = Arc::new(Notify::new());
                     *g = Some(n.clone());
-                    None
+                    (None, Some(n))
                 }
             };
 
@@ -885,14 +926,14 @@ where
             }
 
             // ---- Leader path
+            let mut inflight_guard = InflightGuard::new(
+                &self.inflights[dst_idx],
+                leader_notify.expect("leader notify"),
+            );
+
             // Double-check: maybe dst was filled after we dropped the read lock
             if self.cached_data[dst_idx].read().await.is_some() {
-                // clear inflight and wake any waiters
-                let notify = {
-                    let mut g = self.inflights[dst_idx].lock().await;
-                    g.take().expect("leader must have set inflight")
-                };
-                notify.notify_waiters();
+                inflight_guard.clear();
                 continue;
             }
 
@@ -919,11 +960,6 @@ where
             let produced = match produced {
                 Ok(v) => v,
                 Err(e) => {
-                    let notify = {
-                        let mut g = self.inflights[dst_idx].lock().await;
-                        g.take().expect("leader must have set inflight")
-                    };
-                    notify.notify_waiters();
                     return Err(e);
                 }
             };
@@ -940,11 +976,7 @@ where
             }
 
             // Clear inflight and wake followers
-            let notify = {
-                let mut g = self.inflights[dst_idx].lock().await;
-                g.take().expect("leader must have set inflight")
-            };
-            notify.notify_waiters();
+            inflight_guard.clear();
         }
     }
 
