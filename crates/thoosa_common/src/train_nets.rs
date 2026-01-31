@@ -16,7 +16,7 @@ use clap::clap_derive::Args;
 use thoosa_shared::{mono_key, panic_to_err_async, CopyToDevice};
 
 use log::{debug, info, trace, warn};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
 use rand::seq::{IndexedRandom, SliceRandom};
 
@@ -1225,7 +1225,7 @@ where
     P: FieldName,
     R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone,
     F: for<'a, 'b> AsyncFnMut(
-            &VarStore,
+            Arc<Mutex<VarStore>>,
             R,
             &'a mut (dyn TrainListener + 'b),
         ) -> Result<(f32, N), ThoError>,
@@ -1259,7 +1259,7 @@ where
                     .into_iter()
                     .into();
 
-                let vs = VarStore::new(device);
+                let vs = Arc::new(Mutex::new(VarStore::new(device)));
 
                 let mut listener = PlotVecf32::new(
                     format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(),
@@ -1267,7 +1267,7 @@ where
 
                 let (loss, node_params) = panic_to_err_async!(
                     train_clone(
-                            &vs,
+                            Arc::clone(&vs),
                             run_config.clone(),
                             &mut listener
                     ).await
@@ -1277,10 +1277,15 @@ where
                 });
                 listener.plot();
 
-                debug!("opt_train: run_config_values={run_config:?} loss={loss} "); //descr={descr}
                 let min_loss_val = *min_loss_moved.read();
+                debug!("opt_train: run_config_values={run_config:?} loss={loss} min_loss_val={min_loss_val:?} "); //descr={descr}
+
                 if loss < min_loss_val {
                     *min_loss_moved.write() = loss;
+                    let vs = Arc::try_unwrap(vs)
+                        .expect("opt_train: VarStore still shared after train")
+                        .into_inner();
+
                     min_var_store_clone
                         .write()
                         .replace((vs, node_params, run_config, loss));

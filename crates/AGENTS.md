@@ -8,6 +8,7 @@ async engine is Tokio, rayon is used to parallel sync functions.
 ## Important Agent Rules
 - **Never run `cargo fmt` or any other bulk formatter.** Make only the minimal manual edits required for the task at hand.
 - **Do not touch unrelated files or code paths.** If a change is not strictly required to implement the current request, leave it untouched.
+- before finishing task always check if everything compiles (run `cargo build && cargo test --no-run`) and relevant tests pass (`cargo nextest run --profile codex  --no-fail-fast --retries=0 -p [crate]`)
 
 ## Project Structure & Module Organization
 - Workspace root with `Cargo.toml` (Rust 2024, nightly toolchain).
