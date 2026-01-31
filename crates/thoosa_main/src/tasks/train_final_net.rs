@@ -47,7 +47,7 @@ where
     LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    select_motifs_run_ids: Vec<RunId>,
+    train_label_nets_run_ids: Vec<RunId>,
     run_configs: Arc<OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>>,
     pd: PhantomData<L>,
     label_loader: Arc<LL>,
@@ -59,7 +59,7 @@ where
 }
 
 pub async fn new_train_final_net_with_ml<L, C, R>(
-    select_motifs_run_ids: Vec<RunId>,
+    train_label_nets_run_ids: Vec<RunId>,
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -72,15 +72,15 @@ where
     C: RunCtx + Adjustable + 'static,
     R: RunCtx + Adjustable + 'static,
 {
-    let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, select_motifs_run_ids.clone(), stage_ctx).await?);
+    let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, train_label_nets_run_ids.clone(), stage_ctx).await?);
 
     let label_loader = Arc::new(ABStage::new(
-        SynKey::new([mono_key!("Loader_with_label_nets", "Loader_with_label_nets"), mono_key!(format!("{select_motifs_run_ids:?}"), "select_motifs_run_ids")]),
+        SynKey::new([mono_key!("Loader_with_label_nets", "Loader_with_label_nets"), mono_key!(format!("{train_label_nets_run_ids:?}"), "train_label_nets_run_ids")]),
         Arc::clone(&loader),
         Arc::clone(&apply_label_nets),
     ));
 
-    TrainFinalNet::new(select_motifs_run_ids, label_loader, apply_label_nets.num_nets() as u32, run_configs, ws, store, opt_config).await
+    TrainFinalNet::new(train_label_nets_run_ids, label_loader, apply_label_nets.num_nets() as u32, run_configs, ws, store, opt_config).await
 }
 
 impl<L, LL, C> TrainFinalNet<L, LL, C>
@@ -90,7 +90,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     pub async fn new(
-        select_motifs_run_ids: Vec<RunId>,
+        train_label_nets_run_ids: Vec<RunId>,
         label_loader: Arc<LL>,
         num_label_nets: u32,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
@@ -101,7 +101,7 @@ where
         let label_net_run_ids = {
             let mut store_guard = store.write();
             let mut run_ids = HashSet::new();
-            for run_id in &select_motifs_run_ids {
+            for run_id in &train_label_nets_run_ids {
                 run_ids.extend(store_guard.list_output_run_ids(*run_id)?);
             }
             let mut run_ids = run_ids.into_iter().collect::<Vec<_>>();
@@ -113,7 +113,7 @@ where
         }
 
         Ok(Self {
-            select_motifs_run_ids,
+            train_label_nets_run_ids,
             run_configs: Arc::new(run_configs),
             pd: PhantomData,
             label_loader,
@@ -436,7 +436,8 @@ mod tests {
         reset_print_options();
         GlobalCtx::init_devices(2);
 
-        let select_motifs_run_id: RunId = 2;
+        let train_motif_nets_run_id: RunId = 2;
+        let train_label_nets_run_id: RunId = 3;
         let motif_width = 4;
         let step = 1;
         let device = Device::Cpu;
@@ -477,10 +478,10 @@ mod tests {
 
         let store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
-                .with_list_selected_motifs([(select_motifs_run_id, Ok(vec![vec![(0, 1.0f64), (1, 1.0f64)]]))])
+                .with_get_input_run_ids([(train_label_nets_run_id, Ok(vec![train_motif_nets_run_id]))])
                 .with_list_selected_nets([
                     (
-                        select_motifs_run_id,
+                        train_motif_nets_run_id,
                         Some(0.3),
                         Ok(vec![
                             (net_id_0, 0.1f32),
@@ -488,7 +489,7 @@ mod tests {
                         ]),
                     ),
                 ])
-                .with_list_output_run_ids([(select_motifs_run_id, Ok(vec![100, 200]))])
+                .with_list_output_run_ids([(train_label_nets_run_id, Ok(vec![100, 200]))])
                 .with_list_resource_random_in_group([(train_group, Ok(train_logits)), (valid_group, Ok(valid_logits))])
                 .build(),
         ));
@@ -510,7 +511,7 @@ mod tests {
         );
 
         let mut run_ctx = mock_run_ctx::default(1);
-        let train_final_net = Arc::new(new_train_final_net_with_ml(vec![select_motifs_run_id], loader, run_configs, &ws, &store, run_ctx.branch(Some("new_train_final_net_with_ml"), false, false), Arc::new(OptConfig::new(10, 3))).await?);
+        let train_final_net = Arc::new(new_train_final_net_with_ml(vec![train_label_nets_run_id], loader, run_configs, &ws, &store, run_ctx.branch(Some("new_train_final_net_with_ml"), false, false), Arc::new(OptConfig::new(10, 3))).await?);
 
         let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string()))), CacheArea::default()));
 

@@ -115,6 +115,7 @@ impl TrainLabelNetsRunConfig {
 #[derive(Debug)]
 pub struct TrainLabelNetsRunConfigResult {
     train_motif_nets_run_ids: Vec<RunId>,
+    train_label_nets_run_id: Option<RunId>,
     pub label: String,
     pub loss: f32,
     label_node_params: LabelNetParams,
@@ -142,12 +143,17 @@ impl TrainLabelNetsRunConfigResult {
     ) -> Self {
         Self {
             train_motif_nets_run_ids,
+            train_label_nets_run_id: None,
             label,
             loss,
             label_node_params,
             train_label_nets_run_config: train_motifs_nodes_values,
             var_store,
         }
+    }
+
+    pub fn set_train_label_nets_run_id(&mut self, run_id: RunId) {
+        self.train_label_nets_run_id = Some(run_id);
     }
 }
 
@@ -161,8 +167,16 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
+        let mut input_run_ids = Vec::new();
+        let input_run_ids = if let Some(run_id) = self.train_label_nets_run_id {
+            input_run_ids.push(run_id);
+            input_run_ids.as_slice()
+        } else {
+            self.train_motif_nets_run_ids.as_slice()
+        };
+
         let run_config_id = store.write().save_run_config(
-            Some(&self.train_motif_nets_run_ids),
+            Some(input_run_ids),
             &TrainLabelNetsRunConfig::type_name(),
             "Label",
             "todo",
@@ -1485,7 +1499,7 @@ impl WithId for LoadMotifNetOutput {
 #[derive(Args, Debug, Clone)]
 pub struct TrainFinalNetArgs {
     #[arg(long)]
-    pub select_motifs_run_id: Vec<RunId>,
+    pub train_label_nets_run_ids: Vec<RunId>,
 
     #[arg(long)]
     train_resource_group: String,
