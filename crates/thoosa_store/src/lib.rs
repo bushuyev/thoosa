@@ -3062,16 +3062,13 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
                 "SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches",
             )?;
 
-            let groups = group_slices(
-                stmt.query_map([], |row| {
-                    //TODO move group_slices out, not for store
-                    Ok((
-                        IdSlice(row.get(0)?, row.get(1)?, row.get(2)?),
-                        IdSlice(row.get(0)?, row.get(3)?, row.get(4)?),
-                    ))
-                })?
-                .map(|v| v.unwrap()),
-            );
+            let groups = group_slices_try(stmt.query_map([], |row| {
+                //TODO move group_slices out, not for store
+                Ok((
+                    IdSlice(row.get(0)?, row.get(1)?, row.get(2)?),
+                    IdSlice(row.get(0)?, row.get(3)?, row.get(4)?),
+                ))
+            })?)?;
 
             debug!(
                 "set_motifs: run_id={:?}, channel={:?} groups={:?}",

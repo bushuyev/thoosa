@@ -58,71 +58,115 @@ pub mod copy_mode;
 pub mod runner;
 pub mod comp_id;
 
+struct GroupSlicesBuilder<T> {
+    pairs_groups: HashMap<T, u16>,
+    last_group: u16,
+    separated_groups: Vec<(u16, u16)>,
+}
+
+impl<T> GroupSlicesBuilder<T>
+where
+    T: Hash + Eq + Debug,
+{
+    fn new() -> Self {
+        Self {
+            pairs_groups: HashMap::new(),
+            last_group: 0u16,
+            separated_groups: vec![],
+        }
+    }
+
+    fn push(&mut self, ln: usize, pair: (T, T)) {
+        let g_0 = self.pairs_groups.get(&pair.0);
+        let g_1 = self.pairs_groups.get(&pair.1);
+        if let Some(g_0_val) = g_0 {
+            if g_1.is_some() {
+                trace!("separated group: g_0={:?} g_1={:?} ln={} pair={:?}", g_0, g_1, ln, pair);
+                if g_0.ne(&g_1) {
+                    self.separated_groups.push((*g_0_val, *g_1.unwrap()));
+                }
+            } else {
+                self.pairs_groups.insert(pair.1, *g_0_val);
+            }
+        } else {
+            if let Some(g_1_val) = g_1 {
+                self.pairs_groups.insert(pair.0, *g_1_val);
+            } else {
+                self.pairs_groups.insert(pair.0, self.last_group);
+                self.pairs_groups.insert(pair.1, self.last_group);
+
+                self.last_group += 1;
+            }
+        }
+    }
+
+    fn finish(self) -> HashMap<u16, HashSet<T>> {
+        let GroupSlicesBuilder {
+            pairs_groups,
+            separated_groups,
+            last_group: _,
+        } = self;
+
+        trace!("separated_groups={:?}", separated_groups);
+        let separated_groups_map = if !separated_groups.is_empty() {
+            let map = group_slices(separated_groups.into_iter()) //group separated groups same as slices
+                .values()
+                .fold(HashMap::new(), |mut h, v| {
+                    let mut iter = v.iter();
+                    if let Some(head) = iter.next().copied() {
+                        for i in iter {
+                            h.insert(*i, head);
+                        }
+                    }
+                    h
+                });
+            trace!("separated_groups group_motifs={:?}", map);
+            Some(map)
+        } else {
+            None
+        };
+
+        let mut groups: HashMap<u16, HashSet<T>> = HashMap::new();
+        for (val, group) in pairs_groups {
+            let group = separated_groups_map
+                .as_ref()
+                .and_then(|m| m.get(&group))
+                .unwrap_or(&group); //replace separated group pairs with one in pair
+            let gr_vec = groups.entry(*group).or_insert_with(|| HashSet::new());
+            gr_vec.insert(val);
+        }
+
+        trace!("group_motifs groups={:?}", groups);
+        groups
+    }
+}
+
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
 where
     T: Hash + Eq + Debug,
 {
-    let mut pairs_groups: HashMap<T, u16> = HashMap::new();
-    let mut last_group = 0u16;
-
-    let mut separated_groups: Vec<(u16, u16)> = vec![];
-
+    let mut builder = GroupSlicesBuilder::new();
     for (ln, pair) in pairs.enumerate() {
         trace!("group_slices: ln={ln} pairs={pair:?}");
-
-        let g_0 = pairs_groups.get(&pair.0);
-        let g_1 = pairs_groups.get(&pair.1);
-        if let Some(g_0_val) = g_0 {
-            if g_1.is_some() {
-                trace!("separated group: g_0={:?} g_1={:?} ln={} pair={:?}",g_0, g_1, ln, pair);
-
-                if g_0.ne(&g_1) {
-                    separated_groups.push((*g_0_val, *g_1.unwrap()));
-                }
-            } else {
-                pairs_groups.insert(pair.1, *g_0_val);
-            }
-        } else {
-            if let Some(g_1_val) = g_1 {
-                pairs_groups.insert(pair.0, *g_1_val);
-            } else {
-                pairs_groups.insert(pair.0, last_group);
-                pairs_groups.insert(pair.1, last_group);
-
-                last_group += 1;
-            }
-        }
+        builder.push(ln, pair);
     }
+    builder.finish()
+}
 
-    trace!("separated_groups={:?}", separated_groups);
-    let separated_groups_map = if !separated_groups.is_empty() {
-        let map = group_slices(separated_groups.into_iter()) //group separated groups same as slices
-            .values()
-            .fold(HashMap::new(), |mut h, v| {
-                for i in v.iter().skip(1) {
-                    h.insert(*i, v.iter().next().expect("no group").clone());
-                }
-                h
-            });
-        trace!("separated_groups group_motifs={:?}", map);
-        Some(map)
-    } else {
-        None
-    };
-
-    let mut groups: HashMap<u16, HashSet<T>> = HashMap::new();
-    for (val, group) in pairs_groups {
-        let group = separated_groups_map
-            .as_ref()
-            .and_then(|m| m.get(&group))
-            .unwrap_or(&group); //replace separated group pairs with one in pair
-        let gr_vec = groups.entry(*group).or_insert_with(|| HashSet::new());
-        gr_vec.insert(val);
+pub fn group_slices_try<T, E>(
+    pairs: impl Iterator<Item = Result<(T, T), E>>,
+) -> Result<HashMap<u16, HashSet<T>>, E>
+where
+    T: Hash + Eq + Debug,
+{
+    let mut builder = GroupSlicesBuilder::new();
+    for (ln, pair) in pairs.enumerate() {
+        let pair = pair?;
+        trace!("group_slices: ln={ln} pairs={pair:?}");
+        builder.push(ln, pair);
     }
-
-    trace!("group_motifs groups={:?}", groups);
-    groups
+    Ok(builder.finish())
 }
 
 #[repr(C)]
