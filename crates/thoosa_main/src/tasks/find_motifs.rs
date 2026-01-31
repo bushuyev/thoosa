@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
 use crate::tasks::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
@@ -9,8 +10,8 @@ use async_trait::async_trait;
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
-use futures_util::FutureExt;
-use log::{debug, error, info};
+use futures_util::{FutureExt, SinkExt, StreamExt, TryStreamExt};
+use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -27,7 +28,7 @@ use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SlicesFilter};
 use thoosa_common::loader::LoadRunner;
 use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
-use thoosa_motifs::distance::MaskMaker::{Le, LeRunningMean, LocalMin, Tril};
+use thoosa_motifs::distance::MaskMaker::{Le, LeQuantile, LeRunningMean, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
@@ -43,10 +44,14 @@ use crate::tasks::motif_loader::MotifMeta;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_named_derive::Named;
-use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
+use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, MotifSlices};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::run_configs::RunId;
+use thoosa_with_data::with_data;
+use crate::buffer_limits::FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT;
+use crate::tasks::random_avg_dist::{RandomAvgDist, RandomAvgDistInput};
 
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
@@ -63,7 +68,7 @@ where
     cross_loader: Arc<CrossLoader<
             RC,
         L,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &C) -> Result<DistsMask, ThoError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MasksCtx, &C) -> Result<DistsMask, ThoError> + Send + Sync>, DistsMask, MasksCtx, C>,
             DistsTracker<C>,
             DistsMask,
             C,
@@ -81,7 +86,7 @@ where
         cross_loader: Arc<CrossLoader<
             RC,
             L,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &C) -> Result<DistsMask, ThoError> + Send + Sync>, DistsMask, MeanDistsCtx, C>,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MasksCtx, &C) -> Result<DistsMask, ThoError> + Send + Sync>, DistsMask, MasksCtx, C>,
             DistsTracker<C>,
             DistsMask,
             C,
@@ -92,6 +97,11 @@ where
             cross_loader
         })
     }
+}
+
+pub enum MasksCtx {
+    Mean{k:f32, ctx:MeanDistsCtx},
+    MaxDist{dists:ThoTensor<ChannelsMotifsDists, SynKey>}
 }
 
 pub struct MeanDistsCtx {
@@ -128,136 +138,176 @@ where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(
+    pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
         loader: Arc<L>,
         run_configs: Vec<FindMotifsRunConfig>,
         fixed_config: FixedFindMotifsConfig,
         device: ThoDevice, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
+        mut init_ctx:C
     ) -> Result<Self, ThoError> {
         // let band_filter = Arc::new(FreqFilter::new());
         debug!("FindMotifsStage::new: fixed_config={fixed_config:?}");
 
-        let cross_loaders = run_configs
-            .into_iter()
-            .map(|run_config| {
-                debug!("FindMotifsStage::new: run_config={run_config:?}");
-                let channels = ws.read().channels();
+        let avg_dists = Arc::new(RandomAvgDist::new(Arc::clone(&store), Arc::clone(&loader), &ws));
+        let avg_dists_arc = Arc::clone(&avg_dists);
 
-                let filter = run_config.slices_filter.clone();
 
-                let cross_unfold_clc: CrossUnfoldClc<
-                    Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MeanDistsCtx, &C) -> Result<DistsMask, ThoError> + Send + Sync>,
-                    DistsMask,
-                    MeanDistsCtx,
-                    C,
-                > = CrossUnfoldClc::new(
 
-                    Box::new(move |t_0, t_1, input, means_ctx, ctx| {
-                        let device_idx = ctx.device_idx();
-                        let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
+        let cross_loaders = futures::stream::iter(run_configs
+            .into_iter())
+            .map( |run_config| {
+                let fixed_config = fixed_config.clone();
+                let loader = Arc::clone(&loader);
+                let avg_dists_arc = Arc::clone(&avg_dists_arc);
+                let mut c = init_ctx.branch(Some("init ctx for run_config"), false, false);
 
-                        let mut mask_makers = match &filter {
-                            SlicesFilter::DistanceRunningMeanK(v) => {
-                                vec![
-                                    LocalMin {dim: 1},
-                                    LocalMin {dim: 2},
-                                    LeRunningMean {
-                                        k: v.mean,
-                                        avg: &means_ctx.means_acc,
-                                        total_samples: &means_ctx.total_samples,
-                                    },
-                                ]
-                            }
-                            SlicesFilter::MaxDistance(v) => {
-                                vec![Le {
-                                    v: Tensor::full(
-                                        &[channels as i64, 1],
-                                        v.distance as f64,
-                                        (Float, t_0.device()),
-                                    ),
-                                }]
-                            }
-                        };
+                async move {
+                    debug!("FindMotifsStage::new: run_config={run_config:?}");
+                    let channels = ws.read().channels();
 
-                        if is_diag {
-                            mask_makers.push(Tril);
+                    let filter = run_config.slices_filter.clone();
+
+                    let masks_ctx = match &filter {
+                        SlicesFilter::DistanceRunningMeanK(v) => {
+                            MasksCtx::Mean{k: v.k, ctx:MeanDistsCtx::new(channels, device.into())}
                         }
+                        SlicesFilter::MaxDistance(v) => {
 
-                        //copy to device is done on streams created in CopyCtx and used in DistsMask::new_async. Should wait for calculation stream to finish.
-                        debug!("FindMotifsStage::new, batch_clc: t_0.size={:?}, t_1.size={:?}", t_0.size(), t_1.size());
+                            let r = avg_dists_arc.run(Arc::new(DevicesWrap::wrap(RandomAvgDistInput::new(1000, run_config.id.unwrap()), CacheArea::default())), c.branch(Some("cxt for RandomAvgDistInput"), false, false)).await?;
+                            let t = with_data!(c, r; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
-                        let (clc_dist_d2_and_mask_result, motifs_stream) = with_cuda_stream(device_idx, ||{
-                            thoosa_motifs::distance::clc_dist_d2_and_mask(
-                                t_0.shallow_clone(),
-                                t_1.shallow_clone(),
-                                fixed_config.keep_slice_matches,//if true dists are returned + slices are stored in sqlite
-                                &mut mask_makers,
-                            )
-                        });
+                                ThoTensor::new(t.id().clone(), v.k * t.t.shallow_clone().view((-1, 1, 1)))
+                            })?;
+                            MasksCtx::MaxDist{ dists: t}
+                        }
+                    };
 
-                        let (mask, dists) = clc_dist_d2_and_mask_result?;
 
-                        debug!("FindMotifsStage::new, batch_clc:  dists={dists:?}");
-                        let mask_type = if device_idx > 0 {
-                            DistsMaskType::MaskIndexes(mask.size())
-                        } else {
-                            DistsMaskType::AsIs
-                        };
-                        let stream = if device_idx > 0 { motifs_stream } else { None };
-                        Ok(DistsMask::new(mask, dists, mask_type, stream)?)
+                    let cross_unfold_clc: CrossUnfoldClc<
+                        Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MasksCtx, &C) -> Result<DistsMask, ThoError> + Send + Sync>,
+                        DistsMask,
+                        MasksCtx,
+                        C,
+                    > = CrossUnfoldClc::new(
+                        Box::new(move |t_0, t_1, input, means_ctx, ctx| {
+                            let device_idx = ctx.device_idx();
+                            let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
 
-                    }),
-                    MeanDistsCtx::new(channels, device.into()),
-                    UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
-                );
+                            let mut mask_makers = match &means_ctx {
+                                MasksCtx::Mean{k, ctx} => {
+                                    vec![
+                                        LocalMin { dim: 1 },
+                                        LocalMin { dim: 2 },
+                                        LeRunningMean {
+                                            k: *k,
+                                            avg: &ctx.means_acc,
+                                            total_samples: &ctx.total_samples,
+                                        },
+                                    ]
+                                }
+                                MasksCtx::MaxDist{dists} => {
+                                    vec![
+                                        LocalMin { dim: 1 },
+                                        LocalMin { dim: 2 },
+                                        // LeQuantile {
+                                        //     q: 0.1,
+                                        //     with_mask: false,
+                                        // }
+                                        Le {
+                                            v: dists.t.shallow_clone(),//TODO
+                                            // v: Tensor::full(
+                                            //     &[channels as i64, 1, 1],
+                                            //     0.01f64,
+                                            //     (Float, t_0.device()),
+                                            // ),//TODO
+                                        }
+                                    ]
+                                }
+                            };
 
-                let configured_loader = config_to_stage(&loader, &run_config, ws)?;
-                let run_config_clone = run_config.clone();
-                let step = cross_unfold_clc.unfold_params.step();
-                let find_motifs_run_config_id =run_config_clone.id.expect("find motif run config without id");
-                Ok(FindMotifsStages::new(
-                    run_config,
-                    Arc::new(CrossLoader::new(
-                        find_motifs_run_config_id,
-                        configured_loader,
-                        &store,
-                        Arc::new(cross_unfold_clc),
-                        {
-                            let ws = Arc::clone(ws);
-                            let store = Arc::clone(store);
-                            let run_config = run_config_clone.clone();
-                            let fixed_config = fixed_config.clone();
-                            move |resources: &[Arc<Resource>]| {
-                                debug!("FindMotifsStages::new: new DistsTracker, resources.len={}", resources.len());
-                                // let total_seq_len = resources.iter().map(|r|r.length() as u64).sum::<u64>();
-                                Arc::new(DistsTracker::<C>::new(
-                                    &ws,
-                                    &store,
-                                    &run_config,
-                                    &fixed_config,
-                                    Some(resources.len() as u32 * 10),//TODO. max_slices_count - if motif has more than ten slices in each resource it's probably noise
-                                ))
+                            if is_diag {
+                                mask_makers.push(Tril);
                             }
-                        },
-                        fixed_config.max_chunk_size as usize,
-                        |batch|{
-                            async { batch.to_cpu().await.unwrap() }.boxed()//TODO unwrap
-                        },
-                        |receiver| {
-                            let dists_tracker = Arc::clone(receiver);
-                            async move {
-                                dists_tracker.build_groups().await
-                            }
-                            .boxed()
-                        },
-                        CrossUnfoldClcOutputMergeMode::CpuMerge,
-                        step as u32,
-                    )),
-                )?)
+
+                            //copy to device is done on streams created in CopyCtx and used in DistsMask::new_async. Should wait for calculation stream to finish.
+                            debug!("FindMotifsStage::new, batch_clc: t_0.size={:?}, t_1.size={:?}", t_0.size(), t_1.size());
+
+                            let (clc_dist_d2_and_mask_result, motifs_stream) = with_cuda_stream(device_idx, || {
+
+                                thoosa_motifs::distance::clc_dist_d2_and_mask(
+                                    t_0.shallow_clone(),
+                                    t_1.shallow_clone(),
+                                    fixed_config.keep_slice_matches, //if true dists are returned + slices are stored in sqlite
+                                    &mut mask_makers,
+                                )
+                            });
+
+                            let (mask, dists) = clc_dist_d2_and_mask_result?;
+
+                            trace!("FindMotifsStage::new, batch_clc: mask=\n{mask}");
+                            debug!("FindMotifsStage::new, batch_clc: mask={mask:?} dists={dists:?}");
+                            let mask_type = if device_idx > 0 {
+                                DistsMaskType::MaskIndexes(mask.size())
+                            } else {
+                                DistsMaskType::AsIs
+                            };
+                            let stream = if device_idx > 0 { motifs_stream } else { None };
+                            Ok(DistsMask::new(mask, dists, mask_type, stream)?)
+                        }),
+                        masks_ctx,
+                        UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
+                    );
+
+                    let configured_loader = config_to_stage(&loader, &run_config, ws)?;
+                    let run_config_clone = run_config.clone();
+                    let step = cross_unfold_clc.unfold_params.step();
+                    let find_motifs_run_config_id = run_config_clone.id.expect("find motif run config without id");
+                    Ok::<_, ThoError>(FindMotifsStages::new(
+                        run_config,
+                        Arc::new(CrossLoader::new(
+                            find_motifs_run_config_id,
+                            configured_loader,
+                            &store,
+                            Arc::new(cross_unfold_clc),
+                            {
+                                let ws = Arc::clone(ws);
+                                let store = Arc::clone(store);
+                                let run_config = run_config_clone.clone();
+                                let fixed_config = fixed_config.clone();
+                                move |resources: &[Arc<Resource>]| {
+                                    debug!("FindMotifsStages::new: new DistsTracker, resources.len={}", resources.len());
+                                    // let total_seq_len = resources.iter().map(|r|r.length() as u64).sum::<u64>();
+                                    Arc::new(DistsTracker::<C>::new(
+                                        &ws,
+                                        &store,
+                                        &run_config,
+                                        &fixed_config,
+                                        Some(resources.len() as u32 * 10), //TODO. max_slices_count - if motif has more than ten slices in each resource it's probably noise
+                                    ))
+                                }
+                            },
+                            fixed_config.max_chunk_size as usize,
+                            |batch| {
+                                async { batch.to_cpu().await.unwrap() }.boxed() //TODO unwrap
+                            },
+                            |receiver| {
+                                let dists_tracker = Arc::clone(receiver);
+                                async move {
+                                    dists_tracker.build_groups().await
+                                }
+                                    .boxed()
+                            },
+                            CrossUnfoldClcOutputMergeMode::CpuMerge,
+                            step as u32,
+                        )),
+                    )?)
+                }
             })
-            .collect::<Result<Vec<_>, ThoError>>()?;
+            .buffer_unordered(10)
+            .try_collect::<Vec<_>>()
+            .await?;
 
         Ok(Self {
             run_config_stages: cross_loaders,
@@ -300,26 +350,35 @@ where
         let mut js: JoinSet<Result<Arc<DevicesWrap<()>>, ThoError>> = JoinSet::new();//TODO to stream + spawn
 
         debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
-        for stage in self.run_config_stages.iter() {
-            info!("running find motifs on run config {:?}", stage.run_config.id);
-
-            let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.run_config.id.unwrap_or(0))), true, false);
-            let input_arc = Arc::clone(&input);
-            let cross_loader_arc = Arc::clone(&stage.cross_loader);
-
-            js.spawn(async move {
-                cross_loader_arc.run(input_arc, ctx_for_stage).await
-            });
-        }
-
         let mut failed = AtomicU8::new(0);
+        futures::stream::iter(self.run_config_stages.iter())
+            .map(|stage|{
+                info!("running find motifs on run config {:?}", stage.run_config.id);
 
-        while let Some(res) = js.join_next().await {
-            if let Err(e) = res? {
-                failed.fetch_add(1, Ordering::Relaxed);
-                error!("Find motifs failed: {e:?}");
-            }
-        }
+                let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.run_config.id.unwrap_or(0))), true, false);
+                let input_arc = Arc::clone(&input);
+                let cross_loader_arc = Arc::clone(&stage.cross_loader);
+
+                async move {
+                    cross_loader_arc.run(input_arc, ctx_for_stage).await
+                }
+            })
+            .buffer_unordered(FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT)
+            .filter_map(|r| async {
+                match r {
+                    Ok(v) => {
+                        Some(v)
+                    }
+                    Err(e) => {
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        warn!("Find motifs failed: {e:?}");
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
 
         info!("failed {} out of {}",failed.load(Ordering::Relaxed),self.run_config_stages.len());
 
@@ -359,287 +418,157 @@ mod tests {
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_motifs::FindMotifsStage;
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
-    use crate::tasks::tensor_loader::RawTensorLoader;
-    use thoosa_shared::runner::common::{PermitsCtx, RunCtx};
+    use crate::tasks::tensor_loader::{mock_tensor_loader, RawTensorLoader};
+    use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx, PermitsCtx, RunCtx};
     use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef};
     use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
     use thoosa_shared::runner::global_ctx::GlobalCtx;
-    use log::debug;
+    use log::{debug, set_max_level};
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
+    use log::LevelFilter::Trace;
+    use rand::random_range;
     use tch::Device::Cuda;
-    use tch::{Device, Tensor};
+    use tch::{Device, IndexOp, Tensor};
+    use tch::display::set_print_options_full;
     use tch::kind::INT64_CPU;
     use thoosa_shared::runner::common::cachable::Cached;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Labeled, Simple};
-    use thoosa_common::utils::{lin_t, plot_series, three_sigs_tensor, vec_f32_from};
-    use thoosa_common::ws::FsWorkspace;
-    use thoosa_motifs::find::FixedFindMotifsConfig;
+    use thoosa_common::utils::{lin_t, plot_series, plot_t, reset_print_options, three_sigs_tensor, vec_f32_from};
+    use thoosa_common::ws::{mock_ws_simp, FsWorkspace};
+    use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::DataId;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::mono_key;
+    use thoosa_shared::{mono_key, MotifKind};
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::{cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoError};
-    use thoosa_store::SqlStore;
+    use thoosa_store::{MockStoreBuilder, SqlStore};
     use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_motifs::generators::noise;
+    use thoosa_properties_map::ToHashmap;
+    use thoosa_shared::ResourceType::Group;
+    use thoosa_with_data::with_data;
     use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
     use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::cross_dims::MotifSlices;
     use crate::tasks::average_euclidean_distance::AverageDistanceValue;
+    use crate::tasks::random_avg_dist::RANDOM_AVG_DIST_GROUP;
     use crate::tasks::select_motifs::SelectMotifsStage;
 
     #[ctor::ctor]
-    fn init() {
+    pub fn init() {
         thoosa_shared::test_utils::init_test_logging();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn test_find_motifs() -> Result<(), ThoError> {
-        unsafe {
-            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-        }
-
-        // log::set_max_level(log::LevelFilter::Trace);
-        let global_ctx = GlobalCtx::init_devices(2);
-
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        debug!("test_motifs: test_dir={test_dir:?}");
-
-        fs::create_dir_all(&test_dir)?;
-        let base_path = test_dir.to_string_lossy().to_string();
-
-        let n = 1234;
-
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
-            test_dir.clone(),
-            3,
-            n as u32,
-            100,
-        )?));
-        let ws_rc = Arc::clone(&ws);
-        let max_y = 30.0;
-
-        let sig_0_v = sig_one_imp(n, max_y, None, None, 0.1);
-        let sig_1_v = sig_two_imp(n, max_y, None, None, 0.1);
-        let sig_2_v = sig_three_imp(n, max_y, None, None);
-
-        let x = lin_t(n);
-        // plot_series(
-        //     vec![
-        //         (
-        //             format!("Sig0"),
-        //             plotters::prelude::RED,
-        //             vec_f32_from(&x)
-        //                 .into_iter()
-        //                 .zip(sig_0_v.clone())
-        //                 .collect::<Vec<(f32, f32)>>(),
-        //         ),
-        //         (
-        //             format!("Sig1"),
-        //             plotters::prelude::GREEN,
-        //             vec_f32_from(&x)
-        //                 .into_iter()
-        //                 .zip(sig_1_v.clone())
-        //                 .collect::<Vec<(f32, f32)>>(),
-        //         ),
-        //         (
-        //             format!("Sig2"),
-        //             plotters::prelude::BLACK,
-        //             vec_f32_from(&x)
-        //                 .into_iter()
-        //                 .zip(sig_2_v.clone())
-        //                 .collect::<Vec<(f32, f32)>>(),
-        //         ),
-        //     ],
-        //     "test_find_motifs_euc",
-        //     (2000, 1000),
-        //     &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str(),
-        // )?;
-
-        let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
-        debug!(
-            "t_0_0.size()={:?}, t_0_1.size()={:?}, t_1_0.size()={:?}, t_1_1.size()={:?}",
-            t_0_0.size(),
-            t_0_1.size(),
-            t_1_0.size(),
-            t_1_1.size()
-        );
-
-        t_0_0.save(ws.read().tensors_path().join(format!("t_0_0.pt")))?;
-        t_0_1.save(ws.read().tensors_path().join(format!("t_0_1.pt")))?;
-        t_1_0.save(ws.read().tensors_path().join(format!("t_1_0.pt")))?;
-        t_1_1.save(ws.read().tensors_path().join(format!("t_1_1.pt")))?;
-
-        // debug!("t_1_1 mean={} max-min={}", t_1_1.mean(None).double_value(&[]), t_1_1.max() - t_1_1.min());
-        let channels = 3;
-        let tensors_path = ws.read().tensors_path().clone();
-        let tensors_path_for_import = ws.read().tensors_path().clone();
-
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
-
-        let imported_ids = import_resources(
-            &ws,
-            &store,
-            &["label_0", "label_1"],
-            || {
-                Ok(HashMap::from([
-                    ("t_0_0".to_string(), vec![("label_0".to_string(), 1.0)]),
-                    ("t_0_1".to_string(), vec![("label_0".to_string(), 1.0)]),
-                    ("t_1_0".to_string(), vec![("label_1".to_string(), 1.0)]),
-                    ("t_1_1".to_string(), vec![("label_1".to_string(), 1.0)]),
-                ]))
-            },
-            // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
-            |key| {
-                Tensor::load(tensors_path_for_import.join(format!("{}.pt", key)))
-                    .map_err(ThoError::from)
-            },
-            true,
-        )?;
-
-        let resources = store.read().list_resources_by_ids(&imported_ids)?;
-
-        let resources_0_0 = resources
-            .iter()
-            .find(|r| r.file_stem().eq("t_0_0"))
-            .expect("t_0_0");
-        let resources_0_1 = resources
-            .iter()
-            .find(|r| r.file_stem().eq("t_0_1"))
-            .expect("t_0_1");
-        let resources_1_0 = resources
-            .iter()
-            .find(|r| r.file_stem().eq("t_1_0"))
-            .expect("t_1_0");
-        let resources_1_1 = resources
-            .iter()
-            .find(|r| r.file_stem().eq("t_1_1"))
-            .expect("t_1_1");
-
-        debug!("test_motifs: resources_0_0={resources_0_0:?}");
-
-        let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
-            move |key, _| {
-                let tensor = Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem())))?;
-                debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
-                Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
-            },
-            ThoDevice::from(Device::Cpu),
-        ));
-
-        let ctx = Arc::new(parking_lot::RwLock::new(RunCtxWithPermits::new(1, "aa")));
-        ctx.write().add_permit(global_ctx.acquire_many(0, 1, Arc::new(SynKey::new([mono_key!("test", "test")]))).await?);
-
-        let cache_area = ctx.read().cache_area();
-        let resources_input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(Simple::new(ResourceType::List(
-                vec!["t_0_0", "t_0_1", "t_1_0", "t_1_1"]
-                    .into_iter()
-                    .map(|v| v.to_string())
-                    .collect(),
-            ))),
-            CacheArea::default()
-        ));
-
-        let step_10_window_100 = r#"{
-            step:"10",
-            window:"100",
-            slices_filter: {'DistanceRunningMeanK':{'mean':'0.2'}}
-        }"#;
-
-
-        let step_10_window_100_with_filter = r#"{
-            step:'10',
-            window:'100',
-            'filter': {'BandPassFilter': {'low_hz':'20.', 'band_hz':'10.', kernel_size:'10', stride:'1', 'padding':'0'}},
-            'slices_filter':{'DistanceRunningMeanK':{'mean':'0.02'}}}
-        "#;
-        let run_ids = run_grid::<_, _, _, _, _>(
-            None,
-            serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(
-                // &step_10_window_100,
-                &step_10_window_100_with_filter,
-            )
-            .unwrap(),
-            resources_input,
-            &ws,
-            &store,
-            true,
-            |run_configs| {
-                Arc::new(
-                    FindMotifsStage::new(
-                        &ws,
-                        &store,
-                        Arc::clone(&loader),
-                        run_configs,
-                        FixedFindMotifsConfig::new(30000, false, None),
-                        ThoDevice::from(1),
-                    )
-                    .expect("FindMotifsStage::new failed in test"),
-                )
-            },
-            || ctx.write().branch(Some("find_motifs_test"), false, false),
-        )
-        .await?;
-
-        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::new(
-            Arc::clone(&store),
-            Arc::clone(&loader),
-            &ws
-        ));
-
-        let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
-            Arc::clone(&motif_loader_impl),
-            Arc::new(AverageEuclideanDistanceStage::<RunCtxWithPermits>::new())
-        ));
-
-        let motifs = store.read().list_motifs(run_ids[0])?;
-
-        debug!("test_find_motifs: motifs={motifs:?}");
-
-        for motif_id_raw in motifs {
-            let cache_area_loop = ctx.read().cache_area();
-            let num_devices_loop = GlobalCtx::global().device_count();
-            let motif_id_value = DataId::from(&(motif_id_raw as u32));
-            let motif_id = Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(motif_id_value.clone()), CacheArea::default()));
-
-            let motif = Arc::clone(&motif_loader_impl).run(
-                Arc::clone(&motif_id),
-                ctx.write().branch(Some("find_motifs_motif_loader"), false, false),
-            )
-            .await?;
-
-            let mut ctx_for_data = ctx.write().branch(Some("find_motifs_motif_data"), false, false);
-            motif
-                .with_data_ref(1,
-                &mut ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, _ctx| {
-                   debug!("test_find_motifs: motif_id={motif_id_raw} slices={:?}", t.data());
-
-                   Ok(())
-               })
-                .await?;
-
-            let mut ctx_for_dist = ctx.write().branch(Some("find_motifs_dist_value"), false, false);
-            let dist = Arc::clone(&clc_dist)
-                .run_cached(Arc::clone(&motif_id), ctx.write().branch(Some("find_motifs_clc_dist"), false, false))
-                .await?
-                .with_data_ref(0, &mut ctx_for_dist, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
-                .await?;
-
-            debug!("test_find_motifs:  dist={dist:?} motif_id={motif_id_raw}");
-        }
+    async fn test_find_motifs_running_mean() -> Result<(), ThoError> {
+        setup_find_motifs(FindMotifsRunConfig::new_with_running_mean(Some(1), 10, 100, None, Some(0.5))).await?;
 
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
+    async fn test_find_motifs_max_dist() -> Result<(), ThoError> {
+        setup_find_motifs(FindMotifsRunConfig::new_with_max_dist(Some(1), 10, 100, None, 0.5)).await?;
+
+        Ok(())
+    }
+
+    async fn setup_find_motifs(find_motifs_run_config: FindMotifsRunConfig) -> Result<(), ThoError> {
+        // set_max_level(Trace);
+        GlobalCtx::init_devices(2);
+        // reset_print_options();
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
+        let find_motifs_run_id = 1;
+
+
+        let resources = (0..3).map(|i| {
+            let size = random_range(2..5);
+            let resource = Resource::new(i, 1, format!("resource_{i}"), size * 1000);
+
+
+            let (resource_t, resource_intervals) = noise::resource_tensor(resource.length() as usize, &[
+                vec![(size as usize, 100, MotifKind::Pulse)],
+                vec![(size as usize, 100, MotifKind::Sin)],
+                vec![(size as usize, 100, MotifKind::Triangle)]
+            ], 100)?;
+
+
+            // plot_t(&resource_t, &format!("resource_{i}"))?;
+
+            Ok((resource, resource_t, resource_intervals))
+        }).collect::<Result<Vec<_>, ThoError>>()?;
+
+        let resources_group = "group";
+
+        let mut store = Arc::new(RwLock::new(
+            MockStoreBuilder::new()
+                .with_list_run_config_values(
+                    find_motifs_run_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
+                )
+                .with_list_group_labeled_resources_sets([
+                    (resources_group, Ok(vec![
+                        ("X".to_string(), "set".to_string()),
+                    ])),
+                ])
+                .with_list_resource_set_group_sets(
+                    [(resources_group, Ok(vec![(1, "set".into())]))]
+                )
+                .with_list_resource_set_resources_by_descr([
+                    ("set", Ok(resources.iter().map(|(resource, _resource_t, _resource_intervals)| {
+                        resource.clone()
+                    }).collect())),
+                ])
+                //for max dist
+                .with_list_resources_not_in_group([(RANDOM_AVG_DIST_GROUP, Ok(resources.iter().map(|(resource, _resource_t, _resource_intervals)| {
+                    resource.clone()
+                }).collect()))])
+                .with_save_groups_as_motifs() //TODO check if resource_intervals are in found groups
+                .build()));
+
+        let loader = Arc::new(
+            mock_tensor_loader::build()
+                .with_out_id()
+                .with_run_cached(resources.iter().map(|(resource, resource_t, _resource_intervals)| {
+                    (resource.clone(), resource_t.shallow_clone())
+                }))
+                .finish(),
+        );
+        let mut ctx = mock_run_ctx::default(1);
+
+        let stage: Arc<FindMotifsStage<Simple, _, _>> = Arc::new(FindMotifsStage::new(
+            &ws,
+            &store,
+            Arc::clone(&loader),
+            vec![
+                find_motifs_run_config
+            ],
+            FixedFindMotifsConfig::new(30000, false, None),
+            ThoDevice::from(1),
+            ctx.branch(Some("init"), false, false)
+        ).await.expect("FindMotifsStage::new failed in test"));
+
+
+        let result = stage.run(
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(Group(resources_group.into()))), CacheArea::default())), ctx.branch(Some("run"), false, false),
+        ).await?;
+
+        with_data!(ctx.branch(Some("check"), false, false), result; |ctx, result:&FindMotifsSavableResult|{
+            debug!("result={result:?}");
+            Ok::<_, ThoError>(())
+        })?;
+        Ok(())
+    }
 }

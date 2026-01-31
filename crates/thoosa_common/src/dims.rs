@@ -71,7 +71,7 @@ impl Dims for LabelNetsProbabilities {
 } //[num of label nets x 1] probabilities of an input belonging to corresponding label produces by all label nets
 
 #[derive(Clone, Debug)]
-pub struct LabelsProbabilities;
+pub struct LabelsProbabilities;//TODO rename - name is too close to LabelProbability
 impl Dims for LabelsProbabilities {
     type Metrics = AnyMetrics;
 } //[num of labels, 1] probabilities of an input belonging to target labeled classes
@@ -112,6 +112,8 @@ pub struct AnyDims {}
 impl Dims for AnyDims {
     type Metrics = AnyMetrics;
 }
+
+
 
 pub struct AnySub {}
 

@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Attribute, Data, DeriveInput, Expr, Ident, Lit, Meta, parse_macro_input};
+use syn::{Attribute, DeriveInput, Expr, Lit, Meta, parse_macro_input};
 
 #[proc_macro_derive(Named, attributes(name))]
 pub fn derive_named(input: TokenStream) -> TokenStream {

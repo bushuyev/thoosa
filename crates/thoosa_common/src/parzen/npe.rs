@@ -204,12 +204,12 @@ where
 
         let size = samples.size()[0];
 
-        let (means, badwidth) = self.bandwidth.clc(samples);
+        let (means, bandwidth) = self.bandwidth.clc(samples);
         let domain_range = self.ub - self.lb;
 
         let min_bandwidth = self.bandwidth_clip.value(size) * domain_range;
 
-        let clipped_bandwidth = badwidth
+        let clipped_bandwidth = bandwidth
             .clip(min_bandwidth, 0.5.into() * domain_range)
             .view(1)
             .repeat(size);
@@ -319,26 +319,62 @@ impl NumericalGaussian {
 
         (0..n_samples)
             .map(|_i| {
+                let lb = self.lb;
+                let ub = self.ub;
+                let quant_step = self.quant_step;
                 let distr = self.normal_dists.choose(&mut opt_rnd()).expect("distr");
+                let mean = distr.0;
+                let std = distr.1;
 
-                loop {
-                    // Box-Muller transform using non-deterministic RNG (acceptable for sampling)
-                    let mut rng = rand::rng();
-                    let u1: f64 = rng.random();
-                    let u2: f64 = rng.random();
-                    let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
-                    let val = distr.0 + distr.1 * z;
+                if lb.is_nan() || ub.is_nan() {
+                    return mean;
+                }
+                if lb == ub {
+                    return lb;
+                }
+                if lb > ub {
+                    return mean;
+                }
 
-                    if self.lb <= val && val <= self.ub {
-                        if let Some(q_val) = self.quant_step.as_ref() {
-                            return (((val - self.lb) / *q_val as f64).round() as usize * *q_val)
-                                as f64
-                                + self.lb; //TODO hard bounds
-                        } else {
-                            return val;
+                let quantize = |val: f64| -> f64 {
+                    let clamped = val.clamp(lb, ub);
+                    if let Some(q_val) = quant_step {
+                        if q_val == 0 {
+                            return clamped;
                         }
+                        let q_val_f = q_val as f64;
+                        let snapped =
+                            (((clamped - lb) / q_val_f).round() as usize * q_val) as f64 + lb;
+                        snapped.clamp(lb, ub)
+                    } else {
+                        clamped
+                    }
+                };
+
+                if !mean.is_finite() || !std.is_finite() || std <= 0.0 {
+                    return quantize(mean);
+                }
+
+                let mut rng = rand::rng();
+                const MAX_SAMPLE_ATTEMPTS: usize = 512;
+
+                for _ in 0..MAX_SAMPLE_ATTEMPTS {
+                    // Box-Muller transform using non-deterministic RNG (acceptable for sampling)
+                    let u1: f64 = rng.random();
+                    if u1 <= 0.0 {
+                        continue;
+                    }
+                    let u2: f64 = rng.random();
+                    let z =
+                        (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+                    let val = mean + std * z;
+
+                    if lb <= val && val <= ub {
+                        return quantize(val);
                     }
                 }
+
+                quantize(mean)
             })
             .collect()
     }
@@ -392,7 +428,7 @@ mod tests {
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
 
-    use super::{BandwidthFactor, NumericalParzenEstimator, compute_config_loglikelihoods};
+    use super::{BandwidthFactor, NumericalParzenEstimator, compute_config_loglikelihoods, NumericalGaussian};
 
     #[ctor::ctor]
     fn init() {
@@ -545,4 +581,23 @@ mod tests {
             .round_decimals(3)
         )
     }
+
+    #[test]
+    //std=0 and mean outside bounds
+    fn test_numerical_gaussian_sample_degenerate_out_of_bounds() {
+        let gaussian = NumericalGaussian::new(
+            Tensor::from_slice(&[10.0]),
+            Tensor::from_slice(&[0.0]),
+            Tensor::from_slice(&[1.0]),
+            Tensor::from_slice(&[0.0]),
+            Tensor::from_slice(&[1.0]),
+            0.0,
+            1.0,
+            None,
+        );
+        let samples = gaussian._sample(3);
+        assert!(samples.iter().all(|v| (0.0..=1.0).contains(v)), "samples={samples:?}");
+        assert_eq!(vec![1.0, 1.0, 1.0], samples);
+    }
+
 }

@@ -44,7 +44,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{load_final_model, opt_train, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, FixedNumSlicesNetArgsRangeOrValue, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
+use thoosa_common::train_nets::{load_final_model, opt_train, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
 use thoosa_common::utils::{cuda_mem, from, lin_t, list_devices, plot_series, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
@@ -82,6 +82,7 @@ use thoosa_shared::perf_logging::{format_perf_map, maybe_init_perf_tracing_stdou
 use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
+use crate::tasks::cross_dims::ChannelsMotifsDists;
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
@@ -306,7 +307,7 @@ where
         ThoDevice::from(Device::Cpu),//it's always cpu
     ));
 
-    let mut root_ctx = RunCtxWithPermits::new(1, "find motifs");
+    let mut root_ctx = RunCtxWithPermits::new(1, "root_ctx");
 
     match &cli.command {
         Some(ImportResources(import_resources_params)) => {
@@ -322,6 +323,7 @@ where
                 |key: String| {
                     resource_to_tensor(&import_resources_params.source_path, key.as_str())
                 },
+                true,
                 true,
             )?;
 
@@ -342,6 +344,22 @@ where
                 CacheArea::default()
             ));
 
+            /*
+
+                let random_avg_dist = Arc::new(RandomAvgDist::new(Arc::clone(store), Arc::clone(&loader), ws));
+                match &filter {
+                    SlicesFilter::DistanceRunningMeanK(_) => {}
+                    SlicesFilter::MaxDistance(k) => {
+                        let avg_dist = random_avg_dist.run(
+                            Arc::new(DevicesWrap::wrap(RandomAvgDistInput::new(1000, run_config.id.unwrap()), CacheArea::default()))
+                        ).await;
+                    }
+                };
+             */
+            let init_ctx = root_ctx.branch( Some("find motifs init ctx"), true, false);
+            let init_loader = Arc::clone(&loader_2);
+            let init_ws = Arc::clone(&ws);
+            let init_store = Arc::clone(&store);
             let run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
                 None,
                 find_motifs_run_config_range_or_value,
@@ -349,17 +367,18 @@ where
                 &ws,
                 &store,
                 true,
-                |run_configs| {
+                async move |run_configs| {
                     Arc::new(
                         crate::tasks::find_motifs::FindMotifsStage::new(
-                            &ws,
-                            &store,
-                            loader_2,
+                            &init_ws,
+                            &init_store,
+                            init_loader,
                             run_configs,
                             find_motifs_args.fixed_config.clone(), //FixedFindMotifsConfig::new(None, 10_000, false, None),
                             ThoDevice::from(1),
+                            init_ctx
                         )
-                        .expect("FindMotifsStage::new failed"),
+                        .await.expect("FindMotifsStage::new failed"),
                     )
                 },
                 || root_ctx.branch( Some("find motifs"), true, false),
@@ -392,7 +411,7 @@ where
                 &ws,
                 &store,
                 true,
-                |run_configs| {
+                |run_configs| async {
 
                     Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
                         &ws,
@@ -467,7 +486,7 @@ where
                 async |run_configs| {
 
                     new_train_label_nets_with_ml(
-                        train_label_nets_args.select_motifs_run_id.clone(),
+                        train_label_nets_args.train_motif_nets_run_ids.clone(),
                         loader_2,
                         run_configs,
                         &ws,
@@ -554,18 +573,21 @@ where
                 step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
                 // window: RangeOrValue::Value(1000),
                 window: RangeOrValue::Range { range: Range { start: 1000, end: 5001 }, step: Some((1000, 1)) },
-                filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
-                    low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-                    band_hz: RangeOrValue::Value(100.),
-                    kernel_size: RangeOrValue::Value(1000),
-                    stride: RangeOrValue::Value(1),
-                    padding: RangeOrValue::Value(0),
-                })),
-                // filter: None,
-                slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ mean: RangeOrValue::Value(0.02)}),
+                // filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
+                //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
+                //     band_hz: RangeOrValue::Value(100.),
+                //     kernel_size: RangeOrValue::Value(1000),
+                //     stride: RangeOrValue::Value(1),
+                //     padding: RangeOrValue::Value(0),
+                // })),
+                filter: None,
+                slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ k: RangeOrValue::Value(0.02)}),
             };
             let max_chunk_size = 20_000;
-
+            let init_ctx_find_motifs = root_ctx.branch(Some("init find motifs"), true, false);
+            let store_in_find_motifs = Arc::clone(&store);
+            let ws_in_find_motifs = Arc::clone(&ws);
+            let loader_in_find_motifs = Arc::clone(&loader_2);
             let find_motif_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
                 None,
                 find_motifs_run_config_range_or_value,
@@ -573,18 +595,18 @@ where
                 &ws,
                 &store,
                 true,
-                |run_configs| {
+                async move |run_configs| {
 
                     Arc::new(
                         crate::tasks::find_motifs::FindMotifsStage::new(
-                            &ws,
-                            &store,
-                            Arc::clone(&loader_2),
+                            &ws_in_find_motifs,
+                            &store_in_find_motifs,
+                            loader_in_find_motifs,
                             run_configs,
                             FixedFindMotifsConfig::new(max_chunk_size, false, None),
                             ThoDevice::from(1),
-                        )
-                        .expect("FindMotifsStage::new failed"),
+                            init_ctx_find_motifs
+                        ).await.expect("FindMotifsStage::new failed"),
                     )
                 },
                 || root_ctx.branch( Some("find motifs"), true, false),
@@ -603,7 +625,7 @@ where
                 &ws,
                 &store,
                 true,
-                |run_configs| {
+                async |run_configs| {
 
                     Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
                         &ws,
@@ -630,8 +652,8 @@ where
 
             let common_training_args = CommonTrainingRunConfigRangeOrValue {
                 cycles: RangeOrValue::Value(100),
-                // batch_size: RangeOrValue::Value(20),
-                batch_size: RangeOrValue::Range { range: Range { start: 5, end: 25 }, step: Some((5, 1)) },
+                batch_size: RangeOrValue::Value(20),
+                // batch_size: RangeOrValue::Range { range: Range { start: 5, end: 25 }, step: Some((5, 1)) },
                 lr: RangeOrValue::Value(0.0001),
             };
             let opt_config = Arc::new(OptConfig::new(100, 10));
@@ -649,7 +671,7 @@ where
                 CacheArea::default()
             ));
 
-            let run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
+            let train_motif_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
                 None,
                 train_motif_nets_run_config_range_or_value,
                 input_wrapper,
@@ -668,21 +690,31 @@ where
                 || root_ctx.branch( Some("train motif nets"), true, false),
             ).await?;
 
-            info!("train motif nets done: run_ids={run_ids:?}");
+            info!("train motif nets done: train_motif_nets_run_ids={train_motif_nets_run_ids:?}");
 
             ///////////////////
             debug!("starting train label nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
             let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue{
                 id: None,
                 common_training_args: common_training_args.clone(),
-                net: LabelNetTypeArgsRangeOrValue::FixedNumSlices(FixedNumSlicesNetArgsRangeOrValue{
-                    num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
-                    slices_len: RangeOrValue::Value(1000)
+                // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue{
+                //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+                //     slices_len: RangeOrValue::Value(1000)
+                // }),
+                net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue{
+                    num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 6 }, step: None },
+                    hidden_conv_channels: RangeOrValue::Value(64),
+                    num_head_layers: RangeOrValue::Value(10),
+                    kernel: RangeOrValue::Value(10),
                 }),
             };
 
             let select_motifs_run_ids_for_labels = select_motifs_run_ids.clone();
-            let init_ctx = root_ctx.branch(Some("init label nets"), true, false);
+            let init_ctx_train_labels = root_ctx.branch(Some("init label nets"), true, false);
+            let store_in_train_labels = Arc::clone(&store);
+            let ws_in_train_labels = Arc::clone(&ws);
+            let loader_in_train_labels = Arc::clone(&loader_2);
+            let opt_config_in_train_labels = Arc::clone(&opt_config);
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
                 None,
                 train_label_nets_run_config_range_or_value,
@@ -690,16 +722,16 @@ where
                 &ws,
                 &store,
                 true,
-                async |run_configs| {
+                async move |run_configs| {
 
                     new_train_label_nets_with_ml(
-                        select_motifs_run_ids_for_labels,
-                        Arc::clone(&loader_2),
+                        train_motif_nets_run_ids,
+                        loader_in_train_labels,
                         run_configs,
-                        &ws,
-                        &store,
-                        init_ctx,
-                        Arc::clone(&opt_config)
+                        &ws_in_train_labels,
+                        &store_in_train_labels,
+                        init_ctx_train_labels,
+                        opt_config_in_train_labels
                     ).await.map(|v|Arc::new(v))
                 },
                 || root_ctx.branch( Some("train label nets"), true, false),
@@ -717,7 +749,11 @@ where
                     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
                 },
             };
-            let init_ctx = root_ctx.branch(Some("init final nets"), true, false);
+            let init_ctx_in_train_final = root_ctx.branch(Some("init final nets"), true, false);
+            let store_in_train_final = Arc::clone(&store);
+            let ws_in_train_final = Arc::clone(&ws);
+            let loader_in_train_final = Arc::clone(&loader_2);
+
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
                 None,
                 train_final_net_run_config_range_or_value,
@@ -725,15 +761,15 @@ where
                 &ws,
                 &store,
                 true,
-                async |run_configs| {
+                async move |run_configs| {
 
                     new_train_final_net_with_ml(
                         select_motifs_run_ids,
-                        loader_2,
+                        loader_in_train_final,
                         run_configs,
-                        &ws,
-                        &store,
-                        init_ctx,
+                        &ws_in_train_final,
+                        &store_in_train_final,
+                        init_ctx_in_train_final,
                         opt_config
                     ).await.map(|v|Arc::new(v))
 
@@ -857,6 +893,7 @@ pub fn import_resources<F, R>(
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
     insert_label: bool,
+    save_pure_sets: bool,
 ) -> Result<Vec<ResourceId>, ThoError>
 where
     F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
@@ -921,16 +958,18 @@ where
         failed_tensors.len()
     );
 
-    store_guard.save_pure_sets(3, true, &t)?;
-    store_guard.save_pure_sets(10, true, &t)?;
-    store_guard.save_pure_sets(50, true, &t)?;
-    store_guard.save_pure_sets(100, true, &t)?;
-    store_guard.save_pure_sets(150, true, &t)?;
-    store_guard.save_pure_sets(200, true, &t)?;
+    if save_pure_sets {
+        store_guard.save_pure_sets(3, true, &t)?;
+        store_guard.save_pure_sets(10, true, &t)?;
+        store_guard.save_pure_sets(50, true, &t)?;
+        store_guard.save_pure_sets(100, true, &t)?;
+        store_guard.save_pure_sets(150, true, &t)?;
+        store_guard.save_pure_sets(10000, false, &t)?;
 
-    store_guard.save_pure_balanced_sets("10", Some(10),  0.6, 0.2, &t)?;
-    store_guard.save_pure_balanced_sets("100", Some(100),  0.6, 0.2, &t)?;
-    store_guard.save_pure_balanced_sets("All", None,  0.6, 0.2, &t)?;
+        store_guard.save_pure_balanced_sets("10", Some(10), 0.6, 0.2, &t)?;
+        store_guard.save_pure_balanced_sets("100", Some(100), 0.6, 0.2, &t)?;
+        store_guard.save_pure_balanced_sets("All", None,  0.6, 0.2, &t)?;
+    }
 
     store_guard.save_groups_by_label_cnt(100, &t)?;
     t.commit()?;
@@ -1241,7 +1280,6 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
 
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
-    // fixed_config: FC,
     input: Arc<DevicesWrap<ST::In<'static>>>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
@@ -1250,7 +1288,7 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
     ctx_f: CtxF,
 ) -> Result<Vec<RunId>, ThoError>
 where
-    F: FnOnce(Vec<RC>) -> Arc<ST>,//TODO return Result
+    F: AsyncFnOnce(Vec<RC>) -> Arc<ST>,//TODO return Result
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
@@ -1277,7 +1315,7 @@ where
         vec![]
     };
 
-    let stage = f(run_configs);
+    let stage = f(run_configs).await;
 
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
 
@@ -1327,10 +1365,10 @@ where
 
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
 
-    savable.save(store, ws)?;
+    let run_id = savable.save(store, ws)?;
 
 
-    Ok(vec![])
+    Ok(vec![run_id])
 
 }
 
@@ -1341,7 +1379,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
         let ctx = CopyCtx::instance(Cuda(0));
 
         let t_0 = Instant::now();
-        for i in (0..num_tensors) {
+        for i in 0..num_tensors {
 
 
             let t = Tensor::stack(&[
@@ -1407,13 +1445,10 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{
-        import_resources, run_all_grid_step, run_opt_step,
-        run_plot_motif_slices, Cli,
-    };
+    use crate::cli::{import_resources, run_all_grid_step, run_grid, run_opt_step, run_plot_motif_slices, Cli};
     use clap::Parser;
     use futures::executor::block_on;
-    use log::LevelFilter::{Debug, Error, Trace, Warn};
+    use log::LevelFilter::{Debug, Error, Info, Trace, Warn};
     use log::{debug, error, info, set_max_level, trace, LevelFilter};
     use parking_lot::lock_api::MutexGuard;
     use parking_lot::{Mutex, RawMutex, RawRwLock, RwLock};
@@ -1428,6 +1463,7 @@ mod cli_tests {
     use std::sync::Arc;
     use std::vec::IntoIter;
     use std::{fs, ptr};
+    use std::time::Duration;
     use tch::Device::{Cpu, Cuda};
     use tch::display::{set_print_options, PrinterOptions};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
@@ -1438,9 +1474,10 @@ mod cli_tests {
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Simple};
+    use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{
-        motif_node, CommonTrainingRunConfig, InferArgs, MotifNetParams, OptConfig,
+        lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifNetParams, OptConfig,
         TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig,
         TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue,
         TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue,
@@ -1461,11 +1498,25 @@ mod cli_tests {
     use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::test_utils::set_panic_hook;
-    use thoosa_shared::{
-        cdt, cdt_for_dir, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp,
-        sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoError,
-    };
+    use thoosa_shared::{cdt, cdt_for_dir, mono_key, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoError};
+    use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::data_with_extra::DataWithExtra;
+    use thoosa_shared::perf_logging::{format_perf_map, PERF};
+    use thoosa_shared::runner::cache_areas::CacheArea;
+    use thoosa_shared::runner::common::{PermitsCtx, RunCtx};
+    use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use thoosa_shared::runner::common::runnable::AsyncStage;
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_shared::traits::DataId;
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
+    use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
+    use crate::tasks::cross_dims::MotifSlices;
+    use crate::tasks::cross_loader::ResourcesConfigInput;
+    use crate::tasks::find_motifs::FindMotifsStage;
+    use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
+    use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
+    use crate::tasks::tensor_loader::RawTensorLoader;
 
     #[ctor::ctor]
     fn init() {
@@ -1520,33 +1571,6 @@ mod cli_tests {
         Ok(resources)
     }
 
-    fn plot_t(t_0: &Tensor, label: &str) -> Result<(), ThoError> {
-        plot_series(
-            (0..1)
-                .into_iter()
-                .map(|channel| {
-                    (
-                        format!("0"),
-                        BLACK,
-                        t_0.i((channel, ..))
-                            .iter::<f64>()
-                            .unwrap()
-                            .enumerate()
-                            .map(|(i, v)| (i as f32, v as f32))
-                            .collect::<Vec<(f32, f32)>>(),
-                    )
-                })
-                .collect(),
-            label,
-            (2000, 1000),
-            &format!(
-                "/tmp/plots/{label}_{:?}.png",
-                chrono::Utc::now().to_rfc3339()
-            )
-            .as_str(),
-        )?;
-        Ok(())
-    }
 
     fn label_1_t(n: u32, max_y: f32) -> Tensor {
         Tensor::vstack(&[Tensor::from_slice(
@@ -1644,6 +1668,7 @@ mod cli_tests {
             },
             |_: String| Ok(Tensor::from_slice(&[0., 1., 2., 0., 10., 20.]).view((2, -1))),
             true,
+            false,
         )?;
 
         let imported_resources = store.read().list_resources_by_ids(&imported_ids)?;
@@ -1659,4 +1684,296 @@ mod cli_tests {
 
         Ok(())
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
+    async fn test_run_all() -> Result<(), ThoError> {
+        unsafe {
+            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        }
+
+        // log::set_max_level(log::LevelFilter::Trace);
+        let global_ctx = GlobalCtx::init_devices(2);
+
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        debug!("test_motifs: test_dir={test_dir:?}");
+
+        fs::create_dir_all(&test_dir)?;
+        let base_path = test_dir.to_string_lossy().to_string();
+
+        let n = 1234;
+
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+            test_dir.clone(),
+            3,
+            n as u32,
+            100,
+        )?));
+        let ws_rc = Arc::clone(&ws);
+        let max_y = 30.0;
+
+        let sig_0_v = sig_one_imp(n, max_y, None, None, 0.1);
+        let sig_1_v = sig_two_imp(n, max_y, None, None, 0.1);
+        let sig_2_v = sig_three_imp(n, max_y, None, None);
+
+        let x = lin_t(n);
+        // plot_series(
+        //     vec![
+        //         (
+        //             format!("Sig0"),
+        //             plotters::prelude::RED,
+        //             vec_f32_from(&x)
+        //                 .into_iter()
+        //                 .zip(sig_0_v.clone())
+        //                 .collect::<Vec<(f32, f32)>>(),
+        //         ),
+        //         (
+        //             format!("Sig1"),
+        //             plotters::prelude::GREEN,
+        //             vec_f32_from(&x)
+        //                 .into_iter()
+        //                 .zip(sig_1_v.clone())
+        //                 .collect::<Vec<(f32, f32)>>(),
+        //         ),
+        //         (
+        //             format!("Sig2"),
+        //             plotters::prelude::BLACK,
+        //             vec_f32_from(&x)
+        //                 .into_iter()
+        //                 .zip(sig_2_v.clone())
+        //                 .collect::<Vec<(f32, f32)>>(),
+        //         ),
+        //     ],
+        //     "test_find_motifs_euc",
+        //     (2000, 1000),
+        //     &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str(),
+        // )?;
+
+        let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
+        debug!(
+            "t_0_0.size()={:?}, t_0_1.size()={:?}, t_1_0.size()={:?}, t_1_1.size()={:?}",
+            t_0_0.size(),
+            t_0_1.size(),
+            t_1_0.size(),
+            t_1_1.size()
+        );
+
+        t_0_0.save(ws.read().tensors_path().join(format!("t_0_0.pt")))?;
+        t_0_1.save(ws.read().tensors_path().join(format!("t_0_1.pt")))?;
+        t_1_0.save(ws.read().tensors_path().join(format!("t_1_0.pt")))?;
+        t_1_1.save(ws.read().tensors_path().join(format!("t_1_1.pt")))?;
+
+        // debug!("t_1_1 mean={} max-min={}", t_1_1.mean(None).double_value(&[]), t_1_1.max() - t_1_1.min());
+        let channels = 3;
+        let tensors_path = ws.read().tensors_path().clone();
+        let tensors_path_for_import = ws.read().tensors_path().clone();
+
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
+
+        let imported_ids = import_resources(
+            &ws,
+            &store,
+            &["label_0", "label_1"],
+            || {
+                Ok(HashMap::from([
+                    ("t_0_0".to_string(), vec![("label_0".to_string(), 1.0)]),
+                    ("t_0_1".to_string(), vec![("label_0".to_string(), 1.0)]),
+                    ("t_1_0".to_string(), vec![("label_1".to_string(), 1.0)]),
+                    ("t_1_1".to_string(), vec![("label_1".to_string(), 1.0)]),
+                ]))
+            },
+            // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
+            |key| {
+                Tensor::load(tensors_path_for_import.join(format!("{}.pt", key)))
+                    .map_err(ThoError::from)
+            },
+            true,
+            false,//TODO more resources
+        )?;
+
+        let resources = store.read().list_resources_by_ids(&imported_ids)?;
+
+        let resources_0_0 = resources
+            .iter()
+            .find(|r| r.file_stem().eq("t_0_0"))
+            .expect("t_0_0");
+        let resources_0_1 = resources
+            .iter()
+            .find(|r| r.file_stem().eq("t_0_1"))
+            .expect("t_0_1");
+        let resources_1_0 = resources
+            .iter()
+            .find(|r| r.file_stem().eq("t_1_0"))
+            .expect("t_1_0");
+        let resources_1_1 = resources
+            .iter()
+            .find(|r| r.file_stem().eq("t_1_1"))
+            .expect("t_1_1");
+
+        debug!("test_motifs: resources_0_0={resources_0_0:?}");
+
+        let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
+            move |key, _| {
+                let tensor = Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem())))?;
+                debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
+                Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
+            },
+            ThoDevice::from(Device::Cpu),
+        ));
+
+        let mut ctx = RunCtxWithPermits::new(1, "aa");
+        ctx.add_permit(global_ctx.acquire_many(0, 1, Arc::new(SynKey::new([mono_key!("test", "test")]))).await?);
+
+        let cache_area = ctx.cache_area();
+        let resources_input = Arc::new(DevicesWrap::wrap(
+            ResourcesConfigInput::new(Simple::new(ResourceType::List(
+                vec!["t_0_0", "t_0_1", "t_1_0", "t_1_1"]
+                    .into_iter()
+                    .map(|v| v.to_string())
+                    .collect(),
+            ))),
+            CacheArea::default()
+        ));
+
+        let step_10_window_100 = r#"{
+            step:"10",
+            window:"100",
+            slices_filter: {'DistanceRunningMeanK':{'k':'0.2'}}
+        }"#;
+
+
+        let step_10_window_100_with_filter = r#"{
+            step:'10',
+            window:'100',
+            'filter': {'BandPassFilter': {'low_hz':'20.', 'band_hz':'10.', kernel_size:'10', stride:'1', 'padding':'0'}},
+            'slices_filter':{'DistanceRunningMeanK':{'k':'0.02'}}}
+        "#;
+        let init_ctx = ctx.branch(Some("init find_motifs_test"), false, false);
+        let run_ids = run_grid::<_, _, _, _, _>(
+            None,
+            serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(
+                // &step_10_window_100,
+                &step_10_window_100_with_filter,
+            ).unwrap(),
+            resources_input,
+            &ws,
+            &store,
+            true,
+            async |run_configs| {//TODO move init_ctx
+
+                Arc::new(
+                    FindMotifsStage::new(
+                        &ws,
+                        &store,
+                        Arc::clone(&loader),
+                        run_configs,
+                        FixedFindMotifsConfig::new(30000, false, None),
+                        ThoDevice::from(1),
+                        init_ctx
+                    ).await.expect("FindMotifsStage::new failed in test"),
+                )
+            },
+            || ctx.branch(Some("find_motifs_test"), false, false),
+        ).await?;
+
+        let train_label_net_run_config =
+        serde_json5::from_str::<TrainLabelNetsRunConfigRangeOrValue>(
+            r#"{
+                'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'opt_max_evals':'3', 'opt_n_init': '3'},
+                'net': {ConvNet:{'num_conv_layers':'3..10','hidden_conv_channels':'64', 'num_head_layers':'10',  'kernel':'100'}}
+            }"#,
+        )?;
+
+        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::new(
+            Arc::clone(&store),
+            Arc::clone(&loader),
+            &ws
+        ));
+
+        let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
+            Arc::clone(&motif_loader_impl),
+            Arc::new(AverageEuclideanDistanceStage::<RunCtxWithPermits>::new())
+        ));
+
+        let motifs = store.read().list_motifs(run_ids[0])?;
+
+        debug!("test_find_motifs: motifs={motifs:?}");
+
+        for motif_id_raw in motifs {
+            let motif_id_value = DataId::from(&(motif_id_raw as u32));
+            let motif_id = Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(motif_id_value.clone()), CacheArea::default()));
+
+            let motif = Arc::clone(&motif_loader_impl).run(
+                Arc::clone(&motif_id),
+                ctx.branch(Some("find_motifs_motif_loader"), false, false),
+            )
+                .await?;
+
+            motif
+                .with_data_ref(1, &mut ctx.branch(Some("find_motifs_motif_data"), false, false), None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, _ctx| {
+                    debug!("test_find_motifs: motif_id={motif_id_raw} slices={:?}", t.data());
+
+                    Ok(())
+                })
+                .await?;
+
+            let dist = Arc::clone(&clc_dist)
+                .run_cached(Arc::clone(&motif_id), ctx.branch(Some("find_motifs_clc_dist"), false, false))
+                .await?
+                .with_data_ref(0, &mut ctx.branch(Some("find_motifs_dist_value"), false, false), None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
+                .await?;
+
+            debug!("test_find_motifs:  dist={dist:?} motif_id={motif_id_raw}");
+
+            //TODO
+        }
+
+        Ok(())
+    }
+
+
+    /*
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="test_tracing"))]
+    async fn test_tracing(){
+        tokio::time::sleep(Duration::from_millis(100)).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_log_trace() {
+        log::set_max_level(Trace);
+
+        trace!("some trace");
+        debug!("some debug");
+        info!("some info");
+
+        test_tracing().await;
+        info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
+        println!("test_log_trace");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_log_debug() {
+        log::set_max_level(Debug);//should be default
+
+        trace!("some trace");
+        debug!("some debug");
+        info!("some info");
+
+        test_tracing().await;
+        info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
+        println!("test_log_debug");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_log_info() {
+        log::set_max_level(Info);
+
+        trace!("some trace");
+        debug!("some debug");
+        info!("some info");
+
+        test_tracing().await;
+        info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
+        println!("test_log_info");
+    }
+     */
 }

@@ -30,7 +30,7 @@ where
 {
     type A = Arc<ST>;
 
-    async fn adjust(&self, adjustable: Self::A, adjust_context: &mut AC) -> Result<Self::A, AdjusterError<Self::A>> {
+    async fn adjust(&self, _adjustable: Self::A, _adjust_context: &mut AC) -> Result<Self::A, AdjusterError<Self::A>> {
         todo!()
     }
 }

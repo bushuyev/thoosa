@@ -1,7 +1,6 @@
 #![allow(unused_parens)]
 #![allow(async_fn_in_trait)]
 
-use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 
@@ -15,8 +14,6 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::atomic::Ordering::Relaxed;
 use crate::CopyToDevice;
 use crate::Cause;
 use tokio::sync::{Notify, RwLockReadGuard};
@@ -81,19 +78,21 @@ where
 
                     if let Some(value) = Self::cache().await.get_mut(&key_for_purger) {
                         let shared_fut = value.value().clone();
-                        if shared_fut.peek().is_some() { //to avoid locking on itself
-                            let data: Arc<DevicesWrap<Self::Out>> = shared_fut.await?;
+                        debug!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
+
+                        if let Some( Ok(data)) = shared_fut.peek()  { //to avoid locking on itself
+
                             data.remove_cache_area(cache_area);
 
-                            debug!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} data.cache_area={:?} ", data.cache_area);
+                            debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} data.cache_area={:?} ", data.cache_area);
                             if data.cache_area.assigned_count() == 0 {
                                 data.dump_to_cpu(device_idx).await?;
 
-                                debug!("Cachable::purge_gpu_cache_area: 3  key={key_for_purger:?} done");
+                                debug!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
                             }
                         }
                     } else {
-                        warn!("Cachable::purge_gpu_cache_area: 4 key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //warning
+                        warn!("Cachable::purge_gpu_cache_area: 5 key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //warning
                     }
 
                     Ok(())
@@ -195,7 +194,7 @@ where
     async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoError>
         where Self:Sized;
 
-    async fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> bool
+    fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> impl Future<Output=bool> + Send
         where Self:Sized;
 }
 
@@ -782,8 +781,8 @@ where
         O::M::load_from_any_device_(self, to_device_idx).await
     }
 
-    pub async fn is_all_on_cpu(&self) -> bool {
-        O::M::is_all_on_cpu(self).await
+    pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {
+        O::M::is_all_on_cpu(self)
     }
 }
 

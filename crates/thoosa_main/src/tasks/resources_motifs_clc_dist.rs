@@ -31,7 +31,7 @@ use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
 use crate::tasks::cross_batch_clc::{unfold_and_cat, UnfoldParams};
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
-use crate::tasks::slices_iter::SlicesIter;
+use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::runner::permits::{NumPermits, RunnerPerm};
@@ -132,10 +132,11 @@ where
             .resource_ids
             .iter()
             .zip(batch_1_sizes.into_iter())
-            .map(|(resource_id, size)| (*resource_id, size as usize))
+            .zip(input.resource_offsets.iter().copied())
+            .map(|((resource_id, size), offset)| ResourceSlices::new(*resource_id, size as usize, offset))
             .collect::<Vec<_>>();
 
-        let resources_iter = SlicesIter::new(unfold_params.step() as usize, resource_ids_sizes);
+        let resources_iter = SlicesIter::new_with_offsets(unfold_params.step() as usize, resource_ids_sizes);
 
         let mut mask_makers = vec![
             LocalMin { dim: 2 },
@@ -359,6 +360,7 @@ pub struct ClcResourcesMotifsDistInput<'a> {
     id: SynKey,
     batch: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
     resource_ids: Vec<ResourceId>,
+    resource_offsets: Vec<u32>,
     stacked_motifs_output: &'a StackedMotifsOutput,
 }
 
@@ -369,10 +371,22 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
         resource_ids: Vec<ResourceId>,
         batched_motifs_output: &'a StackedMotifsOutput,
     ) -> ClcResourcesMotifsDistInput<'a> {
+        let resource_offsets = vec![0; resource_ids.len()];
+        Self::new_with_offsets(batch, resource_ids, resource_offsets, batched_motifs_output)
+    }
+
+    pub fn new_with_offsets(
+        batch: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
+        resource_ids: Vec<ResourceId>,
+        resource_offsets: Vec<u32>,
+        batched_motifs_output: &'a StackedMotifsOutput,
+    ) -> ClcResourcesMotifsDistInput<'a> {
+        assert_eq!(resource_ids.len(), resource_offsets.len());
         Self {
             id: SynKey::new([mono_key!("ClcResourcesMotifsDistInput", "stage")]),
             batch,
             resource_ids,
+            resource_offsets,
             stacked_motifs_output: batched_motifs_output,
         }
     }

@@ -11,8 +11,9 @@ use tch::Kind;
 use tch::Kind::Bool;
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::{IndexOp, TchError, Tensor};
-use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm_2};
+use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm_2, z_norm_dims};
 use thoosa_shared::ThoError;
+use crate::pearson_corr::pearson_corr_distance_matrix_0_2;
 
 #[allow(dead_code)]
 pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
@@ -83,9 +84,7 @@ impl<'a> MaskMaker<'a> {
                 };
                 _ = prev.f_diagonal(0, 1, 2)?.f_fill_(0)?;
 
-                trace!(
-                    "MaskMaker::make_mask Diagonal: 2. perv_mask.is_some()={has_prev} prev={prev}"
-                );
+                trace!("MaskMaker::make_mask Diagonal: 2. perv_mask.is_some()={has_prev} prev={prev}");
 
                 Ok(prev)
             }
@@ -164,6 +163,15 @@ pub fn clc_dist_d2_and_mask(
         )));
     }
 
+    //TODO options for z_norm_dims and pearson_corr
+
+    // let distances = Tensor::f_cdist(
+    //     &z_norm_dims(&t_0, &[2], 1e-8)?,
+    //     &z_norm_dims(&t_1, &[2], 1e-8)?,
+    //     2.0, 0
+    // )?;
+
+    // let distances = pearson_corr_distance_matrix_0_2(&t_0, &t_1, 1e-8)?;
 
     let distances = Tensor::f_cdist(&t_0, &t_1, 2.0, 0)?;
 
@@ -338,6 +346,7 @@ fn mean_mask(
     } else {
         (
             distances.f_mean_dim(&[1i64, 2i64][..], false, Kind::Float)?,
+
             Tensor::f_from_slice(&[distances_size[1] * distances_size[2]])?
                 .f_to_device(distances.device())?
                 .f_broadcast_to(distances_size[0])?, //  Tensor of size [channels x 1] with values= distances[1] * distances[2] in each channel
@@ -351,6 +360,7 @@ fn mean_mask(
     debug!("mean_mask: total_samples={total_samples:?} counts={counts_t:?}");
     debug!("mean_mask: total_samples.device={:?} counts.device={:?}",total_samples.lock().device(),counts_t.device());
 
+    //TODO remove or use copy_ctx
     let (mean_t, counts_t) = (
         mean_t.f_to_device(distances.device())?,
         counts_t.f_to_device(distances.device())?,
@@ -484,6 +494,7 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoError> {
     drop(j);
 
     // Step 5: Compute square roots to get Euclidean distances
+    trace!("average_euclidean_distance: pairwise_squared_dists=\n{pairwise_squared_dists}");
     let clc_dist_d2s = pairwise_squared_dists.f_sqrt()?;
     trace!("average_euclidean_distance: pairwise_squared_dists=\n{pairwise_squared_dists}");
     drop(pairwise_squared_dists);

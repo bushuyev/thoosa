@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{DeriveInput, Expr, Lit, Meta, parse_macro_input};
+use syn::{DeriveInput, parse_macro_input};
 // Legacy macro kept for compatibility in this workspace (unused here)
 #[proc_macro_derive(ACachable)]
 pub fn derive_acachable(_input: TokenStream) -> TokenStream {
@@ -11,7 +11,7 @@ pub fn derive_acachable(_input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Cached, attributes(cache_name))]
 pub fn derive_cached(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let DeriveInput { attrs, ident: name, generics, .. } = input;
+    let DeriveInput { attrs: _attrs, ident: name, generics, .. } = input;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let map_type = quote! {
