@@ -44,7 +44,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{load_final_model, opt_train, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
+use thoosa_common::train_nets::{load_final_model, opt_train, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
 use thoosa_common::utils::{cuda_mem, from, lin_t, list_devices, plot_series, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
@@ -486,7 +486,7 @@ where
                 async |run_configs| {
 
                     new_train_label_nets_with_ml(
-                        train_label_nets_args.select_motifs_run_id.clone(),
+                        train_label_nets_args.train_motif_nets_run_ids.clone(),
                         loader_2,
                         run_configs,
                         &ws,
@@ -652,8 +652,8 @@ where
 
             let common_training_args = CommonTrainingRunConfigRangeOrValue {
                 cycles: RangeOrValue::Value(100),
-                // batch_size: RangeOrValue::Value(20),
-                batch_size: RangeOrValue::Range { range: Range { start: 5, end: 25 }, step: Some((5, 1)) },
+                batch_size: RangeOrValue::Value(20),
+                // batch_size: RangeOrValue::Range { range: Range { start: 5, end: 25 }, step: Some((5, 1)) },
                 lr: RangeOrValue::Value(0.0001),
             };
             let opt_config = Arc::new(OptConfig::new(100, 10));
@@ -697,9 +697,15 @@ where
             let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue{
                 id: None,
                 common_training_args: common_training_args.clone(),
-                net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue{
-                    num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
-                    slices_len: RangeOrValue::Value(1000)
+                // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue{
+                //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+                //     slices_len: RangeOrValue::Value(1000)
+                // }),
+                net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue{
+                    num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 6 }, step: None },
+                    hidden_conv_channels: RangeOrValue::Value(64),
+                    num_head_layers: RangeOrValue::Value(10),
+                    kernel: RangeOrValue::Value(10),
                 }),
             };
 

@@ -382,6 +382,7 @@ mod tests {
     use log::LevelFilter::Debug;
     use parking_lot::RwLock;
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use tch::nn::{self, VarStore};
     use tch::{Device, Kind, Tensor};
@@ -443,9 +444,17 @@ mod tests {
         let valid_group = "valid_group";
         let motif_t = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0", "motif_id")]), Tensor::f_zeros(&[1, motif_width as i64], (Kind::Float, device))?)?);
 
+        let (motif_0_params, motif_0_net) = motif_test_net_(device, Arc::clone(&motif_t), step);
+        let (motif_1_params, motif_1_net) = motif_test_net_(device, Arc::clone(&motif_t), step);
+        let net_id_0 = PathBuf::from("0/0_2");
+        let net_id_1 = PathBuf::from("0/1_2");
+
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 1, 100, 1000)
-                .with_load_motif_nets(vec![vec![motif_test_net_(device, Arc::clone(&motif_t), step), motif_test_net_(device, Arc::clone(&motif_t), step)]])
+                .with_load_motif_net(vec![
+                    (net_id_0.clone(), motif_0_params, motif_0_net),
+                    (net_id_1.clone(), motif_1_params, motif_1_net),
+                ])
                 .with_label_nets(HashMap::from([
                     ("A".to_string(), vec![(100, const_label_net(2, 1, 0.1, device).0, const_label_net(2, 1, 0.1, device).1)]),
                     ("B".to_string(), vec![(200, const_label_net(2, 1, 0.2, device).0, const_label_net(2, 1, 0.2, device).1)]),
@@ -469,6 +478,16 @@ mod tests {
         let store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
                 .with_list_selected_motifs([(select_motifs_run_id, Ok(vec![vec![(0, 1.0f64), (1, 1.0f64)]]))])
+                .with_list_selected_nets([
+                    (
+                        select_motifs_run_id,
+                        Some(0.3),
+                        Ok(vec![
+                            (net_id_0, 0.1f32),
+                            (net_id_1, 0.2f32),
+                        ]),
+                    ),
+                ])
                 .with_list_output_run_ids([(select_motifs_run_id, Ok(vec![100, 200]))])
                 .with_list_resource_random_in_group([(train_group, Ok(train_logits)), (valid_group, Ok(valid_logits))])
                 .build(),

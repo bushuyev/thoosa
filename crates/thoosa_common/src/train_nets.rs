@@ -59,7 +59,7 @@ use thoosa_shared::traits::{Data, SimpleId, WithId};
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
     #[arg(long)]
-    pub select_motifs_run_id: Vec<RunId>,
+    pub train_motif_nets_run_ids: Vec<RunId>,
 
     #[arg(long)]
     pub train_resource_group: String,
