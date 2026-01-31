@@ -8,18 +8,18 @@ use thoosa_shared::ThoError;
 #[async_trait]
 pub trait AsyncDataBatch<DX: Dims, DY: Dims>: Debug + Send + Sync {
 
-    async fn train_batch_stream<'a>(&'a self) -> BoxStream<'a, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoError>>;
+    async fn train_batch_stream<'a>(&'a self) -> BoxStream<'a, Result<(ThoBatch<DX>, Option<ThoBatch<DX>>, ThoBatch<DY>), ThoError>>;
 
-    async fn valid_batch_stream<'a>(&'a self) -> BoxStream<'a, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoError>>;
+    async fn valid_batch_stream<'a>(&'a self) -> BoxStream<'a, Result<(ThoBatch<DX>, Option<ThoBatch<DX>>, ThoBatch<DY>), ThoError>>;
 }
 
 #[async_trait]
 impl<DX: Dims, DY: Dims, B:AsyncDataBatch<DX, DY>>  AsyncDataBatch<DX, DY> for Arc<B> {
-    async fn train_batch_stream<'a>(&'a self) -> BoxStream<'a, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoError>> {
+    async fn train_batch_stream<'a>(&'a self) -> BoxStream<'a, Result<(ThoBatch<DX>, Option<ThoBatch<DX>>, ThoBatch<DY>), ThoError>> {
         self.as_ref().train_batch_stream().await
     }
 
-    async fn valid_batch_stream<'a>(&'a self) -> BoxStream<'a, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoError>> {
+    async fn valid_batch_stream<'a>(&'a self) -> BoxStream<'a, Result<(ThoBatch<DX>, Option<ThoBatch<DX>>, ThoBatch<DY>), ThoError>> {
         self.as_ref().valid_batch_stream().await
     }
 }
@@ -43,8 +43,8 @@ pub mod mock_async_data_batch {
 
         #[async_trait]
         impl<DX: Dims, DY: Dims> AsyncDataBatch<DX, DY> for TestBatch<DX, DY>{
-            async fn train_batch_stream<'a>(&'a self)-> BoxStream<'a, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoError >>;
-            async fn valid_batch_stream<'a>(&'a self)-> BoxStream<'a, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoError >>;
+            async fn train_batch_stream<'a>(&'a self)-> BoxStream<'a, Result<(ThoBatch<DX>, Option<ThoBatch<DX>>,  ThoBatch<DY>), ThoError >>;
+            async fn valid_batch_stream<'a>(&'a self)-> BoxStream<'a, Result<(ThoBatch<DX>, Option<ThoBatch<DX>>, ThoBatch<DY>), ThoError >>;
         }
 
     }
@@ -56,7 +56,7 @@ pub mod mock_async_data_batch {
     impl<DX: Dims, DY: Dims> MockAsyncDataBatchBuilder<DX, DY> {
         pub fn with_train_stream_calls<F>(mut self, calls: Arc<AtomicUsize>, stream_fn: F) -> Self
         where
-            F: Fn() -> BoxStream<'static, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoError>>
+            F: Fn() -> BoxStream<'static, Result<(ThoBatch<DX>, Option<ThoBatch<DX>>, ThoBatch<DY>), ThoError>>
                 + Send
                 + Sync
                 + 'static,
@@ -73,7 +73,7 @@ pub mod mock_async_data_batch {
 
         pub fn with_valid_stream_calls<F>(mut self, calls: Arc<AtomicUsize>, stream_fn: F) -> Self
         where
-            F: Fn() -> BoxStream<'static, Result<(ThoBatch<DX>, ThoBatch<DY>), ThoError>>
+            F: Fn() -> BoxStream<'static, Result<(ThoBatch<DX>, Option<ThoBatch<DX>>, ThoBatch<DY>), ThoError>>
                 + Send
                 + Sync
                 + 'static,

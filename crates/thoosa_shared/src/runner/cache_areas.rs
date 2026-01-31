@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use log::debug;
 use crate::{Cause, ThoError};
-use crate::runner::global_ctx;
 
 /// Public “area handle”: global bit index (0..n_areas).
 pub type CacheAreaId = u64;
@@ -250,7 +249,7 @@ impl Eq for CacheArea {}
 
 impl From<u64> for CacheArea {
     fn from(value: u64) -> Self {
-        let mut cache_area = CacheArea::new(CACHE_AREAS_WORDS);
+        let cache_area = CacheArea::new(CACHE_AREAS_WORDS);
 
         cache_area.add_cache_area(value);
 
@@ -537,5 +536,4 @@ mod cache_area_tests {
         assert!(!c.contains(u64::MAX));
     }
 }
-
 

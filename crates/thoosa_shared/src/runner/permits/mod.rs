@@ -1,9 +1,8 @@
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
-use std::mem;
 use std::ops::Deref;
 use std::sync::Arc;
-use log::{debug, trace};
+use log::debug;
 use crate::ThoError;
 use crate::traits::CachableIdTr;
 use tokio::sync::{Notify, OwnedSemaphorePermit, mpsc};

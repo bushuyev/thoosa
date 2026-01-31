@@ -1,17 +1,14 @@
-use ambassador::Delegate;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
-use log::{debug, info, warn};
-use parking_lot::{Mutex, RwLock};
+use log::{debug, warn};
+use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
 use std::mem;
 use std::sync::Arc;
 use mockall_double::double;
 use thoosa_named_derive::Named;
-use thoosa_shared::comp_id::{MonoKey, SynKey};
-use thoosa_shared::resource::Resource;
-use thoosa_shared::runner::common::cachable::Cached;
-use thoosa_shared::runner::common::{ambassador_impl_PermitsCtx, DropIf, MockRunCtx, PermitsCtx, RunCtx};
+use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::runner::common::{DropIf, PermitsCtx, RunCtx};
 #[double]
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::permits::{NumPermits, RunnerPerm};
@@ -33,7 +30,7 @@ pub struct RunCtxWithPermits {
     return_to: Option<(SynKey, Arc<Mutex<Vec<RunnerPerm>>>)>,
 
     purge_gpu_closures:Option<Arc<Mutex<Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>>>>,
-    branches:u32
+    branches:u32//for unique branch ids, never decreased
 }
 
 impl Debug for RunCtxWithPermits {
@@ -138,7 +135,6 @@ impl RunCtx for RunCtxWithPermits {
 
         self.branches+=1;
 
-        self.branches+=1;
         let branch_full_id = match new_name {
             None => {
                 self.id.clone()
@@ -157,7 +153,7 @@ impl RunCtx for RunCtxWithPermits {
             debug!("RunCtx2::branch: branch_name={:?}  new_cache_area={new_cache_area}", branched_ctx.id);
 
             branched_ctx.cache_area = new_cache_area;
-            branched_ctx.purge_gpu_closures = Some(Arc::new(Mutex::new(vec![])));//this causes it to purge gpu caches on Drop
+            branched_ctx.purge_gpu_closures = Some(Arc::new(Mutex::new(vec![])));//Arc::strong_count == 1 causes it to purge gpu caches on Drop
 
             branched_ctx
 
@@ -169,11 +165,11 @@ impl RunCtx for RunCtxWithPermits {
             branched_ctx
         };
 
-        // branched_ctx.id = &self.id + &branched_ctx.id;
 
         let parent_permits = mem::replace(&mut self.permits, Arc::new(Mutex::new(Vec::new())));
 
         branched_ctx.permits = parent_permits;
+
         if give_permits_back_to_parent {
             branched_ctx.set_return_to((self.id.clone(), Arc::clone(&self.permits)));
         }
@@ -260,7 +256,7 @@ mod tests {
 
     #[test]
     fn branch_moves_permits_to_child() {
-        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let sem = Arc::new(Semaphore::new(4));
         let mut parent = make_ctx("parent");
@@ -274,7 +270,7 @@ mod tests {
 
     #[test]
     fn branched_ctx_returns_permits_to_parent_on_drop() {
-        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let sem = Arc::new(Semaphore::new(4));
         let mut parent = make_ctx("parent");

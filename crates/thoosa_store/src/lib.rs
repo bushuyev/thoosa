@@ -184,7 +184,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         ThoError,
     >;
 
-    fn list_random_slices(
+    fn list_random_motif_slices(
         &self,
         motif_id: u32,
         motif_width: u32,
@@ -207,6 +207,10 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     fn save_selected_motifs(&mut self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoError>;
 
     fn list_selected_motifs(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
+
+    fn save_selected_net(&mut self, run_id: RunId, path: PathBuf, loss: f32) -> Result<(), ThoError>;
+
+    fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError>;
 
     fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError>;
     fn conn(&self) -> &parking_lot::Mutex<Connection>; //parking_lot:: for mockall
@@ -336,7 +340,7 @@ mock! {
             ),
             ThoError,
         >;
-        fn list_random_slices(
+        fn list_random_motif_slices(
             &self,
             motif_id: u32,
             motif_width: u32,
@@ -364,6 +368,17 @@ mock! {
             motif_selection_id: RunId,
             channels: u32,
         ) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
+        fn save_selected_net(
+            &mut self,
+            run_id: RunId,
+            path: PathBuf,
+            loss: f32,
+        ) -> Result<(), ThoError>;
+        fn list_selected_nets(
+            &self,
+            run_id: RunId,
+            loss: Option<f32>,
+        ) -> Result<Vec<(PathBuf, f32)>, ThoError>;
         fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError>;
         fn conn(&self) -> &parking_lot::Mutex<Connection>;
     }
@@ -1604,10 +1619,7 @@ impl Store for SqlStore {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
-        debug!(
-            "save_slices_groups_as_motifs_from_tmp_db: run_id={run_id:?}, channel={channel:?} path={}",
-            as_ref.as_ref().to_string_lossy()
-        );
+        debug!("save_slices_groups_as_motifs_from_tmp_db: run_id={run_id:?}, channel={channel:?} path={}",as_ref.as_ref().to_string_lossy());
 
         {
             t.execute(
@@ -1986,8 +1998,8 @@ impl Store for SqlStore {
         Ok(channel_slices)
     }
 
-    //gpt
-    fn list_random_slices(
+    ///gpt generated, returns slices from same tensors and same channel as target motif but not belonging to the motif
+    fn list_random_motif_slices(
         &self,
         motif_id: u32,
         motif_width: u32,
@@ -2426,6 +2438,56 @@ impl Store for SqlStore {
         Ok(channels_motifs)
     }
 
+    fn save_selected_net(
+        &mut self,
+        run_id: RunId,
+        path: PathBuf,
+        loss: f32,
+    ) -> Result<(), ThoError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        t.execute(
+            "INSERT INTO selected_nets (net_path, run_id, loss) VALUES (?, ?, ?)",
+            rusqlite::params![path.to_string_lossy().to_string(), run_id, loss],
+        )?;
+
+        t.commit()?;
+
+        Ok(())
+    }
+
+    fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        let selected_nets = {
+            let (query, params): (&str, Vec<rusqlite::types::Value>) = match loss {
+                Some(loss) => (
+                    "SELECT net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC, net_path ASC",
+                    vec![rusqlite::types::Value::Integer(run_id as i64), rusqlite::types::Value::Real(loss as f64)],
+                ),
+                None => (
+                    "SELECT net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC, net_path ASC",
+                    vec![rusqlite::types::Value::Integer(run_id as i64)],
+                ),
+            };
+            let mut stmt = t.prepare(query)?;
+            stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
+                Ok((
+                    PathBuf::from(row.get::<usize, String>(0)?),
+                    row.get::<usize, f32>(1)?,
+                ))
+            })?
+            .map(|v| v.unwrap())
+            .collect::<Vec<_>>()
+        };
+
+        t.commit()?;
+
+        Ok(selected_nets)
+    }
+
     fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
@@ -2594,6 +2656,7 @@ impl SqlStore {
                 (),
             )?;
 
+            //motif_id in UNIQUE constraint is needed when new slices are added from different find_motifs in same select_motifs run.
             t.execute(
                 "CREATE TABLE IF NOT EXISTS slices (
                 id              INTEGER PRIMARY KEY,
@@ -2602,7 +2665,7 @@ impl SqlStore {
                 channel_id      INTEGER NOT NULL,
                 resource_id     REFERENCES resources(id) ON DELETE CASCADE,
                 slice_idx       INTEGER NOT NULL,
-                UNIQUE(channel_id, run_id, resource_id, slice_idx)
+                UNIQUE(motif_id, run_id, resource_id, slice_idx)
             )",
                 (),
             )?;
@@ -2620,11 +2683,19 @@ impl SqlStore {
 
             //labels_motifs on resource_set
             t.execute(
-                //todo label
                 "CREATE TABLE IF NOT EXISTS selected_motifs (
                 motif_id   REFERENCES motifs(id),
                 run_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 rate    FLOAT NOT NULL
+            )",
+                (),
+            )?;
+
+            t.execute(
+                "CREATE TABLE IF NOT EXISTS selected_nets (
+                net_path  VARCHAR(1024),
+                run_id  NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                loss    FLOAT NOT NULL
             )",
                 (),
             )?;
@@ -2775,8 +2846,7 @@ impl SqlStore {
         motif_id: i64,
         chunk: IntoIter<IdSlice, 500>,
     ) -> Result<(), ThoError> {
-        let sql =
-            "INSERT INTO slices (run_id, channel_id, motif_id, resource_id, slice_idx) VALUES";
+        let sql = "INSERT INTO slices (run_id, channel_id, motif_id, resource_id, slice_idx) VALUES";
 
         let (mut q, params) = chunk.into_iter().fold(
             (vec![sql], vec![]),
@@ -2805,10 +2875,7 @@ impl SqlStore {
                 debug!("insert_slices: slice_inserted={slice_inserted}");
             }
             Err(e) => {
-                debug!(
-                    "insert_slices: e={e} sqlite_error={:?} run_id={run_id}, channel={channel}, motif_id={motif_id}",
-                    e.sqlite_error()
-                );
+                debug!("insert_slices: e={e} sqlite_error={:?} run_id={run_id}, channel={channel}, motif_id={motif_id}",e.sqlite_error());
             }
         };
 
@@ -3002,7 +3069,7 @@ pub fn filter_groups_by_slices_count(max_slices_counts: Option<u32>, groups: Has
             if v.1.len() < max_slices_counts as usize {
                 a.insert(v.0, v.1);
             } else {
-                warn!("load_slices_into_groups: skipping group with {} slices",v.1.len());
+                warn!("skipping group with {} slices",v.1.len());
             }
             a
         }),
@@ -3121,6 +3188,7 @@ mod store_tests {
     use crate::{
         MotifTrackerStore, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoError,
     };
+    use std::path::PathBuf;
 
     #[ctor::ctor]
     fn init() {
@@ -3616,6 +3684,37 @@ mod store_tests {
     }
 
     #[test]
+    fn test_save_list_selected_nets() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem()?;
+
+        let run_id = store.save_run_config(
+            None,
+            &"selected_nets",
+            "selected_nets",
+            "",
+            HashMap::new(),
+        )?;
+
+        store.save_selected_net(run_id, PathBuf::from("nets/a"), 0.2)?;
+        store.save_selected_net(run_id, PathBuf::from("nets/b"), 0.1)?;
+
+        let selected = store.list_selected_nets(run_id, None)?;
+
+        assert_eq!(2, selected.len());
+        assert_eq!(PathBuf::from("nets/b"), selected[0].0);
+        assert!((selected[0].1 - 0.1).abs() < 1e-6);
+        assert_eq!(PathBuf::from("nets/a"), selected[1].0);
+        assert!((selected[1].1 - 0.2).abs() < 1e-6);
+
+        let filtered = store.list_selected_nets(run_id, Some(0.15))?;
+        assert_eq!(1, filtered.len());
+        assert_eq!(PathBuf::from("nets/b"), filtered[0].0);
+        assert!((filtered[0].1 - 0.1).abs() < 1e-6);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_list_motifs_slices_filters_slice_run_ids() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem()?;
 
@@ -4012,7 +4111,7 @@ mod store_tests {
 
         const WIDTH: u32 = 40;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_slices(motif_id, WIDTH, None, WIDTH)?;
+            store.list_random_motif_slices(motif_id, WIDTH, None, WIDTH)?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4068,7 +4167,7 @@ mod store_tests {
         const WIDTH: u32 = 50;
         const MIN_DISTANCE: u32 = 300;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_slices(motif_id, WIDTH, Some(MIN_DISTANCE), WIDTH)?;
+            store.list_random_motif_slices(motif_id, WIDTH, Some(MIN_DISTANCE), WIDTH)?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4244,14 +4343,14 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_list_random_slices(
+    pub fn with_list_random_motif_slices(
         mut self,
         motif_id: u32,
         motif_width: u32,
         min_distance: Option<u32>,
         r: Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>
     ) -> Self {
-        self.store.expect_list_random_slices().returning(
+        self.store.expect_list_random_motif_slices().returning(
             move |p_motif_id, p_width, p_min_distance, crop_len| {
                 if p_motif_id == motif_id && p_width == motif_width && p_min_distance == min_distance {
                     r.clone()
@@ -4272,6 +4371,42 @@ impl MockStoreBuilder {
         self.store.expect_list_selected_motifs().returning(
             move |run_id, channels|{
                 map.get(&run_id).cloned().expect(&format!("mock is not configured to return selected motifs for run id {run_id}"))
+            }
+        );
+        self
+    }
+
+    pub fn with_save_selected_net(
+        mut self,
+        inputs: impl IntoIterator<Item = (RunId, PathBuf, f32)> + Debug,
+    ) -> Self {
+        debug!("with_save_selected_net: inputs={inputs:?}");
+        for (run_id, path, loss) in inputs {
+            self.store
+                .expect_save_selected_net()
+                .with(eq(run_id), eq(path), eq(loss))
+                .times(1)
+                .return_const(Ok(()));
+        }
+        self
+    }
+
+    pub fn with_list_selected_nets<I>(
+        mut self,
+        inputs: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = (RunId, Option<f32>, Result<Vec<(PathBuf, f32)>, ThoError>)> + Debug,
+    {
+        let data = inputs.into_iter().collect::<Vec<_>>();
+        debug!("with_list_selected_nets: inputs={data:?}");
+        let data = Arc::new(data);
+        self.store.expect_list_selected_nets().returning(
+            move |run_id, loss| {
+                data.iter()
+                    .find(|(expected_run_id, expected_loss, _)| *expected_run_id == run_id && *expected_loss == loss)
+                    .map(|(_, _, result)| result.clone())
+                    .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return selected nets for run id {run_id} loss={loss:?}"))))
             }
         );
         self
@@ -4319,6 +4454,17 @@ impl MockStoreBuilder {
                 } else {
                     Err(ThoError::new("Not found"))
                 }
+            });
+
+        self
+    }
+
+    pub fn with_list_resource_set_group_sets<D:IntoIterator<Item=(&'static str, Result<Vec<(usize, String)>, ThoError>)>>(mut self, data:D) ->Self {
+        let map :HashMap<&'static str, Result<Vec<(usize, String)>, ThoError>> = HashMap::from_iter(data);
+
+        self.store.expect_list_resource_set_group_sets()
+            .returning(move |group| {
+                map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()
             });
 
         self
@@ -4381,10 +4527,19 @@ impl MockStoreBuilder {
         self
     }
 
+    pub fn with_save_groups_as_motifs(mut self)->Self{
+        self.store.expect_save_groups_as_motifs()
+            .withf(|run_id, channel, groups|{
+                debug!("with_save_groups_as_motifs: run_id={run_id:?}, channel={channel:?}, groups={groups:?}");
+                true
+            })
+            .return_const(Ok(()));
+        self
+    }
+
     pub fn build(self)->Box<dyn Store> {
         Box::new(self.store)
     }
-
 
 }
 
