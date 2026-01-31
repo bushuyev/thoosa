@@ -525,7 +525,7 @@ where
                 async |run_configs| {
 
                     new_train_final_net_with_ml(
-                        train_final_net_args.select_motifs_run_id.clone(),
+                        train_final_net_args.train_label_nets_run_ids.clone(),
                         loader_2,
                         run_configs,
                         &ws,
@@ -709,13 +709,12 @@ where
                 }),
             };
 
-            let select_motifs_run_ids_for_labels = select_motifs_run_ids.clone();
             let init_ctx_train_labels = root_ctx.branch(Some("init label nets"), true, false);
             let store_in_train_labels = Arc::clone(&store);
             let ws_in_train_labels = Arc::clone(&ws);
             let loader_in_train_labels = Arc::clone(&loader_2);
             let opt_config_in_train_labels = Arc::clone(&opt_config);
-            let run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
+            let train_label_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
                 None,
                 train_label_nets_run_config_range_or_value,
                 train_labels_input,
@@ -737,7 +736,7 @@ where
                 || root_ctx.branch( Some("train label nets"), true, false),
             ).await?;
 
-            info!("train label nets done: run_ids={run_ids:?}");
+            info!("train label nets done: run_ids={train_label_nets_run_ids:?}");
 
             ////////////////////////
             debug!("starting train final nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
@@ -754,7 +753,7 @@ where
             let ws_in_train_final = Arc::clone(&ws);
             let loader_in_train_final = Arc::clone(&loader_2);
 
-            let run_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
+            let _run_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
                 None,
                 train_final_net_run_config_range_or_value,
                 train_final_input,
@@ -764,7 +763,7 @@ where
                 async move |run_configs| {
 
                     new_train_final_net_with_ml(
-                        select_motifs_run_ids,
+                        train_label_nets_run_ids,
                         loader_in_train_final,
                         run_configs,
                         &ws_in_train_final,

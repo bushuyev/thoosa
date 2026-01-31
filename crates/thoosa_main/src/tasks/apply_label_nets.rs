@@ -48,7 +48,7 @@ where
     pub async fn new<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
-        select_motifs_run_ids: Vec<RunId>,
+        train_label_nets_run_ids: Vec<RunId>,
         stage_ctx: R,
     ) -> Result<Self, ThoError>
     where
@@ -58,13 +58,27 @@ where
             (stage_ctx.device_idx(), stage_ctx.cache_area())
         };
 
+        let train_motif_nets_run_ids = {
+            let mut store_guard = store.read();
+            let mut run_ids = HashSet::new();
+            for run_id in &train_label_nets_run_ids {
+                run_ids.extend(store_guard.get_input_run_ids(*run_id, None)?);
+            }
+            let mut run_ids = run_ids.into_iter().collect::<Vec<_>>();
+            run_ids.sort();
+            run_ids
+        };
+        if train_motif_nets_run_ids.is_empty() {
+            return Err(ThoError::new("ApplyLabelNets::new: no train motif nets found"));
+        }
+
         let apply_motif_nets = Arc::new({
             #[cfg(test)]
             {
                 ApplyMotifNets::new(
                     ws,
                     store,
-                    select_motifs_run_ids.clone(),
+                    train_motif_nets_run_ids.clone(),
                     stage_ctx,
                     None,
                 )
@@ -75,7 +89,7 @@ where
                 ApplyMotifNets::new(
                     ws,
                     store,
-                    select_motifs_run_ids.clone(),
+                    train_motif_nets_run_ids.clone(),
                     stage_ctx,
                 )
                 .await?
@@ -85,7 +99,7 @@ where
         let label_net_run_ids = {
             let mut store_guard = store.write();
             let mut run_ids = HashSet::new();
-            for run_id in &select_motifs_run_ids {
+            for run_id in &train_label_nets_run_ids {
                 run_ids.extend(store_guard.list_output_run_ids(*run_id)?);
             }
             run_ids
@@ -402,7 +416,8 @@ mod tests {
     async fn test_apply_label_nets_orders_and_values() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
 
-        let select_motifs_run_id = 10;
+        let train_motif_nets_run_id = 10;
+        let train_label_nets_run_id = 20;
         let motif_width = 4;
         let step = 1;
         let device = Device::Cpu;
@@ -441,15 +456,12 @@ mod tests {
 
         let store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
-                .with_list_selected_motifs([
-                    (
-                        select_motifs_run_id,
-                        Ok(vec![vec![(0, 1.0f64), (1, 1.0f64)]]),
-                    ),
+                .with_get_input_run_ids([
+                    (train_label_nets_run_id, Ok(vec![train_motif_nets_run_id])),
                 ])
                 .with_list_selected_nets([
                     (
-                        select_motifs_run_id,
+                        train_motif_nets_run_id,
                         Some(0.3),
                         Ok(vec![
                             (net_id_0, 0.1f32),
@@ -458,7 +470,7 @@ mod tests {
                     ),
                 ])
                 .with_list_output_run_ids([
-                    (select_motifs_run_id, Ok(vec![100, 101, 200])),
+                    (train_label_nets_run_id, Ok(vec![100, 101, 200])),
                 ])
                 .build(),
         ));
@@ -466,7 +478,7 @@ mod tests {
         let apply_label_nets = Arc::new(ApplyLabelNets::new(
             &ws,
             &store,
-            vec![select_motifs_run_id],
+            vec![train_label_nets_run_id],
             mock_run_ctx::default(0),
         ).await?);
 
