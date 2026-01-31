@@ -24,6 +24,7 @@ use thoosa_shared::traits::{Adjustable, Data, WithId};
 use crate::tasks::cross_dims::ChannelsData2;
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
+use thoosa_shared::run_configs::RunConfig;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch};
 use thoosa_common::cuda_utils::cuda_mem;
@@ -215,11 +216,20 @@ impl WithId for TrainLabelNetsInput {
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct TrainLabelNetsOutput {
-    id: SynKey,
+    id: RunId,
+    train_motif_nets_run_ids: Vec<RunId>,
     results: Vec<TrainLabelNetsRunConfigResult>
 }
 impl WithId for TrainLabelNetsOutput {
-    type ID = SynKey;
+    type ID = RunId;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl WithId for Box<TrainLabelNetsOutput> {
+    type ID = RunId;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -231,22 +241,32 @@ impl Output for TrainLabelNetsOutput {
 
 impl SavableResult for TrainLabelNetsOutput {
     fn value(&self) -> f32 {
-        todo!()
+        0.0
     }
 
     fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
-       for result in &mut self.results {
+        let run_id = store.write().save_run_config(
+            Some(&self.train_motif_nets_run_ids),
+            &TrainLabelNetsRunConfig::type_name(),
+            "TrainLabelNetsResult",
+            "todo",
+            HashMap::new(),
+        )?;
 
-           result.save(store, ws)?;
-       }
+        self.id = run_id;
 
-        Ok(0)
+        for result in &mut self.results {
+            result.set_train_label_nets_run_id(run_id);
+            result.save(store, ws)?;
+        }
+
+        Ok(run_id)
     }
 }
 
 impl TrainLabelNetsOutput {
-    pub fn new(id: SynKey, results: Vec<TrainLabelNetsRunConfigResult>) -> Self {
-        Self { id, results }
+    pub fn new(train_motif_nets_run_ids: Vec<RunId>, results: Vec<TrainLabelNetsRunConfigResult>) -> Self {
+        Self { id: 0, train_motif_nets_run_ids, results }
     }
 }
 
@@ -419,7 +439,7 @@ where
                 .buffer_unordered(crate::buffer_limits::TRAIN_LABEL_NETS_RUN_BUFFER_UNORDERED_LIMIT)
                 .try_collect::<Vec<_>>().await?;
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(SynKey::new([mono_key!("", "empty")]), results), cache_area.into())))
+            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(self.train_motif_nets_run_ids.clone(), results), cache_area.into())))
         }
     }
 }
