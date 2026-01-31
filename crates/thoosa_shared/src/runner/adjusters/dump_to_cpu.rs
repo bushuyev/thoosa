@@ -1,21 +1,17 @@
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
 use log::debug;
-use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use mockall_double::double;
-use thoosa_shared::{Cause, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr};
 use crate::runner::common::{DropIf, RunCtx};
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
 use crate::runner::permits::MAX_PERMITS;
-use crate::runner::permits::runner_queue::Arbiter;
-use crate::simple_id;
 
 #[derive(Debug)]
 pub struct DumpToCpu<A>

@@ -211,26 +211,18 @@ pub trait OutputBuilder: Debug + Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::hash::{Hash, Hasher};
-    use std::ops::{Deref, Range};
-    use std::rc::Rc;
+    use std::ops::Range;
     use std::sync::Arc;
     use async_trait::async_trait;
-    use log::debug;
-    use mockall::{mock, Any};
-    use mockall::predicate::always;
-    use parking_lot::RwLock;
-    use tokio::io::AsyncWriteExt;
+    use mockall::mock;
     use thoosa_shared::ThoError;
     use crate::applicables_runner::{Input, Output};
     use crate::copy_mode::CpuOrGpu;
     use crate::CopyToDevice;
-    use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
+    use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::MockRunCtx;
     use crate::runner::common::runnable::{Stage, SyncStage};
-    use crate::runner::oom_handler::{Adjuster, InputContext};
-    use crate::traits::{Adjustable, CachableIdTr, Data, WithId};
+    use crate::traits::{Adjustable, Data, WithId};
     use crate::traits::mock_cachable_id::MockCachableId;
 
     mock! {
@@ -338,10 +330,12 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     pub struct MockTestOutputBuilderBuilder {
         mock:MockTestOutputBuilder
     }
 
+    #[allow(dead_code)]
     impl MockTestOutputBuilderBuilder {
         fn build() -> MockTestOutputBuilderBuilder {
             MockTestOutputBuilderBuilder {
@@ -365,12 +359,14 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     pub struct MockTestSelectorBuilder {
         mock:MockTestSelector
     }
 
 
 
+    #[allow(dead_code)]
     impl MockTestSelectorBuilder {
 
         pub fn finish_with_from_ranges(ranges:Arc<parking_lot::RwLock<Vec<Range<i64>>>>) -> impl Default {

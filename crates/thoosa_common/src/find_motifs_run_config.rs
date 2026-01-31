@@ -52,7 +52,7 @@ impl FindMotifsRunConfig {
 }
 
 impl FindMotifsRunConfig {
-    pub fn new(
+    pub fn new_with_running_mean(
         id: Option<u32>,
         step: u32,
         window: u32,
@@ -65,10 +65,27 @@ impl FindMotifsRunConfig {
             window,
             filter,
             slices_filter: SlicesFilter::DistanceRunningMeanK(DistanceRunningMeanK {
-                mean: mean_k.unwrap_or(0.5),
+                k: mean_k.unwrap_or(0.5),
             }),
         }
     }
+
+    pub fn new_with_max_dist(
+        id: Option<u32>,
+        step: u32,
+        window: u32,
+        filter: Option<InputFilter>,
+        distance: f32,
+    ) -> Self {
+        Self {
+            id,
+            step,
+            window,
+            filter,
+            slices_filter: SlicesFilter::MaxDistance(MaxDistance{ k: distance }),
+        }
+    }
+
 
     pub fn window(&self) -> u32 {
         self.window
@@ -120,14 +137,14 @@ pub enum SlicesFilter {
 pub struct DistanceRunningMeanK {
     #[in_map]
     #[run_config]
-    pub mean: f32,
+    pub k: f32,
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct MaxDistance {
     #[in_map]
     #[run_config]
-    pub distance: f32,
+    pub k: f32,
 }
 
 #[cfg(test)]
@@ -161,7 +178,7 @@ mod tests {
                 },
             )),
             slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(
-                DistanceRunningMeanKRangeOrValue { mean: 0.5.into() },
+                DistanceRunningMeanKRangeOrValue { k: 0.5.into() },
             ),
         };
         // debug!("{:#}", serde_json5::to_string(&rc).unwrap());

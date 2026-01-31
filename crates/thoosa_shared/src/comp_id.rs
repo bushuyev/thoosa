@@ -6,7 +6,6 @@ use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
 use thoosa_named_derive::Named;
-use crate::val::Val;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ElvVal {

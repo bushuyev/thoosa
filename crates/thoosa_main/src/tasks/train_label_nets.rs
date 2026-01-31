@@ -29,7 +29,7 @@ use thoosa_common::batches::{AsyncDataBatch};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{any_len_label_node, flat_label_node, opt_train, AnyLenNetParams, CommonTrainingRunConfig, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, MaxPaddingNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{lin_label_node, opt_train, LinLenNetParams, CommonTrainingRunConfig, LinNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, ConvNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult, conv_label_node};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -49,7 +49,7 @@ use thoosa_shared::runner::permits::{RunnerPerm, MAX_PERMITS};
 use thoosa_dummy_data_derive::DummyData;
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::stages_seq::ABStage;
-use crate::tasks::train_net::{TrainNet, TrainNetInput};
+use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainNetOutput};
 use thoosa_shared::comp_id::SynKey;
 
 #[derive(Debug)]
@@ -59,7 +59,7 @@ where
     LM: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<MotifProbability, SynKey>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
-    select_motifs_run_ids: Vec<RunId>,
+    train_motif_nets_run_ids: Vec<RunId>,
     run_configs: Arc<OptRunConfigs<
         Vec<NamedVal<TrainLabelNetsRunConfigFields>>,
         Vec<NamedRange<TrainLabelNetsRunConfigFields>>,
@@ -75,8 +75,23 @@ where
 
 }
 
+fn pad_stack_with_mask(tensors: &[&ThoTensor<MotifProbability, SynKey>], channels: i64, max_input: i64) -> Result<(Tensor, Tensor), ThoError> {
+    let (stack, masks) = tensors.iter().try_fold((Vec::with_capacity(tensors.len()), Vec::with_capacity(tensors.len())), |mut acc, v| {
+        let (t, mask) = pad_to_2(v.t_ref(), &[channels, max_input], true, true)?;
+        acc.0.push(t);
+        acc.1.push(mask.expect("no mask"));
+
+        Ok::<_, ThoError>(acc)
+    })?;
+
+    let stack = Tensor::f_stack(stack.as_slice(), 0)?;
+    let masks = Tensor::f_stack(masks.as_slice(), 0)?;
+
+    Ok((stack, masks))
+}
+
 pub async fn new_train_label_nets_with_ml<L, C, R>(
-    select_motifs_run_ids: Vec<RunId>,
+    train_motif_nets_run_ids: Vec<RunId>,
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -92,7 +107,7 @@ where
     let apply_motif_nets = Arc::new(ApplyMotifNets::new(
         ws,
         store,
-        select_motifs_run_ids.clone(),
+        train_motif_nets_run_ids.clone(),
         stage_ctx,
         #[cfg(test)]
         None
@@ -103,14 +118,14 @@ where
     let motif_loader = Arc::new(ABStage::new(
         SynKey::new([
             mono_key!("Loader_with_motifs", "stage"),
-            mono_key!(format!("{select_motifs_run_ids:?}"), "select_motifs_run_ids"),
+            mono_key!(format!("{train_motif_nets_run_ids:?}"), "train_motif_nets_run_ids"),
         ]),
         loader,
         apply_motif_nets
     ));
 
     TrainLabelNets::new(
-        select_motifs_run_ids,
+        train_motif_nets_run_ids,
         motif_loader,
         num_nets,
         run_configs,
@@ -128,7 +143,7 @@ where
 {
 
     pub async fn new(
-        select_motifs_run_ids: Vec<RunId>,
+        train_motif_nets_run_ids: Vec<RunId>,
         motif_loader: Arc<LM>,
         num_nets:u32,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
@@ -145,7 +160,7 @@ where
             num_nets,
             store: Arc::clone(store),
             opt_config,
-            select_motifs_run_ids,
+            train_motif_nets_run_ids: train_motif_nets_run_ids,
 
         })
     }
@@ -261,7 +276,6 @@ where
         let channels = self.ws.read().channels() as i64;
 
 
-
         debug!("TrainLabelNets::run: channels={channels} num_nets={}", self.num_nets);
 
         async move {
@@ -281,12 +295,10 @@ where
                 let opt_config = Arc::clone(&self.opt_config);
                 let train_motifs_nodes_run_configs = Arc::clone(&train_motifs_nodes_run_configs);
                 let loader = Arc::clone(&self.motif_loader);
-                let select_motifs_run_ids = self.select_motifs_run_ids.clone();
+                let train_motif_nets_run_ids = self.train_motif_nets_run_ids.clone();
                 let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
                 let num_nets = self.num_nets;
                 async move {
-
-
                     debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
                     let resources_0 = labels_others_train_valid_resources.get(&label).expect(&format!("no resources not belonging to {label}"));
@@ -313,28 +325,23 @@ where
                                    Arc::clone(&resources_0_valid),
                                    Box::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SynKey>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SynKey>>>>, mut ctx: C| {
                                        async move {
-                                           let (x, y) = with_data!(ctx.branch(Some("train_label_nets_batch_data"), false, false), [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<MotifProbability, SynKey>], x_0:&[&ThoTensor<MotifProbability, SynKey>]|{
+                                           let (x, mask, y) = with_data!(ctx.branch(Some("train_label_nets_batch_data"), false, false), [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<MotifProbability, SynKey>], x_0:&[&ThoTensor<MotifProbability, SynKey>]|{
                                                debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
 
                                                let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.t_ref().size()[1]).max().expect("no max_input");
 
                                                debug!("ResourcesBatch::train_batch_iter: max_input={max_input}");
 
-                                               let x_1 = Tensor::f_stack(&x_1.into_iter().map(|v|{
-                                                   Ok(pad_to_2(v.t_ref(), &[channels, max_input], true)?.copy())//TODO
-                                               }).collect::<Result<Vec<_>, ThoError >>()?, 0)?;
+                                               let (x_1, mask_1) = pad_stack_with_mask(x_1, num_nets as i64, max_input)?;
+                                               let (x_0, mask_0) = pad_stack_with_mask(x_0, num_nets as i64, max_input)?;
 
-                                               let x_0 = Tensor::f_stack(&x_0.into_iter().map(|v|{
-                                                   Ok(pad_to_2(v.t_ref(), &[channels, max_input], true)?.copy())
-                                               }).collect::<Result<Vec<_>, ThoError >>()?, 0)?;
-
-                                               mix_x_binary_with_labels(&x_1, &x_0)
+                                               mix_x_binary_with_labels(&x_1, Some(&mask_1), &x_0, Some(&mask_0))
                                            })?;
 
                                            debug!("ResourcesBatch::train_batch_iter: x.size={:?} y.size={:?}", x.size(), y.size());
 
 
-                                           Ok((x.into(), y.into()))
+                                           Ok((x.into(), mask.map(|mask| mask.into()), y.into()))
                                        }.boxed()
                                    }),
                                    ctx_for_batch
@@ -344,16 +351,19 @@ where
                        },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
                             match rc.net {
-                                LabelNetTypeArgs::MaxPadding(_) => {
-                                    todo!()
-                                }
-                                LabelNetTypeArgs::FixedNumSlices(FixedNumSlicesNetArgs {
-                                    num_layers, slices_len
+                                LabelNetTypeArgs::ConvNet(ConvNetArgs {
+                                     num_conv_layers, hidden_conv_channels: hidden_channels, num_head_layers, kernel
                                 }) => {
+                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(ConvNetParams::new(num_conv_layers, num_head_layers, hidden_channels, kernel)));
 
-                                    let net_params = LabelNetParams::new(channels as u32, num_nets, num_layers, slices_len, LabelNetTypeParams::AnyLenNetParams(AnyLenNetParams::new()));
+                                    Ok((conv_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
+                                }
+                                LabelNetTypeArgs::LinNet(LinNetArgs {
+                                     num_layers, slices_len
+                                }) => {
+                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(slices_len, num_layers)));
 
-                                    Ok((any_len_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
+                                    Ok((lin_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
                             }
 
@@ -365,7 +375,8 @@ where
                             let pred_y = pred;//.squeeze();
                             debug!("train_label_net: pred_y={:?} target={:?} kind={:?}",pred_y.size(),target.size(),target.kind());
                             trace!("train_label_net: pred_y=\n{pred_y} target=\n{target} kind={:?}",target.kind());
-                            Ok(pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean).set_requires_grad(true))
+                            // Ok(pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean).set_requires_grad(true)) - with sigmoid in any_len_label_node
+                            Ok(pred_y.binary_cross_entropy_with_logits::<Tensor>(&target, None, None, Reduction::Mean).set_requires_grad(true))
                         },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore|{
                             let o = AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e|e.into());
@@ -382,18 +393,18 @@ where
                         "label".to_string()
                     ));
 
-                    let result = Arc::into_inner(
-                        train_net.run(
-
-                            Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), cache_area.into())),
-                            ctx_for_task
-
-                        ).await?).unwrap().take_data(0).await?;
-
+                    let result = train_net.run(
+                        Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), cache_area.into())),
+                        ctx_for_task
+                    ).await?;
                     debug!("train_label_net: label={label_} result={result:?}");
+
+                    let result = Arc::into_inner(result).expect("can't get result from train_net").take_data(0).await?;
+
+
                     Ok::<_, ThoError>(
                         TrainLabelNetsRunConfigResult::new(
-                            select_motifs_run_ids,//TODO
+                            train_motif_nets_run_ids, //TODO
                             label_,
                             result.min_loss,
                             result.node_params,
@@ -492,7 +503,7 @@ type BuildBatchFn<LD:Dims+ 'static, X:Dims+ 'static, Y:Dims+ 'static, C> = Box<d
     Vec<Arc<DevicesWrap<ThoTensor<LD, SynKey>>>>,
     Vec<Arc<DevicesWrap<ThoTensor<LD, SynKey>>>>, C
 
-) -> BoxFuture<'static, Result<(ThoBatch<X>, ThoBatch<Y>), ThoError>> + Send + Sync>;
+) -> BoxFuture<'static, Result<(ThoBatch<X>, Option<ThoBatch<X>>, ThoBatch<Y>), ThoError>> + Send + Sync>;
 
 // #[derive(Debug)]
 struct ResourcesBatch<L, C, LD, X, Y>
@@ -582,7 +593,7 @@ where
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
-    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, ThoBatch<Y>), ThoError>> {
+    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, Option<ThoBatch<X>>, ThoBatch<Y>), ThoError>> {
         //TODO if self.batch_size > train_len?
         let batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
 
@@ -599,7 +610,7 @@ where
         )
     }
 
-    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, ThoBatch<Y>), ThoError>> {
+    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, Option<ThoBatch<X>>, ThoBatch<Y>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
@@ -624,7 +635,7 @@ where
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
-    fn build_batch_stream<'a>(build_batch_fn:&'a BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: &'a parking_lot::Mutex<C>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<X>, ThoBatch<Y>), ThoError>> {
+    fn build_batch_stream<'a>(build_batch_fn:&'a BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: &'a parking_lot::Mutex<C>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<X>, Option<ThoBatch<X>>, ThoBatch<Y>), ThoError>> {
 
         futures_util::stream::iter(resource_indexes_for_batches)
             .map(move |batch_keys| {
@@ -709,7 +720,7 @@ mod tests {
     use thoosa_common::dims::{Batch, LabelProbability};
     use thoosa_common::runs::{Labeled, NetResources};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, FixedNumSlicesNetArgsFields, LabelNetTypeArgsFields, OptConfig, TrainLabelNetsRunConfigFields};
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, LabelNetTypeArgsFields, LinNetArgsFields, OptConfig, TrainLabelNetsRunConfigFields};
     use thoosa_common::utils::{mix_x_binary_with_labels, reset_print_options};
     use thoosa_common::ws::{mock_ws_simp, WsMockBuilder};
     use thoosa_motifs::generators::noise::resource_tensor;
@@ -737,7 +748,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_train_label_net_3x3() -> Result<(), ThoError>
+    async fn heavy_test_train_label_net_3x3() -> Result<(), ThoError>
     {
 
         let mut rand = rng();
@@ -892,7 +903,7 @@ mod tests {
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(100)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(8)),
                     // NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), Val::Int(3)),
-                    NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::SlicesLen)), Val::Int(1000)),//TODO used as num features in any_len_label_node
+                    NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::SlicesLen)), Val::Int(1000)),//TODO used as num features in any_len_label_node
                 ]),
                 vec![
                     // NamedRange::new(TrainLabelNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
@@ -900,7 +911,7 @@ mod tests {
             ),
             vec![
                 Hyperparameter::UniformFloat{name: TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.0001, upper: 0.001},
-                Hyperparameter::UniformInt{name: TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), lower: 1, upper: 10}
+                Hyperparameter::UniformInt{name: TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::NumLayers)), lower: 1, upper: 10}
             ],
         );
 
@@ -914,7 +925,7 @@ mod tests {
             &ws,
             &store,
             mock_run_ctx::default(1),
-            Arc::new(OptConfig::new(10, 3))
+            Arc::new(OptConfig::new(30, 10))
         ).await?);
 
 
@@ -1013,9 +1024,9 @@ mod tests {
                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
                         let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
 
-                        let (x,y) = mix_x_binary_with_labels(&x_1, &x_0)?;
+                        let (x, _mask, y) = mix_x_binary_with_labels(&x_1, None, &x_0, None)?;
 
-                         Ok((x.into(), y.into()))
+                         Ok((x.into(), None, y.into()))
                     })
                 }.boxed()
             }),
@@ -1023,11 +1034,11 @@ mod tests {
         );
 
         let mut batch = resource_batch.train_batch_stream().await;
-        let (batch_x, batch_y) = batch.next().await.expect("no batch").expect("batch failed");
+        let (batch_x, mask,  batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 
         let mut batch = resource_batch.valid_batch_stream().await;
-        let (batch_x, batch_y) = batch.next().await.expect("no batch").expect("batch failed");
+        let (batch_x, mask, batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 
 
@@ -1035,13 +1046,4 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async
-    // #[test]
-    fn test_0(){
-
-
-        // debug!("x={x}");
-
-    }
 }

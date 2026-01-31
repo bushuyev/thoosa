@@ -3,19 +3,18 @@ use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
 use ambassador::{delegatable_trait, Delegate};
 use async_trait::async_trait;
 use log::{debug, error};
-use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use mockall_double::double;
-use crate::{Cause, ThoError};
+use crate::Cause;
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
 use crate::traits::{Adjustable, CachableIdTr};
 use crate::runner::common::{DropIf, RunCtx};
-use crate::runner::permits::{NumPermits, RunnerPerm};
+use crate::runner::permits::NumPermits;
 use crate::runner::adjusters::dump_to_cpu::*;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
@@ -217,8 +216,6 @@ impl<'a> RunCtxContext for PermitsAndDumpToCpuAdjustableContex<'a> {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thoosa_shared::Cause;
-    use crate::runner::global_ctx;
     use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
     use crate::runner::global_ctx::mock_global_ctx::{AcquireBehavior, MockGlobalCtxBuildParams};
     use crate::runner::run_ctx_2::RunCtxWithPermits;

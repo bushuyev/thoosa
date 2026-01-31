@@ -20,7 +20,7 @@ use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::nn::{LinearConfig, Optimizer};
 use tch::nn::VarStore;
 use tch::Kind::Float;
-use tch::{nn, Device, Kind, Tensor};
+use tch::{nn, Device, IndexOp, Kind, Tensor};
 use thoosa_shared::{gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoError};
 use torch_sys::cuda::atc_cuda_device_count;
 use crate::my_tch::{LossFp, ThoModule};
@@ -29,6 +29,7 @@ use crate::builder::SeqBuilder;
 use crate::dims::{Batch, Dims, MotifProbability, Slice};
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
+use thoosa_shared::colors_iter::DistinctColorIter;
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -82,6 +83,36 @@ pub fn list_devices() -> Vec<Device> {
             .collect()
     }
 }
+
+pub fn plot_t(t_0: &Tensor, label: &str) -> Result<(), ThoError> {
+    plot_series(
+        (0..t_0.size()[0])
+            .into_iter()
+            .zip(DistinctColorIter::new())
+            .map(|(channel, color)| {
+                (
+                    format!("0"),
+                    color,
+                    t_0.i((channel, ..))
+                        .iter::<f64>()
+                        .unwrap()
+                        .enumerate()
+                        .map(|(i, v)| (i as f32, v as f32))
+                        .collect::<Vec<(f32, f32)>>(),
+                )
+            })
+            .collect(),
+        label,
+        (2000, 1000),
+        &format!(
+            "/tmp/plots/{label}_{:?}.png",
+            chrono::Utc::now().to_rfc3339()
+        )
+            .as_str(),
+    )?;
+    Ok(())
+}
+
 
 pub fn plot_series<S>(
     name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
@@ -413,7 +444,7 @@ pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoError> {
         .map_err(ThoError::from)
 }
 
-pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tensor, ThoError> {
+pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool) -> Result<(Tensor, Option<Tensor>), ThoError> {
     debug!("pad_to: input.size={:?}, to_size={:?}", input.size(), to_size);
 
     if input.size().len() != to_size.len() {
@@ -465,7 +496,16 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool) -> Result<Tenso
         pad_idx.push(to - from);  // pad on the "right"
     }
 
-    Ok(result.f_pad(pad_idx.as_slice(), "constant", 0.0)?)
+    let padded = result.f_pad(pad_idx.as_slice(), "constant", 0.0)?;
+    let mask = if with_mask {
+        let base_mask = Tensor::zeros(cur_size.as_slice(), (Kind::Uint8, result.device()));
+        let padded_mask = base_mask.f_pad(pad_idx.as_slice(), "constant", 1.0)?;
+        Some(padded_mask.to_kind(Kind::Bool))
+    } else {
+        None
+    };
+
+    Ok((padded, mask))
 }
 
 
@@ -542,26 +582,70 @@ impl TrainListener for DummyListener {
     }
 }
 
+/// x:    [B, C, T] float
+/// mask: [B, 1, T] bool (true = keep, false = padding)
+/// out:  [B, C]
+pub fn masked_mean(x: &Tensor, mask: &Tensor) -> Result<Tensor, ThoError> {
+    // float mask in {0,1}
+    let mask_f = mask.f_to_kind(Kind::Float)?; // [B,1,T]
+
+    // sum(x * mask) over T
+    let xm = x.f_mul(&mask_f)?; // [B,C,T] (broadcast over C)
+    let sum = xm.f_sum_dim_intlist(2, false, Kind::Float)?; // [B,C]
+
+    // denom = count(valid) over T, clamp to avoid div-by-zero
+    let denom = mask_f
+        .f_sum_dim_intlist(2, false, Kind::Float)? // [B,1]
+        .f_clamp_min(1.0)?;                           // [B,1]
+
+    // broadcast denom over C
+    let mean = sum.f_div(&denom)?; // [B,C]
+    Ok(mean)
+}
+
+/// x:    [B, C, T] float
+/// mask: [B, 1, T] bool
+/// out:  [B, C]
+///
+/// Uses a large negative fill for masked timesteps (good if x is e.g. probabilities).
+pub fn masked_max(x: &Tensor, mask: &Tensor) -> Result<Tensor, ThoError> {
+    let mask_f = mask.f_to_kind(Kind::Float)?; // [B,1,T]
+    let neg: f64 = -1e9;
+
+    // x_keep = x * mask
+    let x_keep = x.f_mul(&mask_f)?; // [B,C,T]
+
+    // inv = (1 - mask) * neg
+    let ones = mask_f.f_ones_like()?;                 // [B,1,T]
+    let inv = ones.f_subtract(&mask_f)?;              // [B,1,T]
+    let inv_scaled = inv.f_multiply_scalar(neg)?;     // [B,1,T]
+
+    // x_masked = x_keep + inv_scaled  (broadcast over C)
+    let x_masked = x_keep.f_add(&inv_scaled)?;        // [B,C,T]
+
+    let (mx, _idx) = x_masked.f_max_dim(2, false)?;   // mx: [B,C]
+    Ok(mx)
+}
+
+
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
 pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{hist_1_dim, mix_x_binary_with_labels, pad_to_2, TrainListener};
+    use crate::utils::{hist_1_dim, masked_max, masked_mean, mix_x_binary_with_labels, pad_to_2, TrainListener};
     use clap::{Args, Parser, Subcommand};
 
     use log::debug;
     use std::collections::{HashMap, HashSet};
 
     use std::fmt::Debug;
-    use std::fs;
-
     use serde::Deserialize;
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::{Device, Kind, Tensor};
+    use tch::{Device, IndexOp, Kind, Tensor};
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
@@ -580,8 +664,85 @@ pub mod tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
+    fn assert_allclose(a: &Tensor, b: &Tensor, atol: f64) {
+        let ok = a.allclose(b, /*rtol=*/1e-5, /*atol=*/atol, /*equal_nan=*/false);
+        assert!(
+            ok,
+            "tensors not close:\n  a={:?}\n  b={:?}",
+            a,
+            b
+        );
+    }
 
+    #[test]
+    fn test_masked_mean_and_max_basic() {
+        // Shapes: B=2, C=2, T=4
+        // x[b,c,:]
+        // b0,c0: [1,2,3,4]   b0,c1: [10,20,30,40]
+        // b1,c0: [5,6,7,8]   b1,c1: [50,60,70,80]
+        let x = Tensor::from_slice(&[
+            1f32, 2., 3., 4.,      10., 20., 30., 40.,
+            5.,   6., 7., 8.,      50., 60., 70., 80.,
+        ])
+            .view([2i64, 2i64, 4i64])
+            .to_kind(Kind::Float);
 
+        // mask[b,1,:]
+        // b0 valid first 3: [1,1,1,0]
+        // b1 valid first 2: [1,1,0,0]
+        let mask = Tensor::from_slice(&[
+            1i64, 1, 1, 0,
+            1,    1, 0, 0,
+        ])
+            .view([2i64, 1i64, 4i64])
+            .to_kind(Kind::Bool);
+
+        // Expected masked mean:
+        // b0: c0=(1+2+3)/3=2,   c1=(10+20+30)/3=20
+        // b1: c0=(5+6)/2=5.5,   c1=(50+60)/2=55
+        let expected_mean = Tensor::from_slice(
+            &[
+                2f32, 20.,
+                5.5, 55.
+            ])
+            .view([2i64, 2i64]);
+
+        // Expected masked max:
+        // b0: c0=max(1,2,3)=3,   c1=max(10,20,30)=30
+        // b1: c0=max(5,6)=6,     c1=max(50,60)=60
+        let expected_max = Tensor::from_slice(&[3f32, 30., 6., 60.])
+            .view([2i64, 2i64]);
+
+        let mean = masked_mean(&x, &mask).unwrap();
+        let mx = masked_max(&x, &mask).unwrap();
+
+        assert_allclose(&mean, &expected_mean, 1e-5);
+        assert_allclose(&mx, &expected_max, 1e-5);
+    }
+
+    #[test]
+    fn test_all_masked_behavior() {
+        // If everything is masked:
+        // - masked_mean_f returns 0 (because x*mask = 0 and denom is clamped to 1)
+        // - masked_max_f returns neg fill value (-1e9) for every channel
+        let x = Tensor::from_slice(&[
+            1f32, 2., 3.,
+            10., 20., 30.,
+        ])
+            .view([1i64, 2i64, 3i64])
+            .to_kind(Kind::Float);
+
+        let mask = Tensor::zeros([1i64, 1i64, 3i64], (Kind::Bool, x.device()));
+
+        let mean = masked_mean(&x, &mask).unwrap();
+        let mx = masked_max(&x, &mask).unwrap();
+
+        let expected_mean = Tensor::zeros([1i64, 2i64], (Kind::Float, x.device()));
+        let expected_max = Tensor::full([1i64, 2i64], -1e9f64, (Kind::Float, x.device()));
+
+        assert_allclose(&mean, &expected_mean, 1e-5);
+        assert_allclose(&mx, &expected_max, 1e-5);
+    }
 
     #[test]
     fn test_clc_step() {
@@ -609,24 +770,20 @@ pub mod tests {
     #[test]
     fn test_pad_to() -> Result<(), ThoError> {
         let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.])]);
+        let expected = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 2., 0.]),
+            Tensor::from_slice(&[3., 4., 0.]),
+            Tensor::from_slice(&[0., 0., 0.]),
+        ]);
+        let expected_mask = Tensor::from_slice(&[0u8, 0, 1, 0, 0, 1, 1, 1, 1]).view([3, 3]).to_kind(Kind::Bool);
 
-        assert_eq!(
-            Tensor::vstack(&[
-                Tensor::from_slice(&[1., 2., 0.]),
-                Tensor::from_slice(&[3., 4., 0.]),
-                Tensor::from_slice(&[0., 0., 0.]),
-            ]),
-            super::pad_to_2(&t, &[3, 3], false)?
-        );
+        let (actual, mask) = super::pad_to_2(&t, &[3, 3], false, true)?;
+        assert_eq!(expected, actual);
+        assert_eq!(expected_mask, mask.expect("mask"));
 
-        assert_eq!(
-            Tensor::vstack(&[
-                Tensor::from_slice(&[1., 2., 0.]),
-                Tensor::from_slice(&[3., 4., 0.]),
-                Tensor::from_slice(&[0., 0., 0.]),
-            ]),
-            super::pad_to_2(&t, &[3, 3], true)?
-        );
+        let (actual, mask) = super::pad_to_2(&t, &[3, 3], true, true)?;
+        assert_eq!(expected, actual);
+        assert_eq!(expected_mask, mask.expect("mask"));
 
         Ok(())
     }
@@ -645,9 +802,11 @@ pub mod tests {
         ]);
 
         // from shape [2, 3] to [3, 2] with truncation enabled
-        let actual = pad_to_2(&t, &[3, 2], true)?;
+        let (actual, mask) = pad_to_2(&t, &[3, 2], true, true)?;
+        let expected_mask = Tensor::from_slice(&[0u8, 0, 0, 0, 1, 1]).view([3, 2]).to_kind(Kind::Bool);
 
         assert_eq!(expected, actual);
+        assert_eq!(expected_mask, mask.expect("mask"));
         Ok(())
     }
 
@@ -1358,7 +1517,7 @@ pub mod tests {
         let a = Tensor::from_slice(&va).reshape(&[m, n]);
         let b = Tensor::from_slice(&vb).reshape(&[m, n]);
 
-        let (x, y) = mix_x_binary_with_labels(&a, &b)?;
+        let (x, _mask, y) = mix_x_binary_with_labels(&a, None, &b, None)?;
         debug!("mix_basic_shapes_and_labels: x=\n{x} y=\n{y}");
 
         // Shapes
@@ -1388,6 +1547,41 @@ pub mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn mix_masks_align_with_rows() -> Result<(), ThoError> {
+        let a = Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]).reshape(&[2, 3]);
+        let b = Tensor::from_slice(&[101., 102., 103., 104., 105., 106.]).reshape(&[2, 3]);
+        let mask_a = Tensor::from_slice(&[0u8, 1, 0, 1, 0, 1]).reshape(&[2, 3]).to_kind(Kind::Bool);
+        let mask_b = Tensor::from_slice(&[1u8, 1, 0, 0, 0, 1]).reshape(&[2, 3]).to_kind(Kind::Bool);
+
+        let (x, mask, y) = mix_x_binary_with_labels(&a, Some(&mask_a), &b, Some(&mask_b))?;
+        let mask = mask.expect("mask");
+
+        assert_eq!(x.size(), [4, 3], "X must be [2m, n]");
+        assert_eq!(mask.size(), [4, 3], "mask must be [2m, n]");
+        assert_eq!(y.size(), [4, 1], "Y must be [2m, 1]");
+
+        let x_cpu = x.to_device(Device::Cpu);
+        let mask_cpu = mask.to_device(Device::Cpu);
+        let y_cpu = y.to_kind(Kind::Int64).to_device(Device::Cpu);
+
+        for i in 0..4 {
+            let first_val = x_cpu.double_value(&[i, 0]) as i64;
+            let label = y_cpu.int64_value(&[i, 0]);
+            let mask_row = mask_cpu.i((i, ..));
+
+            match first_val {
+                1 => { assert_eq!(mask_row, mask_a.i((0, ..))); assert_eq!(label, 1); }
+                4 => { assert_eq!(mask_row, mask_a.i((1, ..))); assert_eq!(label, 1); }
+                101 => { assert_eq!(mask_row, mask_b.i((0, ..))); assert_eq!(label, 0); }
+                104 => { assert_eq!(mask_row, mask_b.i((1, ..))); assert_eq!(label, 0); }
+                _ => panic!("unexpected first_val={first_val}"),
+            }
+        }
+
+        Ok(())
+    }
 }
 
 pub fn z_norm(t: &Tensor, dim: i64) -> Tensor {
@@ -1401,6 +1595,22 @@ pub fn z_norm_2(t_0: &Tensor, _dim: i64) -> Result<Tensor, ThoError> {
     let std = t_0.f_std_dim(1, true, true)?;
     //TODO std - 0
     Ok(t_0.f_sub(&t_0.f_mean_dim(1, true, Float)?)?.f_div(&std)?)
+}
+
+pub fn z_norm_dims(x: &Tensor, dims: &[i64], eps: f64) -> Result<Tensor, ThoError> {
+    // Mean over dims (keepdim=true so it broadcasts back)
+    let mean = x.f_mean_dim(dims, /*keepdim=*/true, Kind::Float)?;
+
+    // Variance over dims (unbiased=false = "population" variance, typical for normalization)
+    let var = x.f_var_dim(dims, /*unbiased=*/false, /*keepdim=*/true)?;
+
+    // std = sqrt(var + eps)
+    // Prefer f_add_scalar if available in your tch version.
+    let std = var.f_add_scalar(eps)?.f_sqrt()?;
+
+    // (x - mean) / std
+    let centered = x.f_subtract(&mean)?;
+    Ok(centered.f_divide(&std)?)
 }
 
 pub fn skewness_kurtosis_1_dim(dists: &Tensor) -> (Tensor, Tensor) {
@@ -1493,6 +1703,7 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
 use crate::dims::ThoBatch;
 use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
 
+//TODO remove?
 pub trait DataBatch<D: Dims> {
     /// returns (inputs, labels)
     fn train_batch(&self) -> (ThoBatch<D>, Tensor);
@@ -1541,7 +1752,7 @@ where
 
         debug!("train: device={:?}  x_t.size={:?}",device,x_t.size());
 
-        let predicted_y = net.tho_forward(&x_t, true)?;
+        let predicted_y = net.tho_forward(&x_t, None, true)?;
         debug!("train: 1. cuda_mem={:?}", cuda_mem());
         trace!("train: x_t=\n{x_t}");
         x_t.drop();
@@ -1577,7 +1788,7 @@ where
 
                 let x_t = x_f(x_t_0);
 
-                let pred_y = net.tho_forward(&x_t, true)?;
+                let pred_y = net.tho_forward(&x_t, None, true)?;
 
                 let valid_loss = loss_fn(&pred_y.as_ref(), &y_t)?;
                 let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
@@ -1742,7 +1953,7 @@ pub fn reset_print_options() {
         let line_width_ptr =
             (printer_options_ptr as *mut u8).add(size_of::<usize>() * 3) as *mut usize;
 
-        ptr::write(threshold_ptr, 100_000);
+        ptr::write(threshold_ptr, usize::MAX);
         ptr::write(line_width_ptr, 10_000);
     }
     tch::display::set_print_options(printer_options);
@@ -1781,7 +1992,7 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
 }
 
 //TODO check GPT
-pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> Result<(Tensor, Tensor), ThoError> {
+pub fn mix_x_binary_with_labels(x_1: &Tensor, mask_1: Option<&Tensor>, x_0: &Tensor, mask_0: Option<&Tensor>) -> Result<(Tensor, Option<Tensor>, Tensor), ThoError> {
     let [ma, _na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
     let [mb, _nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
     // assert_eq!((na, nb), (na, na), "X1 and X0 must have same n");
@@ -1814,7 +2025,18 @@ pub fn mix_x_binary_with_labels(x_1: &Tensor, x_0: &Tensor) -> Result<(Tensor, T
     let x = x0.f_index_select(0, &perm)?;
     let y = y0.f_index_select(0, &perm)?;
 
-    Ok((x, y))
+    let mask = match (mask_1, mask_0) {
+        (None, None) => None,
+        (Some(mask_1), Some(mask_0)) => {
+            assert_eq!(mask_1.device(), device, "mask_1 must be on the same device as x");
+            assert_eq!(mask_0.device(), device, "mask_0 must be on the same device as x");
+            let mask0 = Tensor::f_cat(&[mask_1, mask_0], 0)?;
+            Some(mask0.f_index_select(0, &perm)?)
+        }
+        _ => return Err(ThoError::new("mask_1 and mask_0 must both be Some or None")),
+    };
+
+    Ok((x, mask, y))
 }
 
 

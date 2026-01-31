@@ -17,6 +17,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::Adjustable;
 use thoosa_shared::traits::{DataId, WithId};
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::utils::z_norm_dims;
 use thoosa_shared::comp_id::SynKey;
 
 pub struct AverageEuclideanDistanceStage<C>
@@ -119,6 +120,8 @@ where
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         Ok(AverageDistanceValue::new(
             SynKey::new([mono_key!("AverageDistanceValue", "AverageDistanceValue")]),
+            //TODO options for z_norm_dims and pearson_corr
+            // panic_to_err!(average_euclidean_distance(&z_norm_dims(input.data().t_ref(), &[1], 1e-8)?))?
             panic_to_err!(average_euclidean_distance(input.data().t_ref()))?
         ))
     }

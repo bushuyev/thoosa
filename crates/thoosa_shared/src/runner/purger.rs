@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::atomic::Ordering::Relaxed;
 use futures_util::future::BoxFuture;
 use log::{debug, error};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use crate::ThoError;
@@ -18,7 +18,7 @@ pub enum PurgeCmd {
 #[derive(Debug)]
 pub struct Purger {
     tx: mpsc::UnboundedSender<PurgeCmd>,
-    worker: Option<JoinHandle<()>>,
+    _worker: Option<JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -58,7 +58,7 @@ impl Purger {
             }
         });
 
-        Self { tx, worker: Some(worker), shutdown:  Arc::clone(&shutdown) }
+        Self { tx, _worker: Some(worker), shutdown:  Arc::clone(&shutdown) }
     }
 
     //TODO rename to send_purge_gpu_rq
