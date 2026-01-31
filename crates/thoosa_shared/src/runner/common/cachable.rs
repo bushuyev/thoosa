@@ -445,6 +445,11 @@ where
         S:Debug + Clone + 'static,
         P: PermitsCtx
     {
+        if permits_ctx.acquired_permits() == 0 {
+            let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?;
+            permits_ctx.add_permit(permit);
+        }
+
         let read_guard: RwLockReadGuard<'_, Option<O>> = wrap.cached_data[to_device_idx].read().await;
 
         if read_guard.is_some() {
@@ -452,11 +457,7 @@ where
                 .as_ref()
                 .expect("no value behind guard");
 
-            let _permit =  if permits_ctx.acquired_permits() == 0 {
-                Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
-            } else {
-                None
-            };
+
             let data: O = base.subview(selector.clone())?;
 
             return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, permits_ctx), data);
@@ -475,11 +476,7 @@ where
                 let sub_t: O = src.subview(selector.clone())?;
 
                 debug!("DataCacheWrapper::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
-                let _permit =  if permits_ctx.acquired_permits() == 0 {
-                    Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
-                } else {
-                    None
-                };
+
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
                 return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, permits_ctx), data);
@@ -497,6 +494,10 @@ where
         P:PermitsCtx,
         Self: Sized
     {
+        if permits_ctx.acquired_permits() == 0 {
+            let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?;
+            permits_ctx.add_permit(permit);
+        }
         let read_guard: RwLockReadGuard<'_, Option<O>> = wrap.cached_data[to_device_idx].read().await;
 
         if read_guard.is_some() {
@@ -520,11 +521,7 @@ where
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t = src.subview(selector.clone())?;
                 debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
-                let _permit =  if permits_ctx.acquired_permits() == 0 {
-                    Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
-                } else {
-                    None
-                };
+
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
                 return do_run(data, permits_ctx);
