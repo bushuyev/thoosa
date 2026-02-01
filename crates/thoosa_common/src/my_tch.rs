@@ -563,6 +563,7 @@ pub fn configure_dense(
             6,
             #[cfg(debug_assertions)]
             "test".to_string(),
+            "todo",
         )
         .end_seq()
 }
@@ -616,6 +617,7 @@ mod tch_tests {
     pub fn test_seq_linear_same_size() {
         let seq = SeqBuilder::new(2, None)
             .linear(
+                "todo",
                 #[cfg(debug_assertions)]
                 "test".to_string(),
             )
@@ -641,6 +643,7 @@ mod tch_tests {
                 1,
                 #[cfg(debug_assertions)]
                 "test".to_string(),
+                "todo",
             )
             .end_seq();
 
@@ -650,6 +653,7 @@ mod tch_tests {
                 1,
                 #[cfg(debug_assertions)]
                 "test".to_string(),
+                "todo",
             )
             .end_seq();
 
@@ -711,6 +715,7 @@ mod tch_tests {
                 1,
                 #[cfg(debug_assertions)]
                 "test".to_string(),
+                "todo",
             )
             .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
             .end_seq()
@@ -828,11 +833,13 @@ mod tch_tests {
                         SeqBuilder::new(123, None)
                             .batch_norm(BatchNormConfig::default()) //3 weight bias running_var
                             .linear(
+                                "todo",
                                 #[cfg(debug_assertions)]
                                 "test_node".to_string(),
                             ) //2 weight bias
                             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
                             .linear(
+                                "todo",
                                 #[cfg(debug_assertions)]
                                 "test_node".to_string(),
                             ) //2 weight bias
@@ -841,11 +848,13 @@ mod tch_tests {
                                 1,
                                 #[cfg(debug_assertions)]
                                 "test".to_string(),
+                                "todo",
                             ) //2 weight bias
                             .end_seq(),
                         SeqBuilder::new(321, None)
                             .batch_norm(BatchNormConfig::default()) //3 weight bias running_var
                             .linear(
+                                "todo",
                                 #[cfg(debug_assertions)]
                                 "test_node".to_string(),
                             ) //2 weight bias
@@ -854,6 +863,7 @@ mod tch_tests {
                                 1,
                                 #[cfg(debug_assertions)]
                                 "test".to_string(),
+                                "todo",
                             ) //2 weight bias
                             .end_seq(),
                     ],
@@ -864,6 +874,7 @@ mod tch_tests {
                     10,
                     #[cfg(debug_assertions)]
                     "test".to_string(),
+                    "todo",
                 ) //2 weight bias
                 .conv_1d("conv", 3, 1, 2, ConvConfig::default(), None) //2 weight bias
                 .conv_1d("conv", 5, 1, 2, ConvConfig::default(), None) //2 weight bias
@@ -871,6 +882,7 @@ mod tch_tests {
                     20,
                     #[cfg(debug_assertions)]
                     "test".to_string(),
+                    "todo",
                 ) //2 weight bias
                 .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
                 .end_seq()
