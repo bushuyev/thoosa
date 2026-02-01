@@ -287,7 +287,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyMaxPool1d {
                 if *len < 0 {
                     return Err(ThoError::new(format!("MyMaxPool1d::tho_forward length must be >= 0, got {len}")));
                 }
-                *len = clc_max_pool1d_out(*len as u32, self.kernel_size as u32, self.padding as u32, self.dilation as u32, self.stride as u32) as i64;
+                *len = clc_max_pool1d_out(*len as u32, self.kernel_size as u32, self.padding as u32, self.dilation as u32, self.stride as u32)? as i64;
             }
         }
         Ok(t.as_ref()
@@ -373,7 +373,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 1]> {
                 if *len < 0 {
                     return Err(ThoError::new(format!("MyConv::tho_forward length must be >= 0, got {len}")));
                 }
-                *len = clc_conv1d_out(*len as u32, self.kernel, self.config) as i64;
+                *len = clc_conv1d_out(*len as u32, self.kernel, self.config)? as i64;
             }
         }
         debug!("MyConv::tho_forward lengths={lengths:?}");
@@ -668,7 +668,7 @@ mod tch_tests {
 
     #[test]
     pub fn test_conv1_out() {
-        let l_out = clc_conv1d_out(50 * 200, 5, ConvConfig::default());
+        let l_out = clc_conv1d_out(50 * 200, 5, ConvConfig::default()).unwrap();
 
         assert_eq!(l_out, 9996);
     }
