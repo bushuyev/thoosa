@@ -344,23 +344,11 @@ where
                 CacheArea::default()
             ));
 
-            /*
-
-                let random_avg_dist = Arc::new(RandomAvgDist::new(Arc::clone(store), Arc::clone(&loader), ws));
-                match &filter {
-                    SlicesFilter::DistanceRunningMeanK(_) => {}
-                    SlicesFilter::MaxDistance(k) => {
-                        let avg_dist = random_avg_dist.run(
-                            Arc::new(DevicesWrap::wrap(RandomAvgDistInput::new(1000, run_config.id.unwrap()), CacheArea::default()))
-                        ).await;
-                    }
-                };
-             */
             let init_ctx = root_ctx.branch( Some("find motifs init ctx"), true, false);
             let init_loader = Arc::clone(&loader_2);
             let init_ws = Arc::clone(&ws);
             let init_store = Arc::clone(&store);
-            let run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
+            let run_ids = run_grid (
                 None,
                 find_motifs_run_config_range_or_value,
                 input_wrapper,
@@ -603,7 +591,7 @@ where
                             &store_in_find_motifs,
                             loader_in_find_motifs,
                             run_configs,
-                            FixedFindMotifsConfig::new(max_chunk_size, false, None),
+                            FixedFindMotifsConfig::new(max_chunk_size, false),
                             ThoDevice::from(1),
                             init_ctx_find_motifs
                         ).await.expect("FindMotifsStage::new failed"),
@@ -1867,7 +1855,7 @@ mod cli_tests {
                         &store,
                         Arc::clone(&loader),
                         run_configs,
-                        FixedFindMotifsConfig::new(30000, false, None),
+                        FixedFindMotifsConfig::new(30000, false),
                         ThoDevice::from(1),
                         init_ctx
                     ).await.expect("FindMotifsStage::new failed in test"),
