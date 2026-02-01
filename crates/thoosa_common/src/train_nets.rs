@@ -9,7 +9,7 @@ use crate::builder::{Node, SeqBuilder};
 use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
-use crate::utils::{masked_max, masked_mean, tensor_mem_size};
+use crate::utils::{mask_from_lengths, masked_mean, tensor_mem_size};
 use crate::utils::{pad_to, plot_series, DataBatch, ListenerResponse, TrainListener};
 use crate::ws::Workspace;
 use clap::clap_derive::Args;
@@ -303,8 +303,8 @@ unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO>
     for ThoModuleWithStore<DI, DO>
 {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        self.module.tho_forward(t, None, train)
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        self.module.tho_forward(t, lengths, train)
     }
 }
 
@@ -589,7 +589,7 @@ pub fn conv_motif_node(params: &MotifNetParams) -> Node {
 
     let mut net = builder
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
 
                 let r = t.unsqueeze(1);
 
@@ -604,7 +604,7 @@ pub fn conv_motif_node(params: &MotifNetParams) -> Node {
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .adaptive_max_pool(1, 4)
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
 
                 let r = t.squeeze();
 
@@ -785,7 +785,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
     let mut seq_builder = SeqBuilder::new(0, None);
     let mut builder = seq_builder
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                 debug!("cnn_label_node: input={t:?}");
                 Ok(t.shallow_clone())
             })),
@@ -814,8 +814,8 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
     }
 
     builder.closure(
-        Arc::new(Box::new(move |t: &Tensor, mask:Option<&Tensor>| {
-            // debug!("cnn_label_node: leaner input={t:?} mask={mask:?}");
+        Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
+            // debug!("cnn_label_node: leaner input={t:?} lengths={lengths:?}");
             //
             // let mean = t.f_mean_dim(2, false, None)?;
             // let max = t.f_max_dim(2, false)?;
@@ -823,7 +823,13 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
             // let max = masked_max(t, mask.expect("no mask"))?;
             //
             // Tensor::f_cat(&[mean, max], 1).map_err(|e|e.into())
-            let mean = t.f_mean_dim(2, false, None)?;
+            let mean = match lengths {
+                None => t.f_mean_dim(2, false, None)?,
+                Some(lengths) => {
+                    let mask = mask_from_lengths(lengths, t.size()[2], t.device())?;
+                    masked_mean(t, &mask)?
+                }
+            };
             Ok(mean)
         })),
         None,
@@ -879,7 +885,7 @@ pub fn lin_label_node(params: &LabelNetParams) -> Node {
 
     SeqBuilder::new(num_features/*30000*/, None)
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                 debug!("lin_label_node: input={t:?}");
                 Ok(t.shallow_clone())
             })),
@@ -1710,7 +1716,7 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 
     SeqBuilder::new(num_features, None)
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                 debug!(
                         "test_label_net: merged final in flatten t.size()={:?}",
                         t.size()
@@ -2016,6 +2022,7 @@ mod train_tests {
         vs_0.freeze();
 
         for slices in all_slices {
+            let mut lengths = vec![*slices as i64; batch as usize];
             let _ = net.tho_forward(
                 &Tensor::rand(
                     [
@@ -2026,16 +2033,7 @@ mod train_tests {
                     FLOAT_CPU,
                 ).into(),
 
-                Some(
-                    &Tensor::rand(
-                        [
-                            batch,
-                            motif_nets as i64,
-                            *slices as i64,
-                        ],
-                        (Float, Cpu),
-                    ).le(0.5).into()
-                ),
+                Some(lengths.as_mut_slice()),
                 false,
             )?;
         }
@@ -2060,6 +2058,7 @@ mod train_tests {
 
         let cuda_net = loaded_module.copy_to_device(1).await?;
         for slices in all_slices {
+            let mut lengths = vec![*slices as i64; batch as usize];
             let _ = cuda_net.tho_forward(
                 &Tensor::rand(
                     [
@@ -2070,16 +2069,7 @@ mod train_tests {
                     FLOAT_CUDA,
                 ).into(),
 
-                Some(
-                    &Tensor::rand(
-                        [
-                            batch,
-                            motif_nets as i64,
-                            *slices as i64,
-                        ],
-                        (Float, Cuda(0)),
-                    ).le(0.5).into()
-                ),
+                Some(lengths.as_mut_slice()),
                 false,
             )?;
         }
@@ -2110,13 +2100,13 @@ mod train_tests {
 
         debug!("batch_refs_vec={batch_refs_vec:?}");
 
-        let (batch, mask) = pad_stack_with_mask(batch_refs_vec.as_slice(), motif_nets as i64, batch_max_len)?;
+        let (batch, mut lengths) = pad_stack_with_mask(batch_refs_vec.as_slice(), motif_nets as i64, batch_max_len)?;
 
-        debug!("batch=\n{batch} mask=\n{mask}",);
+        debug!("batch=\n{batch} lengths={lengths:?}");
         let _ = net.tho_forward(
             &batch.into(),
 
-            Some(&mask.into()),
+            Some(lengths.as_mut_slice()),
             false,
         )?;
 

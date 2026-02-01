@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Reduction, Tensor};
-use thoosa_common::batches::AsyncDataBatch;
+use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch};
 use thoosa_common::runs::{Logits, NetResources, SavableResult};
 use thoosa_common::tho_device::ThoDevice;
@@ -289,7 +289,7 @@ where
         })
     }
 
-    fn build_batch_stream<'a>(loader: Arc<L>, ctx: &'a Mutex<C>, resources: Arc<Vec<(Resource, Vec<f32>)>>, batch_size: u32, labels_len: usize) -> BoxStream<'a, Result<(ThoBatch<LabelProbability>, Option<ThoBatch<LabelProbability>>, ThoBatch<LabelsProbabilities>), ThoError>> {
+    fn build_batch_stream<'a>(loader: Arc<L>, ctx: &'a Mutex<C>, resources: Arc<Vec<(Resource, Vec<f32>)>>, batch_size: u32, labels_len: usize) -> BoxStream<'a, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(resources.len(), batch_size, &mut rand::rng());
 
         futures_util::stream::iter(batches)
@@ -363,11 +363,11 @@ where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + OutId + 'static,
     C: RunCtx + 'static,
 {
-    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, Option<ThoBatch<LabelProbability>>, ThoBatch<LabelsProbabilities>), ThoError>> {
+    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
         Self::build_batch_stream(Arc::clone(&self.loader), &self.ctx, Arc::clone(&self.train_resources), self.batch_size, self.labels_len)
     }
 
-    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, Option<ThoBatch<LabelProbability>>, ThoBatch<LabelsProbabilities>), ThoError>> {
+    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
         Self::build_batch_stream(Arc::clone(&self.loader), &self.ctx, Arc::clone(&self.valid_resources), self.batch_size, self.labels_len)
     }
 }
@@ -416,7 +416,7 @@ mod tests {
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
+                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                         let sum = t.f_sum_dim_intlist(&[1, 2][..], false, None)?;
                         let mut sum = sum.f_unsqueeze(1)?;
                         let out = sum.f_mul_scalar_(k)?;
