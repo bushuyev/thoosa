@@ -54,7 +54,7 @@ pub enum Node {
         join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
     },
     Conv1d {
-        path:&'static str,
+        path:String,
         kernel: u32,
         in_channels: u32,
         out_channels: u32,
@@ -72,6 +72,7 @@ pub enum Node {
         config: BatchNormConfig,
     },
     Linear {
+        path:String,
         in_feats: u32,
         out_feats: u32,
         config: Option<LinearConfig>,
@@ -164,7 +165,7 @@ impl Node {
 
             Node::Split1 { node, split, join } => {
                 Box::new(Split1::new(
-                    node.build_tch_module(&(vs / format!("Split1")))?,//TODO name
+                    node.build_tch_module(&(vs / "split_1"))?,//TODO name
                     split,
                     join
                 ))
@@ -213,6 +214,7 @@ impl Node {
             } => Box::new(MyBatchNorm1d::new(vs / "batch_norm", num_features, config)),
 
             Node::Linear {
+                path,
                 in_feats,
                 out_feats,
                 config,
@@ -226,7 +228,7 @@ impl Node {
                 debug!("Node::Linear: descr={descr} in_feats={:?}, out_feats={:?}",in_feats, out_feats);
 
                 Box::new(my_linear(
-                    vs / "linear",
+                    vs / path,
                     in_feats as i64,
                     out_feats as i64,
                     config.unwrap_or(LinearConfig::default()),
@@ -338,9 +340,9 @@ impl SeqBuilder {
         self
     }
 
-    pub fn conv_1d(
+    pub fn conv_1d<P:ToString>(
         &mut self,
-        path: &'static str,
+        path: P,
         kernel: u32,
         in_channels: u32,
         out_channels: u32,
@@ -348,7 +350,7 @@ impl SeqBuilder {
         init: Option<Arc<ThoTensor<AnyDims, SimpleId>>>,
     ) -> &mut Self {
         self.elts.push(Node::Conv1d {
-            path,
+            path:path.to_string(),
             kernel,
             in_channels,
             out_channels,
@@ -421,8 +423,9 @@ impl SeqBuilder {
         self
     }
 
-    pub fn linear(&mut self, #[cfg(debug_assertions)] descr: String) -> &mut Self {
+    pub fn linear<P:ToString>(&mut self, path: P, #[cfg(debug_assertions)] descr: String) -> &mut Self {
         self.elts.push(Node::Linear {
+            path: path.to_string(),
             in_feats: self.num_features,
             out_feats: self.num_features,
             config: None,
@@ -432,13 +435,15 @@ impl SeqBuilder {
         self
     }
 
-    pub fn linear_feats(
+    pub fn linear_feats<P:ToString>(
         &mut self,
+        path: P,
         num_features: u32,
         out_feats: u32,
         #[cfg(debug_assertions)] descr: String,
     ) -> &mut Self {
         self.elts.push(Node::Linear {
+            path: path.to_string(),
             in_feats: num_features,
             out_feats,
             config: None,
@@ -449,9 +454,10 @@ impl SeqBuilder {
         self
     }
 
-    pub fn linear_f(&mut self, f: f32, #[cfg(debug_assertions)] descr: String) -> &mut Self {
+    pub fn linear_f<P:ToString>(&mut self, path: P, f: f32, #[cfg(debug_assertions)] descr: String) -> &mut Self {
         let out_feats = (self.num_features as f32 * f) as u32;
         self.elts.push(Node::Linear {
+            path: path.to_string(),
             in_feats: self.num_features,
             out_feats,
             config: None,
@@ -463,13 +469,15 @@ impl SeqBuilder {
         self
     }
 
-    pub fn linear_s(
+    pub fn linear_s<P:ToString>(
         &mut self,
         out_feats: u32,
         #[cfg(debug_assertions)] descr: String,
+        path: P,
     ) -> &mut Self {
         assert!(out_feats > 0);
         self.elts.push(Node::Linear {
+            path: path.to_string(),
             in_feats: self.num_features,
             out_feats,
             config: None,
@@ -481,13 +489,15 @@ impl SeqBuilder {
         self
     }
 
-    pub fn linear_s_with_conf(
+    pub fn linear_s_with_conf<P:ToString>(
         &mut self,
+        path: P,
         out_feats: u32,
         config: LinearConfig,
         #[cfg(debug_assertions)] descr: &str,
     ) -> &mut Self {
         self.elts.push(Node::Linear {
+            path: path.to_string(),
             in_feats: self.num_features,
             out_feats,
             config: Some(config),
@@ -499,14 +509,15 @@ impl SeqBuilder {
         self
     }
 
-    pub fn linear_p(&mut self, n: usize, p: &impl NthParams<Params = u32>) -> &mut Self {
+    pub fn linear_p<P:ToString>(&mut self, path: P, n: usize, p: &impl NthParams<Params = u32>) -> &mut Self {
         let out_feats = p.on_nth_layer(n);
         self.elts.push(Node::Linear {
+            path: path.to_string(),
             in_feats: self.num_features,
             out_feats,
             config: None,
             #[cfg(debug_assertions)]
-            descr: "zzz".to_string(),
+            descr: "linear_p".to_string(),
         });
         self.num_features = out_feats;
 
