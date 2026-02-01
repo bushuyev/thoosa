@@ -20,7 +20,7 @@ use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::batches::AsyncDataBatch;
+use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
@@ -402,7 +402,7 @@ where
             ).unwrap();
             */
 
-            let (x, _mask, y) = mix_x_binary_with_labels(&motifs, None, &random, None)?;
+            let (x, _lengths, y) = mix_x_binary_with_labels(&motifs, None, &random, None)?;
 
             debug!("MotifsBatch::train_batch: motifs={:?} random={:?}", motifs.device(), random.device());
             debug!("MotifsBatch::train_batch: x={:?} y={:?}", x.device(), y.device());
@@ -417,7 +417,7 @@ impl<C> AsyncDataBatch<Slice, MotifProbability> for MotifsBatch<C>
 where
     C: RunCtx,
 {
-    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, Option<ThoBatch<Slice>>, ThoBatch<MotifProbability>), ThoError>> {
+    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
         futures_util::stream::once( self.make_batch(Arc::clone(&self.train_motifs)))//TODO this corresponds to number of resources in label training , replace with configurable val?
         .map(|fut_res|{
             fut_res.map(|v|{
@@ -427,7 +427,7 @@ where
         .boxed()
     }
 
-    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, Option<ThoBatch<Slice>>, ThoBatch<MotifProbability>), ThoError>> {
+    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
         futures_util::stream::once( self.make_batch(Arc::clone(&self.valid_motifs)))
             .map(|fut_res|{
                 fut_res.map(|v|{

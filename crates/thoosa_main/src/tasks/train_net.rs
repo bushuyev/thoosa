@@ -24,7 +24,7 @@ use std::time::Instant;
 use tch::nn::{Optimizer, VarStore};
 use tch::Device;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::batches::AsyncDataBatch;
+use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
@@ -255,8 +255,8 @@ where
                 let mut batches = batch.train_batch_stream().await;
                 debug!("TrainNet::run_inner, train:  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
-                while let Some(Ok((x_t_0, mask, expected_y))) = batches.next().await {
-                    let input = Arc::new(TrainStepInput::new(x_t_0, mask, expected_y));
+                while let Some(Ok((x_t_0, lengths, expected_y))) = batches.next().await {
+                    let input = Arc::new(TrainStepInput::new(x_t_0, lengths, expected_y));
 
                     debug!("TrainNet::run_inner, train:  before oom input.id={:?}", input.id());
 
@@ -289,12 +289,13 @@ where
                     let mut valid_loss_sum = 0f32;
                     let mut valid_loss_count = 0u32;
 
-                    while let Some(Ok((x_t_0,mask, y_t))) = batches.next().await {
+                    while let Some(Ok((x_t_0, lengths, y_t))) = batches.next().await {
                         tch::no_grad(||{
 
                             let x_t = (train_step.x_f())(x_t_0);
 
-                            let pred_y = train_step.forward(&x_t, None, false)?;
+                            let mut lengths = lengths;
+                            let pred_y = train_step.forward(&x_t, lengths.as_deref_mut(), false)?;
 
                             let valid_loss = (train_step.loss_fn())(&pred_y.as_ref(), &y_t.as_ref())?;
                             let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
@@ -413,17 +414,17 @@ where
 pub struct TrainStepInput<DI: Dims, DO: Dims> {
     id: SynKey,
     x: ThoBatch<DI>,
-    mask: Option<ThoBatch<DI>>,
+    lengths: Option<BatchLengths>,
     expected_y: ThoBatch<DO>,
     cache_area: CacheArea,
 }
 
 impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
-    fn new(x: ThoBatch<DI>, mask: Option<ThoBatch<DI>>, expected_y: ThoBatch<DO>) -> Self {
+    fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>) -> Self {
         Self {
             id: SynKey::new([mono_key!("train_step", "stage")]),
             x,
-            mask,
+            lengths,
             expected_y,
             cache_area: CacheArea::default(),
         }
@@ -482,12 +483,7 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
         Ok(TrainStepInput {
             id: self.id.clone(),
             x: self.x.copy_to_device(dst_device).await?,
-            mask: match &self.mask{
-                None => None,
-                Some(mask) => {
-                    Some(mask.copy_to_device(dst_device).await?)
-                }
-            },
+            lengths: self.lengths.clone(),
             expected_y: self.expected_y.copy_to_device(dst_device).await?,
             cache_area: self.cache_area.clone(),
         })
@@ -509,19 +505,14 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 
         } else {
 
-            let (x, mask) = (
+            let (x, lengths) = (
                 self.x.copy_to_device(to_device_idx).await?,
-                match &self.mask {
-                    None => None,
-                    Some(mask) => {
-                        Some(mask.copy_to_device(to_device_idx).await?)
-                    }
-                }
+                self.lengths.clone(),
             );
 
             let expected_y = self.expected_y.copy_to_device(to_device_idx).await?;
 
-            let input = TrainStepInput::new(x, mask, expected_y);
+            let input = TrainStepInput::new(x, lengths, expected_y);
 
             do_run(&input, permits_ctx)
         }
@@ -579,9 +570,9 @@ where
         &self.device
     }
 
-    fn forward(&self, x_t: &ThoBatch<DI>, mask: Option<&ThoBatch<DI>>, train: bool) -> Result<ThoBatch<DO>, ThoError> {
+    fn forward(&self, x_t: &ThoBatch<DI>, lengths: Option<&mut [i64]>, train: bool) -> Result<ThoBatch<DO>, ThoError> {
         let net = self.net.lock();
-        net.tho_forward(x_t, mask, train)
+        net.tho_forward(x_t, lengths, train)
     }
 
     fn x_f(&self) -> Arc<F> {
@@ -629,7 +620,8 @@ where
 
         debug!("TrainStep::do_run: device={:?}  x_t.size={:?}", self.device, x_t.size());
 
-        let predicted_y = self.forward(&x_t, input.mask.as_ref(), true)?;
+        let mut lengths = input.lengths.clone();
+        let predicted_y = self.forward(&x_t, lengths.as_deref_mut(), true)?;
         debug!("TrainStep::do_run: 1. cuda_mem={:?}",maybe_cuda_mem(&self.device));
         trace!("TrainStep::do_run: x_t=\n{x_t}");
 
@@ -704,6 +696,7 @@ mod tests {
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::runner::common::MockRunCtx;
     use thoosa_common::batches::mock_async_data_batch;
+    use thoosa_common::batches::BatchLengths;
     use thoosa_common::dims::{Batch, Dims, ThoBatch};
     use thoosa_common::my_tch::{my_linear, ThoModule};
     use thoosa_common::train_nets::OptConfig;
@@ -746,7 +739,7 @@ mod tests {
         (x.into(), y.into())
     }
 
-    fn make_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, Option<ThoBatch<DummyX>>,  ThoBatch<DummyY>), ThoError>> {
+    fn make_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, Option<BatchLengths>,  ThoBatch<DummyY>), ThoError>> {
         let (x, y) = make_batch();
         stream::iter(vec![Ok((x, None, y))]).boxed()
     }

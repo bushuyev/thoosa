@@ -26,12 +26,12 @@ use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::batches::AsyncDataBatch;
+use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
 use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, CommonTrainingRunConfig, ConvNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinLenNetParams, LinNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
-use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, ListenerResponse, TrainListener};
+use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::{mono_key, shuffle_and_chunk_with_rng, CopyToDevice, ThoError};
@@ -330,23 +330,23 @@ where
                                    Arc::clone(&resources_0_valid),
                                    Box::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SynKey>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SynKey>>>>, mut ctx: C| {
                                        async move {
-                                           let (x, mask, y) = with_data!(ctx.branch(Some("train_label_nets_batch_data"), false, false), [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<MotifProbability, SynKey>], x_0:&[&ThoTensor<MotifProbability, SynKey>]|{
+                                           let (x, lengths, y) = with_data!(ctx.branch(Some("train_label_nets_batch_data"), false, false), [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<MotifProbability, SynKey>], x_0:&[&ThoTensor<MotifProbability, SynKey>]|{
                                                debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
 
                                                let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.t_ref().size()[1]).max().expect("no max_input");
 
                                                debug!("ResourcesBatch::train_batch_iter: max_input={max_input}");
 
-                                               let (x_1, mask_1) = pad_stack_with_mask(x_1, num_nets as i64, max_input)?;
-                                               let (x_0, mask_0) = pad_stack_with_mask(x_0, num_nets as i64, max_input)?;
+                                               let (x_1, lengths_1) = pad_stack_with_mask(x_1, num_nets as i64, max_input)?;
+                                               let (x_0, lengths_0) = pad_stack_with_mask(x_0, num_nets as i64, max_input)?;
 
-                                               mix_x_binary_with_labels(&x_1, Some(&mask_1), &x_0, Some(&mask_0))
+                                               mix_x_binary_with_labels(&x_1, Some(lengths_1.as_slice()), &x_0, Some(lengths_0.as_slice()))
                                            })?;
 
-                                           debug!("ResourcesBatch::train_batch_iter: x.size={:?} y.size={:?} mask={mask:?}", x.size(), y.size());
+                                           debug!("ResourcesBatch::train_batch_iter: x.size={:?} y.size={:?} lengths={lengths:?}", x.size(), y.size());
 
 
-                                           Ok((x.into(), mask.map(|mask| mask.into()), y.into()))
+                                           Ok((x.into(), lengths, y.into()))
                                        }.boxed()
                                    }),
                                    ctx_for_batch
@@ -508,7 +508,7 @@ type BuildBatchFn<LD:Dims+ 'static, X:Dims+ 'static, Y:Dims+ 'static, C> = Box<d
     Vec<Arc<DevicesWrap<ThoTensor<LD, SynKey>>>>,
     Vec<Arc<DevicesWrap<ThoTensor<LD, SynKey>>>>, C
 
-) -> BoxFuture<'static, Result<(ThoBatch<X>, Option<ThoBatch<X>>, ThoBatch<Y>), ThoError>> + Send + Sync>;
+) -> BoxFuture<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> + Send + Sync>;
 
 // #[derive(Debug)]
 struct ResourcesBatch<L, C, LD, X, Y>
@@ -598,7 +598,7 @@ where
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
-    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, Option<ThoBatch<X>>, ThoBatch<Y>), ThoError>> {
+    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         //TODO if self.batch_size > train_len?
         let batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
 
@@ -615,7 +615,7 @@ where
         )
     }
 
-    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, Option<ThoBatch<X>>, ThoBatch<Y>), ThoError>> {
+    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
@@ -640,7 +640,7 @@ where
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
-    fn build_batch_stream<'a>(build_batch_fn:&'a BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: &'a parking_lot::Mutex<C>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<X>, Option<ThoBatch<X>>, ThoBatch<Y>), ThoError>> {
+    fn build_batch_stream<'a>(build_batch_fn:&'a BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: &'a parking_lot::Mutex<C>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
 
         futures_util::stream::iter(resource_indexes_for_batches)
             .map(move |batch_keys| {
@@ -1029,7 +1029,7 @@ mod tests {
                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
                         let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
 
-                        let (x, _mask, y) = mix_x_binary_with_labels(&x_1, None, &x_0, None)?;
+                        let (x, _lengths, y) = mix_x_binary_with_labels(&x_1, None, &x_0, None)?;
 
                          Ok((x.into(), None, y.into()))
                     })
@@ -1039,11 +1039,11 @@ mod tests {
         );
 
         let mut batch = resource_batch.train_batch_stream().await;
-        let (batch_x, mask,  batch_y) = batch.next().await.expect("no batch").expect("batch failed");
+        let (_batch_x, _lengths,  _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 
         let mut batch = resource_batch.valid_batch_stream().await;
-        let (batch_x, mask, batch_y) = batch.next().await.expect("no batch").expect("batch failed");
+        let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 
 

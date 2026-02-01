@@ -520,7 +520,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 
     let node = SeqBuilder::new(num_features, None)
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
 
                 let r = t.unsqueeze(1);//dummy channel
 
@@ -535,14 +535,14 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
                 SeqBuilder::new(num_features, None).conv_1d("conv", l as u32, 1, 1, cfg, Some(Arc::clone(&tho_tensor))).end_seq(),
                 SeqBuilder::new(num_features, None)
                     .closure(
-                        Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
+                        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                             Ok(t.f_pow_tensor_scalar(2)?)
                         })),
                         None,
                     )
                     .conv_1d("energy", l as u32, 1, 1, cfg, Some(Arc::clone(&ones)))
                     .closure(
-                        Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
+                        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                             Ok(t.f_clamp_min(1e-12)?) //.sqrt()
                         })),
                         None,

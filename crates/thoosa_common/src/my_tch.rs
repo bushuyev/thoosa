@@ -13,7 +13,7 @@ use tch::nn::{
 
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
-use crate::builder::{clc_conv1d_out, Node};
+use crate::builder::{clc_avg_pool1d_out, clc_conv1d_out, clc_max_pool1d_out, Node};
 // use crate::{data, utils};
 use crate::builder::SeqBuilder;
 use crate::dims::{AnyDims, Dims};
@@ -41,25 +41,19 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
         }
     }
 
-    fn run_layers(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}",t.as_ref().size(),t.device_idx(),self.layers[0]);
-        let mask = match mask {
-            None => None,
-            Some(v) => {
-                Some(ThoTensor::<AnyDims, SimpleId>::new(t.id().clone(), v.t.shallow_clone())?)//FIXME
-            }
-        };
+    fn run_layers(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}", t.as_ref().size(), t.device_idx(), self.layers[0]);
 
-        let output_t = self.layers[0].tho_forward(&t.as_ref().into(), mask.as_ref(), train)?;
+        let output_t = self.layers[0].tho_forward(&t.as_ref().into(), lengths.as_deref_mut(), train)?;
 
         Ok(self.layers
             .iter()
             .skip(1)
             .enumerate()
             .try_fold(output_t, |output_t, (i, layer)| {
-                debug!("MySequential::run_layers={i} output_t.size={:?} output_t.device={:?} layer={:?}",output_t.size(),output_t.device_idx(),layer);
+                debug!("MySequential::run_layers={i} output_t.size={:?} output_t.device={:?} layer={:?}", output_t.size(), output_t.device_idx(), layer);
 
-                layer.tho_forward(&output_t, mask.as_ref(), train)
+                layer.tho_forward(&output_t, lengths.as_deref_mut(), train)
             })?
             .as_ref()
             .into())
@@ -73,15 +67,18 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
         }
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         if self.layers.is_empty() {
             Ok(t.shallow_clone())
         } else {
             match self.split_input {
-                None => self.run_layers(t, mask, train),
+                None => self.run_layers(t, lengths.as_deref_mut(), train),
                 Some((dim, num_features)) => {
                     let splits = t.as_ref().f_split(num_features, dim)?;
                     debug!("MySequential::tho_forward splits.sizes={:?} num_features={num_features} dim={dim}",splits.iter().map(|t| t.size()).collect::<Vec<_>>());
+
+                    let original_lengths = lengths.as_deref().map(|vals| vals.to_vec());
+                    let mut updated_lengths: Option<Vec<i64>> = None;
 
                     let split_r = Tensor::f_concat(
                         splits
@@ -91,7 +88,11 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
                                 if split.size()[dim as usize] == num_features {
                                     debug!("MySequential::tho_forward i={i} split={:?}",split.size());
 
-                                    let r = self.run_layers(&split.into(), mask, train)?;
+                                    let mut lengths_run = original_lengths.as_ref().map(|vals| vals.clone());
+                                    let r = self.run_layers(&split.into(), lengths_run.as_deref_mut(), train)?;
+                                    if updated_lengths.is_none() {
+                                        updated_lengths = lengths_run;
+                                    }
                                     debug!("MySequential::tho_forward i={i} r.size()={:?}",r.size());
 
                                     Ok(r)
@@ -106,6 +107,10 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
                             .as_slice(),
                         1,
                     )?;
+
+                    if let (Some(updated), Some(lengths_out)) = (updated_lengths, lengths.as_deref_mut()) {
+                        lengths_out.copy_from_slice(updated.as_slice());
+                    }
 
                     let mean_r = split_r.f_mean_dim(1, false, None)?.f_unsqueeze(1)?;//TODO why mean?
 
@@ -153,15 +158,28 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyParallel<DI, DO> {
         }
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MyParallel::forward: xs={:?}", t.size());
+        let original_lengths = lengths.as_deref().map(|vals| vals.to_vec());
+        let mut updated_lengths: Option<Vec<i64>> = None;
         let t = (self.join)(
             (self.split)(t.as_ref())?
                 .into_iter()
                 .zip(self.layers.iter())
-                .map(|(t, net)| net.tho_forward(&t.into(), None, train).map(|v|v.as_ref().shallow_clone()))
+                .map(|(t, net)| {
+                    let mut lengths_run = original_lengths.as_ref().map(|vals| vals.clone());
+                    let out = net.tho_forward(&t.into(), lengths_run.as_deref_mut(), train).map(|v|v.as_ref().shallow_clone())?;
+                    if updated_lengths.is_none() {
+                        updated_lengths = lengths_run;
+                    }
+                    Ok(out)
+                })
                 .collect::<Result<Vec<Tensor>, ThoError>>()?,
         )?;
+
+        if let (Some(updated), Some(lengths_out)) = (updated_lengths, lengths.as_deref_mut()) {
+            lengths_out.copy_from_slice(updated.as_slice());
+        }
 
         debug!("MyParallel::forward: t={:?}", t.size());
 
@@ -201,14 +219,27 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for Split1<DI, DO> {
        self.layer.debug()
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MyParallel::forward: xs={:?}", t.size());
+        let original_lengths = lengths.as_deref().map(|vals| vals.to_vec());
+        let mut updated_lengths: Option<Vec<i64>> = None;
         let t = (self.join)(
             (self.split)(t.as_ref())?
                 .into_iter()
-                .map(|split_t| self.layer.tho_forward(&split_t.into(), None, train).map(|v|v.as_ref().shallow_clone()))
+                .map(|split_t| {
+                    let mut lengths_run = original_lengths.as_ref().map(|vals| vals.clone());
+                    let out = self.layer.tho_forward(&split_t.into(), lengths_run.as_deref_mut(), train).map(|v|v.as_ref().shallow_clone())?;
+                    if updated_lengths.is_none() {
+                        updated_lengths = lengths_run;
+                    }
+                    Ok(out)
+                })
                 .collect::<Result<Vec<Tensor>, ThoError>>()?,
         )?;
+
+        if let (Some(updated), Some(lengths_out)) = (updated_lengths, lengths.as_deref_mut()) {
+            lengths_out.copy_from_slice(updated.as_slice());
+        }
 
         debug!("MyParallel::forward: t={:?}", t.size());
 
@@ -250,7 +281,15 @@ impl MyMaxPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        if let Some(lengths) = lengths.as_deref_mut() {
+            for len in lengths.iter_mut() {
+                if *len < 0 {
+                    return Err(ThoError::new(format!("MyMaxPool1d::tho_forward length must be >= 0, got {len}")));
+                }
+                *len = clc_max_pool1d_out(*len as u32, self.kernel_size as u32, self.padding as u32, self.dilation as u32, self.stride as u32) as i64;
+            }
+        }
         Ok(t.as_ref()
             .f_max_pool1d(
                 self.kernel_size,
@@ -275,7 +314,12 @@ impl AdaptiveMaxPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        if let Some(lengths) = lengths.as_deref_mut() {
+            for len in lengths.iter_mut() {
+                *len = self.output_size as i64;
+            }
+        }
         Ok(t.as_ref()
             .f_adaptive_avg_pool1d(self.output_size as i64)?
             .into())
@@ -300,7 +344,7 @@ impl MyBatchNorm1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyBatchNorm1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(self.batch_norm.forward_t(t.as_ref(), train).into())
     }
 }
@@ -311,27 +355,34 @@ unsafe impl Sync for MyBatchNorm1d {}
 #[derive(Debug)]
 pub struct MyConv<ND> {
     conv: Conv<ND>,
+    kernel: u32,
+    config: ConvConfig,
 }
 
 impl<ND> MyConv<ND> {
     pub fn new(conv: Conv<ND>, kernel: u32, conv_config: ConvConfig) -> Self {
-        Self { conv }
+        Self { conv, kernel, config: conv_config }
     }
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 1]> {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        //when mask is changed to Option<Vec<u32>>
-        // if let Some(mask_t) = mask {
-        //     mask.replace(mask.into_iter().map(|l|clc_conv1d_out(l, self.kernel, self.conf)).collect());
-        // }
-        debug!("MyConv::tho_forward mask={mask:?}");
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        debug!("MyConv::tho_forward: lengths={lengths:?}");
+        if let Some(lengths) = lengths.as_deref_mut() {
+            for len in lengths.iter_mut() {
+                if *len < 0 {
+                    return Err(ThoError::new(format!("MyConv::tho_forward length must be >= 0, got {len}")));
+                }
+                *len = clc_conv1d_out(*len as u32, self.kernel, self.config) as i64;
+            }
+        }
+        debug!("MyConv::tho_forward lengths={lengths:?}");
         Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
     }
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 2]> {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
     }
 }
@@ -361,7 +412,15 @@ impl MyAvgPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAvgPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        if let Some(lengths) = lengths.as_deref_mut() {
+            for len in lengths.iter_mut() {
+                if *len < 0 {
+                    return Err(ThoError::new(format!("MyAvgPool1d::tho_forward length must be >= 0, got {len}")));
+                }
+                *len = clc_avg_pool1d_out(*len as u32, self.kernel_size as u32, self.padding as u32, self.stride as u32) as i64;
+            }
+        }
         Ok(t.as_ref()
             .f_avg_pool1d(
                 self.kernel_size,
@@ -381,7 +440,7 @@ pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send {
         0
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError>;
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError>;
 }
 
 // unsafe impl <DI:Dims, DO:Dims>  Send for ThoModuleWithStore<DI, DO>{}
@@ -407,21 +466,21 @@ impl MyFuncModule {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyFuncModule {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         (self.func)(t.as_ref()).map(|t|t.into())
     }
 }
 
 pub struct MyClosureModule {
     //TODO Tensor->ThoTensor
-    func: Arc<Box<dyn Fn(&Tensor, Option<&Tensor>) -> Result<Tensor, ThoError>>>,
+    func: Arc<Box<dyn Fn(&Tensor, Option<&[i64]>) -> Result<Tensor, ThoError>>>,
 }
 
 unsafe impl Send for MyClosureModule {}
 unsafe impl Sync for MyClosureModule {}
 
 impl MyClosureModule {
-    pub fn new(func: Arc<Box<dyn Fn(&Tensor, Option<&Tensor>) -> Result<Tensor, ThoError>>>) -> Self {
+    pub fn new(func: Arc<Box<dyn Fn(&Tensor, Option<&[i64]>) -> Result<Tensor, ThoError>>>) -> Self {
         Self { func }
     }
 }
@@ -433,10 +492,10 @@ impl Debug for MyClosureModule {
 }
 
 impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyClosureModule {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         (self.func)(
             t.as_ref(),
-            mask.map(|v|v.as_ref())
+            lengths.as_deref()
         ).map(|v|v.into())
     }
 }
@@ -464,7 +523,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLin
         );
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         #[cfg(debug_assertions)]
         {
             debug!("Module for MyLinear::forward: descr={}", self.descr);
@@ -591,25 +650,21 @@ fn add_node_output_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, mot
 #[cfg(test)]
 mod tch_tests {
     use std::sync::Arc;
-    use log::LevelFilter::Info;
-    use log::{debug, set_max_level};
+    use log::debug;
 
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::{Device, IndexOp, Kind, Reduction, Tensor, nn};
+    use tch::{Device, IndexOp, Kind, Tensor, nn};
 
-    use tch::nn::{BatchNormConfig, ConvConfig, OptimizerConfig, VarStore};
+    use tch::nn::{BatchNormConfig, ConvConfig, VarStore};
 
     use thoosa_shared::ThoError;
-    use thoosa_shared::*;
 
     use crate::builder::SeqBuilder;
     use crate::builder::{Node, clc_conv1d_out};
     use crate::dims::{AnyDims, Batch};
     use crate::my_tch::ThoModule;
     use crate::train_nets::ThoModuleWithStore;
-
-    use crate::utils::*;
 
     #[test]
     pub fn test_conv1_out() {
@@ -703,6 +758,7 @@ mod tch_tests {
     }
 
 
+    #[allow(dead_code)]
     fn test_net(
         vs: &VarStore,
         num_features: u32,
@@ -710,7 +766,7 @@ mod tch_tests {
         SeqBuilder::new(num_features, None)
             .batch_norm(BatchNormConfig::default())
             .closure(
-                Arc::new(Box::new(|t: &Tensor, _mask:Option<&Tensor>| {
+                Arc::new(Box::new(|t: &Tensor, _lengths: Option<&[i64]>| {
                     Ok(t.view((t.size()[0], 1, t.size()[1]))) //channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
                 })),
                 None,
