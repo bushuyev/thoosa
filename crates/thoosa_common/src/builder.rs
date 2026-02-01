@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Formatter};
+use std::fmt::{format, Debug, Formatter};
 use std::sync::Arc;
 use log::debug;
 use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
@@ -11,26 +11,46 @@ use thoosa_shared::traits::SimpleId;
 use crate::tho_tensor::ThoTensor;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
-pub fn clc_conv1d_out(l_in: u32, kernel: u32, c: ConvConfig) -> u32 {
+pub fn clc_conv1d_out(l_in: u32, kernel: u32, c: ConvConfig) -> Result<u32, ThoError> {
     if l_in == 0 { //convolution was first layer, num_features is not known
-        return  0;
+        return  Ok(0);
     }
+    if kernel < 2 {// if kernel is calculated in runtime
+        return Err(ThoError::new(format!("kernel={kernel} should be bigger than 2")))
+    }
+    if l_in + 2 * (c.padding as u32) < c.dilation as u32  * (kernel - 1) {
+        return Err(ThoError::new(format!("l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={} dilation={} should be bigger than 2", kernel, c.dilation)))
+    }
+
+    if l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1{
+
+        return Err(ThoError::new(format!("l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1 : l_in={l_in} kernel={} dilation={} should be bigger than 1", kernel, c.dilation)))
+    }
+
     debug!("clc_conv1d_out: l_in={l_in} kernel={kernel} padding={} dilation={} stride={}", c.padding, c.dilation, c.stride);
 
     let r = (l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) - 1) / c.stride as u32 + 1;
 
     debug!("clc_conv1d_out: r={r}");
 
-    r
+    Ok(r)
 }
 
-pub fn clc_max_pool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, stride: u32) -> u32 {
+pub fn clc_max_pool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, stride: u32) -> Result<u32, ThoError> {
+    // throwing error should cause f32::MAX loss in optimizer
+    if kernel < 2 {// if kernel is calculated in runtime
+        return Err(ThoError::new(format!("kernel={kernel} should be bigger than 2")))
+    }
+    if l_in + 2 * padding < dilation * (kernel - 1) - 1 {
+        return Err(ThoError::new(format!("l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={kernel} dilation={dilation} should be bigger than 2")))
+    }
+
     debug!("clc_max_pool1d_out: l_in={l_in} kernel={kernel} padding={padding} dilation={dilation} stride={stride}");
     let r= (l_in + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1;
 
     debug!("clc_max_pool1d_out: r={r}");
 
-    r
+    Ok(r)
 }
 
 pub fn clc_avg_pool1d_out(l_in: u32, kernel: u32, padding: u32, stride: u32) -> u32 {
@@ -360,7 +380,7 @@ impl SeqBuilder {
             init,
         });
 
-        self.num_features = clc_conv1d_out(self.num_features, kernel, config) as u32;
+        self.num_features = clc_conv1d_out(self.num_features, kernel, config).unwrap();
         self.kernel = Some(kernel);
 
         self
@@ -380,7 +400,7 @@ impl SeqBuilder {
             config,
         });
 
-        self.num_features = clc_conv1d_out(self.num_features, kernel, config) as u32; //TODO 2d
+        self.num_features = clc_conv1d_out(self.num_features, kernel, config).unwrap() as u32; //TODO 2d
         self.kernel = Some(kernel);
 
         self
@@ -393,7 +413,7 @@ impl SeqBuilder {
             padding,
         });
 
-        self.num_features = clc_max_pool1d_out(self.num_features, kernel, padding, 1, stride); //TODO config?
+        self.num_features = clc_max_pool1d_out(self.num_features, kernel, padding, 1, stride).unwrap(); //TODO config?
 
         self
     }
