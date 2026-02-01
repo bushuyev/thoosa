@@ -9,7 +9,7 @@ use crate::builder::{Node, SeqBuilder};
 use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
-use crate::utils::{mask_from_lengths, masked_mean, tensor_mem_size};
+use crate::utils::{mask_from_lengths, masked_max, masked_mean, tensor_mem_size};
 use crate::utils::{pad_to, plot_series, DataBatch, ListenerResponse, TrainListener};
 use crate::ws::Workspace;
 use clap::clap_derive::Args;
@@ -815,28 +815,30 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
 
     builder.closure(
         Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
-            // debug!("cnn_label_node: leaner input={t:?} lengths={lengths:?}");
-            //
-            // let mean = t.f_mean_dim(2, false, None)?;
-            // let max = t.f_max_dim(2, false)?;
-            // let mean = masked_mean(t, mask.expect("no mask"))?;
-            // let max = masked_max(t, mask.expect("no mask"))?;
-            //
-            // Tensor::f_cat(&[mean, max], 1).map_err(|e|e.into())
-            let mean = match lengths {
-                None => t.f_mean_dim(2, false, None)?,
-                Some(lengths) => {
-                    let mask = mask_from_lengths(lengths, t.size()[2], t.device())?;
-                    masked_mean(t, &mask)?
-                }
-            };
-            Ok(mean)
+            debug!("cnn_label_node: leaner input={t:?} lengths={lengths:?}");
+            let lengths = lengths.unwrap();
+            let mask = mask_from_lengths(lengths, *lengths.iter().max().unwrap(), t.device())?;
+
+            let mean = t.f_mean_dim(2, false, None)?;
+            let max = t.f_max_dim(2, false)?;
+            let mean = masked_mean(t, &mask)?;
+            let max = masked_max(t, &mask)?;
+
+            Tensor::f_cat(&[mean, max], 1).map_err(|e|e.into())
+            // let mean = match lengths {
+            //     None => t.f_mean_dim(2, false, None)?,
+            //     Some(lengths) => {
+            //         let mask = mask_from_lengths(lengths, t.size()[2], t.device())?;
+            //         masked_mean(t, &mask)?
+            //     }
+            // };
+            // Ok(mean)
         })),
         None,
     )
         .linear_feats(
             "todo",
-            cnn_params.hidden_conv_channels, 2* 256,
+            2 * cnn_params.hidden_conv_channels, 2* 256,
             #[cfg(debug_assertions)]
             "linear_feats".to_string(),
         )
@@ -1288,7 +1290,7 @@ where
 
                 let mut listener = PlotVecf32::new(
                     format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(),
-                ); //motif_id ?
+                ); //motif_id ?train_net
 
                 let (loss, node_params) = panic_to_err_async!(
                     train_clone(
@@ -2091,9 +2093,11 @@ mod train_tests {
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = conv_label_node(&params).build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
-        let max_len = 16;
+        let max_len = 32;
         let batch_vec = std::iter::once(Tensor::rand(&[motif_nets as i64, max_len], FLOAT_CPU))
-            .chain((1..5).map(|i|Tensor::rand(&[motif_nets as i64, random_range(3..16)], FLOAT_CPU))).collect::<Vec<_>>();
+            .chain((1..4).map(|i|Tensor::rand(&[motif_nets as i64, random_range(max_len/2..max_len)], FLOAT_CPU)))
+            .chain(std::iter::once(Tensor::rand(&[motif_nets as i64, max_len/2], FLOAT_CPU)))
+            .collect::<Vec<_>>();
 
         let batch_max_len = batch_vec.iter().map(|t|t.size()[1]).max().unwrap();
         let batch_refs_vec = batch_vec.iter().collect::<Vec<_>>();
