@@ -126,6 +126,9 @@ pub struct RunAllArgs {
     #[arg(long)]
     select_resources: String,
 
+    #[arg(long, default_value_t = 20_000)]
+    pub max_chunk_size: u32, //FixedFindMotifsConfig::max_chunk_size
+
     #[arg(long, default_value = "XXX")]
     train_resource_group: String,
 
@@ -293,7 +296,7 @@ where
 
     GlobalCtx::init_devices(2);
 
-    let loader_2 = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
+    let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
         move |key, _| {
             ThoTensor::new(
                 SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
@@ -344,23 +347,11 @@ where
                 CacheArea::default()
             ));
 
-            /*
-
-                let random_avg_dist = Arc::new(RandomAvgDist::new(Arc::clone(store), Arc::clone(&loader), ws));
-                match &filter {
-                    SlicesFilter::DistanceRunningMeanK(_) => {}
-                    SlicesFilter::MaxDistance(k) => {
-                        let avg_dist = random_avg_dist.run(
-                            Arc::new(DevicesWrap::wrap(RandomAvgDistInput::new(1000, run_config.id.unwrap()), CacheArea::default()))
-                        ).await;
-                    }
-                };
-             */
             let init_ctx = root_ctx.branch( Some("find motifs init ctx"), true, false);
-            let init_loader = Arc::clone(&loader_2);
+            let init_loader = Arc::clone(&loader);
             let init_ws = Arc::clone(&ws);
             let init_store = Arc::clone(&store);
-            let run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
+            let run_ids = run_grid (
                 None,
                 find_motifs_run_config_range_or_value,
                 input_wrapper,
@@ -400,7 +391,7 @@ where
             //TODO move it into SelectMotifsStage
             let motif_loader = Arc::new(MotifLoader::new(
                 Arc::clone(&store),
-                Arc::clone(&loader_2),
+                Arc::clone(&loader),
                 &ws
             ));
 
@@ -416,11 +407,11 @@ where
                     Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
                         &ws,
                         &store,
-                        loader_2,
+                        loader,
                         motif_loader,
                         run_configs,
                         select_motifs_args.find_motifs_run_ids.clone(),
-                        100_000,//TODO config
+                        100_000, //TODO config
                         #[cfg(test)]
                         None
                     ))
@@ -451,7 +442,7 @@ where
                 async |run_configs| {
 
                     Ok(Arc::new(TrainMotifNets::<_, RunCtxWithPermits>::new(
-                        loader_2,
+                        loader,
                         &ws,
                         &store,
                         run_configs,
@@ -487,7 +478,7 @@ where
 
                     new_train_label_nets_with_ml(
                         train_label_nets_args.train_motif_nets_run_ids.clone(),
-                        loader_2,
+                        loader,
                         run_configs,
                         &ws,
                         &store,
@@ -526,7 +517,7 @@ where
 
                     new_train_final_net_with_ml(
                         train_final_net_args.train_label_nets_run_ids.clone(),
-                        loader_2,
+                        loader,
                         run_configs,
                         &ws,
                         &store,
@@ -567,7 +558,6 @@ where
                 CacheArea::default()
             ));
 
-
             let find_motifs_run_config_range_or_value:FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue{
                 id: None,
                 step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
@@ -583,73 +573,13 @@ where
                 // filter: None,
                 slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ k: RangeOrValue::Value(0.02)}),
             };
-            let max_chunk_size = 20_000;
-            let init_ctx_find_motifs = root_ctx.branch(Some("init find motifs"), true, false);
-            let store_in_find_motifs = Arc::clone(&store);
-            let ws_in_find_motifs = Arc::clone(&ws);
-            let loader_in_find_motifs = Arc::clone(&loader_2);
-            let find_motif_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
-                None,
-                find_motifs_run_config_range_or_value,
-                find_motifs_input,
-                &ws,
-                &store,
-                true,
-                async move |run_configs| {
-
-                    Arc::new(
-                        crate::tasks::find_motifs::FindMotifsStage::new(
-                            &ws_in_find_motifs,
-                            &store_in_find_motifs,
-                            loader_in_find_motifs,
-                            run_configs,
-                            FixedFindMotifsConfig::new(max_chunk_size, false, None),
-                            ThoDevice::from(1),
-                            init_ctx_find_motifs
-                        ).await.expect("FindMotifsStage::new failed"),
-                    )
-                },
-                || root_ctx.branch( Some("find motifs"), true, false),
-            ).await?;
-
-            info!("find motifs done, find_motif_run_ids={find_motif_run_ids:?}");
-
-            debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
-            let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
-                Some(find_motif_run_ids.clone()),
-                SelectMotifsRunConfigRangeOrValue{
-                    id: None,
-                    motif_selector: MotifSelectorRangeOrValue::ByLabelVariance(ByLabelVarianceConfigRangeOrValue{ _dummy: 0 })
-                },
-                select_motifs_input,
-                &ws,
-                &store,
-                true,
-                async |run_configs| {
-
-                    Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
-                        &ws,
-                        &store,
-                        Arc::clone(&loader_2),
-                        Arc::new(MotifLoader::new(
-                            Arc::clone(&store),
-                            Arc::clone(&loader_2),
-                            &ws
-                        )),
-                        run_configs,
-                        find_motif_run_ids.clone(),
-                        max_chunk_size as i64,
-                        #[cfg(test)]
-                        None
-                    ))
-                },
-                || root_ctx.branch( Some("select motifs"), true, false),
-            ).await?;
-
-            info!("select motifs done: find_motif_run_ids={find_motif_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
-
-            debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
-
+            let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
+            //////////////////////select
+            let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
+                id: None,
+                motif_selector: MotifSelectorRangeOrValue::ByLabelVariance(ByLabelVarianceConfigRangeOrValue { _dummy: 0 })
+            };
+            /////////////////////train_motifs
             let common_training_args = CommonTrainingRunConfigRangeOrValue {
                 cycles: RangeOrValue::Value(100),
                 batch_size: RangeOrValue::Value(20),
@@ -665,6 +595,98 @@ where
                 num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
                 step: RangeOrValue::Value(10),
             };
+            //////////////////////train labels
+            let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue{
+                id: None,
+                common_training_args: common_training_args.clone(),
+                // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue{
+                //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+                //     slices_len: RangeOrValue::Value(1000)
+                // }),
+                net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue{
+                    num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 12 }, step: None },
+                    hidden_conv_channels: RangeOrValue::Value(64),
+                    num_head_layers: RangeOrValue::Value(10),
+                    // kernel: RangeOrValue::Value(10),
+                    kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+                }),
+            };
+            //////////////////////train final
+            let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue{
+                id: None,
+                common_training_args,
+                net: FinalNetArgsRangeOrValue {
+                    num_layers: RangeOrValue::Range { range: Range { start: 3, end: 20 }, step: None },
+                },
+            };
+
+            ///////////////////////////////
+
+            let init_ctx_find_motifs = root_ctx.branch(Some("init find motifs"), true, false);
+            let store_in_find_motifs = Arc::clone(&store);
+            let ws_in_find_motifs = Arc::clone(&ws);
+            let loader_in_find_motifs = Arc::clone(&loader);
+            let find_motif_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
+                None,
+                find_motifs_run_config_range_or_value,
+                find_motifs_input,
+                &ws,
+                &store,
+                true,
+                async move |run_configs| {
+
+                    Arc::new(
+                        crate::tasks::find_motifs::FindMotifsStage::new(
+                            &ws_in_find_motifs,
+                            &store_in_find_motifs,
+                            loader_in_find_motifs,
+                            run_configs,
+                            fixed_find_motifs_config,
+                            ThoDevice::from(1),
+                            init_ctx_find_motifs
+                        ).await.expect("FindMotifsStage::new failed"),
+                    )
+                },
+                || root_ctx.branch( Some("find motifs"), true, false),
+            ).await?;
+
+            info!("find motifs done, find_motif_run_ids={find_motif_run_ids:?}");
+
+            debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
+
+            let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
+                Some(find_motif_run_ids.clone()),
+                select_motifs_run_config,
+                select_motifs_input,
+                &ws,
+                &store,
+                true,
+                async |run_configs| {
+
+                    Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
+                        &ws,
+                        &store,
+                        Arc::clone(&loader),
+                        Arc::new(MotifLoader::new(
+                            Arc::clone(&store),
+                            Arc::clone(&loader),
+                            &ws
+                        )),
+                        run_configs,
+                        find_motif_run_ids.clone(),
+                        run_all_params.max_chunk_size as i64,
+                        #[cfg(test)]
+                        None
+                    ))
+                },
+                || root_ctx.branch( Some("select motifs"), true, false),
+            ).await?;
+
+            info!("select motifs done: find_motif_run_ids={find_motif_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
+
+            debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
+
+
 
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
@@ -682,7 +704,7 @@ where
                 async |run_configs| {
 
                     Ok(Arc::new(TrainMotifNets::<_, RunCtxWithPermits>::new(
-                        Arc::clone(&loader_2),
+                        Arc::clone(&loader),
                         &ws,
                         &store,
                         run_configs,
@@ -695,26 +717,11 @@ where
 
             ///////////////////
             debug!("starting train label nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
-            let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue{
-                id: None,
-                common_training_args: common_training_args.clone(),
-                // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue{
-                //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
-                //     slices_len: RangeOrValue::Value(1000)
-                // }),
-                net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue{
-                    num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 12 }, step: None },
-                    hidden_conv_channels: RangeOrValue::Value(64),
-                    num_head_layers: RangeOrValue::Value(10),
-                    // kernel: RangeOrValue::Value(10),
-                    kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-                }),
-            };
 
             let init_ctx_train_labels = root_ctx.branch(Some("init label nets"), true, false);
             let store_in_train_labels = Arc::clone(&store);
             let ws_in_train_labels = Arc::clone(&ws);
-            let loader_in_train_labels = Arc::clone(&loader_2);
+            let loader_in_train_labels = Arc::clone(&loader);
             let opt_config_in_train_labels = Arc::clone(&opt_config);
             let train_label_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
                 None,
@@ -743,17 +750,11 @@ where
             ////////////////////////
             debug!("starting train final nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
-            let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue{
-                id: None,
-                common_training_args,
-                net: FinalNetArgsRangeOrValue {
-                    num_layers: RangeOrValue::Range { range: Range { start: 3, end: 20 }, step: None },
-                },
-            };
+
             let init_ctx_in_train_final = root_ctx.branch(Some("init final nets"), true, false);
             let store_in_train_final = Arc::clone(&store);
             let ws_in_train_final = Arc::clone(&ws);
-            let loader_in_train_final = Arc::clone(&loader_2);
+            let loader_in_train_final = Arc::clone(&loader);
 
             let _run_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
                 None,
@@ -798,7 +799,7 @@ where
         }
 
         Some(PlotMotifSlices(plot_motif_slices_params)) => {
-            run_plot_motif_slices(&ws, &store, &loader_2, &plot_motif_slices_params, &devices[0]).await?;
+            run_plot_motif_slices(&ws, &store, &loader, &plot_motif_slices_params, &devices[0]).await?;
         }
 
         Some(MotifsToTensor(choose_fragments_params)) => {
@@ -1867,7 +1868,7 @@ mod cli_tests {
                         &store,
                         Arc::clone(&loader),
                         run_configs,
-                        FixedFindMotifsConfig::new(30000, false, None),
+                        FixedFindMotifsConfig::new(30000, false),
                         ThoDevice::from(1),
                         init_ctx
                     ).await.expect("FindMotifsStage::new failed in test"),

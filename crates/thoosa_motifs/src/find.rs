@@ -109,20 +109,16 @@ pub struct FixedFindMotifsConfig {
     #[arg(long, default_value_t = false)]
     pub keep_slice_matches: bool, //sql
 
-    #[arg(long)]
-    pub max_slices_k: Option<f32>,
 }
 
 impl FixedFindMotifsConfig {
     pub fn new(
         max_chunk_size: u32,
         keep_slice_matches: bool,
-        max_slices_k: Option<f32>,
     ) -> Self {
         Self {
             max_chunk_size,
             keep_slice_matches,
-            max_slices_k,
         }
     }
 }
