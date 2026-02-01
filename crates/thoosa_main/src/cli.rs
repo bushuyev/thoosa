@@ -556,7 +556,7 @@ where
             ));
 
             let train_labels_input = Arc::new(DevicesWrap::wrap(
-                ResourcesConfigInput::new( //TODO the group is needed to load resouces not belonging to label being trained
+                ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
                 run_all_params.train_resource_config()).check(&store)?,
                 CacheArea::default()
             ));

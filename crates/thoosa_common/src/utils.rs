@@ -1954,6 +1954,7 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 
     let builder = Arc::new( move |path:&nn::Path|SeqBuilder::new(num_features, None)
         .linear_s_with_conf(
+            "todo",
             1,
             LinearConfig {
                 ws_init: nn::Init::Const(k), //conflicts with ctor's init

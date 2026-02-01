@@ -619,6 +619,7 @@ pub fn conv_motif_node(params: &MotifNetParams) -> Node {
             4,
             #[cfg(debug_assertions)]
             "motif_node first layer".to_string(),
+            "todo",
         )
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()));
 
@@ -628,6 +629,7 @@ pub fn conv_motif_node(params: &MotifNetParams) -> Node {
                 4,
                 #[cfg(debug_assertions)]
                 format!("motif_node  {i}th layer"),
+                "todo",
             )
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
     }
@@ -639,6 +641,7 @@ pub fn conv_motif_node(params: &MotifNetParams) -> Node {
             1,
             #[cfg(debug_assertions)]
             "motif_node last layer".to_string(),
+            "todo",
         )
         .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
@@ -654,6 +657,7 @@ pub fn lin_motif_node(params: &MotifNetParams) -> Node {
             params.num_features * 2,
             #[cfg(debug_assertions)]
             "motif_node first layer".to_string(),
+            "todo",
         )
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()));
 
@@ -663,6 +667,7 @@ pub fn lin_motif_node(params: &MotifNetParams) -> Node {
                 params.num_features * 2,
                 #[cfg(debug_assertions)]
                 format!("motif_node  {i}th layer"),
+                "todo",
             )
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()));
     }
@@ -674,6 +679,7 @@ pub fn lin_motif_node(params: &MotifNetParams) -> Node {
             1,
             #[cfg(debug_assertions)]
             "motif_node last layer".to_string(),
+            "todo",
         )
         .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
@@ -797,7 +803,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
 
     for layer in 0..cnn_params.num_conv_layers {
         builder = builder.conv_1d(
-            "conv_1d 0",
+            format!("conv_1d {layer}"),
             cnn_params.kernel,
             cnn_params.hidden_conv_channels,
             cnn_params.hidden_conv_channels,
@@ -821,6 +827,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
         None,
     )
         .linear_feats(
+            "todo",
             cnn_params.hidden_conv_channels, 2* 256,
             #[cfg(debug_assertions)]
             "linear_feats".to_string(),
@@ -830,24 +837,28 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
             256,
             #[cfg(debug_assertions)]
             "cnn_label_node 0".to_string(),
+            "todo",
         )
         .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))
         .linear_s(
             256,
             #[cfg(debug_assertions)]
             "cnn_label_node 1".to_string(),
+            "todo",
         )
         .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))
         .linear_s(
             128,
             #[cfg(debug_assertions)]
             "cnn_label_node 1".to_string(),
+            "todo",
         )
         .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))
         .linear_s(
             1,
             #[cfg(debug_assertions)]
             "cnn_label_node 2".to_string(),
+            "todo",
         )
         // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
@@ -889,6 +900,7 @@ pub fn lin_label_node(params: &LabelNetParams) -> Node {
                     num_features,
                     #[cfg(debug_assertions)]
                     "lin_label_node 0".to_string(),
+                    "todo",
                 )
 
             }
@@ -943,24 +955,28 @@ pub fn lin_label_node(params: &LabelNetParams) -> Node {
             num_features,
             #[cfg(debug_assertions)]
             "lin_label_node 0".to_string(),
+            "todo",
         )
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
             256,
             #[cfg(debug_assertions)]
             "lin_label_node 1".to_string(),
+            "todo",
         )
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
             128,
             #[cfg(debug_assertions)]
             "lin_label_node 1".to_string(),
+            "todo",
         )
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
             1,
             #[cfg(debug_assertions)]
             "lin_label_node 2".to_string(),
+            "todo",
         )
         // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
@@ -999,6 +1015,7 @@ pub fn final_net(params: &FinalNetParams) -> Node {
             2 * params.in_features,
             #[cfg(debug_assertions)]
             "final_net: first layer".to_string(),
+            "todo",
         )
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()));
 
@@ -1008,6 +1025,7 @@ pub fn final_net(params: &FinalNetParams) -> Node {
                 params.in_features,
                 #[cfg(debug_assertions)]
                 format!("final_net: {i}th layer"),
+                "todo",
             )
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
     }
@@ -1018,6 +1036,7 @@ pub fn final_net(params: &FinalNetParams) -> Node {
             params.out_features,
             #[cfg(debug_assertions)]
             "final_net: last layer".to_string(),
+            "todo",
         )
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .end_seq()
@@ -1706,6 +1725,7 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
             None,
         )
         .linear_s_with_conf(
+            "todo",
             1,
             LinearConfig {
                 ws_init: init::Init::Const(k), //conflicts with ctor's init
@@ -2458,6 +2478,7 @@ mod train_tests {
 
         let test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> = SeqBuilder::new(100, None)
             .linear_s_with_conf(
+                "todo",
                 1,
                 LinearConfig {
                     ws_init: init::Init::Const(1.0),
