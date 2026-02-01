@@ -498,8 +498,8 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool
 
     let padded = result.f_pad(pad_idx.as_slice(), "constant", 0.0)?;
     let mask = if with_mask {
-        let base_mask = Tensor::zeros(cur_size.as_slice(), (Kind::Uint8, result.device()));
-        let padded_mask = base_mask.f_pad(pad_idx.as_slice(), "constant", 1.0)?;
+        let base_mask = Tensor::ones(cur_size.as_slice(), (Kind::Uint8, result.device()));
+        let padded_mask = base_mask.f_pad(pad_idx.as_slice(), "constant", 0.0)?;
         Some(padded_mask.to_kind(Kind::Bool))
     } else {
         None
@@ -2000,4 +2000,19 @@ pub fn assert_close<A:Into<f64> + Display, B:Into<f64> + Display>(val_a: A, val_
         diff <= max_diff,
         "values not close enough: {a} vs {b} (diff={diff}, max_diff={max_diff})"
     );
+}
+
+pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], channels: i64, max_input: i64) -> Result<(Tensor, Tensor), ThoError> {
+    let (stack, masks) = tensors.iter().try_fold((Vec::with_capacity(tensors.len()), Vec::with_capacity(tensors.len())), |mut acc, v| {
+        let (t, mask) = pad_to_2(v.as_ref(), &[channels, max_input], true, true)?;
+        acc.0.push(t);
+        acc.1.push(mask.expect("no mask"));
+
+        Ok::<_, ThoError>(acc)
+    })?;
+
+    let stack = Tensor::f_stack(stack.as_slice(), 0)?;
+    let masks = Tensor::f_stack(masks.as_slice(), 0)?;
+
+    Ok((stack, masks))
 }

@@ -802,6 +802,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
     );
 
     for layer in 0..cnn_params.num_conv_layers {
+
         builder = builder.conv_1d(
             format!("conv_1d {layer}"),
             cnn_params.kernel,
@@ -813,7 +814,9 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
     }
 
     builder.closure(
-        Arc::new(Box::new(move |t: &Tensor,_mask:Option<&Tensor>| {
+        Arc::new(Box::new(move |t: &Tensor, mask:Option<&Tensor>| {
+            debug!("cnn_label_node: leaner input={t:?} mask={mask:?}");
+
             // let mean = t.f_mean_dim(2, false, None)?;
             // let max = t.f_max_dim(2, false)?;
             // let mean = masked_mean(t, mask.expect("no mask"))?;
@@ -1758,10 +1761,7 @@ mod train_tests {
         InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore,
     };
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
-    use crate::utils::{
-        cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath,
-        vs_mem_size, TrainListener,
-    };
+    use crate::utils::{cuda_mem, from, optimizer_mem_size, pad_stack_with_mask, set_requires_grad_in_subpath, vs_mem_size, TrainListener};
     use crate::utils::{
         lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size, DataBatch,
     };
@@ -1776,7 +1776,7 @@ mod train_tests {
     use mockall::automock;
     use mockall_double::double;
     use parking_lot::{Mutex, RwLock};
-    use rand::Rng;
+    use rand::{random_range, Rng};
     use rayon::iter::IntoParallelRefMutIterator;
     use std::collections::HashMap;
     use std::ops::Deref;
@@ -1986,7 +1986,7 @@ mod train_tests {
         _test_save_load_cnn_label_node(
             3, 19, &[2000, 12030, 17000], 11i64,
             ConvNetParams::new(3, 10, 64, 10)
-        ).await?
+        ).await
     }
 
     #[tokio::test]
@@ -1994,10 +1994,10 @@ mod train_tests {
         _test_save_load_cnn_label_node(
             360, 1541, &[1541], 101i64,
             ConvNetParams::new(7, 10, 64, 100)
-        ).await?
+        ).await
     }
 
-    async fn _test_save_load_cnn_label_node(motif_nets: u32, max_motif_nodes: i32, all_slices: &[i32], batch: i64, conv_net_params: ConvNetParams) -> Result<Result<(), ThoError>, ThoError> {
+    async fn _test_save_load_cnn_label_node(motif_nets: u32, max_motif_nodes: i32, all_slices: &[i32], batch: i64, conv_net_params: ConvNetParams) -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_dir={test_dir:?}");
 
@@ -2007,7 +2007,7 @@ mod train_tests {
             1000,//not used
             32000,
         )?));
-        let params = LabelNetParams::new( //not used
+        let params = LabelNetParams::new(
           motif_nets,
           LabelNetTypeParams::ConvNetParams(conv_net_params),
         );
@@ -2086,7 +2086,42 @@ mod train_tests {
         }
 
 
-        Ok(Ok(()))
+        Ok(())
+    }
+
+    #[test]
+    fn test_cnn_label_node_with_mask() -> Result<(), ThoError>{
+        reset_print_options();
+        let motif_nets = 3;
+        let params = LabelNetParams::new(
+            motif_nets,
+            LabelNetTypeParams::ConvNetParams(ConvNetParams::new(3, 10, 4, 3)),
+        );
+
+        let mut vs_0 = VarStore::new(Cpu);
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = conv_label_node(&params).build_tch_module(&vs_0.root())?;
+        vs_0.freeze();
+
+        let max_len = 16;
+        let batch_vec = std::iter::once(Tensor::rand(&[motif_nets as i64, max_len], FLOAT_CPU))
+            .chain((1..5).map(|i|Tensor::rand(&[motif_nets as i64, random_range(3..16)], FLOAT_CPU))).collect::<Vec<_>>();
+
+        let batch_max_len = batch_vec.iter().map(|t|t.size()[1]).max().unwrap();
+        let batch_refs_vec = batch_vec.iter().collect::<Vec<_>>();
+
+        debug!("batch_refs_vec={batch_refs_vec:?}");
+
+        let (batch, mask) = pad_stack_with_mask(batch_refs_vec.as_slice(), motif_nets as i64, batch_max_len)?;
+
+        debug!("batch=\n{batch} mask=\n{mask}",);
+        let _ = net.tho_forward(
+            &batch.into(),
+
+            Some(&mask.into()),
+            false,
+        )?;
+
+        Ok(())
     }
 
     fn dummy_0(data: &mut [f64; 11]) -> (Tensor, f32) {
