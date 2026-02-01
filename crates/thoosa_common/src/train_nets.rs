@@ -9,7 +9,7 @@ use crate::builder::{Node, SeqBuilder};
 use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
-use crate::utils::tensor_mem_size;
+use crate::utils::{masked_max, masked_mean, tensor_mem_size};
 use crate::utils::{pad_to, plot_series, DataBatch, ListenerResponse, TrainListener};
 use crate::ws::Workspace;
 use clap::clap_derive::Args;
@@ -815,16 +815,15 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
 
     builder.closure(
         Arc::new(Box::new(move |t: &Tensor, mask:Option<&Tensor>| {
-            debug!("cnn_label_node: leaner input={t:?} mask={mask:?}");
-
+            // debug!("cnn_label_node: leaner input={t:?} mask={mask:?}");
+            //
             // let mean = t.f_mean_dim(2, false, None)?;
             // let max = t.f_max_dim(2, false)?;
             // let mean = masked_mean(t, mask.expect("no mask"))?;
             // let max = masked_max(t, mask.expect("no mask"))?;
-
-            // Tensor::f_cat(&[mean, max.0], 1).map_err(|e|e.into())
+            //
+            // Tensor::f_cat(&[mean, max], 1).map_err(|e|e.into())
             let mean = t.f_mean_dim(2, false, None)?;
-            debug!("cnn_label_node: leaner input={t:?} mean={mean:?}");
             Ok(mean)
         })),
         None,
