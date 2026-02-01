@@ -35,7 +35,7 @@ impl<D: Dims> WithId for &ThoTensor<D, SimpleId> {
 //TODO remove?
 
 
-impl<D: Dims> AsRef<Tensor> for ThoTensor<D, SimpleId> {
+impl<D: Dims, Id: Named + Debug + Clone> AsRef<Tensor> for ThoTensor<D, Id> {
     fn as_ref(&self) -> &Tensor {
         &self.t
     }

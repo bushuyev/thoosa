@@ -13,7 +13,7 @@ use tch::nn::{
 
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
-use crate::builder::Node;
+use crate::builder::{clc_conv1d_out, Node};
 // use crate::{data, utils};
 use crate::builder::SeqBuilder;
 use crate::dims::{AnyDims, Dims};
@@ -314,13 +314,18 @@ pub struct MyConv<ND> {
 }
 
 impl<ND> MyConv<ND> {
-    pub fn new(conv: Conv<ND>) -> Self {
+    pub fn new(conv: Conv<ND>, kernel: u32, conv_config: ConvConfig) -> Self {
         Self { conv }
     }
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 1]> {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        //when mask is changed to Option<Vec<u32>>
+        // if let Some(mask_t) = mask {
+        //     mask.replace(mask.into_iter().map(|l|clc_conv1d_out(l, self.kernel, self.conf)).collect());
+        // }
+        debug!("MyConv::tho_forward mask={mask:?}");
         Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
     }
 }

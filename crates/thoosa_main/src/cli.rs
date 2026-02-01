@@ -558,67 +558,14 @@ where
                 CacheArea::default()
             ));
 
-            let find_motifs_run_config_range_or_value:FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue{
-                id: None,
-                step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-                // window: RangeOrValue::Value(1000),
-                window: RangeOrValue::Range { range: Range { start: 1000, end: 5001 }, step: Some((1000, 1)) },
-                filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue{
-                    low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-                    band_hz: RangeOrValue::Value(100.),
-                    kernel_size: RangeOrValue::Value(1000),
-                    stride: RangeOrValue::Value(1),
-                    padding: RangeOrValue::Value(0),
-                })),
-                // filter: None,
-                slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue{ k: RangeOrValue::Value(0.02)}),
-            };
-            let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
-            //////////////////////select
-            let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
-                id: None,
-                motif_selector: MotifSelectorRangeOrValue::ByLabelVariance(ByLabelVarianceConfigRangeOrValue { _dummy: 0 })
-            };
-            /////////////////////train_motifs
-            let common_training_args = CommonTrainingRunConfigRangeOrValue {
-                cycles: RangeOrValue::Value(100),
-                batch_size: RangeOrValue::Value(20),
-                // batch_size: RangeOrValue::Range { range: Range { start: 5, end: 25 }, step: Some((5, 1)) },
-                lr: RangeOrValue::Range { range: Range { start: 0.00001, end: 0.0001 }, step: None },
-                // lr: RangeOrValue::Value(0.0001),
-            };
-            let opt_config = Arc::new(OptConfig::new(200, 10));
-
-            let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
-                id: None,
-                common_training_args: common_training_args.clone(),
-                num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
-                step: RangeOrValue::Value(10),
-            };
-            //////////////////////train labels
-            let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue{
-                id: None,
-                common_training_args: common_training_args.clone(),
-                // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue{
-                //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
-                //     slices_len: RangeOrValue::Value(1000)
-                // }),
-                net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue{
-                    num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 12 }, step: None },
-                    hidden_conv_channels: RangeOrValue::Value(64),
-                    num_head_layers: RangeOrValue::Value(10),
-                    // kernel: RangeOrValue::Value(10),
-                    kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-                }),
-            };
-            //////////////////////train final
-            let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue{
-                id: None,
-                common_training_args,
-                net: FinalNetArgsRangeOrValue {
-                    num_layers: RangeOrValue::Range { range: Range { start: 3, end: 20 }, step: None },
-                },
-            };
+            let (find_motifs_run_config_range_or_value,
+                fixed_find_motifs_config,
+                select_motifs_run_config,
+                opt_config,
+                train_motif_nets_run_config_range_or_value,
+                train_label_nets_run_config_range_or_value,
+                train_final_net_run_config_range_or_value)
+                = run_all_config_0(run_all_params);
 
             ///////////////////////////////
 
@@ -845,6 +792,124 @@ where
     GlobalCtx::global().shutdown().await;
 
     Ok(())
+}
+
+fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrValue, FixedFindMotifsConfig, SelectMotifsRunConfigRangeOrValue, Arc<OptConfig>, TrainMotifsNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue) {
+    let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
+        id: None,
+        step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+        window: RangeOrValue::Value(1000),
+        filter: None,
+        slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue { k: RangeOrValue::Value(0.02) }),
+    };
+    let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
+    //////////////////////select
+    let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
+        id: None,
+        motif_selector: MotifSelectorRangeOrValue::ByLabelVariance(ByLabelVarianceConfigRangeOrValue { _dummy: 0 })
+    };
+    /////////////////////train_motifs
+    let common_training_args = CommonTrainingRunConfigRangeOrValue {
+        cycles: RangeOrValue::Value(100),
+        batch_size: RangeOrValue::Value(20),
+        lr: RangeOrValue::Value(0.0001),
+    };
+    let opt_config = Arc::new(OptConfig::new(200, 10));
+
+    let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
+        id: None,
+        common_training_args: common_training_args.clone(),
+        num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
+        step: RangeOrValue::Value(10),
+    };
+    //////////////////////train labels
+    let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
+        id: None,
+        common_training_args: common_training_args.clone(),
+
+        net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
+            num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
+            hidden_conv_channels: RangeOrValue::Value(64),
+            num_head_layers: RangeOrValue::Value(10),
+            kernel: RangeOrValue::Value(10),
+            // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+        }),
+    };
+    //////////////////////train final
+    let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
+        id: None,
+        common_training_args,
+        net: FinalNetArgsRangeOrValue {
+            num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
+        },
+    };
+    (find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value)
+}
+
+
+fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrValue, FixedFindMotifsConfig, SelectMotifsRunConfigRangeOrValue, Arc<OptConfig>, TrainMotifsNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue) {
+    let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
+        id: None,
+        step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+        // window: RangeOrValue::Value(1000),
+        window: RangeOrValue::Range { range: Range { start: 1000, end: 5001 }, step: Some((1000, 1)) },
+        filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue {
+            low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
+            band_hz: RangeOrValue::Value(100.),
+            kernel_size: RangeOrValue::Value(1000),
+            stride: RangeOrValue::Value(1),
+            padding: RangeOrValue::Value(0),
+        })),
+        // filter: None,
+        slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue { k: RangeOrValue::Value(0.02) }),
+    };
+    let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
+    //////////////////////select
+    let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
+        id: None,
+        motif_selector: MotifSelectorRangeOrValue::ByLabelVariance(ByLabelVarianceConfigRangeOrValue { _dummy: 0 })
+    };
+    /////////////////////train_motifs
+    let common_training_args = CommonTrainingRunConfigRangeOrValue {
+        cycles: RangeOrValue::Value(100),
+        batch_size: RangeOrValue::Value(20),
+        // batch_size: RangeOrValue::Range { range: Range { start: 5, end: 25 }, step: Some((5, 1)) },
+        lr: RangeOrValue::Range { range: Range { start: 0.00001, end: 0.0001 }, step: None },
+        // lr: RangeOrValue::Value(0.0001),
+    };
+    let opt_config = Arc::new(OptConfig::new(200, 10));
+
+    let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
+        id: None,
+        common_training_args: common_training_args.clone(),
+        num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+        step: RangeOrValue::Value(10),
+    };
+    //////////////////////train labels
+    let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
+        id: None,
+        common_training_args: common_training_args.clone(),
+        // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue{
+        //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+        //     slices_len: RangeOrValue::Value(1000)
+        // }),
+        net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
+            num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 12 }, step: None },
+            hidden_conv_channels: RangeOrValue::Value(64),
+            num_head_layers: RangeOrValue::Value(10),
+            // kernel: RangeOrValue::Value(10),
+            kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+        }),
+    };
+    //////////////////////train final
+    let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
+        id: None,
+        common_training_args,
+        net: FinalNetArgsRangeOrValue {
+            num_layers: RangeOrValue::Range { range: Range { start: 3, end: 20 }, step: None },
+        },
+    };
+    (find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value)
 }
 
 fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(

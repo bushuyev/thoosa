@@ -43,3 +43,6 @@ Notes:
 - Location: unit tests inline in `src/*` modules;
 - A struct being tested should receive its mocked dependencies which are configured through their Mock[StructName]Builder (placed next to StructName in a #[cfg(test)] mock_[struct_name] module. If a struct can't be hidden behind a trait (although it should not be a problem to hide a Stage struct behind Stage trait) it can be injected with mock_double.
 - Naming: `mod tests { ... }`, test fns `snake_case` describing behavior.
+
+## Useful info
+masks for tensors of all sorts expected to contain false for padded (zeros)) values and true for actual values.
