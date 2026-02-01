@@ -770,9 +770,7 @@ impl LabelNetParams {
 }
 
 pub fn conv_label_node(params: &LabelNetParams) -> Node {
-    // let num_features = params.slices_len; //params.motif_nets;
     let LabelNetTypeParams::ConvNetParams(cnn_params) = &params.net_type else {
-        // return Err(ThoError::new(format!("Unexpected params type: {cnn_params:?}")));
         panic!("Unexpected params type: {:?}", params.net_type);
     };
 
