@@ -555,7 +555,7 @@ mod tests {
             vec![
                 find_motifs_run_config
             ],
-            FixedFindMotifsConfig::new(30000, false, None),
+            FixedFindMotifsConfig::new(30000, false),
             ThoDevice::from(1),
             ctx.branch(Some("init"), false, false)
         ).await.expect("FindMotifsStage::new failed in test"));

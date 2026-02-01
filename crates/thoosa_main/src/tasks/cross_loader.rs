@@ -1697,7 +1697,7 @@ mod tests {
             HashMap::new(),
         )?;
         let run_config = FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, 2, None, None);
-        let fixed_config = FixedFindMotifsConfig::new(2, false, None);
+        let fixed_config = FixedFindMotifsConfig::new(2, false);
 
         let resource_key_refs = resource_keys.iter().map(|v| v.as_str()).collect::<Vec<_>>();
         let resources = store.read().list_resources_by_file_stems(&resource_key_refs)?;
