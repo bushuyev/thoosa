@@ -192,7 +192,7 @@ impl Node {
                     });
 
                 }
-                Box::new(MyConv::new(conv))
+                Box::new(MyConv::new(conv, kernel, config))
             },
 
             Node::Conv2d {
@@ -206,7 +206,9 @@ impl Node {
                 out_channels as i64,
                 kernel as i64,
                 config,
-            ))),
+            ),
+          0,
+            ConvConfig::default())),
 
             Node::BatchNorm {
                 num_features,

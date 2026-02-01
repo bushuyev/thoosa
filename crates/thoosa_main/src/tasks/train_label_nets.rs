@@ -26,12 +26,12 @@ use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::batches::{AsyncDataBatch};
+use thoosa_common::batches::AsyncDataBatch;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{lin_label_node, opt_train, LinLenNetParams, CommonTrainingRunConfig, LinNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, ConvNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult, conv_label_node};
-use thoosa_common::utils::{mix_x_binary_with_labels, pad_to_2, ListenerResponse, TrainListener};
+use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, CommonTrainingRunConfig, ConvNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinLenNetParams, LinNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
+use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::{mono_key, shuffle_and_chunk_with_rng, CopyToDevice, ThoError};
@@ -74,21 +74,6 @@ where
     store: Arc<RwLock<Box<dyn Store>>>,
     opt_config:Arc<OptConfig>,
 
-}
-
-fn pad_stack_with_mask(tensors: &[&ThoTensor<MotifProbability, SynKey>], channels: i64, max_input: i64) -> Result<(Tensor, Tensor), ThoError> {
-    let (stack, masks) = tensors.iter().try_fold((Vec::with_capacity(tensors.len()), Vec::with_capacity(tensors.len())), |mut acc, v| {
-        let (t, mask) = pad_to_2(v.t_ref(), &[channels, max_input], true, true)?;
-        acc.0.push(t);
-        acc.1.push(mask.expect("no mask"));
-
-        Ok::<_, ThoError>(acc)
-    })?;
-
-    let stack = Tensor::f_stack(stack.as_slice(), 0)?;
-    let masks = Tensor::f_stack(masks.as_slice(), 0)?;
-
-    Ok((stack, masks))
 }
 
 pub async fn new_train_label_nets_with_ml<L, C, R>(
@@ -358,7 +343,7 @@ where
                                                mix_x_binary_with_labels(&x_1, Some(&mask_1), &x_0, Some(&mask_0))
                                            })?;
 
-                                           debug!("ResourcesBatch::train_batch_iter: x.size={:?} y.size={:?}", x.size(), y.size());
+                                           debug!("ResourcesBatch::train_batch_iter: x.size={:?} y.size={:?} mask={mask:?}", x.size(), y.size());
 
 
                                            Ok((x.into(), mask.map(|mask| mask.into()), y.into()))

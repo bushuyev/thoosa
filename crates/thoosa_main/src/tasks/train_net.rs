@@ -256,7 +256,7 @@ where
                 debug!("TrainNet::run_inner, train:  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
                 while let Some(Ok((x_t_0, mask, expected_y))) = batches.next().await {
-                    let input = Arc::new(TrainStepInput::new(x_t_0, None, expected_y));
+                    let input = Arc::new(TrainStepInput::new(x_t_0, mask, expected_y));
 
                     debug!("TrainNet::run_inner, train:  before oom input.id={:?}", input.id());
 
@@ -430,7 +430,7 @@ impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
     }
 
     fn x(&self) -> ThoBatch<DI> {
-        self.x.shallow_clone::<Batch<DI>>()
+        self.x.shallow_clone::<Batch<DI>>()//called form sync TrainStep::do_run
     }
 
     fn expected_y(&self) -> ThoBatch<DO> {
@@ -629,7 +629,7 @@ where
 
         debug!("TrainStep::do_run: device={:?}  x_t.size={:?}", self.device, x_t.size());
 
-        let predicted_y = self.forward(&x_t, None, true)?;
+        let predicted_y = self.forward(&x_t, input.mask.as_ref(), true)?;
         debug!("TrainStep::do_run: 1. cuda_mem={:?}",maybe_cuda_mem(&self.device));
         trace!("TrainStep::do_run: x_t=\n{x_t}");
 
