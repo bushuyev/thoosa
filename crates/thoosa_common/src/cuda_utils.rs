@@ -321,7 +321,6 @@ pub async fn copy_h2d_from_ptr(
     // chunk layout
     let chunks = tensor_mem_size / buf_size;
     let last = tensor_mem_size % buf_size;
-    // println!("chunks={chunks} last={last}");
 
     // destination tensor lives on GPU 0
     let dst_t = Tensor::empty(size, (init_type, Device::Cuda(dst_device_idx - 1)));

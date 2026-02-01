@@ -39,8 +39,13 @@ impl Purger {
                         debug!("Purger::new, loop, got cmd: closures.len={}, cache_area={cache_area:064b} ", closures.len());
 
 
-                        for cl in &closures {
-                            match (cl)().await {
+                        for purge_cl in &closures {
+                            if shutdown_in_loop.load(Relaxed) {
+                                break;
+                            }
+                            // A shutdown can still occur while inside the purge_cl call spitting CUDA_ERROR_DEINITIALIZED, so it would need to be checked somewhere in cuda_utils::copy_h2d_from_ptr.
+                            // However, that would be rather wasteful since the app is not going to shut down very often.
+                            match purge_cl().await {
                                 Ok(()) => {
                                     debug!("Purger::new, loop: done purging ")
                                 }
@@ -64,6 +69,10 @@ impl Purger {
     //TODO rename to send_purge_gpu_rq
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>, cache_area: u64) -> Result<(), ThoError>{
         debug!("Purger::run_purge_gpu: closures.len={}", closures.len());
+        if self.shutdown.load(Relaxed) {
+            debug!("Purger::run_purge_gpu: shutdown set, skipping purge");
+            return Ok(());
+        }
         self.tx.send(PurgeCmd::Gpu {cache_area, closures}).map_err(|e|e.into())
     }
 
