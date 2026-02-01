@@ -1,9 +1,7 @@
 use std::fmt::Display;
-use std::io::Write;
 use std::iter::Map;
 
 use std::ops::Range;
-use std::time::Instant;
 use std::{fs, ptr};
 
 use log::{debug, error, trace};
@@ -23,7 +21,6 @@ use tch::Kind::Float;
 use tch::{nn, Device, IndexOp, Kind, Tensor};
 use thoosa_shared::{gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoError};
 use torch_sys::cuda::atc_cuda_device_count;
-use crate::my_tch::{LossFp, ThoModule};
 
 use crate::builder::SeqBuilder;
 use crate::dims::{Batch, Dims, MotifProbability, Slice};
@@ -627,6 +624,18 @@ pub fn masked_max(x: &Tensor, mask: &Tensor) -> Result<Tensor, ThoError> {
     Ok(mx)
 }
 
+pub fn mask_from_lengths(lengths: &[i64], max_len: i64, device: Device) -> Result<Tensor, ThoError> {
+    if lengths.is_empty() {
+        return Err(ThoError::new("mask_from_lengths: empty lengths"));
+    }
+    if max_len < 0 {
+        return Err(ThoError::new(format!("mask_from_lengths: max_len must be >= 0, got {max_len}")));
+    }
+    let lengths_t = Tensor::f_from_slice(lengths)?.f_to_device(device)?.f_view([lengths.len() as i64, 1, 1])?;
+    let range = Tensor::f_arange(max_len, (Kind::Int64, device))?.f_view([1, 1, max_len])?;
+    Ok(range.f_lt_tensor(&lengths_t)?.to_kind(Kind::Bool))
+}
+
 
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
@@ -645,7 +654,7 @@ pub mod tests {
     use tch::nn::VarStore;
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::{Device, IndexOp, Kind, Tensor};
+    use tch::{Device, Kind, Tensor};
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
@@ -775,7 +784,7 @@ pub mod tests {
             Tensor::from_slice(&[3., 4., 0.]),
             Tensor::from_slice(&[0., 0., 0.]),
         ]);
-        let expected_mask = Tensor::from_slice(&[0u8, 0, 1, 0, 0, 1, 1, 1, 1]).view([3, 3]).to_kind(Kind::Bool);
+        let expected_mask = Tensor::from_slice(&[1u8, 1, 0, 1, 1, 0, 0, 0, 0]).view([3, 3]).to_kind(Kind::Bool);
 
         let (actual, mask) = super::pad_to_2(&t, &[3, 3], false, true)?;
         assert_eq!(expected, actual);
@@ -803,7 +812,7 @@ pub mod tests {
 
         // from shape [2, 3] to [3, 2] with truncation enabled
         let (actual, mask) = pad_to_2(&t, &[3, 2], true, true)?;
-        let expected_mask = Tensor::from_slice(&[0u8, 0, 0, 0, 1, 1]).view([3, 2]).to_kind(Kind::Bool);
+        let expected_mask = Tensor::from_slice(&[1u8, 1, 1, 1, 0, 0]).view([3, 2]).to_kind(Kind::Bool);
 
         assert_eq!(expected, actual);
         assert_eq!(expected_mask, mask.expect("mask"));
@@ -1517,7 +1526,7 @@ pub mod tests {
         let a = Tensor::from_slice(&va).reshape(&[m, n]);
         let b = Tensor::from_slice(&vb).reshape(&[m, n]);
 
-        let (x, _mask, y) = mix_x_binary_with_labels(&a, None, &b, None)?;
+        let (x, _lengths, y) = mix_x_binary_with_labels(&a, None, &b, None)?;
         debug!("mix_basic_shapes_and_labels: x=\n{x} y=\n{y}");
 
         // Shapes
@@ -1552,30 +1561,27 @@ pub mod tests {
     fn mix_masks_align_with_rows() -> Result<(), ThoError> {
         let a = Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]).reshape(&[2, 3]);
         let b = Tensor::from_slice(&[101., 102., 103., 104., 105., 106.]).reshape(&[2, 3]);
-        let mask_a = Tensor::from_slice(&[0u8, 1, 0, 1, 0, 1]).reshape(&[2, 3]).to_kind(Kind::Bool);
-        let mask_b = Tensor::from_slice(&[1u8, 1, 0, 0, 0, 1]).reshape(&[2, 3]).to_kind(Kind::Bool);
+        let lengths_a = vec![2, 3];
+        let lengths_b = vec![1, 2];
 
-        let (x, mask, y) = mix_x_binary_with_labels(&a, Some(&mask_a), &b, Some(&mask_b))?;
-        let mask = mask.expect("mask");
+        let (x, lengths, y) = mix_x_binary_with_labels(&a, Some(lengths_a.as_slice()), &b, Some(lengths_b.as_slice()))?;
+        let lengths = lengths.expect("lengths");
 
         assert_eq!(x.size(), [4, 3], "X must be [2m, n]");
-        assert_eq!(mask.size(), [4, 3], "mask must be [2m, n]");
         assert_eq!(y.size(), [4, 1], "Y must be [2m, 1]");
 
         let x_cpu = x.to_device(Device::Cpu);
-        let mask_cpu = mask.to_device(Device::Cpu);
         let y_cpu = y.to_kind(Kind::Int64).to_device(Device::Cpu);
 
-        for i in 0..4 {
-            let first_val = x_cpu.double_value(&[i, 0]) as i64;
-            let label = y_cpu.int64_value(&[i, 0]);
-            let mask_row = mask_cpu.i((i, ..));
+        for i in 0..4usize {
+            let first_val = x_cpu.double_value(&[i as i64, 0]) as i64;
+            let label = y_cpu.int64_value(&[i as i64, 0]);
 
             match first_val {
-                1 => { assert_eq!(mask_row, mask_a.i((0, ..))); assert_eq!(label, 1); }
-                4 => { assert_eq!(mask_row, mask_a.i((1, ..))); assert_eq!(label, 1); }
-                101 => { assert_eq!(mask_row, mask_b.i((0, ..))); assert_eq!(label, 0); }
-                104 => { assert_eq!(mask_row, mask_b.i((1, ..))); assert_eq!(label, 0); }
+                1 => { assert_eq!(lengths[i], lengths_a[0]); assert_eq!(label, 1); }
+                4 => { assert_eq!(lengths[i], lengths_a[1]); assert_eq!(label, 1); }
+                101 => { assert_eq!(lengths[i], lengths_b[0]); assert_eq!(label, 0); }
+                104 => { assert_eq!(lengths[i], lengths_b[1]); assert_eq!(label, 0); }
                 _ => panic!("unexpected first_val={first_val}"),
             }
         }
@@ -1894,7 +1900,7 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
 }
 
 //TODO check GPT
-pub fn mix_x_binary_with_labels(x_1: &Tensor, mask_1: Option<&Tensor>, x_0: &Tensor, mask_0: Option<&Tensor>) -> Result<(Tensor, Option<Tensor>, Tensor), ThoError> {
+pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&[i64]>, x_0: &Tensor, lengths_0: Option<&[i64]>) -> Result<(Tensor, Option<Vec<i64>>, Tensor), ThoError> {
     let [ma, _na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
     let [mb, _nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
     // assert_eq!((na, nb), (na, na), "X1 and X0 must have same n");
@@ -1927,18 +1933,30 @@ pub fn mix_x_binary_with_labels(x_1: &Tensor, mask_1: Option<&Tensor>, x_0: &Ten
     let x = x0.f_index_select(0, &perm)?;
     let y = y0.f_index_select(0, &perm)?;
 
-    let mask = match (mask_1, mask_0) {
+    let lengths = match (lengths_1, lengths_0) {
         (None, None) => None,
-        (Some(mask_1), Some(mask_0)) => {
-            assert_eq!(mask_1.device(), device, "mask_1 must be on the same device as x");
-            assert_eq!(mask_0.device(), device, "mask_0 must be on the same device as x");
-            let mask0 = Tensor::f_cat(&[mask_1, mask_0], 0)?;
-            Some(mask0.f_index_select(0, &perm)?)
+        (Some(lengths_1), Some(lengths_0)) => {
+            if lengths_1.len() != ma as usize {
+                return Err(ThoError::new(format!("lengths_1 len mismatch: expected={ma} got={}", lengths_1.len())));
+            }
+            if lengths_0.len() != mb as usize {
+                return Err(ThoError::new(format!("lengths_0 len mismatch: expected={mb} got={}", lengths_0.len())));
+            }
+            let mut lengths = Vec::with_capacity((ma + mb) as usize);
+            lengths.extend_from_slice(lengths_1);
+            lengths.extend_from_slice(lengths_0);
+            let perm_cpu = perm.to_device(Device::Cpu);
+            let perm_vec: Vec<i64> = (&perm_cpu).try_into().map_err(|e| ThoError::from_error("mix_x_binary_with_labels: perm to vec", e))?;
+            let mut lengths_perm = Vec::with_capacity(lengths.len());
+            for idx in perm_vec {
+                lengths_perm.push(lengths[idx as usize]);
+            }
+            Some(lengths_perm)
         }
-        _ => return Err(ThoError::new("mask_1 and mask_0 must both be Some or None")),
+        _ => return Err(ThoError::new("lengths_1 and lengths_0 must both be Some or None")),
     };
 
-    Ok((x, mask, y))
+    Ok((x, lengths, y))
 }
 
 
@@ -2002,17 +2020,34 @@ pub fn assert_close<A:Into<f64> + Display, B:Into<f64> + Display>(val_a: A, val_
     );
 }
 
-pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], channels: i64, max_input: i64) -> Result<(Tensor, Tensor), ThoError> {
-    let (stack, masks) = tensors.iter().try_fold((Vec::with_capacity(tensors.len()), Vec::with_capacity(tensors.len())), |mut acc, v| {
-        let (t, mask) = pad_to_2(v.as_ref(), &[channels, max_input], true, true)?;
-        acc.0.push(t);
-        acc.1.push(mask.expect("no mask"));
+pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], channels: i64, max_input: i64) -> Result<(Tensor, Vec<i64>), ThoError> {
+    let mut stack = Vec::with_capacity(tensors.len());
+    let mut lengths = Vec::with_capacity(tensors.len());
 
-        Ok::<_, ThoError>(acc)
-    })?;
+    for v in tensors {
+        let t = v.as_ref();
+        let size = t.size();
+        if size.len() != 2 {
+            return Err(ThoError::new(format!("pad_stack_with_mask expects 2D tensors, got size={size:?}")));
+        }
+        if size[0] != channels {
+            return Err(ThoError::new(format!("pad_stack_with_mask channels mismatch: expected={channels} got={}", size[0])));
+        }
+
+        let mut t = t.shallow_clone();
+        let len = size[1].min(max_input);
+        if size[1] > max_input {
+            t = t.f_narrow(1, 0, max_input)?;
+        }
+        let pad_right = max_input - len;
+        if pad_right > 0 {
+            t = t.f_pad(&[0, pad_right, 0, 0], "constant", 0.0)?;
+        }
+        stack.push(t);
+        lengths.push(len);
+    }
 
     let stack = Tensor::f_stack(stack.as_slice(), 0)?;
-    let masks = Tensor::f_stack(masks.as_slice(), 0)?;
 
-    Ok((stack, masks))
+    Ok((stack, lengths))
 }
