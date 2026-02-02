@@ -831,6 +831,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
             num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
             hidden_conv_channels: RangeOrValue::Value(64),
             num_head_layers: RangeOrValue::Value(10),
+            num_head_features: RangeOrValue::Value(256),
             kernel: RangeOrValue::Value(10),
             // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
         }),
@@ -898,6 +899,7 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
             hidden_conv_channels: RangeOrValue::Value(64),
             num_head_layers: RangeOrValue::Value(10),
             // kernel: RangeOrValue::Value(10),
+            num_head_features: RangeOrValue::Value(256),
             kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
         }),
     };
@@ -1033,8 +1035,12 @@ where
         store_guard.save_pure_sets(150, true, &t)?;
         store_guard.save_pure_sets(10000, false, &t)?;
 
-        store_guard.save_pure_balanced_sets("10", Some(10), 0.6, 0.2, &t)?;
-        store_guard.save_pure_balanced_sets("100", Some(100), 0.6, 0.2, &t)?;
+        store_guard.save_pure_balanced_sets("A10", Some(10), 0.6, 0.2, &t)?;
+        store_guard.save_pure_balanced_sets("B10", Some(10), 0.6, 0.2, &t)?;
+        store_guard.save_pure_balanced_sets("C10", Some(10), 0.6, 0.2, &t)?;
+        store_guard.save_pure_balanced_sets("A100", Some(100), 0.6, 0.2, &t)?;
+        store_guard.save_pure_balanced_sets("B100", Some(100), 0.6, 0.2, &t)?;
+        store_guard.save_pure_balanced_sets("C100", Some(100), 0.6, 0.2, &t)?;
         store_guard.save_pure_balanced_sets("All", None,  0.6, 0.2, &t)?;
     }
 

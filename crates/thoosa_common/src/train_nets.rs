@@ -715,9 +715,11 @@ impl Default for LabelNetTypeParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConvNetParams {
     num_conv_layers:u32,
-    num_head_layers:u32,
     kernel:u32,
-    hidden_conv_channels:u32
+    hidden_conv_channels:u32,
+
+    num_head_layers:u32,
+    num_head_features:u32,
 }
 
 
@@ -734,12 +736,13 @@ impl LinLenNetParams {
 }
 
 impl ConvNetParams {
-    pub fn new(num_conv_layers:u32, num_head_layers: u32, hidden_conv_channels:u32, kernel: u32) -> Self {
+    pub fn new(num_conv_layers:u32, hidden_conv_channels:u32, kernel: u32, num_head_layers: u32, num_head_features: u32) -> Self {
         Self {
             num_conv_layers,
             num_head_layers,
             kernel,
-            hidden_conv_channels
+            hidden_conv_channels,
+            num_head_features
         }
     }
 }
@@ -793,7 +796,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
         );
 
     builder = builder.conv_1d(
-        "conv_1d 0",
+        "cnn_label_conv_1d",
         cnn_params.kernel,
         params.motif_nets,
         cnn_params.hidden_conv_channels,
@@ -804,7 +807,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
     for layer in 0..cnn_params.num_conv_layers {
 
         builder = builder.conv_1d(
-            format!("conv_1d {layer}"),
+            format!("cnn_label_conv_1d_{layer}"),
             cnn_params.kernel,
             cnn_params.hidden_conv_channels,
             cnn_params.hidden_conv_channels,
@@ -813,7 +816,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
         );
     }
 
-    builder.closure(
+    builder = builder.closure(
         Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
             debug!("cnn_label_node: leaner input={t:?} lengths={lengths:?}");
             let lengths = lengths.unwrap();
@@ -825,53 +828,36 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
             let max = masked_max(t, &mask)?;
 
             Tensor::f_cat(&[mean, max], 1).map_err(|e|e.into())
-            // let mean = match lengths {
-            //     None => t.f_mean_dim(2, false, None)?,
-            //     Some(lengths) => {
-            //         let mask = mask_from_lengths(lengths, t.size()[2], t.device())?;
-            //         masked_mean(t, &mask)?
-            //     }
-            // };
-            // Ok(mean)
+
         })),
         None,
+    );
+
+    builder = builder.linear_feats(
+        "cnn_label_head",
+        2 * cnn_params.hidden_conv_channels, 2* cnn_params.num_head_features,
+        #[cfg(debug_assertions)]
+        "cnn_label_head".to_string(),
+    );
+
+    for layer in 0..cnn_params.num_head_layers {
+        builder = builder .linear_s(
+            cnn_params.num_head_features,
+            #[cfg(debug_assertions)]
+            format!("cnn_label_head_{layer}"),
+            format!("cnn_label_head_{layer}"),
+        )
+            .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))
+    }
+
+    builder.linear_s(
+        1,
+        #[cfg(debug_assertions)]
+        "cnn_label_head_last".to_string(),
+        "cnn_label_head_last",
     )
-        .linear_feats(
-            "todo",
-            2 * cnn_params.hidden_conv_channels, 2* 256,
-            #[cfg(debug_assertions)]
-            "linear_feats".to_string(),
-        )
-        // .conv_1d("cnn_label_node conv", 1000)
-        .linear_s(
-            256,
-            #[cfg(debug_assertions)]
-            "cnn_label_node 0".to_string(),
-            "todo",
-        )
-        .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))
-        .linear_s(
-            256,
-            #[cfg(debug_assertions)]
-            "cnn_label_node 1".to_string(),
-            "todo",
-        )
-        .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))
-        .linear_s(
-            128,
-            #[cfg(debug_assertions)]
-            "cnn_label_node 1".to_string(),
-            "todo",
-        )
-        .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))
-        .linear_s(
-            1,
-            #[cfg(debug_assertions)]
-            "cnn_label_node 2".to_string(),
-            "todo",
-        )
-        // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
-        .end_seq()
+    // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
+    .end_seq()
 }
 
 
@@ -1653,13 +1639,6 @@ pub enum LabelNetTypeArgs {
     LinNet(LinNetArgs),
 }
 
-//TODO remove
-impl Default for LabelNetTypeArgs {
-    fn default() -> LabelNetTypeArgs {
-        LabelNetTypeArgs::ConvNet(ConvNetArgs { num_conv_layers: 16, hidden_conv_channels: 64, num_head_layers: 3, kernel: 100 })
-    }
-}
-
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ConvNetArgs {
@@ -1675,14 +1654,19 @@ pub struct ConvNetArgs {
     #[run_config]
     pub num_head_layers: u32,
 
+
+    #[in_map]
+    #[run_config]
+    pub num_head_features: u32,
+
     #[in_map]
     #[run_config]
     pub kernel: u32
 }
 
 impl ConvNetArgs {
-    pub fn new(num_conv_layers: u32, hidden_conv_channels: u32, kernel: u32, num_head_layers: u32) -> Self {
-        Self { num_conv_layers, hidden_conv_channels, num_head_layers, kernel }
+    pub fn new(num_conv_layers: u32, hidden_conv_channels: u32, kernel: u32, num_head_layers: u32, num_head_features:u32) -> Self {
+        Self { num_conv_layers, hidden_conv_channels, num_head_layers, kernel, num_head_features }
     }
 }
 
@@ -1992,7 +1976,7 @@ mod train_tests {
     async fn test_save_load_cnn_label_node() -> Result<(), ThoError> {
         _test_save_load_cnn_label_node(
             3, 19, &[2000, 12030, 17000], 11i64,
-            ConvNetParams::new(3, 10, 64, 10)
+            ConvNetParams::new(3, 64, 10, 10, 256)
         ).await
     }
 
@@ -2000,7 +1984,7 @@ mod train_tests {
     async fn test_save_load_cnn_label_node_1() -> Result<(), ThoError> {
         _test_save_load_cnn_label_node(
             360, 1541, &[1541], 101i64,
-            ConvNetParams::new(7, 10, 64, 100)
+            ConvNetParams::new(7, 64, 100, 10, 256)
         ).await
     }
 
@@ -2086,7 +2070,7 @@ mod train_tests {
         let motif_nets = 3;
         let params = LabelNetParams::new(
             motif_nets,
-            LabelNetTypeParams::ConvNetParams(ConvNetParams::new(3, 10, 4, 3)),
+            LabelNetTypeParams::ConvNetParams(ConvNetParams::new(3, 4, 3, 10, 256)),
         );
 
         let mut vs_0 = VarStore::new(Cpu);

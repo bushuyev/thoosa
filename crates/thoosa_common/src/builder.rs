@@ -97,7 +97,7 @@ pub enum Node {
         out_feats: u32,
         config: Option<LinearConfig>,
         #[cfg(debug_assertions)]
-        descr: String,
+        descr: String,//TODO remove, path is enough
     },
     Func {
         func: Fp,
@@ -243,11 +243,12 @@ impl Node {
                 #[cfg(debug_assertions)]
                 descr,
             } => {
-                assert!(in_feats > 0);
-                assert!(out_feats > 0);
 
-                #[cfg(debug_assertions)]
-                debug!("Node::Linear: descr={descr} in_feats={:?}, out_feats={:?}",in_feats, out_feats);
+                debug!("Node::Linear: path={path} in_feats={:?}, out_feats={:?}",in_feats, out_feats);
+
+                assert!(in_feats > 0, "in_feats > 0: in_feats={in_feats} path={path}");
+                assert!(out_feats > 0, "out_feats > 0: in_feats={in_feats} path={path}");
+
 
                 Box::new(my_linear(
                     vs / path,
@@ -393,17 +394,18 @@ impl SeqBuilder {
         out_channels: u32,
         config: ConvConfig,
     ) -> &mut Self {
-        self.elts.push(Node::Conv2d {
-            kernel,
-            in_channels,
-            out_channels,
-            config,
-        });
+        // self.elts.push(Node::Conv2d {
+        //     kernel,
+        //     in_channels,
+        //     out_channels,
+        //     config,
+        // });
+        //
+        // self.num_features = clc_conv1d_out(self.num_features, kernel, config).unwrap() as u32; //TODO 2d
+        // self.kernel = Some(kernel);
+        //self
+        todo!()
 
-        self.num_features = clc_conv1d_out(self.num_features, kernel, config).unwrap() as u32; //TODO 2d
-        self.kernel = Some(kernel);
-
-        self
     }
 
     pub fn max_pool(&mut self, kernel: u32, stride: u32, padding: u32) -> &mut Self {
@@ -446,6 +448,8 @@ impl SeqBuilder {
     }
 
     pub fn linear<P:ToString>(&mut self, path: P, #[cfg(debug_assertions)] descr: String) -> &mut Self {
+        assert!(self.num_features > 0, "linear, self.num_features > 0: path={}", path.to_string());
+
         self.elts.push(Node::Linear {
             path: path.to_string(),
             in_feats: self.num_features,
@@ -464,6 +468,8 @@ impl SeqBuilder {
         out_feats: u32,
         #[cfg(debug_assertions)] descr: String,
     ) -> &mut Self {
+        assert!(num_features > 0, "linear_feats, num_features > 0: path={}", path.to_string());
+
         self.elts.push(Node::Linear {
             path: path.to_string(),
             in_feats: num_features,
@@ -477,6 +483,8 @@ impl SeqBuilder {
     }
 
     pub fn linear_f<P:ToString>(&mut self, path: P, f: f32, #[cfg(debug_assertions)] descr: String) -> &mut Self {
+        assert!(self.num_features > 0, "linear_f, self.num_features > 0: path={}", path.to_string());
+
         let out_feats = (self.num_features as f32 * f) as u32;
         self.elts.push(Node::Linear {
             path: path.to_string(),
@@ -497,7 +505,9 @@ impl SeqBuilder {
         #[cfg(debug_assertions)] descr: String,
         path: P,
     ) -> &mut Self {
-        assert!(out_feats > 0);
+        assert!(self.num_features > 0, "linear_f, self.num_features > 0: path={}", path.to_string());
+        assert!(out_feats > 0, "linear_f, out_feats > 0: path={}", path.to_string());
+
         self.elts.push(Node::Linear {
             path: path.to_string(),
             in_feats: self.num_features,
@@ -518,6 +528,9 @@ impl SeqBuilder {
         config: LinearConfig,
         #[cfg(debug_assertions)] descr: &str,
     ) -> &mut Self {
+        assert!(self.num_features > 0, "linear_s_with_conf, self.num_features > 0: path={}", path.to_string());
+        assert!(out_feats > 0, "linear_s_with_conf, out_feats > 0: path={}", path.to_string());
+
         self.elts.push(Node::Linear {
             path: path.to_string(),
             in_feats: self.num_features,
@@ -532,7 +545,12 @@ impl SeqBuilder {
     }
 
     pub fn linear_p<P:ToString>(&mut self, path: P, n: usize, p: &impl NthParams<Params = u32>) -> &mut Self {
+
         let out_feats = p.on_nth_layer(n);
+
+        assert!(self.num_features > 0, "linear_p, self.num_features > 0: path={}", path.to_string());
+        assert!(out_feats > 0, "linear_p, out_feats > 0: path={}", path.to_string());
+
         self.elts.push(Node::Linear {
             path: path.to_string(),
             in_feats: self.num_features,
