@@ -94,7 +94,7 @@ impl FromStr for MotifsBy {
             ))
         } else if let Some(rest) = v.strip_prefix("run_id:") {
             MotifsBy::parse_run_id_payload(rest)
-        } else if let Some(rest) = v.strip_prefix("good_motifs_run_id:") {
+        } else if let Some(rest) = v.strip_prefix("good_motifs_run_id:") {//renamed to select_motifs_run_id
             Ok(MotifsBy::GoodMotifs(
                 rest.parse()
                     .map_err(|e| format!("can't parse {rest:?} to good motifs run_id: {e}"))?,

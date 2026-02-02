@@ -292,7 +292,7 @@ where
             debug!("TrainLabelNets::run: labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
 
 
-            let results = futures::stream::iter(labels_tain_and_valid_sets.clone())
+            let results = futures::stream::iter(labels_tain_and_valid_sets.clone()).take(1)
             .map(|label_tain_and_valid_sets|{
                 let (label, resources_1) = label_tain_and_valid_sets;
                 let mut ctx_for_task = ctx.branch(Some(&format!("Train_{label}")), true, false);//into is needed because mock needs SynKey or &str
@@ -357,9 +357,8 @@ where
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
                             match rc.net {
                                 LabelNetTypeArgs::ConvNet(ConvNetArgs {
-                                     num_conv_layers, hidden_conv_channels: hidden_channels, num_head_layers, kernel
-                                }) => {
-                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(ConvNetParams::new(num_conv_layers, num_head_layers, hidden_channels, kernel)));
+                                     num_conv_layers, hidden_conv_channels, num_head_layers, num_head_features, kernel }) => {
+                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(ConvNetParams::new(num_conv_layers, hidden_conv_channels, kernel, num_head_layers, num_head_features)));
 
                                     Ok((conv_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
