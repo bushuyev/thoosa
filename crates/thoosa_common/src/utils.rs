@@ -88,7 +88,7 @@ pub fn plot_t(t_0: &Tensor, label: &str) -> Result<(), ThoError> {
             .zip(DistinctColorIter::new())
             .map(|(channel, color)| {
                 (
-                    format!("0"),
+                    format!("channel {channel}"),
                     color,
                     t_0.i((channel, ..))
                         .iter::<f64>()
@@ -236,18 +236,18 @@ where
 
 
 
-    let motif_area = |x_0: i32, x_1: i32| {
-        return EmptyElement::at((1000., 0.))
-            + Rectangle::new(
-            [
-                (0, 0),
-                (1000, w_h.1 as i32 )
-            ],
-            &BLUE)
-            + Text::new(format!("({:.2},{:.2})", x_0, x_1), (5, 5), ("sans-serif", 15.0).into_font(),
-        );
-    };
-    chart.plotting_area().draw(&motif_area(1000, 2000)).expect("Drawing Failure");
+    // let motif_area = |x_0: i32, x_1: i32| {
+    //     return EmptyElement::at((1000., 0.))
+    //         + Rectangle::new(
+    //         [
+    //             (0, 0),
+    //             (1000, w_h.1 as i32 )
+    //         ],
+    //         &BLUE)
+    //         + Text::new(format!("({:.2},{:.2})", x_0, x_1), (5, 5), ("sans-serif", 15.0).into_font(),
+    //     );
+    // };
+    // chart.plotting_area().draw(&motif_area(1000, 2000)).expect("Drawing Failure");
 
 
 
@@ -2003,7 +2003,7 @@ pub fn motif_test_net(
     Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
 ) {
     (
-        Box::new(move || MotifNetParams::new(motif_width, 1, 100)),
+        Box::new(move || MotifNetParams::new(motif_width, 1, 100, 32, 10)),
         Box::new(move || {
             *test_net(motif_width, k, device, "test_motif_net").unwrap()
         }),

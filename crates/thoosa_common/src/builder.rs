@@ -5,7 +5,7 @@ use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
-use crate::my_tch::{Fp, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule, my_linear, AdaptiveMaxPool1d, Split1};
+use crate::my_tch::{Fp, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule, my_linear, AdaptiveMaxPool1d, Split1, MyAttnPool1d};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 use crate::tho_tensor::ThoTensor;
@@ -96,8 +96,6 @@ pub enum Node {
         in_feats: u32,
         out_feats: u32,
         config: Option<LinearConfig>,
-        #[cfg(debug_assertions)]
-        descr: String,//TODO remove, path is enough
     },
     Func {
         func: Fp,
@@ -109,6 +107,11 @@ pub enum Node {
     },
     AdaptiveMaxPool {
         output_size: u32,
+    },
+    AttnPool1d {
+        path:String,
+        channels: u32,
+        attn_hidden: u32
     },
     AvgPool {
         kernel_size: u32,
@@ -240,8 +243,7 @@ impl Node {
                 in_feats,
                 out_feats,
                 config,
-                #[cfg(debug_assertions)]
-                descr,
+
             } => {
 
                 debug!("Node::Linear: path={path} in_feats={:?}, out_feats={:?}",in_feats, out_feats);
@@ -249,6 +251,8 @@ impl Node {
                 assert!(in_feats > 0, "in_feats > 0: in_feats={in_feats} path={path}");
                 assert!(out_feats > 0, "out_feats > 0: in_feats={in_feats} path={path}");
 
+                #[cfg(debug_assertions)]
+                let decr = path.clone();
 
                 Box::new(my_linear(
                     vs / path,
@@ -256,8 +260,8 @@ impl Node {
                     out_feats as i64,
                     config.unwrap_or(LinearConfig::default()),
                     #[cfg(debug_assertions)]
-                    descr,
-                )?) //TODO rename layer1
+                    decr,
+                )?)
             }
 
             Node::MaxPool {
@@ -290,7 +294,9 @@ impl Node {
                 Box::new(MyClosureModule::new(closure))
             },
 
-
+            Node::AttnPool1d { path, channels, attn_hidden } => {
+                Box::new(MyAttnPool1d::new(&(vs / path), channels as i64, attn_hidden as i64))
+            }
         })
     }
 }
@@ -430,6 +436,18 @@ impl SeqBuilder {
         self
     }
 
+    pub fn attn_pool1d<P:ToString>(&mut self, path:P, channels:u32, attn_hidden:u32) -> &mut Self {
+
+        self.elts.push(Node::AttnPool1d {
+            path: path.to_string(),
+            channels,
+            attn_hidden,
+        });
+
+        self
+    }
+
+
 
     pub fn avg_pool(&mut self, kernel: u32, stride: u32, padding: u32) -> &mut Self {
         self.elts.push(Node::AvgPool {
@@ -455,8 +473,6 @@ impl SeqBuilder {
             in_feats: self.num_features,
             out_feats: self.num_features,
             config: None,
-            #[cfg(debug_assertions)]
-            descr,
         });
         self
     }
@@ -475,8 +491,6 @@ impl SeqBuilder {
             in_feats: num_features,
             out_feats,
             config: None,
-            #[cfg(debug_assertions)]
-            descr,
         });
         self.num_features = out_feats;
         self
@@ -491,8 +505,6 @@ impl SeqBuilder {
             in_feats: self.num_features,
             out_feats,
             config: None,
-            #[cfg(debug_assertions)]
-            descr,
         });
         self.num_features = out_feats as u32;
 
@@ -513,8 +525,6 @@ impl SeqBuilder {
             in_feats: self.num_features,
             out_feats,
             config: None,
-            #[cfg(debug_assertions)]
-            descr,
         });
         self.num_features = out_feats;
 
@@ -536,8 +546,7 @@ impl SeqBuilder {
             in_feats: self.num_features,
             out_feats,
             config: Some(config),
-            #[cfg(debug_assertions)]
-            descr: descr.into(),
+
         });
         self.num_features = out_feats;
 
@@ -556,8 +565,7 @@ impl SeqBuilder {
             in_feats: self.num_features,
             out_feats,
             config: None,
-            #[cfg(debug_assertions)]
-            descr: "linear_p".to_string(),
+
         });
         self.num_features = out_feats;
 

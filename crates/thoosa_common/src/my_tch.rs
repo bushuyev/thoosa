@@ -4,9 +4,9 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use log::{debug, error};
-use tch::Tensor;
+use tch::{nn, Kind, Tensor};
 
-use tch::nn::ConvConfig;
+use tch::nn::{ConvConfig, Module};
 use tch::nn::{
     BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, ModuleT, Path, batch_norm1d,
 };
@@ -433,6 +433,9 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAvgPool1d {
     }
 }
 
+
+
+
 pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send {
     fn debug(&self) {}
     fn mem_size(&self) -> usize {
@@ -442,9 +445,6 @@ pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send {
 
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError>;
 }
-
-// unsafe impl <DI:Dims, DO:Dims>  Send for ThoModuleWithStore<DI, DO>{}
-// unsafe impl <DI:Dims, DO:Dims>  Sync for ThoModuleWithStore<DI, DO>{}
 
 pub type Fp = fn(&Tensor) -> Result<Tensor, ThoError>;
 pub type LossFp = fn(&Tensor, &Tensor) -> Result<Tensor, ThoError>;
@@ -545,7 +545,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLin
 }
 
 pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims, DO: Dims>(
-    vs: T,
+    path: T,
     in_dim: i64,
     out_dim: i64,
     c: LinearConfig,
@@ -554,7 +554,7 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims, DO: Dims>(
     assert!(in_dim > 0);
     assert!(out_dim > 0);
 
-    let vs = vs.borrow();
+    let path = path.borrow();
     let bs = if c.bias {
         let bs_init = c.bs_init.unwrap_or_else(|| {
             let bound = 1.0 / (in_dim as f64).sqrt();
@@ -563,13 +563,13 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims, DO: Dims>(
                 up: bound,
             }
         });
-        Some(vs.f_var("bias", &[out_dim], bs_init)?)
+        Some(path.f_var("bias", &[out_dim], bs_init)?)
     } else {
         None
     };
 
     Ok(MyLinear {
-        ws: vs.f_var("weight", &[out_dim, in_dim], c.ws_init)?,
+        ws: path.f_var("weight", &[out_dim, in_dim], c.ws_init)?,
         bs,
         _pd_di: Default::default(),
         _pd_do: Default::default(),
@@ -644,6 +644,66 @@ fn add_node_output_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, mot
         net_batch.push(pad_to(&motifs_p_t, &[motif_batch_size]).expect("pad_to failed"));
     } else {
         net_batch.push(motifs_p_t);
+    }
+}
+
+
+#[derive(Debug)]
+pub struct MyAttnPool1d {
+    proj: nn::Conv1D,
+    v: nn::Conv1D,
+}
+
+impl MyAttnPool1d {
+    pub fn new(vs: &nn::Path, c: i64, attn_hidden: i64) -> Self {
+        let mut cfg = nn::ConvConfig { ..Default::default() };
+        cfg.bias = true;
+        let proj = nn::conv1d(vs / "proj", c, attn_hidden, 1, cfg);
+
+        let mut cfg2 = nn::ConvConfig { ..Default::default() };
+        cfg2.bias = false;
+        let v = nn::conv1d(vs / "v", attn_hidden, 1, 1, cfg2);
+
+        Self { proj, v }
+    }
+
+}
+
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAttnPool1d {
+    /// h: [B, C, T]
+    /// mask: Option<[B, T] bool> where true=valid
+    /// returns: (pooled [B,C], attn [B,T])
+
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        let mask = lengths.and_then(|lengths| mask_from_lengths(lengths, *lengths.iter().max().unwrap(), t.as_ref().device()).ok());
+
+        let h = t.as_ref();
+
+        let p = self.proj.forward(&h);
+        let t = p.tanh();
+
+        let scores = self.v.forward(&t).squeeze_dim(1);
+
+        debug!("MyAttnPool1d::tho_forward: p.size={:?}, t.size={:?}, scores.size={:?}", p.size(), t.size(), scores.size());
+
+
+        let scores = if let Some(m) = mask {
+            debug!("MyAttnPool1d::tho_forward:  after mask.size={:?} ", m.size());
+            // set padding to large negative so softmax weight ~0 there
+            scores.f_masked_fill(&m.squeeze_dim(1).logical_not(), -1e9)?
+        } else {
+            scores
+        };
+
+        debug!("MyAttnPool1d::tho_forward:  after mask scores.size={:?}", scores.size());
+
+        let attn = scores.softmax(-1, Kind::Float);               // [B,T]
+        let attn_unsqueezed = attn.unsqueeze(1);
+        debug!("MyAttnPool1d::tho_forward: scores.size={:?} attn.size={:?} h.size={:?}, attn_unsqueezed.size={:?}",scores.size(), attn.size(), h.size(), attn_unsqueezed.size());
+        let pooled = (h * attn_unsqueezed).sum_dim_intlist(2, false, Kind::Float); // [B,C]
+
+        debug!("MyAttnPool1d::tho_forward: pooled.size={:?}", pooled.size());
+        Ok(pooled.into())
     }
 }
 
