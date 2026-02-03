@@ -1493,7 +1493,7 @@ where
                     warn!("opt_train failed with {e:?} on {run_config:?} ");
                     (f32::MAX, Default::default())
                 });
-                listener.plot();
+                // listener.plot();
 
                 let min_loss_val = *min_loss_moved.read();
                 debug!("opt_train: run_config_values={run_config:?} loss={loss} min_loss_val={min_loss_val:?} "); //descr={descr}
