@@ -6,7 +6,7 @@ pub use crate::find_motifs_run_config::{FindMotifsRunConfigRangeOrValue, InputFi
 pub use thoosa_shared::RangeOrValue;
 
 use crate::builder::{Node, SeqBuilder};
-use crate::my_tch::ThoModule;
+use crate::my_tch::{MyLinear, ThoModule};
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
 use crate::utils::{mask_from_lengths, masked_max, masked_mean, tensor_mem_size};
@@ -472,19 +472,17 @@ pub struct TrainMotifsNetsRunConfig {
 
     #[in_map]
     #[run_config]
-    pub step: u32,
+    pub step: u32,//TODO renamed to Conv stride
+
+    #[in_map]
+    #[run_config]
+    pub channels:u32,
+
+    #[in_map]
+    #[run_config]
+    pub kernel: u32
 }
 
-impl TrainMotifsNetsRunConfig {
-    pub fn new(id: Option<RunId>) -> Self {
-        Self {
-            id,
-            common_training_args: CommonTrainingRunConfig::new(1, 1, 0.1),
-            num_layers: 1,
-            step: 1,
-        }
-    }
-}
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct CommonTrainingRunConfig {
@@ -538,15 +536,19 @@ impl OptConfig {
 pub struct MotifNetParams {
     pub num_features: u32,
     pub num_layers: u32,
-    pub stride:u32
+    pub stride:u32,
+    pub channels:u32,
+    pub kernel: u32
 }
 
 impl MotifNetParams {
-    pub fn new(num_features: u32, num_layers: u32, stride: u32) -> Self {
+    pub fn new(num_features: u32, num_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
         Self {
             num_features,
             num_layers,
-            stride
+            stride,
+            channels,
+            kernel
         }
     }
 
@@ -563,6 +565,8 @@ impl MotifNetParams {
                 .expect("num_features as_i64"),
             1,
             100,
+            32,
+            10,
         )
     }
 
@@ -600,9 +604,9 @@ pub fn conv_motif_node(params: &MotifNetParams) -> Node {
             None,
         )
         // .batch_norm()
-        .conv_1d("conv_1", 10, 1, 4, nd, None)
+        .conv_1d("conv_1", params.kernel, 1, params.channels, nd, None)
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
-        .adaptive_max_pool(1, 4)
+        .adaptive_max_pool(1, params.channels)
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
 
@@ -616,20 +620,20 @@ pub fn conv_motif_node(params: &MotifNetParams) -> Node {
         )
 
         .linear_s(
-            4,
+            params.channels,
             #[cfg(debug_assertions)]
             "motif_node first layer".to_string(),
-            "todo",
+            "motif_first_head",
         )
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()));
 
     for i in 0..params.num_layers as usize {
         net = net
             .linear_s(
-                4,
+                params.channels,
                 #[cfg(debug_assertions)]
                 format!("motif_node  {i}th layer"),
-                "todo",
+                format!("motif_{i}_head"),
             )
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
     }
@@ -641,9 +645,9 @@ pub fn conv_motif_node(params: &MotifNetParams) -> Node {
             1,
             #[cfg(debug_assertions)]
             "motif_node last layer".to_string(),
-            "todo",
+            "motif_last_head",
         )
-        .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
+        // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
 }
 
@@ -711,6 +715,25 @@ impl Default for LabelNetTypeParams {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ConvNetJoint {
+    AttnPool1d,
+    MinMax
+}
+
+impl From<&ConvNetJointArgs> for ConvNetJoint {
+    fn from(value: &ConvNetJointArgs) -> Self {
+        match value {
+            ConvNetJointArgs::AttnPool1d(_) => {
+                ConvNetJoint::AttnPool1d
+            }
+            ConvNetJointArgs::MinMax(_) => {
+                ConvNetJoint::MinMax
+            }
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConvNetParams {
@@ -720,6 +743,8 @@ pub struct ConvNetParams {
 
     num_head_layers:u32,
     num_head_features:u32,
+
+    joint: ConvNetJoint
 }
 
 
@@ -736,13 +761,14 @@ impl LinLenNetParams {
 }
 
 impl ConvNetParams {
-    pub fn new(num_conv_layers:u32, hidden_conv_channels:u32, kernel: u32, num_head_layers: u32, num_head_features: u32) -> Self {
+    pub fn new(num_conv_layers:u32, hidden_conv_channels:u32, kernel: u32, num_head_layers: u32, num_head_features: u32, joint: ConvNetJoint) -> Self {
         Self {
             num_conv_layers,
             num_head_layers,
             kernel,
             hidden_conv_channels,
-            num_head_features
+            num_head_features,
+            joint
         }
     }
 }
@@ -816,38 +842,54 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
         );
     }
 
-    builder = builder.closure(
-        Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
-            debug!("cnn_label_node: leaner input={t:?} lengths={lengths:?}");
-            let lengths = lengths.unwrap();
-            let mask = mask_from_lengths(lengths, *lengths.iter().max().unwrap(), t.device())?;
+    builder = match &cnn_params.joint{
+        ConvNetJoint::AttnPool1d => {
+            builder.attn_pool1d(
+                "attn_pool",
+                cnn_params.hidden_conv_channels,
+                2*cnn_params.hidden_conv_channels
+            ).linear_feats(
+                "cnn_label_head",
+                cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
+                #[cfg(debug_assertions)]
+                "cnn_label_head".to_string(),
+            )
+        }
 
-            let mean = t.f_mean_dim(2, false, None)?;
-            let max = t.f_max_dim(2, false)?;
-            let mean = masked_mean(t, &mask)?;
-            let max = masked_max(t, &mask)?;
+        ConvNetJoint::MinMax => {
+            builder.closure(
+                Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
+                    debug!("cnn_label_node: leaner input={t:?} lengths={lengths:?}");
+                    let lengths = lengths.expect("no mask");//TODO
+                    let mask = mask_from_lengths(lengths, *lengths.iter().max().unwrap(), t.device())?;
 
-            Tensor::f_cat(&[mean, max], 1).map_err(|e|e.into())
+                    let mean = t.f_mean_dim(2, false, None)?;
+                    let max = t.f_max_dim(2, false)?;
+                    let mean = masked_mean(t, &mask)?;
+                    let max = masked_max(t, &mask)?;
 
-        })),
-        None,
-    );
+                    Tensor::f_cat(&[mean, max], 1).map_err(|e|e.into())
 
-    builder = builder.linear_feats(
-        "cnn_label_head",
-        2 * cnn_params.hidden_conv_channels, 2* cnn_params.num_head_features,
-        #[cfg(debug_assertions)]
-        "cnn_label_head".to_string(),
-    );
+                })),
+                None,
+            ).linear_feats(
+                "cnn_label_head",
+                2* cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
+                #[cfg(debug_assertions)]
+                "cnn_label_head".to_string(),
+            )
+        }
+    };
+
 
     for layer in 0..cnn_params.num_head_layers {
         builder = builder .linear_s(
-            cnn_params.num_head_features,
+            2*cnn_params.num_head_features,
             #[cfg(debug_assertions)]
             format!("cnn_label_head_{layer}"),
             format!("cnn_label_head_{layer}"),
         )
-            .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))
+        .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))
     }
 
     builder.linear_s(
@@ -1654,19 +1696,41 @@ pub struct ConvNetArgs {
     #[run_config]
     pub num_head_layers: u32,
 
-
     #[in_map]
     #[run_config]
     pub num_head_features: u32,
 
     #[in_map]
     #[run_config]
-    pub kernel: u32
+    pub kernel: u32,
+
+    #[in_map]
+    #[run_config]
+    pub joint:ConvNetJointArgs
 }
 
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AttnPool1dArgs{
+    #[in_map]
+    pub _dummy: u32,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct MinMaxArgs{
+    #[in_map]
+    pub _dummy: u32,
+}
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum ConvNetJointArgs {
+    AttnPool1d(AttnPool1dArgs),
+    MinMax(MinMaxArgs)
+}
+
+
 impl ConvNetArgs {
-    pub fn new(num_conv_layers: u32, hidden_conv_channels: u32, kernel: u32, num_head_layers: u32, num_head_features:u32) -> Self {
-        Self { num_conv_layers, hidden_conv_channels, num_head_layers, kernel, num_head_features }
+    pub fn new(num_conv_layers: u32, hidden_conv_channels: u32, kernel: u32, num_head_layers: u32, num_head_features:u32, joint:ConvNetJointArgs) -> Self {
+
+        Self { num_conv_layers, hidden_conv_channels, num_head_layers, kernel, num_head_features, joint }
     }
 }
 
@@ -1747,7 +1811,7 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, LinNetArgs, ConvNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node};
+    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, LinNetArgs, ConvNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node, ConvNetJoint};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore,
     };
@@ -1971,21 +2035,34 @@ mod train_tests {
         Ok(())
     }
 
-
     #[tokio::test]
     async fn test_save_load_cnn_label_node() -> Result<(), ThoError> {
         _test_save_load_cnn_label_node(
             3, 19, &[2000, 12030, 17000], 11i64,
-            ConvNetParams::new(3, 64, 10, 10, 256)
-        ).await
+            ConvNetParams::new(3, 64, 10, 10, 256, ConvNetJoint::MinMax)
+        ).await?;
+
+        _test_save_load_cnn_label_node(
+            3, 19, &[2000, 12030, 17000], 11i64,
+            ConvNetParams::new(3, 64, 10, 10, 256, ConvNetJoint::AttnPool1d)
+        ).await?;
+
+        Ok(())
     }
 
     #[tokio::test]
     async fn test_save_load_cnn_label_node_1() -> Result<(), ThoError> {
         _test_save_load_cnn_label_node(
             360, 1541, &[1541], 101i64,
-            ConvNetParams::new(7, 64, 100, 10, 256)
-        ).await
+            ConvNetParams::new(7, 64, 100, 10, 256, ConvNetJoint::MinMax)
+        ).await?;
+
+        _test_save_load_cnn_label_node(
+            360, 1541, &[1541], 101i64,
+            ConvNetParams::new(7, 64, 100, 10, 256, ConvNetJoint::AttnPool1d)
+        ).await?;
+
+        Ok(())
     }
 
     async fn _test_save_load_cnn_label_node(motif_nets: u32, max_motif_nodes: i32, all_slices: &[i32], batch: i64, conv_net_params: ConvNetParams) -> Result<(), ThoError> {
@@ -2070,7 +2147,7 @@ mod train_tests {
         let motif_nets = 3;
         let params = LabelNetParams::new(
             motif_nets,
-            LabelNetTypeParams::ConvNetParams(ConvNetParams::new(3, 4, 3, 10, 256)),
+            LabelNetTypeParams::ConvNetParams(ConvNetParams::new(3, 4, 3, 10, 256, ConvNetJoint::MinMax)),
         );
 
         let mut vs_0 = VarStore::new(Cpu);
@@ -2485,7 +2562,7 @@ mod train_tests {
     ) -> Result<(), ThoError> {
         let mut vs_0 = VarStore::new(Cpu);
         let _test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            train_nets::lin_motif_node(&MotifNetParams::new(window, 1, 100))
+            train_nets::lin_motif_node(&MotifNetParams::new(window, 1, 100, 32, 10))
                 .build_tch_module(&vs_0.root())?;
 
         let test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> = SeqBuilder::new(100, None)
@@ -2513,7 +2590,7 @@ mod train_tests {
             &motif_node_params_run_id,
             &motif_id,
             &vs_0,
-            &MotifNetParams::new(100, 1, 100),
+            &MotifNetParams::new(100, 1, 100, 32, 10),
         )?;
         Ok(())
     }

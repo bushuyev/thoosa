@@ -224,7 +224,11 @@ where
                     Ok(pred.binary_cross_entropy_with_logits::<Tensor>(target, None, None, Reduction::Mean).set_requires_grad(true))
                 },
                 move |rc: &TrainFinalNetRunConfig, vs: &VarStore| AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e| e.into()),
-                |t: ThoBatch<LabelProbability>| t,
+                |t: ThoBatch<LabelProbability>| {
+                    debug!("train_final_net: t=\n{t}");
+
+                    t
+                },
                 |rc: &TrainFinalNetRunConfig| rc.common_training_args.cycles,
                 "final".to_string(),
             ));
@@ -348,6 +352,9 @@ where
                                 .as_slice(),
                             0,
                         )?;
+
+                        debug!("LogitsResourcesBatch::build_batch_stream: x=\n{x} y=\n{y}");
+
                         Ok::<_, ThoError>((x.into(), None, y.into()))
                     })
                 }
@@ -443,10 +450,11 @@ mod tests {
         let device = Device::Cpu;
         let train_group = "train_group";
         let valid_group = "valid_group";
-        let motif_t = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0", "motif_id")]), Tensor::f_zeros(&[1, motif_width as i64], (Kind::Float, device))?)?);
+        let motif_t_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0", "motif_id")]), Tensor::f_ones(&[1, motif_width as i64], (Kind::Float, device))?)?);
+        let motif_t_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1", "motif_id")]), Tensor::f_ones(&[1, motif_width as i64], (Kind::Float, device))?)?);
 
-        let (motif_0_params, motif_0_net) = motif_test_net_(device, Arc::clone(&motif_t), step);
-        let (motif_1_params, motif_1_net) = motif_test_net_(device, Arc::clone(&motif_t), step);
+        let (motif_0_params, motif_0_net) = motif_test_net_(device, Arc::clone(&motif_t_0), step);
+        let (motif_1_params, motif_1_net) = motif_test_net_(device, Arc::clone(&motif_t_1), step);
         let net_id_0 = PathBuf::from("0/0_2");
         let net_id_1 = PathBuf::from("0/1_2");
 
@@ -463,12 +471,17 @@ mod tests {
                 .build(),
         ));
 
-        let resources_train = (0..4).map(|i| Resource::new(i, 1, format!("resource_train_{i}"), 32)).collect::<Vec<_>>();
+        let resources_train = (0..10).map(|i| Resource::new(i, 1, format!("resource_train_{i}"), 32)).collect::<Vec<_>>();
         let resources_valid = (10..14).map(|i| Resource::new(i, 1, format!("resource_valid_{i}"), 32)).collect::<Vec<_>>();
 
         let mut resources_map = HashMap::new();
-        for r in resources_train.iter().chain(resources_valid.iter()) {
-            resources_map.insert(r.clone(), Tensor::f_zeros(&[1, 32], (Kind::Float, device))?);
+        for (i, r) in resources_train.iter().chain(resources_valid.iter()).enumerate() {
+            if i % 2 == 0 {
+                resources_map.insert(r.clone(), Tensor::f_zeros(&[1, 32], (Kind::Float, device))?);
+            } else {
+                resources_map.insert(r.clone(), Tensor::f_ones(&[1, 32], (Kind::Float, device))?);
+            }
+
         }
 
         let loader = Arc::new(mock_tensor_loader::build().with_out_id().with_run_cached(resources_map).finish());
