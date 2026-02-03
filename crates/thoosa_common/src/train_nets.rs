@@ -455,6 +455,38 @@ impl TrainMotifsNetsArgs {
     }
 }
 
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct MotifConvNetArgs {
+    #[in_map]
+    pub _dummy: u32,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct MotifLinNetArgs {
+    #[in_map]
+    pub _dummy: u32,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct MotifCosineNetArgs {
+    #[in_map]
+    pub _dummy: u32,
+}
+
+#[allow(non_snake_case, unused_assignments, unused_variables)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum MotifNetTypeArgs {
+    ConvNet(MotifConvNetArgs),
+    LinNet(MotifLinNetArgs),
+    CosineNet(MotifCosineNetArgs),
+}
+
+impl Default for MotifNetTypeArgs {
+    fn default() -> Self {
+        MotifNetTypeArgs::ConvNet(MotifConvNetArgs::default())
+    }
+}
+
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
@@ -465,6 +497,11 @@ pub struct TrainMotifsNetsRunConfig {
     #[in_map]
     #[run_config]
     pub common_training_args: CommonTrainingRunConfig,
+
+    #[in_map]
+    #[run_config]
+    #[serde(default)]
+    pub net: MotifNetTypeArgs,
 
     #[in_map]
     #[run_config]
@@ -532,28 +569,90 @@ impl OptConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct MotifNetParams {
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MotifConvNetParams {
     pub num_features: u32,
     pub num_layers: u32,
-    pub stride:u32,
-    pub channels:u32,
-    pub kernel: u32
+    pub stride: u32,
+    pub channels: u32,
+    pub kernel: u32,
+}
+
+impl MotifConvNetParams {
+    pub fn new(num_features: u32, num_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
+        Self { num_features, num_layers, stride, channels, kernel }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MotifLinNetParams {
+    pub num_features: u32,
+    pub num_layers: u32,
+    pub stride: u32,
+}
+
+impl MotifLinNetParams {
+    pub fn new(num_features: u32, num_layers: u32, stride: u32) -> Self {
+        Self { num_features, num_layers, stride }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MotifCosineNetParams {
+    pub num_features: u32,
+    pub stride: u32,
+    pub channels: u32,
+    pub kernel: u32,
+}
+
+impl MotifCosineNetParams {
+    pub fn new(num_features: u32, stride: u32, channels: u32, kernel: u32) -> Self {
+        Self { num_features, stride, channels, kernel }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum MotifNetTypeParams {
+    LinNetParams(MotifLinNetParams),
+    ConvNetParams(MotifConvNetParams),
+    CosineNetParams(MotifCosineNetParams),
+}
+
+impl Default for MotifNetTypeParams {
+    fn default() -> Self {
+        MotifNetTypeParams::ConvNetParams(MotifConvNetParams::new(0, 1, 100, 32, 10))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct MotifNetParams {
+    #[serde(default)]
+    pub net_type: MotifNetTypeParams,
 }
 
 impl MotifNetParams {
     pub fn new(num_features: u32, num_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
-        Self {
-            num_features,
-            num_layers,
-            stride,
-            channels,
-            kernel
-        }
+        Self::new_conv(num_features, num_layers, stride, channels, kernel)
+    }
+
+    pub fn new_with_net_type(net_type: MotifNetTypeParams) -> Self {
+        Self { net_type }
+    }
+
+    pub fn new_conv(num_features: u32, num_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
+        Self::new_with_net_type(MotifNetTypeParams::ConvNetParams(MotifConvNetParams::new(num_features, num_layers, stride, channels, kernel)))
+    }
+
+    pub fn new_lin(num_features: u32, num_layers: u32, stride: u32) -> Self {
+        Self::new_with_net_type(MotifNetTypeParams::LinNetParams(MotifLinNetParams::new(num_features, num_layers, stride)))
+    }
+
+    pub fn new_cosine(num_features: u32, stride: u32, channels: u32, kernel: u32) -> Self {
+        Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, stride, channels, kernel)))
     }
 
     pub fn to_properties_map(&self) -> HashMap<String, Val> {
-        HashMap::from([("num_features".into(), self.num_features.into())])
+        HashMap::from([("num_features".into(), self.num_features().into())])
     }
 
     pub fn from_properties_map(properties: HashMap<String, Val>) -> Self {
@@ -577,13 +676,32 @@ impl MotifNetParams {
     }
 
     pub fn num_features(&self) -> u32 {
-        self.num_features
+        match &self.net_type {
+            MotifNetTypeParams::LinNetParams(v) => v.num_features,
+            MotifNetTypeParams::ConvNetParams(v) => v.num_features,
+            MotifNetTypeParams::CosineNetParams(v) => v.num_features,
+        }
     }
 
+    pub fn stride(&self) -> u32 {
+        match &self.net_type {
+            MotifNetTypeParams::LinNetParams(v) => v.stride,
+            MotifNetTypeParams::ConvNetParams(v) => v.stride,
+            MotifNetTypeParams::CosineNetParams(v) => v.stride,
+        }
+    }
+
+    pub fn motif_net(&self) -> Node {
+        match &self.net_type {
+            MotifNetTypeParams::LinNetParams(v) => lin_motif_node(v),
+            MotifNetTypeParams::ConvNetParams(v) => conv_motif_node(v),
+            MotifNetTypeParams::CosineNetParams(v) => cosine_motif_node(v),
+        }
+    }
 }
 
 
-pub fn conv_motif_node(params: &MotifNetParams) -> Node {
+pub fn conv_motif_node(params: &MotifConvNetParams) -> Node {
     debug!("motif_node: params={params:?}");
     let mut builder = SeqBuilder::new(params.num_features, None);
     let nd = ConvConfig {
@@ -651,8 +769,53 @@ pub fn conv_motif_node(params: &MotifNetParams) -> Node {
         .end_seq()
 }
 
+pub fn cosine_motif_node(params: &MotifCosineNetParams) -> Node {
+    debug!("cosine_motif_node: params={params:?}");
+    let mut builder = SeqBuilder::new(params.num_features, None);
+    let bank_cfg = ConvConfig {
+        stride: params.stride as i64,
+        bias: false,
+        ..ConvConfig::default()
+    };
 
-pub fn lin_motif_node(params: &MotifNetParams) -> Node {
+    builder
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                Ok(t.unsqueeze(1))
+            })),
+            None,
+        )
+        .cosine_conv_1d("cosine_bank", params.kernel, 1, params.channels, bank_cfg)
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                Ok(t.f_transpose(1, 2)?)
+            })),
+            Some(params.channels),
+        )
+        .linear_s(
+            1,
+            #[cfg(debug_assertions)]
+            "cosine_head".to_string(),
+            "cosine_head",
+        )
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                Ok(t.f_transpose(1, 2)?)
+            })),
+            Some(1),
+        )
+        .adaptive_max_pool(1, 1)
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                Ok(t.squeeze_dim(2))
+            })),
+            Some(1),
+        )
+        .end_seq()
+}
+
+
+pub fn lin_motif_node(params: &MotifLinNetParams) -> Node {
     debug!("motif_node: params={params:?}");
     let mut builder = SeqBuilder::new(params.num_features, None);
     let mut net = builder
@@ -1330,7 +1493,7 @@ where
                     warn!("opt_train failed with {e:?} on {run_config:?} ");
                     (f32::MAX, Default::default())
                 });
-                listener.plot();
+                // listener.plot();
 
                 let min_loss_val = *min_loss_moved.read();
                 debug!("opt_train: run_config_values={run_config:?} loss={loss} min_loss_val={min_loss_val:?} "); //descr={descr}
@@ -1813,7 +1976,7 @@ mod train_tests {
     use crate::tho_tensor::ThoTensor;
     use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, LinNetArgs, ConvNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node, ConvNetJoint};
     use crate::train_nets::{
-        InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore,
+        InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore,
     };
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use crate::utils::{cuda_mem, from, optimizer_mem_size, pad_stack_with_mask, set_requires_grad_in_subpath, vs_mem_size, TrainListener};
@@ -2562,7 +2725,7 @@ mod train_tests {
     ) -> Result<(), ThoError> {
         let mut vs_0 = VarStore::new(Cpu);
         let _test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            train_nets::lin_motif_node(&MotifNetParams::new(window, 1, 100, 32, 10))
+            train_nets::lin_motif_node(&MotifLinNetParams::new(window, 1, 100))
                 .build_tch_module(&vs_0.root())?;
 
         let test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> = SeqBuilder::new(100, None)

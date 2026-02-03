@@ -5,7 +5,7 @@ use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
-use crate::my_tch::{Fp, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule, my_linear, AdaptiveMaxPool1d, Split1, MyAttnPool1d};
+use crate::my_tch::{AdaptiveMaxPool1d, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, Split1, ThoModule, my_linear};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 use crate::tho_tensor::ThoTensor;
@@ -80,6 +80,13 @@ pub enum Node {
         out_channels: u32,
         config: ConvConfig,
         init: Option<Arc<ThoTensor<AnyDims, SimpleId>>>
+    },
+    CosineConv1d {
+        path:String,
+        kernel: u32,
+        in_channels: u32,
+        out_channels: u32,
+        config: ConvConfig,
     },
     Conv2d {
         kernel: u32,
@@ -233,6 +240,20 @@ impl Node {
           0,
             ConvConfig::default())),
 
+            Node::CosineConv1d {
+                path,
+                kernel,
+                in_channels,
+                out_channels,
+                config,
+            } => Box::new(MyCosineConv1d::new(
+                &(vs / path),
+                in_channels as i64,
+                out_channels as i64,
+                kernel as i64,
+                config,
+            )?),
+
             Node::BatchNorm {
                 num_features,
                 config,
@@ -385,6 +406,28 @@ impl SeqBuilder {
             out_channels,
             config,
             init,
+        });
+
+        self.num_features = clc_conv1d_out(self.num_features, kernel, config).unwrap();
+        self.kernel = Some(kernel);
+
+        self
+    }
+
+    pub fn cosine_conv_1d<P:ToString>(
+        &mut self,
+        path: P,
+        kernel: u32,
+        in_channels: u32,
+        out_channels: u32,
+        config: ConvConfig,
+    ) -> &mut Self {
+        self.elts.push(Node::CosineConv1d {
+            path:path.to_string(),
+            kernel,
+            in_channels,
+            out_channels,
+            config,
         });
 
         self.num_features = clc_conv1d_out(self.num_features, kernel, config).unwrap();
