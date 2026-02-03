@@ -949,7 +949,7 @@ mod tests {
     use super::{FsWorkspace, Workspace};
     use crate::dims::AnyDims;
     use crate::my_tch::ThoModule;
-    use crate::train_nets::{FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams, MotifNetParams, conv_motif_node, cosine_motif_node};
+    use crate::train_nets::{conv_motif_node, cosine_motif_node, FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams, MotifNetParams, MotifNetTypeParams};
     use log::debug;
     use std::path::Path;
     use tch::Device::Cpu;
@@ -1053,10 +1053,13 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
 
-        let params = MotifNetParams::new(10, 1, 100, 32, 10);
+        let params = MotifNetParams::new_conv(10, 1, 100, 32, 10);
         let mut vs = VarStore::new(Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            conv_motif_node(&params).build_tch_module(&vs.root())?;
+            conv_motif_node(match &params.net_type {
+                MotifNetTypeParams::ConvNetParams(v) => v,
+                _ => unreachable!(),
+            }).build_tch_module(&vs.root())?;
         vs.freeze();
 
         let net_id = ws.save_motif_net(&0, &0, &0, &vs, &params)?;
@@ -1075,10 +1078,13 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
 
-        let params = MotifNetParams::new(10, 1, 100, 32, 10);
+        let params = MotifNetParams::new_cosine(10, 100, 32, 10);
         let mut vs = VarStore::new(Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            cosine_motif_node(&params).build_tch_module(&vs.root())?;
+            cosine_motif_node(match &params.net_type {
+                MotifNetTypeParams::CosineNetParams(v) => v,
+                _ => unreachable!(),
+            }).build_tch_module(&vs.root())?;
         vs.freeze();
 
         let net_id = ws.save_motif_net(&0, &0, &0, &vs, &params)?;

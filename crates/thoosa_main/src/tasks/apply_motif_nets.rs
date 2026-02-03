@@ -126,8 +126,8 @@ where
         let mut slice_step = HashSet::new();
         for v in &loaded_motif_nets {
             with_data!(stage_ctx.branch(Some("apply_motif_nets_meta"), false, false), v; |_ctx, v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
-                motif_width.insert(v.extra().motif_net_params.num_features);
-                slice_step.insert(v.extra().motif_net_params.stride);
+                motif_width.insert(v.extra().motif_net_params.num_features());
+                slice_step.insert(v.extra().motif_net_params.stride());
 
                 Ok::<_, ThoError>(())
             })?;
