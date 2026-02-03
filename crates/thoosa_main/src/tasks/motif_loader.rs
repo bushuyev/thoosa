@@ -31,6 +31,7 @@ use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
+use thoosa_common::utils::plot_t;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_shared::runner::permits::MAX_PERMITS;
@@ -187,8 +188,10 @@ where
                 .read()
                 .list_motif_slices(motif_id_value, None, None, None)?;
 
-        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), None, &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "motif_loader").await?;
+        let (window, motif) = load_motif_slices(motif_id.clone(), Arc::clone(&self.store), Arc::clone(&self.loader), None, &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "motif_loader").await?;
 
+
+        // plot_t(motif.as_ref(), &format!("motif_{motif_id}"))?;
 
         Ok(Arc::new(DevicesWrap::wrap(
             DataWithExtra::new(
@@ -298,8 +301,9 @@ where
                     find_motifs_run_config.window//it's assumed that filter's kernel is of same size as window
                 )?;
 
-        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), Some((0, 0)), &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "random loader").await?;
+        let (window, motif) = load_motif_slices(motif_id.clone(), Arc::clone(&self.store), Arc::clone(&self.loader), Some((0, 0)), &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "random loader").await?;
 
+        // plot_t(motif.as_ref(), &format!("random_motif_{motif_id}"))?;
 
         Ok(Arc::new(DevicesWrap::wrap(
             motif,

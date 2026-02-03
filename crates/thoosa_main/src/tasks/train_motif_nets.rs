@@ -25,7 +25,7 @@ use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
 use thoosa_common::train_nets::{opt_train, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsResult, TrainMotifNetResult, lin_motif_node, conv_motif_node};
-use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, vec_f32_from, DataBatch, DummyListener};
+use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, plot_t, vec_f32_from, DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_run_config_args::OptRunConfigSource;
@@ -217,14 +217,15 @@ where
                         }.boxed()
                    },
                     move |rc:&TrainMotifsNetsRunConfig, vs: &VarStore| {
-                        let params = MotifNetParams::new(motif_width, rc.num_layers, rc.step);
+                        let params = MotifNetParams::new(motif_width, rc.num_layers, rc.step, rc.channels, rc.kernel);
                         Ok((conv_motif_node(&params).build_tch_module(&vs.root())?, params))
                     },
                     opt_config.clone(), //TODO clone
                     train_motifs_nodes_run_configs.clone(), //TODO clone
                     |pred_y: &Tensor, target: &Tensor| {
 
-                        let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean).set_requires_grad(true);
+                        // let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean).set_requires_grad(true);
+                        let loss = pred_y.binary_cross_entropy_with_logits::<Tensor>(&target.totype(Float), None, None, Reduction::Mean).set_requires_grad(true);
                         debug!("run_train_motif_net: pred_y ={pred_y} target={target} loss={loss}");
 
                         Ok(loss)
@@ -389,18 +390,21 @@ where
             let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;//TODO config
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
 
-           /*
-           let test_dir = Path::new("/tmp/motifs");//.join(cdt_for_dir());
-            plot_series_with_lanes(
-                (0..random.size()[0]).map(|i| {
-                    (format!("i={i}"), BLACK, vec_f32_from(&random.i((i, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>())
-                }).collect::<Vec<_>>(),
-                format!("sig").as_str(),
-                (2000, 1000),
-                &test_dir.join(&format!("motif__{}.png", COUNTER.fetch_add(1, Relaxed))),
-                &[(0, 1000)]
-            ).unwrap();
-            */
+
+           // let test_dir = Path::new("/tmp/motifs");//.join(cdt_for_dir());
+           //  plot_series_with_lanes(
+           //      // (0..random.size()[0]).map(|i| {
+           //      //     (format!("i={i}"), BLACK, vec_f32_from(&random.i((i, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>())
+           //      // }).collect::<Vec<_>>(),
+           //       (0..motifs.size()[0]).map(|i| {
+           //          (format!("i={i}"), BLACK, vec_f32_from(&motifs.i((i, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>())
+           //      }).collect::<Vec<_>>(),
+           //      format!("sig").as_str(),
+           //      (2000, 1000),
+           //      &test_dir.join(&format!("motif__{}.png", COUNTER.fetch_add(1, Relaxed))),
+           //      &[(0, 1000)]
+           //  ).unwrap();
+
 
             let (x, _lengths, y) = mix_x_binary_with_labels(&motifs, None, &random, None)?;
 
@@ -521,19 +525,14 @@ mod tests {
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 50, 100, None, None).to_properties_iter(None).collect()),
                 )
-                .with_list_motif_slices(motif_id, None, None, None, Ok((0i64, find_motifs_run_id, /*vec![
-                    TensorIdSliceIdx(1, 100),
-                    TensorIdSliceIdx(1, 200),
-                    TensorIdSliceIdx(2, 100)
-                ]*/motif_intervals,
-                                                                  resources_id_map.clone()
+                .with_list_motif_slices(motif_id, None, None, None, Ok((0i64, find_motifs_run_id, motif_intervals, resources_id_map.clone()
 
                 )))
-                .with_list_random_motif_slices(motif_id, motif_width as u32, None, Ok((0i64, find_motifs_run_id, vec![
-                    TensorIdSliceIdx(1, 100),
-                    TensorIdSliceIdx(1, 200),
-                    TensorIdSliceIdx(2, 100)
-                ], resources_id_map)))
+                .with_list_random_motif_slices(motif_id, motif_width as u32, None, Ok((0i64, find_motifs_run_id, (0..10).flat_map(|i|vec![
+                    TensorIdSliceIdx(i, 100),
+                    TensorIdSliceIdx(i, 300),
+                    TensorIdSliceIdx(i, 500)
+                ]).collect(), resources_id_map)))
 
                 .with_list_selected_motifs([
                     (select_motifs_run_id, Ok(vec![vec![(motif_id, 1.0f64)]]))
@@ -545,7 +544,7 @@ mod tests {
         let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(20)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(100)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(11)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.001)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Step, Val::Int(1))
@@ -574,7 +573,7 @@ mod tests {
             run_configs
         ));
 
-        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(10, 3))), CacheArea::default()));
+        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(1, 1))), CacheArea::default()));
 
         let mut run_ctx = mock_run_ctx::default(1);
         let run_ctx_branch = run_ctx.branch(Some("train_motif_nets_run"), false, false);

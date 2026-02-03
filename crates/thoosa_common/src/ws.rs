@@ -975,14 +975,14 @@ mod tests {
 
         assert!(ws.store_path().ends_with("main_db.db3"));
 
-        ws.save_motif_net(&0, &0, &0, &VarStore::new(Cpu), &MotifNetParams::new(10, 1, 100))?;
-        ws.save_motif_net(&1, &1, &0, &VarStore::new(Cpu), &MotifNetParams::new(20, 1, 100))?;
+        ws.save_motif_net(&0, &0, &0, &VarStore::new(Cpu), &MotifNetParams::new(10, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &1, &0, &VarStore::new(Cpu), &MotifNetParams::new(20, 1, 100, 32, 10))?;
 
-        ws.save_motif_net(&1, &2, &2, &VarStore::new(Cpu), &MotifNetParams::new(30, 1, 100))?;
-        ws.save_motif_net(&1, &3, &2, &VarStore::new(Cpu), &MotifNetParams::new(40, 1, 100))?;
-        ws.save_motif_net(&1, &4, &2, &VarStore::new(Cpu), &MotifNetParams::new(50, 1, 100))?;
+        ws.save_motif_net(&1, &2, &2, &VarStore::new(Cpu), &MotifNetParams::new(30, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &3, &2, &VarStore::new(Cpu), &MotifNetParams::new(40, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &4, &2, &VarStore::new(Cpu), &MotifNetParams::new(50, 1, 100, 32, 10))?;
 
-        ws.save_motif_net(&1, &3, &4, &VarStore::new(Cpu), &MotifNetParams::new(50, 1, 100))?;
+        ws.save_motif_net(&1, &3, &4, &VarStore::new(Cpu), &MotifNetParams::new(50, 1, 100, 32, 10))?;
 
         let models = ws.motif_models(0, 0)?;
 
@@ -1055,7 +1055,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
 
-        let params = MotifNetParams::new(10, 1, 100);
+        let params = MotifNetParams::new(10, 1, 100, 32, 10);
         let mut vs = VarStore::new(Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
             conv_motif_node(&params).build_tch_module(&vs.root())?;

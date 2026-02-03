@@ -292,7 +292,12 @@ where
             debug!("TrainLabelNets::run: labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
 
 
-            let results = futures::stream::iter(labels_tain_and_valid_sets.clone()).take(1)
+            let results = futures::stream::iter(
+                labels_tain_and_valid_sets.iter()
+                .filter(|v|{
+                    v.0.eq("seizure")
+                })
+            )
             .map(|label_tain_and_valid_sets|{
                 let (label, resources_1) = label_tain_and_valid_sets;
                 let mut ctx_for_task = ctx.branch(Some(&format!("Train_{label}")), true, false);//into is needed because mock needs SynKey or &str
@@ -306,11 +311,11 @@ where
                 async move {
                     debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
-                    let resources_0 = labels_others_train_valid_resources.get(&label).expect(&format!("no resources not belonging to {label}"));
+                    let resources_0 = labels_others_train_valid_resources.get(label).expect(&format!("no resources not belonging to {label}"));
                     debug!("TrainLabelNets::run: label={label} resources_x={resources_0:?}");
 
-                    let resources_1_train = Arc::new(resources_1.0);
-                    let resources_1_valid = Arc::new(resources_1.1);
+                    let resources_1_train = Arc::new(resources_1.0.clone());
+                    let resources_1_valid = Arc::new(resources_1.1.clone());
                     let resources_0_train = Arc::new(resources_0.0.clone());
                     let resources_0_valid = Arc::new(resources_0.1.clone());
                     let label_ = label.clone();
@@ -357,8 +362,11 @@ where
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
                             match rc.net {
                                 LabelNetTypeArgs::ConvNet(ConvNetArgs {
-                                     num_conv_layers, hidden_conv_channels, num_head_layers, num_head_features, kernel }) => {
-                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(ConvNetParams::new(num_conv_layers, hidden_conv_channels, kernel, num_head_layers, num_head_features)));
+                                     num_conv_layers, hidden_conv_channels, num_head_layers, num_head_features, kernel, ref joint
+
+                                }) => {
+                                    //TODO impl From<(num_nets, LabelNetTypeArgs)> for LabelNetParams
+                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(ConvNetParams::new(num_conv_layers, hidden_conv_channels, kernel, num_head_layers, num_head_features, joint.into())));
 
                                     Ok((conv_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
@@ -401,10 +409,10 @@ where
                         Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), cache_area.into())),
                         ctx_for_task
                     ).await?;
-                    debug!("train_label_net: label={label_} result={result:?}");
+
 
                     let result = Arc::into_inner(result).expect("can't get result from train_net").take_data(0).await?;
-
+                    info!("train_label_net: label={label_} loss={:?}", result.min_loss);
 
                     Ok::<_, ThoError>(
                         TrainLabelNetsRunConfigResult::new(
