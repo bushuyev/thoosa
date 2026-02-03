@@ -2,7 +2,7 @@ use crate::dims::{
     Batch, LabelProbability, LabelsProbabilities, MotifProbability, MotifsNetsSelectionDims, Slice,
 };
 use crate::train_nets::{
-    FinalNetParams, LabelNetParams, MotifNetParams, ThoModuleWithStore, conv_motif_node, final_net,
+    FinalNetParams, LabelNetParams, MotifNetParams, ThoModuleWithStore, final_net,
 };
 use log::{debug, info, trace};
 use mockall::automock;
@@ -162,7 +162,7 @@ impl FsWorkspace {
         let module = ThoModuleWithStore::load(
             mono_key!("MotifNet", "MotifNet")
                 + &mono_key!(model_path.to_string_lossy().to_string(), "motif_model"),
-            move |path: &nn::Path| conv_motif_node(&params_for_builder).build_tch_module(path),
+            move |path: &nn::Path| params_for_builder.motif_net().build_tch_module(path),
             model_path,
             *device,
         )?;
@@ -456,7 +456,7 @@ impl Workspace for FsWorkspace {
 
             let module = ThoModuleWithStore::load(
                 mono_key!("MotifNet", "MotifNet") + &mono_key!(motif_id, "motif_id"),
-                move |path: &nn::Path| conv_motif_node(&params_for_builder).build_tch_module(path),
+                move |path: &nn::Path| params_for_builder.motif_net().build_tch_module(path),
                 model,
                 device.clone(),
             )?;
@@ -949,9 +949,7 @@ mod tests {
     use super::{FsWorkspace, Workspace};
     use crate::dims::AnyDims;
     use crate::my_tch::ThoModule;
-    use crate::train_nets::{
-        FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams, MotifNetParams, conv_motif_node,
-    };
+    use crate::train_nets::{FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams, MotifNetParams, conv_motif_node, cosine_motif_node};
     use log::debug;
     use std::path::Path;
     use tch::Device::Cpu;
@@ -1051,7 +1049,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_motif_net() -> Result<(), ThoError> {
+    fn test_load_conv_motif_net() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
 
@@ -1071,6 +1069,29 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_load_cosine_motif_net() -> Result<(), ThoError> {
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
+
+        let params = MotifNetParams::new(10, 1, 100, 32, 10);
+        let mut vs = VarStore::new(Cpu);
+        let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
+            cosine_motif_node(&params).build_tch_module(&vs.root())?;
+        vs.freeze();
+
+        let net_id = ws.save_motif_net(&0, &0, &0, &vs, &params)?;
+        debug!("net_id={net_id:?}");
+
+        let (loaded_params, loaded_module) = ws.load_motif_net(&net_id, &Cpu)?;
+
+        assert_eq!(format!("{:?}", params), format!("{:?}", loaded_params));
+        assert_eq!(vs.variables(), loaded_module.var_store().variables());
+
+        Ok(())
+    }
+
 
     #[test]
     fn test_load_label_net() -> Result<(), ThoError> {

@@ -455,6 +455,38 @@ impl TrainMotifsNetsArgs {
     }
 }
 
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct MotifConvNetArgs {
+    #[in_map]
+    pub _dummy: u32,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct MotifLinNetArgs {
+    #[in_map]
+    pub _dummy: u32,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct MotifCosineNetArgs {
+    #[in_map]
+    pub _dummy: u32,
+}
+
+#[allow(non_snake_case, unused_assignments, unused_variables)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum MotifNetTypeArgs {
+    ConvNet(MotifConvNetArgs),
+    LinNet(MotifLinNetArgs),
+    CosineNet(MotifCosineNetArgs),
+}
+
+impl Default for MotifNetTypeArgs {
+    fn default() -> Self {
+        MotifNetTypeArgs::ConvNet(MotifConvNetArgs::default())
+    }
+}
+
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
@@ -465,6 +497,11 @@ pub struct TrainMotifsNetsRunConfig {
     #[in_map]
     #[run_config]
     pub common_training_args: CommonTrainingRunConfig,
+
+    #[in_map]
+    #[run_config]
+    #[serde(default)]
+    pub net: MotifNetTypeArgs,
 
     #[in_map]
     #[run_config]
@@ -532,23 +569,53 @@ impl OptConfig {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum MotifNetTypeParams {
+    ConvNet,
+    LinNet,
+    CosineNet,
+}
+
+impl Default for MotifNetTypeParams {
+    fn default() -> Self {
+        MotifNetTypeParams::ConvNet
+    }
+}
+
+impl From<&MotifNetTypeArgs> for MotifNetTypeParams {
+    fn from(value: &MotifNetTypeArgs) -> Self {
+        match value {
+            MotifNetTypeArgs::ConvNet(_) => MotifNetTypeParams::ConvNet,
+            MotifNetTypeArgs::LinNet(_) => MotifNetTypeParams::LinNet,
+            MotifNetTypeArgs::CosineNet(_) => MotifNetTypeParams::CosineNet,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct MotifNetParams {
     pub num_features: u32,
     pub num_layers: u32,
     pub stride:u32,
     pub channels:u32,
-    pub kernel: u32
+    pub kernel: u32,
+    #[serde(default)]
+    pub net_type: MotifNetTypeParams,
 }
 
 impl MotifNetParams {
     pub fn new(num_features: u32, num_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
+        Self::new_with_net_type(num_features, num_layers, stride, channels, kernel, MotifNetTypeParams::default())
+    }
+
+    pub fn new_with_net_type(num_features: u32, num_layers: u32, stride: u32, channels: u32, kernel: u32, net_type: MotifNetTypeParams) -> Self {
         Self {
             num_features,
             num_layers,
             stride,
             channels,
-            kernel
+            kernel,
+            net_type,
         }
     }
 
@@ -578,6 +645,14 @@ impl MotifNetParams {
 
     pub fn num_features(&self) -> u32 {
         self.num_features
+    }
+
+    pub fn motif_net(&self) -> Node {
+        match &self.net_type {
+            MotifNetTypeParams::ConvNet => conv_motif_node(self),
+            MotifNetTypeParams::LinNet => lin_motif_node(self),
+            MotifNetTypeParams::CosineNet => cosine_motif_node(self),
+        }
     }
 
 }
@@ -648,6 +723,38 @@ pub fn conv_motif_node(params: &MotifNetParams) -> Node {
             "motif_last_head",
         )
         // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
+        .end_seq()
+}
+
+pub fn cosine_motif_node(params: &MotifNetParams) -> Node {
+    debug!("cosine_motif_node: params={params:?}");
+    let mut builder = SeqBuilder::new(params.num_features, None);
+    let bank_cfg = ConvConfig {
+        stride: params.stride as i64,
+        bias: false,
+        ..ConvConfig::default()
+    };
+    let head_cfg = ConvConfig {
+        bias: true,
+        ..ConvConfig::default()
+    };
+
+    builder
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                Ok(t.unsqueeze(1))
+            })),
+            None,
+        )
+        .cosine_conv_1d("cosine_bank", params.kernel, 1, params.channels, bank_cfg)
+        .conv_1d("cosine_head", 1, params.channels, 1, head_cfg, None)
+        .adaptive_max_pool(1, 1)
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                Ok(t.squeeze_dim(2))
+            })),
+            Some(1),
+        )
         .end_seq()
 }
 

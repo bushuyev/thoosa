@@ -24,7 +24,7 @@ use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
-use thoosa_common::train_nets::{opt_train, MotifNetParams, OptConfig, TensorsDataBatch, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsResult, TrainMotifNetResult, lin_motif_node, conv_motif_node};
+use thoosa_common::train_nets::{conv_motif_node, cosine_motif_node, lin_motif_node, MotifNetParams, MotifNetTypeArgs, OptConfig, TensorsDataBatch, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, opt_train};
 use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, plot_t, vec_f32_from, DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -217,8 +217,13 @@ where
                         }.boxed()
                    },
                     move |rc:&TrainMotifsNetsRunConfig, vs: &VarStore| {
-                        let params = MotifNetParams::new(motif_width, rc.num_layers, rc.step, rc.channels, rc.kernel);
-                        Ok((conv_motif_node(&params).build_tch_module(&vs.root())?, params))
+                        let params = MotifNetParams::new_with_net_type(motif_width, rc.num_layers, rc.step, rc.channels, rc.kernel, (&rc.net).into());
+                        let node = match &rc.net {
+                            MotifNetTypeArgs::ConvNet(_) => conv_motif_node(&params),
+                            MotifNetTypeArgs::LinNet(_) => lin_motif_node(&params),
+                            MotifNetTypeArgs::CosineNet(_) => cosine_motif_node(&params),
+                        };
+                        Ok((node.build_tch_module(&vs.root())?, params))
                     },
                     opt_config.clone(), //TODO clone
                     train_motifs_nodes_run_configs.clone(), //TODO clone

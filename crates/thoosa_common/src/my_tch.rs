@@ -391,6 +391,78 @@ unsafe impl<ND> Send for MyConv<ND> {}
 unsafe impl<ND> Sync for MyConv<ND> {}
 
 #[derive(Debug)]
+pub struct MyCosineConv1d {
+    ws: Tensor,
+    kernel: u32,
+    config: ConvConfig,
+}
+
+impl MyCosineConv1d {
+    pub fn new(vs: &nn::Path, in_channels: i64, out_channels: i64, kernel: i64, config: ConvConfig) -> Result<Self, ThoError> {
+        if config.padding != 0 {
+            return Err(ThoError::new(format!("MyCosineConv1d::new supports padding=0 only, got {}", config.padding)));
+        }
+        if config.dilation != 1 {
+            return Err(ThoError::new(format!("MyCosineConv1d::new supports dilation=1 only, got {}", config.dilation)));
+        }
+        if config.groups != 1 {
+            return Err(ThoError::new(format!("MyCosineConv1d::new supports groups=1 only, got {}", config.groups)));
+        }
+
+        let ws = vs.f_var("weight", &[out_channels, in_channels, kernel], Init::Randn { mean: 0.0, stdev: 0.02 })?;
+        Ok(Self { ws, kernel: kernel as u32, config })
+    }
+}
+
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        if let Some(lengths) = lengths.as_deref_mut() {
+            for len in lengths.iter_mut() {
+                if *len < 0 {
+                    return Err(ThoError::new(format!("MyCosineConv1d::tho_forward length must be >= 0, got {len}")));
+                }
+                *len = clc_conv1d_out(*len as u32, self.kernel, self.config)? as i64;
+            }
+        }
+
+        let x = t.as_ref();
+        let x_shape = x.size();
+        if x_shape.len() != 3 {
+            return Err(ThoError::new(format!("MyCosineConv1d::tho_forward expected [B,C,T], got {:?}", x_shape)));
+        }
+
+        let window = self.kernel as i64;
+        let x_unfold = x.f_unfold(2, window, self.config.stride)?.f_transpose(1, 2)?.f_contiguous()?; // [B,T',C,K]
+        let unfolded_shape = x_unfold.size();
+        let (batch, out_len, channels, kernel) = (unfolded_shape[0], unfolded_shape[1], unfolded_shape[2], unfolded_shape[3]);
+        if self.ws.size()[1] != channels {
+            return Err(ThoError::new(format!("MyCosineConv1d::tho_forward unexpected channels: weights={} input={channels}", self.ws.size()[1])));
+        }
+        let x_flat = x_unfold.f_view([batch, out_len, channels * kernel])?; // [B,T',C*K]
+
+        let w_flat = self.ws.f_view([self.ws.size()[0], channels * kernel])?; // [K,C*K]
+        let w_norm = w_flat
+            .f_pow_tensor_scalar(2.0)?
+            .f_sum_dim_intlist(1, true, Kind::Float)?
+            .f_clamp_min(1e-12)?
+            .f_sqrt()?;
+        let w_unit = w_flat.f_div(&w_norm)?; // [K,C*K]
+
+        let num = x_flat.f_matmul(&w_unit.f_transpose(0, 1)?)?; // [B,T',K]
+        let denom = x_flat
+            .f_pow_tensor_scalar(2.0)?
+            .f_sum_dim_intlist(2, true, Kind::Float)?
+            .f_clamp_min(1e-12)?
+            .f_sqrt()?; // [B,T',1]
+
+        Ok(num.f_div(&denom)?.f_transpose(1, 2)?.into()) // [B,K,T']
+    }
+}
+
+unsafe impl Send for MyCosineConv1d {}
+unsafe impl Sync for MyCosineConv1d {}
+
+#[derive(Debug)]
 pub struct MyAvgPool1d {
     kernel_size: i64,
     stride: i64,
@@ -813,6 +885,29 @@ mod tch_tests {
         // for v in vs.trainable_variables() {
         //     debug!("device={:?}", v.device());
         // }
+
+        Ok(())
+    }
+
+    #[test]
+    pub fn test_cosine_conv_1d_output_bounds() -> Result<(), ThoError> {
+        let node = SeqBuilder::new(10, None)
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    Ok(t.unsqueeze(1))
+                })),
+                None,
+            )
+            .cosine_conv_1d("cosine", 3, 1, 2, ConvConfig { stride: 1, bias: false, ..ConvConfig::default() })
+            .end_seq();
+
+        let vs = nn::VarStore::new(Cpu);
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = node.build_tch_module(&vs.root())?;
+        let out = net.tho_forward(&Tensor::randn([4, 10], (Kind::Float, Device::Cpu)).into(), None, true)?;
+
+        assert_eq!(vec![4, 2, 8], out.size());
+        assert!(out.as_ref().max().double_value(&[]) <= 1.0001);
+        assert!(out.as_ref().min().double_value(&[]) >= -1.0001);
 
         Ok(())
     }
