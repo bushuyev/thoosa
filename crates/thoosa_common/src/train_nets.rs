@@ -1458,7 +1458,7 @@ where
 
     let grid_vals_sets = run_config_source.grid_to_vals();
 
-    info!("opt_train_2: running opt train {descr} grid_vals_sets={grid_vals_sets:?}");
+    info!("opt_train: running opt train {descr} grid_vals_sets={grid_vals_sets:?}");
 
     for grid_vals in grid_vals_sets.into_iter() {
         let const_vals = const_vals.clone();
@@ -1515,11 +1515,11 @@ where
             opt_config.opt_max_evals,
             opt_config.opt_num_init,
         );
-        info!("opt_train_2: wait on optimize ");
+        info!("opt_train: wait on optimize ");
         let best_config = opt.optimize().await;
 
-        debug!("best_config={:?}", best_config);
-        trace!("done opt {descr}");
+        debug!("opt_train: best_config={:?}", best_config);
+        
         info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={} min_var_store={min_var_store:?}", min_loss.read());
     }
     Arc::into_inner(min_var_store)

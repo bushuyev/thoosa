@@ -139,9 +139,7 @@ where
             &self.store.read().list_run_config_values(find_motifs_run_id)?,
         )?;
         let motif_width = find_motifs_run_config.window;
-        if motif_width == 0 {
-            return Err(ThoError::new("RandomAvgDist: motif_width must be > 0"));
-        }
+        assert_ne!(motif_width, 0, "RandomAvgDist: motif_width must be > 0");
 
         let resources = self.store.read().list_resources_not_in_group(RANDOM_AVG_DIST_GROUP, max_slices)?;
         let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, motif_width)?;
@@ -149,25 +147,20 @@ where
         debug!("RandomAvgDist::run: slices.len={} resources_map.len={}", slices.len(), resources_map.len());
 
         let channels = self.ws.read().channels();
-        if channels == 0 {
-            return Err(ThoError::new("RandomAvgDist: workspace reports 0 channels"));
-        }
+        assert_ne!(channels, 0, "no channels");
 
         let mut avg_dists = Vec::with_capacity(channels as usize);
         for channel in 0..channels {
             let mut channel_ctx = ctx.branch(Some(&format!("random_avg_dist_channel_{channel}")), false, false);
             let (_window, motif) = load_motif_slices(
                 0u32.into(),
+                find_motifs_run_id,
+                channel as i64,
+                resources_map.clone(),
+                slices.clone(),
                 Arc::clone(&self.store),
                 Arc::clone(&self.loader),
-                None,
                 &mut channel_ctx,
-                find_motifs_run_id,
-                slices.clone(),
-                resources_map.clone(),
-                channel as i64,
-                device_idx,
-                cache_area,
                 &self.ws,
                 "random_avg_dist",
             ).await?;
@@ -184,13 +177,11 @@ where
             avg_dists.push(dist);
         }
 
-        let out_id = &input_id + &SynKey::new([mono_key!("random_avg_dist", "stage")]);
         let avg_t = Tensor::from_slice(avg_dists.as_slice())
             .view([channels as i64, 1])
             .to_device(ThoDevice::from(device_idx).into());
 
-        let out = ThoTensor::new(out_id, avg_t)?;
-        Ok(Arc::new(DevicesWrap::wrap(out, cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(&input_id + &SynKey::new(["random_avg_dist".into()]), avg_t)?, cache_area.into())))
     }
 }
 
@@ -273,6 +264,7 @@ mod tests {
     use super::*;
     use parking_lot::RwLock;
     use std::sync::Arc;
+    use tch::kind::FLOAT_CPU;
     use thoosa_common::utils::lin_t;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::runner::cache_areas::CacheArea;
@@ -288,14 +280,16 @@ mod tests {
     async fn test_random_avg_dist_basic() -> Result<(), ThoError> {
         GlobalCtx::init_devices(1);
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 1000)));
         let resources = vec![
-            Resource::new(1, 1, "resource_a", 20),
-            Resource::new(2, 1, "resource_b", 20),
+            Resource::new(1, 1, "resource_a", 10),
+            Resource::new(2, 1, "resource_b", 10),
+            Resource::new(3, 1, "resource_c", 10),
+            Resource::new(4, 1, "resource_d", 10),
         ];
 
         let run_id = 42;
-        let motif_width = 4;
+        let motif_width = 6;
         let store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
                 .with_list_resources_not_in_group([(RANDOM_AVG_DIST_GROUP, Ok(resources.clone()))])
@@ -312,8 +306,10 @@ mod tests {
             mock_tensor_loader::build()
                 .with_out_id()
                 .with_run_cached([
-                    (resources[0].clone(), lin_t(40).view((2, -1))),
-                    (resources[1].clone(), lin_t(40).view((2, -1))),
+                    (resources[0].clone(), Tensor::full(30, 0., FLOAT_CPU).view((3, -1))),
+                    (resources[1].clone(), Tensor::full(30, 1., FLOAT_CPU).view((3, -1))),
+                    (resources[2].clone(), Tensor::full(30, 2., FLOAT_CPU).view((3, -1))),
+                    (resources[3].clone(), Tensor::full(30, 3., FLOAT_CPU).view((3, -1))),
                 ])
                 .finish(),
         );
@@ -332,11 +328,17 @@ mod tests {
         let mut ctx_for_data = ctx.write().branch(Some("random_avg_dist_data"), false, false);
         let size = output
             .with_data_ref(0, &mut ctx_for_data, None, |t: &ThoTensor<ChannelsMotifsDists, SynKey>, _ctx| {
+                debug!("t=\n{}", t.as_ref());
+                /*
+                    average Euclidean distance between [0, 0, 0, 0, 0, 0] [1, 1, 1, 1, 1, 1] [2, 2, 2, 2, 2, 2] [3, 3, 3, 3, 3, 3] - 4.0825f32. For same values for all channels,
+                 */
+                assert!(Tensor::from_slice(&[4.0825f32, 4.0825, 4.0825]).view((3,1)).allclose(t.as_ref(), 0.02, 0.02, false));
+
                 Ok::<_, ThoError>(t.t_ref().size())
             })
             .await?;
 
-        assert_eq!(size, vec![2, 1]);
+        assert_eq!(size, vec![3, 1]);
 
         Ok(())
     }

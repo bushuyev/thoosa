@@ -186,9 +186,9 @@ where
         let (channel, find_motifs_run_id, slices, resources_map) =
             self.store
                 .read()
-                .list_motif_slices(motif_id_value, None, None, None)?;
+                .list_motif_slices(motif_id_value, None, Some(1000), None)?;//TODO config
 
-        let (window, motif) = load_motif_slices(motif_id.clone(), Arc::clone(&self.store), Arc::clone(&self.loader), None, &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "motif_loader").await?;
+        let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), &mut ctx, &self.ws, "motif_loader").await?;
 
 
         // plot_t(motif.as_ref(), &format!("motif_{motif_id}"))?;
@@ -301,7 +301,7 @@ where
                     find_motifs_run_config.window//it's assumed that filter's kernel is of same size as window
                 )?;
 
-        let (window, motif) = load_motif_slices(motif_id.clone(), Arc::clone(&self.store), Arc::clone(&self.loader), Some((0, 0)), &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "random loader").await?;
+        let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), &mut ctx, &self.ws, "random loader").await?;
 
         // plot_t(motif.as_ref(), &format!("random_motif_{motif_id}"))?;
 
@@ -312,12 +312,23 @@ where
     }
 }
 
-pub(crate) async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &mut C, find_motifs_run_id: u32, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, channel: i64, device_idx: usize, cache_area: u64, ws: &Arc<RwLock<Box<dyn Workspace>>>, descr: &str) -> Result<(u32, ThoTensor<MotifSlices, DataId>), ThoError>
+pub(crate) async fn load_motif_slices<L, C>(
+    motif_id: DataId,
+    find_motifs_run_id: u32,
+    channel: i64,
+    resources_map: HashMap<ResourceId, Resource>,
+    slices: Vec<TensorIdSliceIdx>,
+    store: Arc<RwLock<Box<dyn Store>>>,
+    loader: Arc<L>,
+    ctx: &mut C,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    descr: &str
+) -> Result<(u32, ThoTensor<MotifSlices, DataId>), ThoError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
 {
-
+    let device_idx = ctx.device_idx();
     debug!("load_motif_slices: motif_id={motif_id} slices={slices:?} descr={descr}");
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
@@ -327,7 +338,7 @@ where
 
     let resource_ids_slices = slices
         .iter()
-        .take(100)//TODO input/config
+        // .take(100)//TODO input/config
         .fold(HashMap::new(), |mut a, slice| {
             a.entry(slice.0.clone()) //TODO clone
                 .or_insert_with(|| vec![])
@@ -341,7 +352,7 @@ where
 
     debug!("load_motif_slices: find_motifs_run_id={find_motifs_run_id} window={window:?} device_idx={device_idx}");
 
-    let tmp_cache: TmpCached<ThoTensor<ChannelsData2, SynKey>> = TmpCached::new("motifs", cache_area).await;
+    let tmp_cache: TmpCached<ThoTensor<ChannelsData2, SynKey>> = TmpCached::new("motifs", ctx.cache_area()).await;
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
 
@@ -351,7 +362,7 @@ where
             .get(&resource_id)
             .cloned()
             .expect(&format!("no resource with id={resource_id}"));
-        let resource_cache = Arc::new(DevicesWrap::wrap(resource, cache_area.into()));
+        let resource_cache = Arc::new(DevicesWrap::wrap(resource, ctx.cache_area().into()));
 
         //into is needed because mock needs SynKey or &str
         let raw_tensor = Arc::clone(&configurable_loader)
