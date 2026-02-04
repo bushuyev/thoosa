@@ -387,8 +387,6 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 2]> {
     }
 }
 
-unsafe impl<ND> Send for MyConv<ND> {}
-unsafe impl<ND> Sync for MyConv<ND> {}
 
 #[derive(Debug)]
 pub struct MyCosineConv1d {
@@ -458,9 +456,6 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
         Ok(num.f_div(&denom)?.f_transpose(1, 2)?.into()) // [B,K,T']
     }
 }
-
-unsafe impl Send for MyCosineConv1d {}
-unsafe impl Sync for MyCosineConv1d {}
 
 #[derive(Debug)]
 pub struct MyAvgPool1d {
