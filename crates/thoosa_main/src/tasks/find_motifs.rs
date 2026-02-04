@@ -147,7 +147,7 @@ where
         device: ThoDevice, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
         mut init_ctx:C
     ) -> Result<Self, ThoError> {
-        // let band_filter = Arc::new(FreqFilter::new());
+        
         debug!("FindMotifsStage::new: fixed_config={fixed_config:?}");
 
         let avg_dists = Arc::new(RandomAvgDist::new(Arc::clone(&store), Arc::clone(&loader), &ws));
@@ -161,7 +161,7 @@ where
                 let fixed_config = fixed_config.clone();
                 let loader = Arc::clone(&loader);
                 let avg_dists_arc = Arc::clone(&avg_dists_arc);
-                let mut c = init_ctx.branch(Some("init ctx for run_config"), false, false);
+                let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {:?}", run_config.id)), false, false);
 
                 async move {
                     debug!("FindMotifsStage::new: run_config={run_config:?}");
@@ -175,12 +175,12 @@ where
                         }
                         SlicesFilter::MaxDistance(v) => {
 
-                            let r = avg_dists_arc.run(Arc::new(DevicesWrap::wrap(RandomAvgDistInput::new(1000, run_config.id.unwrap()), CacheArea::default())), c.branch(Some("cxt for RandomAvgDistInput"), false, false)).await?;
-                            let t = with_data!(c, r; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
+                            let dists = avg_dists_arc.run(Arc::new(DevicesWrap::wrap(RandomAvgDistInput::new(v.slices, run_config.id.unwrap()), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
+                            let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
-                                ThoTensor::new(t.id().clone(), v.k * t.t.shallow_clone().view((-1, 1, 1)))
+                                ThoTensor::new(t.id().clone(), v.k * t.t.view((-1, 1, 1)))
                             })?;
-                            MasksCtx::MaxDist{ dists: t}
+                            MasksCtx::MaxDist{ dists }
                         }
                     };
 
@@ -479,7 +479,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn test_find_motifs_max_dist() -> Result<(), ThoError> {
-        setup_find_motifs(FindMotifsRunConfig::new_with_max_dist(Some(1), 10, 100, None, 0.5)).await?;
+        setup_find_motifs(FindMotifsRunConfig::new_with_max_dist(Some(1), 10, 100, None, 0.5, 1000)).await?;
 
         Ok(())
     }

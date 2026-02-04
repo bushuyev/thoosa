@@ -75,14 +75,15 @@ impl FindMotifsRunConfig {
         step: u32,
         window: u32,
         filter: Option<InputFilter>,
-        distance: f32,
+        k: f32,
+        slices: u32,
     ) -> Self {
         Self {
             id,
             step,
             window,
             filter,
-            slices_filter: SlicesFilter::MaxDistance(MaxDistance{ k: distance }),
+            slices_filter: SlicesFilter::MaxDistance(MaxDistance{ k, slices}),
         }
     }
 
@@ -145,6 +146,10 @@ pub struct MaxDistance {
     #[in_map]
     #[run_config]
     pub k: f32,
+
+    #[in_map]
+    #[run_config]
+    pub slices: u32,
 }
 
 #[cfg(test)]

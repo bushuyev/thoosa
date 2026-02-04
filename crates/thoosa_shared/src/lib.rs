@@ -32,6 +32,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::{fmt, fs};
+use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use ambassador::delegatable_trait;
 use mockall::automock;
@@ -1978,7 +1979,7 @@ pub trait CopyToDevice {
 macro_rules! panic_to_err_async {
     ($expr:expr) => {{
         let x = std::panic::catch_unwind(core::panic::AssertUnwindSafe(async || $expr));
-        
+
         match x {
             //no panic
             Ok(inner_result) => {
@@ -2077,6 +2078,12 @@ pub fn sample_n_owned<T, R: Rng + ?Sized>(mut v: Vec<T>, n: usize, rng: &mut R) 
     v
 }
 
+pub fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before Unix epoch")
+        .as_millis()
+}
 
 #[cfg(test)]
 #[test]
