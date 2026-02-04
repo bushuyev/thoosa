@@ -155,7 +155,6 @@ where
         let avg_dists_arc = Arc::clone(&avg_dists);
 
 
-
         let cross_loaders = futures::stream::iter(run_configs
             .into_iter())
             .map( |run_config| {
@@ -171,7 +170,7 @@ where
                     let filter = run_config.slices_filter.clone();
 
                     let masks_ctx = match &filter {
-                        SlicesFilter::DistanceRunningMeanK(v) => {
+                        SlicesFilter::DistanceRunningMean(v) => {
                             MasksCtx::Mean{k: v.k, ctx:MeanDistsCtx::new(channels, device.into())}
                         }
                         SlicesFilter::MaxDistance(v) => {

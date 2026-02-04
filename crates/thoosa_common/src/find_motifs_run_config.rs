@@ -64,7 +64,7 @@ impl FindMotifsRunConfig {
             step,
             window,
             filter,
-            slices_filter: SlicesFilter::DistanceRunningMeanK(DistanceRunningMeanK {
+            slices_filter: SlicesFilter::DistanceRunningMean(DistanceRunningMeanK {
                 k: mean_k.unwrap_or(0.5),
             }),
         }
@@ -130,7 +130,7 @@ impl Conv1Params {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub enum SlicesFilter {
-    DistanceRunningMeanK(DistanceRunningMeanK),
+    DistanceRunningMean(DistanceRunningMeanK),
     MaxDistance(MaxDistance),
 }
 
