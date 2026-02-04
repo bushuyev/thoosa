@@ -39,19 +39,20 @@ use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_common::cuda_utils::{pack_bits_bool, with_cuda_stream};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::data_with_extra::DataWithExtra;
-use crate::tasks::average_euclidean_distance::AverageDistanceValue;
+use crate::tasks::slices_stats::AverageDistanceValue;
 use crate::tasks::motif_loader::MotifMeta;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_named_derive::Named;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, MotifSlices};
+use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::run_configs::RunId;
 use thoosa_with_data::with_data;
 use crate::buffer_limits::FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT;
-use crate::tasks::random_avg_dist::{RandomAvgDist, RandomAvgDistInput};
+use crate::tasks::random_slices_stats::{RandomStats, RandomStatsInput};
 
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
@@ -150,7 +151,7 @@ where
         
         debug!("FindMotifsStage::new: fixed_config={fixed_config:?}");
 
-        let avg_dists = Arc::new(RandomAvgDist::new(Arc::clone(&store), Arc::clone(&loader), &ws));
+        let avg_dists = Arc::new(RandomStats::new(Arc::clone(&store), Arc::clone(&loader), &ws));
         let avg_dists_arc = Arc::clone(&avg_dists);
 
 
@@ -175,7 +176,7 @@ where
                         }
                         SlicesFilter::MaxDistance(v) => {
 
-                            let dists = avg_dists_arc.run(Arc::new(DevicesWrap::wrap(RandomAvgDistInput::new(v.slices, run_config.id.unwrap()), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
+                            let dists = avg_dists_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_config.id.unwrap(), Metrics::EucDist, Aggr::Mean), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
                             let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
                                 ThoTensor::new(t.id().clone(), v.k * t.t.view((-1, 1, 1)))
@@ -457,12 +458,12 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::ResourceType::Group;
     use thoosa_with_data::with_data;
-    use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
+    use crate::tasks::slices_stats::SlicesStats;
     use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::cross_dims::MotifSlices;
-    use crate::tasks::average_euclidean_distance::AverageDistanceValue;
-    use crate::tasks::random_avg_dist::RANDOM_AVG_DIST_GROUP;
+    use crate::tasks::slices_stats::AverageDistanceValue;
+    use crate::tasks::random_slices_stats::RANDOM_AVG_DIST_GROUP;
     use crate::tasks::select_motifs::SelectMotifsStage;
 
     #[ctor::ctor]
