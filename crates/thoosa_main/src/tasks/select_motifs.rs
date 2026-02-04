@@ -50,13 +50,13 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 use crate::cli::Commands::SelectMotifs;
-use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
+use crate::tasks::slices_stats::{Aggr, AverageDistanceValue, Metrics, SlicesStats};
 use crate::tasks::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
 use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::cross_loader::{RangeOrSlice, ResourcesConfigInput};
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
-use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, LoadMotifAndClcDistanceStage, MotifSlicesSelector};
+use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::find_motifs::config_to_stage;
@@ -82,7 +82,7 @@ where
     find_motifs_run_ids:Vec<RunId>,
     clc_resources_motifs_dist:Arc<ClcResourcesMotifsDist<C>>,
     max_batch:i64,//TODO to SelectMotifsSFixedConfig,
-    clc_dist:Arc<LoadMotifAndClcDistanceStage<ML, AverageEuclideanDistanceStage<C>, C>>
+    clc_dist:Arc<LoadMotifAndClcDistanceStage<ML, SlicesStats<C>, C>>
 }
 
 impl <L, ML, C> Debug for SelectMotifsStage<L, ML, C>
@@ -655,7 +655,7 @@ where
 
         let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
             Arc::clone(&motif_loader),
-            Arc::new(AverageEuclideanDistanceStage::<C>::new())
+            Arc::new(SlicesStats::<C>::new())
         ));
 
 
@@ -666,7 +666,7 @@ where
             loader,
             stacked_motifs_loader: Arc::new(StackedMotifsLoader::new(Arc::clone(ws), Arc::clone(&motif_loader), Arc::clone(&Arc::new(LoadMotifAndClcDistanceStage::new(
                 Arc::clone(&motif_loader),
-                Arc::new(AverageEuclideanDistanceStage::<C>::new()),
+                Arc::new(SlicesStats::<C>::new()),
             ))), Arc::clone(store))),
             run_configs,
             find_motifs_run_ids,
@@ -1008,10 +1008,10 @@ where
                                 ML::cache().await.remove(&ML::out_id(&clc_dist.motif_loader, &motif_id)); //purges cache so motif is reloaded in clc_dist and its average dist recalculated - TODO add flag to motif loader input to trigger motif reload + load only from added resources
 
                                 let clc_ctx = ctx_for_motif.branch(Some("select_motifs_clc_dist"), false, false);
-                                let dist = clc_dist
+                                let dist: Arc<DevicesWrap<AverageDistanceValue>> = clc_dist
                                     .run(
                                         Arc::new(DevicesWrap::wrap(
-                                            MotifLoaderInput::all_slices(DataId(*motif_id)),
+                                            LoadMotifAndClcDistanceInput::new(MotifLoaderInput::all_slices(DataId(*motif_id)), Metrics::EucDist, Aggr::Mean),
                                             CacheArea::default(),
                                         )),
                                         clc_ctx,

@@ -32,9 +32,9 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics,
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
-use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
+use crate::tasks::slices_stats::{Aggr, AverageDistanceValue, Metrics, SlicesStats};
 use crate::tasks::cross_dims::{ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
-use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
+use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage};
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use thoosa_shared::comp_id::SynKey;
 use crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN;
@@ -140,7 +140,7 @@ where
     C: RunCtx + Adjustable + 'static
 {
     motif_loader:Arc<ML>,
-    load_and_clc_avg_dist:Arc<LoadMotifAndClcDistanceStage<ML, AverageEuclideanDistanceStage<C>, C>>,
+    load_and_clc_avg_dist:Arc<LoadMotifAndClcDistanceStage<ML, SlicesStats<C>, C>>,
     ws:Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<RwLock<Box<dyn Store>>>,
     pd:PhantomData<C>,
@@ -166,7 +166,7 @@ where
     pub fn new(
         ws: Arc<RwLock<Box<dyn Workspace>>>,
         motif_loader: Arc<ML>,
-        load_and_clc_avg_dist: Arc<LoadMotifAndClcDistanceStage<ML, AverageEuclideanDistanceStage<C>, C>>,
+        load_and_clc_avg_dist: Arc<LoadMotifAndClcDistanceStage<ML, SlicesStats<C>, C>>,
         store: Arc<RwLock<Box<dyn Store>>>) -> Self
     {
         Self {
@@ -236,11 +236,13 @@ where
                 // let select_motifs_run_config_id = input.select_motifs_run_config.id;
 
                 async move {
-                    let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id as u32).into()), cache_area.into()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
+                    let motif_loader_input = MotifLoaderInput::find_motif_slices_only((motif_id as u32).into());
+                    let motif_id_wrap = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), cache_area.into()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
+                    let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, Metrics::EucDist, Aggr::Mean), cache_area.into()));
 
 
                     let avg_motif_dist = load_and_clc_avg_dist_clone
-                        .run_cached(Arc::clone(&motif_id_wrap), ctx.branch(Some("stacked_motifs_loader_clc_run"), false, false))
+                        .run_cached(clc_input, ctx.branch(Some("stacked_motifs_loader_clc_run"), false, false))
                         .await?
                         .with_data_ref(0, &mut ctx, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
                         .await?;
