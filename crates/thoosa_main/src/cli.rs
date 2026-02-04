@@ -39,7 +39,7 @@ use tch::{Device, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::{ThoDevice};
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{ByLabelVarianceConfig, ByLabelVarianceConfigRangeOrValue, DistanceRunningMean, DistanceRunningMeanRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_common::find_motifs_run_config::{ByAvgEucDist, ByAvgEucDistRangeOrValue, DistanceRunningMean, DistanceRunningMeanRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -806,7 +806,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
     //////////////////////select
     let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
         id: None,
-        motif_selector: MotifSelectorRangeOrValue::ByLabelVariance(ByLabelVarianceConfigRangeOrValue { _dummy: 0 })
+        motif_selector: MotifSelectorRangeOrValue::ByAvgEucDist(ByAvgEucDistRangeOrValue { k: RangeOrValue::Value(0.5) })
     };
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
@@ -872,7 +872,7 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
     //////////////////////select
     let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
         id: None,
-        motif_selector: MotifSelectorRangeOrValue::ByLabelVariance(ByLabelVarianceConfigRangeOrValue { _dummy: 0 })
+        motif_selector: MotifSelectorRangeOrValue::ByAvgEucDist(ByAvgEucDistRangeOrValue{ k: RangeOrValue::Value(0.5) })
     };
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
