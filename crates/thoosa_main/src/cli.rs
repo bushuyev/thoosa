@@ -81,9 +81,9 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::perf_logging::{format_perf_map, maybe_init_perf_tracing_stdout_simplelog_like, PERF};
 use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
-use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
+use crate::tasks::slices_stats::{Aggr, AverageDistanceValue, Metrics, SlicesStats};
 use crate::tasks::cross_dims::ChannelsMotifsDists;
-use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifSlicesSelector};
+use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
 use crate::tasks::train_final_net::new_train_final_net_with_ml;
@@ -1075,8 +1075,8 @@ async fn run_plot_motif_slices(
         ws
     ));
     let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
-        Arc::clone(&motif_loader_impl), // as Arc<dyn MotifLoaderStage<Output = <AverageEuclideanDistanceStage as Stage>::In<'static>>>,
-        Arc::new(AverageEuclideanDistanceStage::<RunCtxWithPermits>::new()),
+        Arc::clone(&motif_loader_impl), // as Arc<dyn MotifLoaderStage<Output = <SlicesStats as Stage>::In<'static>>>,
+        Arc::new(SlicesStats::<RunCtxWithPermits>::new()),
     ));
 
     match plot_motif_slices_params.motifs_by() {
@@ -1175,11 +1175,13 @@ async fn plot_motif(
     mut ctx: RunCtxWithPermits,
     motif_id: usize,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>>,
-    clc_dist: Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, AverageEuclideanDistanceStage<RunCtxWithPermits>, RunCtxWithPermits>>,
+    clc_dist: Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, SlicesStats<RunCtxWithPermits>, RunCtxWithPermits>>,
     select_motif_run_ids: Option<Vec<RunId>>,
 ) -> Result<(), ThoError> {
     let select_motif_run_ids_sfx = select_motif_run_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
-    let motif_id_arc = Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(DataId(motif_id as u32), select_motif_run_ids), CacheArea::default()));
+    let motif_loader_input = MotifLoaderInput::new(DataId(motif_id as u32), select_motif_run_ids);
+    let motif_id_arc = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), CacheArea::default()));
+    let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, Metrics::EucDist, Aggr::Mean), CacheArea::default()));
 
     let motif = Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_arc),
@@ -1189,7 +1191,7 @@ async fn plot_motif(
 
     let mut ctx_for_dist = ctx.branch(Some("plot_motif_dist_value"), false, false);
     let dist = clc_dist
-        .run_cached(Arc::clone(&motif_id_arc), ctx.branch(Some("plot_motif_clc_dist"), false, false))
+        .run_cached(clc_input, ctx.branch(Some("plot_motif_clc_dist"), false, false))
         .await?
         .with_data_ref(0, &mut ctx_for_dist, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
         .await?;
@@ -1591,11 +1593,11 @@ mod cli_tests {
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::traits::DataId;
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
-    use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
+    use crate::tasks::slices_stats::{Aggr, AverageDistanceValue, Metrics, SlicesStats};
     use crate::tasks::cross_dims::MotifSlices;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_motifs::FindMotifsStage;
-    use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
+    use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage};
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::tensor_loader::RawTensorLoader;
 
@@ -1972,7 +1974,7 @@ mod cli_tests {
 
         let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
             Arc::clone(&motif_loader_impl),
-            Arc::new(AverageEuclideanDistanceStage::<RunCtxWithPermits>::new())
+            Arc::new(SlicesStats::<RunCtxWithPermits>::new())
         ));
 
         let motifs = store.read().list_motifs(run_ids[0])?;
@@ -1981,7 +1983,9 @@ mod cli_tests {
 
         for motif_id_raw in motifs {
             let motif_id_value = DataId::from(&(motif_id_raw as u32));
-            let motif_id = Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(motif_id_value.clone()), CacheArea::default()));
+            let motif_loader_input = MotifLoaderInput::all_slices(motif_id_value.clone());
+            let motif_id = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), CacheArea::default()));
+            let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, Metrics::EucDist, Aggr::Mean), CacheArea::default()));
 
             let motif = Arc::clone(&motif_loader_impl).run(
                 Arc::clone(&motif_id),
@@ -1998,7 +2002,7 @@ mod cli_tests {
                 .await?;
 
             let dist = Arc::clone(&clc_dist)
-                .run_cached(Arc::clone(&motif_id), ctx.branch(Some("find_motifs_clc_dist"), false, false))
+                .run_cached(clc_input, ctx.branch(Some("find_motifs_clc_dist"), false, false))
                 .await?
                 .with_data_ref(0, &mut ctx.branch(Some("find_motifs_dist_value"), false, false), None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
                 .await?;
