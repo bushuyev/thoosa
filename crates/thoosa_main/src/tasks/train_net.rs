@@ -9,9 +9,9 @@ use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
-use thoosa_shared::mono_key;
+use thoosa_shared::{mono_key, now_ms};
 use futures_util::{future::BoxFuture, StreamExt};
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use parking_lot::Mutex;
 use rand::random;
 use std::collections::{HashMap, HashSet};
@@ -20,7 +20,7 @@ use std::io::Write;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use tch::nn::{Optimizer, VarStore};
 use tch::Device;
 use thoosa_common::tho_device::ThoDevice;
@@ -221,7 +221,14 @@ where
 
         let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
-        let validation_step = 10;//TODO config
+
+
+        let validation_step = 1;//TODO config
+        //TODO config
+        let mut bad_epochs = 0u32;
+        let patience = 5u32;
+        let min_delta = 1e-4_f32;
+
         Box::pin(async move {
 
             let batch = (self.batch)(ctx.branch(Some("train_batch"), false, false), &run_config).await?;
@@ -242,11 +249,12 @@ where
                 None,
             );
 
-            let best_checkpoint_path = PathBuf::from("/tmp").join(format!("thoosa_train_net_best_{}.safetensors", random::<u64>()));
+            //TODO configure in ws
+            std::fs::create_dir_all("/tmp/thoosa")?;
+            let best_checkpoint_path = PathBuf::from("/tmp/thoosa").join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>()));
             let mut best_valid_loss = f32::MAX;
-            let mut bad_epochs = 0u32;
-            let patience = 5u32;
-            let min_delta = 1e-4_f32;
+
+
             let mut saved_best = false;
 
             for idx in 1..epochs {
@@ -329,15 +337,18 @@ where
 
                 }
 
-
                 print!(".");
                 std::io::stdout().flush()?;
             }
             if saved_best {
                 let mut vs_guard = vs.lock();
                 vs_guard.load(&best_checkpoint_path)?;
+                debug!("train: final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
+                std::fs::remove_file(best_checkpoint_path)?;
+            } else {
+                warn!("train: done without saving best for run_config={run_config:?}");
             }
-            debug!("train: final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
+
 
             Ok((best_valid_loss, params))
         })
