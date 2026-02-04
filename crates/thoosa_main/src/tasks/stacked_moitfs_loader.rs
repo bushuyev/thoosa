@@ -238,7 +238,7 @@ where
                 async move {
                     let motif_loader_input = MotifLoaderInput::find_motif_slices_only((motif_id as u32).into());
                     let motif_id_wrap = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), cache_area.into()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
-                    let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, Metrics::EucDist, Aggr::Mean), cache_area.into()));
+                    let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, Metrics::EucDist, Aggr::Mean(1.0)), cache_area.into()));
 
 
                     let avg_motif_dist = load_and_clc_avg_dist_clone

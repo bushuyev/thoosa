@@ -35,13 +35,13 @@ impl Default for Metrics {
 
 #[derive(Debug, Copy, Clone, DummyData)]
 pub enum Aggr {
-    Mean,
+    Mean(f32),
     Quantile(f32),
 }
 
 impl Default for Aggr {
     fn default() -> Self {
-        Self::Mean
+        Self::Mean(0.1)
     }
 }
 
@@ -276,7 +276,7 @@ fn aggregate_distances(distances: &Tensor, aggr: Aggr) -> Result<f32, ThoError> 
     }
 
     let scalar = match aggr {
-        Aggr::Mean => distances.f_mean(Kind::Float)?,
+        Aggr::Mean(k) =>k * distances.f_mean(Kind::Float)?,
         Aggr::Quantile(q) => {
             let q = q.clamp(0.0, 1.0) as f64;
             let quantile = distances.f_quantile_scalar(q, 0, true, "lower")?;
