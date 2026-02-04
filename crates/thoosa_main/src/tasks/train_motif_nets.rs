@@ -466,7 +466,7 @@ mod tests {
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::dims::{Batch, MotifProbability, Slice};
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifNetParams, OptConfig, ThoModuleWithStore, TrainMotifsNetsResult, TrainMotifsNetsRunConfigFields};
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, OptConfig, ThoModuleWithStore, TrainMotifsNetsResult, TrainMotifsNetsRunConfigFields};
     use thoosa_common::utils::{reset_print_options, test_net};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
@@ -551,15 +551,19 @@ mod tests {
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(100)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(11)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.001)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Step, Val::Int(1))
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Step, Val::Int(1)),
+                    // NamedVal::new(TrainMotifsNetsRunConfigFields::Channels, Val::Int(8)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Kernel, Val::Int(100)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Dummy)), Val::Int(1))
                 ]),
                 vec![
                     // NamedRange::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
                 ],
             ),
             vec![
-                Hyperparameter::UniformInt{name: TrainMotifsNetsRunConfigFields::NumLayers, lower: 3, upper: 4}
+                Hyperparameter::UniformInt{name: TrainMotifsNetsRunConfigFields::NumLayers, lower: 2, upper: 8},
+                Hyperparameter::UniformInt{name: TrainMotifsNetsRunConfigFields::Channels, lower: 4, upper: 32}
             ],
         );
 
@@ -578,7 +582,7 @@ mod tests {
             run_configs
         ));
 
-        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(1, 1))), CacheArea::default()));
+        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(100, 10))), CacheArea::default()));
 
         let mut run_ctx = mock_run_ctx::default(1);
         let run_ctx_branch = run_ctx.branch(Some("train_motif_nets_run"), false, false);

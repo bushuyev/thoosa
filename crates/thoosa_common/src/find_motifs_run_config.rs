@@ -64,7 +64,7 @@ impl FindMotifsRunConfig {
             step,
             window,
             filter,
-            slices_filter: SlicesFilter::DistanceRunningMean(DistanceRunningMeanK {
+            slices_filter: SlicesFilter::DistanceRunningMean(DistanceRunningMean {
                 k: mean_k.unwrap_or(0.5),
             }),
         }
@@ -130,12 +130,12 @@ impl Conv1Params {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub enum SlicesFilter {
-    DistanceRunningMean(DistanceRunningMeanK),
+    DistanceRunningMean(DistanceRunningMean),
     MaxDistance(MaxDistance),
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
-pub struct DistanceRunningMeanK {
+pub struct DistanceRunningMean {
     #[in_map]
     #[run_config]
     pub k: f32,
@@ -155,7 +155,7 @@ pub struct MaxDistance {
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use crate::find_motifs_run_config::{DistanceRunningMeanK, DistanceRunningMeanKRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue, SlicesFilterRangeOrValue};
+    use crate::find_motifs_run_config::{DistanceRunningMean, DistanceRunningMeanRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue, SlicesFilterRangeOrValue};
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use log::debug;
     use tch::Tensor;
@@ -182,8 +182,8 @@ mod tests {
                     padding: 1i64.into(),
                 },
             )),
-            slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(
-                DistanceRunningMeanKRangeOrValue { k: 0.5.into() },
+            slices_filter: SlicesFilterRangeOrValue::DistanceRunningMean(
+                DistanceRunningMeanRangeOrValue { k: 0.5.into() },
             ),
         };
         // debug!("{:#}", serde_json5::to_string(&rc).unwrap());
