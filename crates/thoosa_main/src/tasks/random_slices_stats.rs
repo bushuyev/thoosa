@@ -326,7 +326,7 @@ mod tests {
 
         let stage = Arc::new(RandomStats::new(Arc::clone(&store), loader, &ws));
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
-        let input = Arc::new(DevicesWrap::wrap(RandomStatsInput::new(4, run_id, Metrics::EucDist, Aggr::Mean), CacheArea::default()));
+        let input = Arc::new(DevicesWrap::wrap(RandomStatsInput::new(4, run_id, Metrics::EucDist, Aggr::Mean(1.0)), CacheArea::default()));
 
         let output = stage.run(input, ctx.write().branch(Some("random_stats"), false, false)).await?;
 
