@@ -6,32 +6,33 @@ use log::{debug, warn};
 use parking_lot::RwLock;
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::Rng;
-use tch::Kind::Float;
 use tch::Tensor;
 use cached_derive::Cached;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::utils::z_norm_dims;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_motifs::distance::average_euclidean_distance;
-use thoosa_motifs::pearson_corr::pearson_corr_distance_matrix_0_2_single;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::run_configs::RunId;
+use thoosa_shared::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
+use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
-use thoosa_shared::traits::WithId;
+use thoosa_shared::traits::{Adjustable, DataId, MonoMetrics, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
+use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
-use crate::tasks::motif_loader::load_motif_slices;
+use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, MotifSlicesSelector};
+use crate::tasks::motif_loader::{load_motif_slices, MotifMeta};
 
 pub const RANDOM_AVG_DIST_GROUP: &str = "random_avg_dist";//dummy group to load random resources, TODO - add proper method to SqlStore
 
@@ -70,7 +71,7 @@ impl WithId for RandomAvgDistInput {
 pub struct RandomAvgDist<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     store: Arc<RwLock<Box<dyn Store>>>,
     loader: Arc<L>,
@@ -81,7 +82,7 @@ where
 impl<L, C> RandomAvgDist<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
         Self {
@@ -96,7 +97,7 @@ where
 impl<L, C> Stage for RandomAvgDist<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     type In<'a> = RandomAvgDistInput;
     type Out = ThoTensor<ChannelsMotifsDists, SynKey>;
@@ -107,7 +108,7 @@ where
 impl<L, C> AsyncStage for RandomAvgDist<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RandomAvgDist::run"))]
     async fn run(
@@ -148,12 +149,13 @@ where
 
         let channels = self.ws.read().channels();
         assert_ne!(channels, 0, "no channels");
+        let clc_dist = Arc::new(AverageEuclideanDistanceStage::<C>::new());
 
         let mut avg_dists = Vec::with_capacity(channels as usize);
         for channel in 0..channels {
             let mut channel_ctx = ctx.branch(Some(&format!("random_avg_dist_channel_{channel}")), false, false);
-            let (_window, motif) = load_motif_slices(
-                0u32.into(),
+            let (window, motif) = load_motif_slices(
+                DataId(channel),
                 find_motifs_run_id,
                 channel as i64,
                 resources_map.clone(),
@@ -170,11 +172,22 @@ where
                 return Err(ThoError::new(format!("RandomAvgDist: not enough slices for channel {channel}, got {slice_count}")));
             }
 
-            //TODO options for z_norm_dims and pearson_corr
-            // let dist = average_euclidean_distance(&z_norm_dims(motif.t_ref(), &[1], 1e-8)?)?;
-            // let dist = pearson_corr_distance_matrix_0_2_single(motif.t_ref(), 1e-8)?.mean_dim(&[0,1][..], false, Float).double_value(&[]) as f32;
-            let dist = average_euclidean_distance(motif.t_ref())?;
-            avg_dists.push(dist);
+            let motif = Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif, MotifMeta { channel: channel as i64, find_motifs_run_id, window }), cache_area.into()));
+            let motif_size = motif.size().clone();
+            let dist_out_id = clc_dist.out_id(motif.id());
+            let dist = OOMHandler::new(vec![Adjusters::Input(Box::new(SplitsAdjuster::<MotifSlicesSelector, MonoMetrics<0, 2>>::new([2, -1].into())))], None)
+                .run(
+                    &clc_dist,
+                    Arc::clone(&motif),
+                    channel_ctx.branch(Some("random_avg_dist_dist"), false, false),
+                    Contexts::new(
+                        SplitsAdjusterContextImpl::new(motif_size, DistOutputBuilder::new(dist_out_id)),
+                        NoopRunnableContext {},
+                        NoopRunCtxContext {},
+                    ),
+                )
+                .await?;
+            avg_dists.push(dist.value());
         }
 
         let avg_t = Tensor::from_slice(avg_dists.as_slice())
