@@ -1011,7 +1011,7 @@ where
                                 let dist: Arc<DevicesWrap<AverageDistanceValue>> = clc_dist
                                     .run(
                                         Arc::new(DevicesWrap::wrap(
-                                            LoadMotifAndClcDistanceInput::new(MotifLoaderInput::all_slices(DataId(*motif_id)), Metrics::EucDist, Aggr::Mean),
+                                            LoadMotifAndClcDistanceInput::new(MotifLoaderInput::all_slices(DataId(*motif_id)), Metrics::EucDist, Aggr::Mean(1.0)),//TODO config
                                             CacheArea::default(),
                                         )),
                                         clc_ctx,

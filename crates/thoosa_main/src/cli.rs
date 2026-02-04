@@ -1181,7 +1181,7 @@ async fn plot_motif(
     let select_motif_run_ids_sfx = select_motif_run_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
     let motif_loader_input = MotifLoaderInput::new(DataId(motif_id as u32), select_motif_run_ids);
     let motif_id_arc = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), CacheArea::default()));
-    let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, Metrics::EucDist, Aggr::Mean), CacheArea::default()));
+    let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, Metrics::EucDist, Aggr::Mean(1.0)), CacheArea::default()));
 
     let motif = Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_arc),
@@ -1985,7 +1985,7 @@ mod cli_tests {
             let motif_id_value = DataId::from(&(motif_id_raw as u32));
             let motif_loader_input = MotifLoaderInput::all_slices(motif_id_value.clone());
             let motif_id = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), CacheArea::default()));
-            let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, Metrics::EucDist, Aggr::Mean), CacheArea::default()));
+            let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, Metrics::EucDist, Aggr::Mean(0.1)), CacheArea::default()));
 
             let motif = Arc::clone(&motif_loader_impl).run(
                 Arc::clone(&motif_id),

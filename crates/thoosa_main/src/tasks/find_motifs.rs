@@ -175,10 +175,10 @@ where
                         }
                         SlicesFilter::MaxDistance(v) => {
 
-                            let dists = avg_dists_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_config.id.unwrap(), Metrics::EucDist, Aggr::Mean), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
+                            let dists = avg_dists_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_config.id.unwrap(), Metrics::EucDist, Aggr::Quantile(0.1)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
                             let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
-                                ThoTensor::new(t.id().clone(), v.k * t.t.view((-1, 1, 1)))
+                                ThoTensor::new(t.id().clone(), t.t.view((-1, 1, 1)))
                             })?;
                             MasksCtx::MaxDist{ dists }
                         }

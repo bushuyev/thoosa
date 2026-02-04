@@ -278,8 +278,8 @@ impl OutputBuilder for DistOutputBuilder {
             0.0
         } else {
             match self.aggr {
-                Aggr::Mean => self.values.iter().sum::<f32>() / self.values.len() as f32,
-                Aggr::Quantile(_) => self.values.into_iter().reduce(f32::max).unwrap_or(0.0),
+                Aggr::Mean(k) => k * self.values.iter().sum::<f32>() / self.values.len() as f32,
+                Aggr::Quantile(_) =>  self.values.into_iter().reduce(f32::max).unwrap_or(0.0),
             }
         };
 
@@ -338,7 +338,7 @@ mod tests {
         let stage = Arc::new(LoadMotifAndClcDistanceStage::new(motif_loader, clc_stage));
 
         let input = Arc::new(DevicesWrap::wrap(
-            LoadMotifAndClcDistanceInput::new(MotifLoaderInput::all_slices(DataId::from(&42u32)), Metrics::EucDist, Aggr::Mean),
+            LoadMotifAndClcDistanceInput::new(MotifLoaderInput::all_slices(DataId::from(&42u32)), Metrics::EucDist, Aggr::Mean(0.1)),
             CacheArea::default(),
         ));
         let expected_id = stage.out_id(input.id());
