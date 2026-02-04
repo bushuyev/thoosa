@@ -224,19 +224,20 @@ impl SelectMotifsRunConfig {
     pub fn new() -> Self {
         Self {
             id: None,
-            motif_selector: MotifSelector::ByLabelVariance(ByLabelVarianceConfig::default()),
+            motif_selector: MotifSelector::ByAvgEucDist(ByAvgEucDist::default()),
         }
     }
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
-pub struct ByLabelVarianceConfig {
+pub struct ByAvgEucDist {
     #[in_map]
-    pub _dummy: u32, //TODO fix ThoosaRunConfig to let empty configs
+    #[run_config]
+    pub k: f32,
 }
 
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub enum MotifSelector {
-    ByLabelVariance(ByLabelVarianceConfig), //TODO
+    ByAvgEucDist(ByAvgEucDist), //TODO
 }

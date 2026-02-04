@@ -787,6 +787,10 @@ where
         debug!("SelectMotifsStage::run: self.run_configs.len={}", self.run_configs.len());
         for select_motifs_run_config in self.run_configs.iter() {
 
+            match select_motifs_run_config.motif_selector {
+                MotifSelector::ByAvgEucDist(_) => {}
+            }
+
             let mut channels_motifs_added_slices:Arc<Vec<tokio::sync::RwLock<HashMap<DataId, HashSet<IdSlice>>>>> = Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
 
 
@@ -999,38 +1003,30 @@ where
                     let mut ctx_for_motif = ctx_for_channel.branch(Some("select_motifs_motif"), false, false);
                     async move {
 
-                        #[allow(unreachable_patterns)]
-                        match &motif_selector {
-                            //TODO add relevant MotifSelector variants
-                            MotifSelector::ByLabelVariance(_) => {
-                                //TODO mock it in tests
-                                #[cfg(not(debug_assertions))]
-                                ML::cache().await.remove(&ML::out_id(&clc_dist.motif_loader, &motif_id)); //purges cache so motif is reloaded in clc_dist and its average dist recalculated - TODO add flag to motif loader input to trigger motif reload + load only from added resources
 
-                                let clc_ctx = ctx_for_motif.branch(Some("select_motifs_clc_dist"), false, false);
-                                let dist: Arc<DevicesWrap<AverageDistanceValue>> = clc_dist
-                                    .run(
-                                        Arc::new(DevicesWrap::wrap(
-                                            LoadMotifAndClcDistanceInput::new(MotifLoaderInput::all_slices(DataId(*motif_id)), Metrics::EucDist, Aggr::Mean(1.0)),//TODO config
-                                            CacheArea::default(),
-                                        )),
-                                        clc_ctx,
-                                    )
-                                    .await
-                                    .map_err(|e| {
-                                        error!("run clc_dist for motif_id={motif_id} failed: {e:?}");
-                                        e
-                                    })?;
+                        //TODO mock it in tests
+                        #[cfg(not(debug_assertions))]
+                        ML::cache().await.remove(&ML::out_id(&clc_dist.motif_loader, &motif_id)); //purges cache so motif is reloaded in clc_dist and its average dist recalculated - TODO add flag to motif loader input to trigger motif reload + load only from added resources
 
-                                with_data!(ctx_for_motif.branch(Some("select_motifs_dist_value"), false, false), dist; |_ctx, dist:&AverageDistanceValue|{
-                                    Ok::<_, ThoError>((*motif_id, dist.value() as f64))
-                                })
-                            }
-                            v => {
-                                warn!("SelectMotifsStage::run: unsupported motif selector: {v:?}");
-                                Ok((*motif_id, f64::MAX)) //TODO
-                            }
-                        }
+                        let clc_ctx = ctx_for_motif.branch(Some("select_motifs_clc_dist"), false, false);
+                        let dist: Arc<DevicesWrap<AverageDistanceValue>> = clc_dist
+                            .run(
+                                Arc::new(DevicesWrap::wrap(
+                                    LoadMotifAndClcDistanceInput::new(MotifLoaderInput::all_slices(DataId(*motif_id)), Metrics::EucDist, Aggr::Mean(1.0)),//TODO config
+                                    CacheArea::default(),
+                                )),
+                                clc_ctx,
+                            )
+                            .await
+                            .map_err(|e| {
+                                error!("run clc_dist for motif_id={motif_id} failed: {e:?}");
+                                e
+                            })?;
+
+                        with_data!(ctx_for_motif.branch(Some("select_motifs_dist_value"), false, false), dist; |_ctx, dist:&AverageDistanceValue|{
+                            Ok::<_, ThoError>((*motif_id, dist.value() as f64))
+                        })
+
                     }
                 })
 
@@ -1100,7 +1096,7 @@ pub mod tests {
     use thoosa_shared::runner::global_ctx;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::runner::permits::MAX_PERMITS;
-    use thoosa_common::find_motifs_run_config::{ByLabelVarianceConfig, FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig};
+    use thoosa_common::find_motifs_run_config::{ByAvgEucDist, FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig};
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::utils::{draw_function_plot, reset_print_options, vec_f32_from, z_norm, z_norm_2};
     use thoosa_common::ws::mock_ws_simp;
@@ -1205,7 +1201,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }))],
             vec![find_motifs_run_id],
             1000,
             None,
@@ -1283,7 +1279,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }))],
             vec![find_motifs_run_id],
             1000,
             None
@@ -1367,7 +1363,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }))],
             vec![find_motifs_run_id],
             1000,
             None
@@ -1510,10 +1506,10 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }))],
             vec![find_motifs_run_id],
-            10000,//TODO fails with max_batch 1000
-            Some(801)//TODO check if ran through OOMHandler
+            10000, //TODO fails with max_batch 1000
+            Some(801) //TODO check if ran through OOMHandler
         ));
 
 
@@ -1839,9 +1835,9 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }))],
             vec![find_motifs_run_id],
-            30_000_000,//slices
+            30_000_000, //slices
             None
         ));
 

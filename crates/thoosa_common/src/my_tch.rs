@@ -458,6 +458,94 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
 }
 
 #[derive(Debug)]
+pub struct MySharpeningHead1d {
+    cls: nn::Conv1D,
+    k_mu: i64,
+    k_hat: i64,
+    p: f64,
+    temperature: f64,
+}
+
+impl MySharpeningHead1d {
+    pub fn new(vs: &nn::Path, in_channels: i64, out_channels: i64, k_mu: i64, k_hat: i64, p: f64, temperature: f64) -> Result<Self, ThoError> {
+        if in_channels <= 0 {
+            return Err(ThoError::new(format!("MySharpeningHead1d::new in_channels must be > 0, got {in_channels}")));
+        }
+        if out_channels <= 0 {
+            return Err(ThoError::new(format!("MySharpeningHead1d::new out_channels must be > 0, got {out_channels}")));
+        }
+        if k_mu <= 0 || k_mu % 2 == 0 {
+            return Err(ThoError::new(format!("MySharpeningHead1d::new k_mu must be an odd positive number, got {k_mu}")));
+        }
+        if k_hat <= 0 || k_hat % 2 == 0 {
+            return Err(ThoError::new(format!("MySharpeningHead1d::new k_hat must be an odd positive number, got {k_hat}")));
+        }
+        if p <= 0.0 {
+            return Err(ThoError::new(format!("MySharpeningHead1d::new p must be > 0, got {p}")));
+        }
+        if temperature <= 0.0 {
+            return Err(ThoError::new(format!("MySharpeningHead1d::new temperature must be > 0, got {temperature}")));
+        }
+
+        let cfg = ConvConfig { bias: true, ..ConvConfig::default() };
+        let cls = nn::conv1d(vs / "cls", in_channels, out_channels, 1, cfg);
+
+        Ok(Self { cls, k_mu, k_hat, p, temperature })
+    }
+
+    fn same_pad(kernel: i64) -> (i64, i64) {
+        (kernel / 2, kernel - 1 - kernel / 2)
+    }
+
+    fn same_avgpool1d(x: &Tensor, kernel: i64) -> Result<Tensor, ThoError> {
+        let (pad_left, pad_right) = Self::same_pad(kernel);
+        let padded = x.f_pad([pad_left, pad_right], "replicate", 0.0)?;
+        padded.f_avg_pool1d(kernel, 1, 0, false, true).map_err(|e| e.into())
+    }
+
+    fn morph_opening1d(x: &Tensor, kernel: i64) -> Result<Tensor, ThoError> {
+        let (pad_left, pad_right) = Self::same_pad(kernel);
+        let erode = x
+            .f_neg()?
+            .f_pad([pad_left, pad_right], "replicate", 0.0)?
+            .f_max_pool1d(kernel, 1, 0, 1, false)?
+            .f_neg()?;
+        erode
+            .f_pad([pad_left, pad_right], "replicate", 0.0)?
+            .f_max_pool1d(kernel, 1, 0, 1, false)
+            .map_err(|e| e.into())
+    }
+
+    pub fn forward_with_thp(&self, sims: &Tensor) -> Result<(Tensor, Tensor), ThoError> {
+        let sims_shape = sims.size();
+        if sims_shape.len() != 3 {
+            return Err(ThoError::new(format!("MySharpeningHead1d::forward_with_thp expected [B,C,T], got {:?}", sims_shape)));
+        }
+
+        let mu = Self::same_avgpool1d(sims, self.k_mu)?;
+        let mu2 = Self::same_avgpool1d(&sims.f_mul(sims)?, self.k_mu)?;
+        let var = mu2.f_sub(&mu.f_mul(&mu)?)?.f_clamp_min(1e-12)?;
+        let z = sims.f_sub(&mu)?.f_div(&var.f_sqrt()?)?;
+
+        let opening = Self::morph_opening1d(&z, self.k_hat)?;
+        let th = z.f_sub(&opening)?;
+        let mut thp = th.f_relu()?;
+        if (self.p - 1.0).abs() > f64::EPSILON {
+            thp = thp.f_pow_tensor_scalar(self.p)?;
+        }
+
+        let logits = self.cls.forward(&thp) / self.temperature;
+        Ok((logits, thp))
+    }
+}
+
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MySharpeningHead1d {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        self.forward_with_thp(t.as_ref()).map(|(logits, _thp)| logits.into())
+    }
+}
+
+#[derive(Debug)]
 pub struct MyAvgPool1d {
     kernel_size: i64,
     stride: i64,
@@ -903,6 +991,21 @@ mod tch_tests {
         assert_eq!(vec![4, 2, 8], out.size());
         assert!(out.as_ref().max().double_value(&[]) <= 1.0001);
         assert!(out.as_ref().min().double_value(&[]) >= -1.0001);
+
+        Ok(())
+    }
+
+    #[test]
+    pub fn test_sharpening_head_1d_shapes() -> Result<(), ThoError> {
+        let vs = nn::VarStore::new(Cpu);
+        let head = super::MySharpeningHead1d::new(&vs.root(), 4, 2, 5, 5, 1.7, 0.5)?;
+        let sims = Tensor::randn([3, 4, 16], (Kind::Float, Device::Cpu));
+
+        let (logits, thp) = head.forward_with_thp(&sims)?;
+
+        assert_eq!(vec![3, 2, 16], logits.size());
+        assert_eq!(vec![3, 4, 16], thp.size());
+        assert!(thp.min().double_value(&[]) >= -1e-7);
 
         Ok(())
     }

@@ -458,7 +458,7 @@ impl TrainMotifsNetsArgs {
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct MotifConvNetArgs {
     #[in_map]
-    pub _dummy: u32,
+    pub _dummy: u32, //TODO fix ThoosaRunConfig to let empty configs
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -1519,7 +1519,7 @@ where
         let best_config = opt.optimize().await;
 
         debug!("opt_train: best_config={:?}", best_config);
-        
+
         info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={} min_var_store={min_var_store:?}", min_loss.read());
     }
     Arc::into_inner(min_var_store)
