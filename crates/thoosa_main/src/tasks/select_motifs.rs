@@ -787,10 +787,6 @@ where
         debug!("SelectMotifsStage::run: self.run_configs.len={}", self.run_configs.len());
         for select_motifs_run_config in self.run_configs.iter() {
 
-            match select_motifs_run_config.motif_selector {
-                MotifSelector::ByAvgEucDist(_) => {}
-            }
-
             let mut channels_motifs_added_slices:Arc<Vec<tokio::sync::RwLock<HashMap<DataId, HashSet<IdSlice>>>>> = Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
 
 
