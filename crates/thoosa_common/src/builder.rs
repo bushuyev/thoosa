@@ -5,7 +5,7 @@ use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
-use crate::my_tch::{AdaptiveMaxPool1d, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, Split1, ThoModule, my_linear};
+use crate::my_tch::{AdaptiveMaxPool1d, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, Split1, ThoModule, my_linear};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 use crate::tho_tensor::ThoTensor;
@@ -87,6 +87,15 @@ pub enum Node {
         in_channels: u32,
         out_channels: u32,
         config: ConvConfig,
+    },
+    SharpeningHead1d {
+        path: String,
+        in_channels: u32,
+        out_channels: u32,
+        k_mu: u32,
+        k_hat: u32,
+        p: f32,
+        temperature: f32,
     },
     Conv2d {
         kernel: u32,
@@ -252,6 +261,24 @@ impl Node {
                 out_channels as i64,
                 kernel as i64,
                 config,
+            )?),
+
+            Node::SharpeningHead1d {
+                path,
+                in_channels,
+                out_channels,
+                k_mu,
+                k_hat,
+                p,
+                temperature,
+            } => Box::new(MySharpeningHead1d::new(
+                &(vs / path),
+                in_channels as i64,
+                out_channels as i64,
+                k_mu as i64,
+                k_hat as i64,
+                p as f64,
+                temperature as f64,
             )?),
 
             Node::BatchNorm {
@@ -433,6 +460,19 @@ impl SeqBuilder {
         self.num_features = clc_conv1d_out(self.num_features, kernel, config).unwrap();
         self.kernel = Some(kernel);
 
+        self
+    }
+
+    pub fn sharpening_head_1d<P:ToString>(&mut self, path: P, in_channels: u32, out_channels: u32, k_mu: u32, k_hat: u32, p: f32, temperature: f32) -> &mut Self {
+        self.elts.push(Node::SharpeningHead1d {
+            path: path.to_string(),
+            in_channels,
+            out_channels,
+            k_mu,
+            k_hat,
+            p,
+            temperature,
+        });
         self
     }
 
