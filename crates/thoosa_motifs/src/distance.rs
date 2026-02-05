@@ -539,7 +539,7 @@ mod distance_tests {
     use thoosa_common::utils::{
         cuda_mem, from, hist_1_dim, lin_iter,
         lin_t, plot_series, plot_series_with_points, reset_print_options,
-        skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from,
+        skewness_kurtosis_1_dim, three_sigs_tensor, to_vec_f32,
     };
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::colors_iter::DistinctColorIter;

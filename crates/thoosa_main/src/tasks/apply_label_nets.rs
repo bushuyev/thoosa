@@ -327,7 +327,7 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets;
     use thoosa_common::train_nets::{LinLenNetParams, ConvNetParams, LabelNetParams, LabelNetTypeParams, MotifNetParams, ThoModuleWithStore};
-    use thoosa_common::utils::{assert_close, vec_f32_from};
+    use thoosa_common::utils::{assert_close, to_vec_f32};
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_shared::runner::common::cachable::DevicesWrap;
     use thoosa_shared::runner::cache_areas::CacheArea;
@@ -494,7 +494,7 @@ mod tests {
 
         with_data!(run_ctx.branch(Some("apply_label_nets_assert".into()), false, false), out; |_ctx, out:&ThoTensor<LabelProbability, SynKey>|{
             assert_eq!(out.t_ref().size(), vec![3, 1]);
-            let vals = vec_f32_from(out.t_ref());
+            let vals = to_vec_f32(out.t_ref());
             assert_close(vals[0], 0.3, 1e-4);
             assert_close(vals[1], 0.6, 1e-4);
             assert_close(vals[2], 1.5, 1e-4);

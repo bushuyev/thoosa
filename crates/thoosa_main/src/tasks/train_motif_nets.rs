@@ -25,7 +25,7 @@ use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
 use thoosa_common::train_nets::{MotifNetParams, MotifNetTypeArgs, OptConfig, TensorsDataBatch, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, opt_train};
-use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, plot_t, vec_f32_from, DataBatch, DummyListener};
+use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, plot_t, to_vec_f32, DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_run_config_args::OptRunConfigSource;

@@ -291,8 +291,7 @@ where
     std::io::stdout().flush()?;
 
     let tensors_path = ws.read().tensors_path().clone();
-    let tensors_path_2 = tensors_path.clone();
-    let tensors_path_runner = ws.read().tensors_path().clone();
+    let tensors_path_for_loader = tensors_path.clone();
 
     GlobalCtx::init_devices(2);
 
@@ -300,7 +299,7 @@ where
         move |key, _| {
             ThoTensor::new(
                 SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
-                Tensor::load(tensors_path_2.join(format!(
+                Tensor::load(tensors_path_for_loader.join(format!(
                     "{}_{}.pt",
                     key.import_id(),
                     key.file_stem()
@@ -1556,19 +1555,12 @@ mod cli_tests {
     };
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
+    use thoosa_common::my_tch::ThoModule;
     use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Simple};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{
-        lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifNetParams, OptConfig,
-        TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig,
-        TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue,
-        TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue,
-    };
-    use thoosa_common::utils::{
-        from, lin_t, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1,
-        three_sigs_tensor, vec_f32_from,
-    };
+    use thoosa_common::train_nets::{lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
+    use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, plot_t, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
     use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
@@ -2061,4 +2053,81 @@ mod cli_tests {
         println!("test_log_info");
     }
      */
+
+    #[test]
+    fn test_apply_moitf_net() -> Result<(), ThoError>{
+        let ws = Arc::new(RwLock::new(FsWorkspace::new("/home/bu/tmp/ws_test_hbac", 20, 684400, 200)?));
+        let tensors_path = ws.read().tensors_path().clone();
+        let store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
+
+        let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
+            move |key, _| {
+                ThoTensor::new(
+                    SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
+                    Tensor::load(tensors_path.join(format!(
+                        "{}_{}.pt",
+                        key.import_id(),
+                        key.file_stem()
+                    )))?,
+                )
+            },
+            ThoDevice::from(Device::Cpu),//it's always cpu
+        ));
+
+
+        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::new(
+            Arc::clone(&store),
+            Arc::clone(&loader),
+            &ws
+        ));
+
+
+        let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
+            Arc::clone(&motif_loader_impl), // as Arc<dyn MotifLoaderStage<Output = <SlicesStats as Stage>::In<'static>>>,
+            Arc::new(SlicesStats::<RunCtxWithPermits>::new()),
+        ));
+
+
+
+        let t = Tensor::load("/home/bu/tmp/ws_test_hbac/tensors/1_2722809500.pt")?;
+
+        let channel = 16;
+        let channel_16_t = t.i((channel, ..)).view((1, -1));
+        plot_t(&channel_16_t, "1_2722809500")?;
+        let t_1 = white_tophat1d(&channel_16_t, 101)?;
+        debug!("t_1={:?}", t_1.size());
+        let mask = local_max_1d(&t_1.view((1,1,-1)), 101)?;
+        let t_1_masked = t_1 * mask;
+        plot_t(&t_1_masked.squeeze_dim(1), "1_2722809500_t_1_masked")?;
+
+        // let motif_id= 15781;
+        //
+        //
+        //
+        // let (params, module)  = ws.read().load_motif_net(&PathBuf::from(format!("{channel}/{motif_id}_3852/")), &Cuda(0))?;
+        // match params.net_type {
+        //     MotifNetTypeParams::LinNetParams(_) => {
+        //         debug!("LinNetParams");
+        //         todo!()
+        //     }
+        //     MotifNetTypeParams::ConvNetParams(_) => {
+        //         debug!("ConvNetParams");
+        //         todo!()
+        //     }
+        //     MotifNetTypeParams::CosineNetParams(MotifCosineNetParams{ num_features, stride, channels, kernel }) => {
+        //         debug!("CosineNetParams");
+        //
+        //         let out = module.tho_forward(&t.unfold(0, num_features as i64, stride as i64).into(), None, false)?;
+        //
+        //         debug!("out.size={:?}", out.size());
+        //
+        //         plot_t(&out.t.view((1, -1)), "7511 applied")?;
+        //     }
+        // }
+
+
+
+        Ok(())
+    }
+
 }

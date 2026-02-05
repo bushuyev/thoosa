@@ -18,7 +18,7 @@ use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::nn::{LinearConfig, Optimizer};
 use tch::nn::VarStore;
 use tch::Kind::Float;
-use tch::{nn, Device, IndexOp, Kind, Tensor};
+use tch::{nn, Device, IndexOp, Kind, TchError, Tensor};
 use thoosa_shared::{gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoError};
 use torch_sys::cuda::atc_cuda_device_count;
 
@@ -397,12 +397,16 @@ where
     T::try_from(t).unwrap()
 }
 
-pub fn vec_f32_from(t: &Tensor) -> Vec<f32> {
+pub fn to_vec_f32(t: &Tensor) -> Vec<f32> {
     from::<Vec<f32>>(&t.reshape(-1))
 }
 
-pub fn vec_f64_from(t: &Tensor) -> Vec<f64> {
+pub fn to_vec_f64(t: &Tensor) -> Vec<f64> {
     from::<Vec<f64>>(&t.reshape(-1))
+}
+
+pub fn to_vec_i64(t: &Tensor) -> Vec<i64> {
+    from::<Vec<i64>>(&t.reshape(-1))
 }
 
 pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoError> {
@@ -637,12 +641,551 @@ pub fn mask_from_lengths(lengths: &[i64], max_len: i64, device: Device) -> Resul
 }
 
 
+pub fn z_norm(t: &Tensor, dim: i64) -> Tensor {
+    let mean_t = t.mean_dim(dim, true, Float);
+    let std_t = t.std(false);
+    let z_t = (t - mean_t) / std_t;
+    z_t
+}
+
+pub fn z_norm_2(t_0: &Tensor, _dim: i64) -> Result<Tensor, ThoError> {
+    let std = t_0.f_std_dim(1, true, true)?;
+    //TODO std - 0
+    Ok(t_0.f_sub(&t_0.f_mean_dim(1, true, Float)?)?.f_div(&std)?)
+}
+
+pub fn z_norm_dims(x: &Tensor, dims: &[i64], eps: f64) -> Result<Tensor, ThoError> {
+    // Mean over dims (keepdim=true so it broadcasts back)
+    let mean = x.f_mean_dim(dims, /*keepdim=*/true, Kind::Float)?;
+
+    // Variance over dims (unbiased=false = "population" variance, typical for normalization)
+    let var = x.f_var_dim(dims, /*unbiased=*/false, /*keepdim=*/true)?;
+
+    // std = sqrt(var + eps)
+    // Prefer f_add_scalar if available in your tch version.
+    let std = var.f_add_scalar(eps)?.f_sqrt()?;
+
+    // (x - mean) / std
+    let centered = x.f_subtract(&mean)?;
+    Ok(centered.f_divide(&std)?)
+}
+
+pub fn skewness_kurtosis_1_dim(dists: &Tensor) -> (Tensor, Tensor) {
+    let mean = dists.mean_dim(1, true, Kind::Float);
+
+    let std = dists.std_dim(1, true, true);
+
+    let std = &std + 1e-6;
+
+    //z score = (x - mean) / std
+    let z = (dists - &mean) / &std;
+
+    // Compute skewness: skewness = mean(z^3)
+    let skewness = z.pow_tensor_scalar(3).mean_dim(1, false, Float);
+
+    // Compute kurtosis: kurtosis = mean(z^4) - 3
+    let kurtosis = z.pow_tensor_scalar(4).mean_dim(1, false, Float) - 3.0;
+
+    (skewness, kurtosis)
+}
+
+pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, ThoError> {
+    let norm_01 = norm_2(slice_01, dim)?;
+    let norm_02 = norm_2(slice_02, dim)?;
+    Ok(norm_01.f_tensordot(&norm_02, [dim], [dim])?.f_diag(0)?)
+}
+
+pub fn self_dot(
+    t1: &Tensor,
+    i_0: i64,
+    i_1: i64,
+    dim: i64,
+    step: i64,
+    d_i: i64,
+) -> Result<Tensor, ThoError> {
+    let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0 + d_i), step)?;
+    let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1 + d_i), step)?;
+
+    Ok(slice_1.f_tensordot(&slice_2, [dim], [dim])?.f_diag(0)?)
+}
+
+pub fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
+    t.view(dim) / t.dot(&t).sqrt()
+}
+
+pub fn norm_2(t: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
+    let denom = t
+        .f_tensordot(&t, dim, dim)?
+        .f_diag(0)?
+        .f_sqrt()?
+        .f_view([1, -1])?
+        .f_transpose(0, 1)?;
+    Ok(t.f_div(&denom)?)
+}
+
+pub fn lin_t(n: u32) -> Tensor {
+    // Tensor::from(lin_iter(n).collect::<Vec<f32>>().as_slice())
+    Tensor::arange(n as i64, FLOAT_CPU)
+}
+
+pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Tensor {
+    let end = size.iter().fold(1, |a, v| a * *v);
+
+    debug!("lin_for_size: end={end}");
+
+    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, *device)))
+        .expect("f_arange failed")
+        .view(&size[..]);
+
+    t = t.set_requires_grad(false);
+    match kind {
+        Kind::Uint8 | Kind::Int8 | Kind::Int16 | Kind::Int | Kind::Int64 => {
+            t *= k as i32;
+        }
+        _ => {
+            t *= k;
+        }
+    }
+
+    trace!("lin_for_size:t=\n{t}");
+    debug!("lin_for_size: t.size()={:?}", t.size());
+
+    t
+}
+
+pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
+    (0..n).map(|x| x as f32)
+}
+
+use crate::dims::ThoBatch;
+use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
+
+//TODO remove?
+pub trait DataBatch<D: Dims> {
+    /// returns (inputs, labels)
+    fn train_batch(&self) -> (ThoBatch<D>, Tensor);
+    fn valid_batch(&self) -> (ThoBatch<D>, Tensor);
+}
+
+
+pub trait TrainListener: Send + Sync {
+    fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<'_, ListenerResponse> {
+        async {ListenerResponse::Nope}.boxed()
+    }
+    fn on_valid_cycle(&mut self, cycle: u32, loss: f32) -> ListenerResponse;
+}
+
+pub enum ListenerResponse {
+    Stop,
+    UpdateLR(f64),
+    Nope,
+}
+
+
+pub fn two_sigs(n: u32) -> (Tensor, Tensor) {
+    let sig_1 = Tensor::from_slice(
+        pulses_in_const(
+            n,
+            &[
+                // (10, pulse_v(8., 3., 20, 2.)),
+                // (30, pulse_v(8., 3., 20, 2.))
+                (100, pulse_v(80., 30., 200, 20.)),
+                (300, pulse_v(80., 30., 200, 20.)),
+            ],
+        )
+            .as_slice(),
+    );
+
+    let sig_2 = Tensor::from_slice(pulse_in_rand(n, &[], 10., 0.001, 0.1).as_slice());
+    (sig_1, sig_2)
+}
+
+//f(x)=-sin(3x)+x^2+0.7 *x
+pub fn sin3_pow2(
+    n: i64,
+    min: f32,
+    max: f32,
+    with_noise: Option<f32>,
+) -> (Tensor, Tensor, Vec<f32>) {
+    let mut rng = rand::rng();
+    let x = (0..n)
+        .map(|i| min + (i as f32 / (n - 1) as f32) * (max - min))
+        .into_iter()
+        .collect::<Vec<f32>>();
+
+    let y_train_full = Tensor::from_slice(
+        x.iter()
+            .map(|x| sin3_pow2_with_noise_f(with_noise, &mut rng, *x))
+            .collect::<Vec<f32>>()
+            .as_slice(),
+    )
+        .view((1, -1))
+        .totype(Float); //.transpose(0,1);
+
+    let x_t = Tensor::from_slice(x.as_slice()).totype(Float).view((-1, 1));
+
+    (y_train_full, x_t, x)
+}
+
+fn sin3_pow2_with_noise_f(with_noise: Option<f32>, rng: &mut ThreadRng, x: f32) -> f32 {
+    sin3_pow2_f(x) + with_noise.map(|v| v * rng.random::<f32>()).unwrap_or(0.)
+}
+
+pub fn sin3_pow2_f(x: f32) -> f32 {
+    -(3. * x).sin() + x.powi(2) + 0.7 * x
+}
+
+pub fn sin3_pow2_t(t: &Tensor) -> Tensor {
+    t.multiply_scalar(-3.).sin() + t.pow_tensor_scalar(2) + t.multiply_scalar(0.7) //TODO noise?
+}
+
+pub fn gauss_t(μ: f32, σ: f32, n: i64) -> Tensor {
+    Tensor::from(gauss_i(μ, σ, n).collect::<Vec<_>>().as_slice())
+}
+
+pub fn pulse_t(μ: f32, σ: f32, n: i64, f: f32) -> Tensor {
+    Tensor::from(pulse_v(μ, σ, n, f).as_slice())
+}
+
+pub fn three_sigs_tensor(
+    n: u32,
+    sig_0_v: &Vec<f32>,
+    sig_1_v: &Vec<f32>,
+    sig_2_v: &Vec<f32>,
+) -> (Tensor, Tensor, Tensor, Tensor) {
+    let t_0_0 = t_0_0(n, sig_0_v, sig_2_v);
+
+    // debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
+
+    let t_0_1 = t_0_1(n, sig_0_v, sig_2_v);
+
+    // debug!("t_0_1 mean={} max-min={}", t_0_1.mean(None).double_value(&[]), t_0_1.max() - t_0_1.min());
+
+    let t_1_0 = t_1_0(n, sig_1_v, sig_2_v);
+
+    // debug!("t_1_0 mean={} max-min={}", t_1_0.mean(None).double_value(&[]), t_1_0.max() - t_1_0.min());
+
+    let t_1_1 = t_1_1(n, sig_1_v, sig_2_v);
+    (t_0_0, t_0_1, t_1_0, t_1_1)
+}
+
+pub fn t_0_0(n: u32, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+    Tensor::vstack(&[
+        Tensor::from_slice([sig_0_v.clone(), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice()),
+    ])
+}
+
+pub fn t_0_1(n: u32, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+    Tensor::vstack(&[
+        Tensor::from_slice([saw(n), sig_0_v.clone(), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
+    ])
+}
+
+pub fn t_1_0(n: u32, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+    Tensor::vstack(&[
+        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), sig_1_v.clone(), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice()),
+    ])
+}
+
+pub fn t_1_1(n: u32, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+    Tensor::vstack(&[
+        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([sig_1_v.clone(), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
+    ])
+}
+
+pub fn reset_print_options() {
+    let mut printer_options = PrinterOptions::default();
+
+    unsafe {
+        let printer_options_ptr: *mut PrinterOptions = &mut printer_options;
+
+        let threshold_ptr =
+            (printer_options_ptr as *mut u8).add(size_of::<usize>() * 1) as *mut usize;
+        let line_width_ptr =
+            (printer_options_ptr as *mut u8).add(size_of::<usize>() * 3) as *mut usize;
+
+        ptr::write(threshold_ptr, usize::MAX);
+        ptr::write(line_width_ptr, 10_000);
+    }
+    tch::display::set_print_options(printer_options);
+}
+
+pub fn tensor_mem_size(t: &Tensor) -> usize {
+    t.numel() * t.kind().elt_size_in_bytes()
+}
+
+pub fn vs_mem_size(opt: &VarStore) -> usize {
+    opt.trainable_variables()
+        .iter()
+        .map(|t| tensor_mem_size(t))
+        .sum()
+}
+
+pub fn optimizer_mem_size(opt: &Optimizer) -> usize {
+    opt.trainable_variables()
+        .iter()
+        .map(|t| tensor_mem_size(t))
+        .sum()
+}
+
+pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad: bool) {
+    for (name, tensor) in vsd.variables() {
+        if name.contains("batch_norm") {
+            continue;
+        }
+        let freezing = name.starts_with(subpath);
+        debug!("freeze_subpath: name={name:?} freezing={freezing}");
+
+        if freezing {
+            _ = tensor.set_requires_grad(requires_grad);
+        }
+    }
+}
+
+//TODO check GPT
+pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&[i64]>, x_0: &Tensor, lengths_0: Option<&[i64]>) -> Result<(Tensor, Option<Vec<i64>>, Tensor), ThoError> {
+    let [ma, _na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
+    let [mb, _nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
+    // assert_eq!((na, nb), (na, na), "X1 and X0 must have same n");
+    // assert_eq!(ma, mb, "X1 and X0 must have same m");
+    assert_eq!(x_0.device(), x_1.device(), "A and B must be on the same device");
+
+    let device = x_0.device();
+    let two_m = ma * 2;
+
+    // X0 = [A; B]
+    let x0 = Tensor::f_cat(&[x_1, x_0], 0)?;
+
+    // Choose a reasonable dtype for Y (float if A is floating, else Float)
+    let y_kind = match x_0.kind() {
+        Kind::Double | Kind::Float | Kind::Half | Kind::BFloat16 => x_0.kind(),
+        _ => Kind::Float,
+    };
+
+    // Y0 = [ones(m,1); zeros(m,1)]
+    let y0 = Tensor::f_cat(
+        &[
+            Tensor::f_ones(&[ma, 1], (y_kind, device))?,
+            Tensor::f_zeros(&[mb, 1], (y_kind, device))?,
+        ],
+        0,
+    )?;
+
+    // Single random permutation applied to both X and Y
+    let perm = Tensor::f_randperm(two_m, (Kind::Int64, device))?;
+    let x = x0.f_index_select(0, &perm)?;
+    let y = y0.f_index_select(0, &perm)?;
+
+    let lengths = match (lengths_1, lengths_0) {
+        (None, None) => None,
+        (Some(lengths_1), Some(lengths_0)) => {
+            if lengths_1.len() != ma as usize {
+                return Err(ThoError::new(format!("lengths_1 len mismatch: expected={ma} got={}", lengths_1.len())));
+            }
+            if lengths_0.len() != mb as usize {
+                return Err(ThoError::new(format!("lengths_0 len mismatch: expected={mb} got={}", lengths_0.len())));
+            }
+            let mut lengths = Vec::with_capacity((ma + mb) as usize);
+            lengths.extend_from_slice(lengths_1);
+            lengths.extend_from_slice(lengths_0);
+            let perm_cpu = perm.to_device(Device::Cpu);
+            let perm_vec: Vec<i64> = (&perm_cpu).try_into().map_err(|e| ThoError::from_error("mix_x_binary_with_labels: perm to vec", e))?;
+            let mut lengths_perm = Vec::with_capacity(lengths.len());
+            for idx in perm_vec {
+                lengths_perm.push(lengths[idx as usize]);
+            }
+            Some(lengths_perm)
+        }
+        _ => return Err(ThoError::new("lengths_1 and lengths_0 must both be Some or None")),
+    };
+
+    Ok((x, lengths, y))
+}
+
+
+///sums and multiplies inputs by k
+pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
+    num_features: u32,
+    k: f64,
+    device: Device,
+    _descr: &str,
+) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
+    let vs = VarStore::new(device);
+
+
+    let builder = Arc::new( move |path:&nn::Path|SeqBuilder::new(num_features, None)
+        .linear_s_with_conf(
+            "todo",
+            1,
+            LinearConfig {
+                ws_init: nn::Init::Const(k), //conflicts with ctor's init
+                bs_init: None,
+                bias: false,
+            },
+            #[cfg(debug_assertions)]
+            "test",
+        )
+        .end_seq().build_tch_module(path));
+
+    Ok(Box::new(ThoModuleWithStore::with_factory(
+        "test_net",
+        Arc::clone(&builder)(&vs.root())?,
+        vs,
+        Some(builder)
+    )))
+
+}
+
+
+pub fn motif_test_net(
+    motif_width: u32,
+    k: f64,
+    device: Device,
+) -> (
+    Box<dyn Fn() -> MotifNetParams + Sync + Send>,
+    Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
+) {
+    (
+        Box::new(move || MotifNetParams::new(motif_width, 1, 100, 32, 10)),
+        Box::new(move || {
+            *test_net(motif_width, k, device, "test_motif_net").unwrap()
+        }),
+    )
+}
+
+pub fn assert_close<A:Into<f64> + Display, B:Into<f64> + Display>(val_a: A, val_b: B, max_diff: f64) {
+    let a = <A as Into<f64>>::into(val_a);
+    let b = <B as Into<f64>>::into(val_b);
+    let diff = (a - b).abs();
+    assert!(
+        diff <= max_diff,
+        "values not close enough: {a} vs {b} (diff={diff}, max_diff={max_diff})"
+    );
+}
+
+pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], channels: i64, max_input: i64) -> Result<(Tensor, Vec<i64>), ThoError> {
+    let mut stack = Vec::with_capacity(tensors.len());
+    let mut lengths = Vec::with_capacity(tensors.len());
+
+    for v in tensors {
+        let t = v.as_ref();
+        let size = t.size();
+        if size.len() != 2 {
+            return Err(ThoError::new(format!("pad_stack_with_mask expects 2D tensors, got size={size:?}")));
+        }
+        if size[0] != channels {
+            return Err(ThoError::new(format!("pad_stack_with_mask channels mismatch: expected={channels} got={}", size[0])));
+        }
+
+        let mut t = t.shallow_clone();
+        let len = size[1].min(max_input);
+        if size[1] > max_input {
+            t = t.f_narrow(1, 0, max_input)?;
+        }
+        let pad_right = max_input - len;
+        if pad_right > 0 {
+            t = t.f_pad(&[0, pad_right, 0, 0], "constant", 0.0)?;
+        }
+        stack.push(t);
+        lengths.push(len);
+    }
+
+    let stack = Tensor::f_stack(stack.as_slice(), 0)?;
+
+    Ok((stack, lengths))
+}
+
+/// 1D grayscale morphology using max-pool (GPU friendly).
+/// Expected input shape: [B, C, L] (batch, channels, length).
+///
+/// Note:
+/// - Prefer odd `k` so padding = k/2 keeps length unchanged and centered.
+/// - These `f_*` versions propagate CUDA/OOM/ATen errors instead of panicking.
+#[inline]
+pub fn dilate1d(x: &Tensor, k: i64) -> Result<Tensor, TchError> {
+    let pad = k / 2;
+    x.f_max_pool1d(k, 1, pad, 1, false)
+}
+
+#[inline]
+pub fn erode1d(x: &Tensor, k: i64) -> Result<Tensor, TchError> {
+    let pad = k / 2;
+    // erosion(x) = -dilation(-x)
+    let nx = x.f_neg()?;
+    let pooled = nx.f_max_pool1d(k, 1, pad, 1, false)?;
+    pooled.f_neg()
+}
+
+#[inline]
+pub fn opening1d(x: &Tensor, k: i64) -> Result<Tensor, TchError> {
+    // opening = erosion then dilation
+    let e = erode1d(x, k)?;
+    dilate1d(&e, k)
+}
+
+#[inline]
+pub fn white_tophat1d(x: &Tensor, k: i64) -> Result<Tensor, TchError> {
+    // white top-hat = x - opening(x)
+    let opened = opening1d(x, k)?;
+    x.f_sub(&opened)
+}
+
+
+/// Local-maximum mask along the last dimension (expects xs shape [B, C, L]).
+///
+/// A position is a local max if it equals the max over a sliding window of size `kernel`.
+/// Note: flat plateaus produce multiple `true`s (all equal-to-max positions).
+pub fn local_max_1d_mask(xs: &Tensor, kernel: i64) -> Result<Tensor, TchError> {
+    if xs.dim() != 3 {
+        return Err(TchError::Shape(format!(
+            "f_local_max_1d_mask: expected xs dim=3 ([B,C,L]), got shape {:?}",
+            xs.size()
+        )));
+    }
+    if kernel <= 0 {
+        return Err(TchError::Shape(format!(
+            "f_local_max_1d_mask: kernel must be > 0, got {kernel}"
+        )));
+    }
+    if kernel % 2 == 0 {
+        return Err(TchError::Shape(format!(
+            "f_local_max_1d_mask: kernel must be odd to preserve alignment, got {kernel}"
+        )));
+    }
+
+    let pad = (kernel - 1) / 2;
+
+    // max_pool1d with stride=1 + padding keeps length L.
+    // Signature in tch is (kernel, stride, padding, dilation, ceil_mode) for 1D pooling.
+    let pooled = xs.f_max_pool1d(kernel, 1, pad, 1, false)?;
+
+    // Since max_pool returns values taken from xs, exact equality is typically safe here.
+    let mask = xs.f_eq_tensor(&pooled)?;
+    Ok(mask)
+}
+
+/// Returns a tensor with only local maxima kept (everything else becomes 0),
+/// same shape and dtype as `xs`.
+pub fn local_max_1d(xs: &Tensor, kernel: i64) -> Result<Tensor, TchError> {
+    let mask = local_max_1d_mask(xs, kernel)?;
+    let mask_f = mask.f_to_kind(xs.kind())?;
+    xs.f_mul(&mask_f)
+}
+
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
 pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{hist_1_dim, masked_max, masked_mean, mix_x_binary_with_labels, pad_to_2, TrainListener};
+    use crate::utils::{hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_to_2, to_vec_f32, to_vec_i64, TrainListener};
     use clap::{Args, Parser, Subcommand};
 
     use log::debug;
@@ -1588,466 +2131,20 @@ pub mod tests {
 
         Ok(())
     }
-}
 
-pub fn z_norm(t: &Tensor, dim: i64) -> Tensor {
-    let mean_t = t.mean_dim(dim, true, Float);
-    let std_t = t.std(false);
-    let z_t = (t - mean_t) / std_t;
-    z_t
-}
+    #[test]
+    fn test_local_max_mask_basic() {
+        // [0, 1, 0, 2, 2, 1, 0]
+        // With kernel=3 => local maxima at 1 and both 2's (plateau).
+        let x = Tensor::from_slice(&[0f32, 1., 0., 2., 2., 1., 0.]).view([1, 1, 7]);
 
-pub fn z_norm_2(t_0: &Tensor, _dim: i64) -> Result<Tensor, ThoError> {
-    let std = t_0.f_std_dim(1, true, true)?;
-    //TODO std - 0
-    Ok(t_0.f_sub(&t_0.f_mean_dim(1, true, Float)?)?.f_div(&std)?)
-}
+        let m = local_max_1d_mask(&x, 3).unwrap();
+        let m_i64 = m.to_kind(Kind::Int64).view([-1]);
+        let v = to_vec_i64(&m_i64);
+        assert_eq!(v, vec![0, 1, 0, 1, 1, 0, 0]);
 
-pub fn z_norm_dims(x: &Tensor, dims: &[i64], eps: f64) -> Result<Tensor, ThoError> {
-    // Mean over dims (keepdim=true so it broadcasts back)
-    let mean = x.f_mean_dim(dims, /*keepdim=*/true, Kind::Float)?;
-
-    // Variance over dims (unbiased=false = "population" variance, typical for normalization)
-    let var = x.f_var_dim(dims, /*unbiased=*/false, /*keepdim=*/true)?;
-
-    // std = sqrt(var + eps)
-    // Prefer f_add_scalar if available in your tch version.
-    let std = var.f_add_scalar(eps)?.f_sqrt()?;
-
-    // (x - mean) / std
-    let centered = x.f_subtract(&mean)?;
-    Ok(centered.f_divide(&std)?)
-}
-
-pub fn skewness_kurtosis_1_dim(dists: &Tensor) -> (Tensor, Tensor) {
-    let mean = dists.mean_dim(1, true, Kind::Float);
-
-    let std = dists.std_dim(1, true, true);
-
-    let std = &std + 1e-6;
-
-    //z score = (x - mean) / std
-    let z = (dists - &mean) / &std;
-
-    // Compute skewness: skewness = mean(z^3)
-    let skewness = z.pow_tensor_scalar(3).mean_dim(1, false, Float);
-
-    // Compute kurtosis: kurtosis = mean(z^4) - 3
-    let kurtosis = z.pow_tensor_scalar(4).mean_dim(1, false, Float) - 3.0;
-
-    (skewness, kurtosis)
-}
-
-pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, ThoError> {
-    let norm_01 = norm_2(slice_01, dim)?;
-    let norm_02 = norm_2(slice_02, dim)?;
-    Ok(norm_01.f_tensordot(&norm_02, [dim], [dim])?.f_diag(0)?)
-}
-
-pub fn self_dot(
-    t1: &Tensor,
-    i_0: i64,
-    i_1: i64,
-    dim: i64,
-    step: i64,
-    d_i: i64,
-) -> Result<Tensor, ThoError> {
-    let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0 + d_i), step)?;
-    let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1 + d_i), step)?;
-
-    Ok(slice_1.f_tensordot(&slice_2, [dim], [dim])?.f_diag(0)?)
-}
-
-pub fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
-    t.view(dim) / t.dot(&t).sqrt()
-}
-
-pub fn norm_2(t: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
-    let denom = t
-        .f_tensordot(&t, dim, dim)?
-        .f_diag(0)?
-        .f_sqrt()?
-        .f_view([1, -1])?
-        .f_transpose(0, 1)?;
-    Ok(t.f_div(&denom)?)
-}
-
-pub fn lin_t(n: u32) -> Tensor {
-    // Tensor::from(lin_iter(n).collect::<Vec<f32>>().as_slice())
-    Tensor::arange(n as i64, FLOAT_CPU)
-}
-
-pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Tensor {
-    let end = size.iter().fold(1, |a, v| a * *v);
-
-    debug!("lin_for_size: end={end}");
-
-    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, *device)))
-        .expect("f_arange failed")
-        .view(&size[..]);
-
-    t = t.set_requires_grad(false);
-    match kind {
-        Kind::Uint8 | Kind::Int8 | Kind::Int16 | Kind::Int | Kind::Int64 => {
-            t *= k as i32;
-        }
-        _ => {
-            t *= k;
-        }
+        let peaks = local_max_1d(&x, 3).unwrap().view([-1]);
+        let pv = to_vec_f32(&peaks);
+        assert_eq!(pv, vec![0., 1., 0., 2., 2., 0., 0.]);
     }
-
-    trace!("lin_for_size:t=\n{t}");
-    debug!("lin_for_size: t.size()={:?}", t.size());
-
-    t
-}
-
-pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
-    (0..n).map(|x| x as f32)
-}
-
-use crate::dims::ThoBatch;
-use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
-
-//TODO remove?
-pub trait DataBatch<D: Dims> {
-    /// returns (inputs, labels)
-    fn train_batch(&self) -> (ThoBatch<D>, Tensor);
-    fn valid_batch(&self) -> (ThoBatch<D>, Tensor);
-}
-
-
-pub trait TrainListener: Send + Sync {
-    fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<'_, ListenerResponse> {
-        async {ListenerResponse::Nope}.boxed()
-    }
-    fn on_valid_cycle(&mut self, cycle: u32, loss: f32) -> ListenerResponse;
-}
-
-pub enum ListenerResponse {
-    Stop,
-    UpdateLR(f64),
-    Nope,
-}
-
-
-pub fn two_sigs(n: u32) -> (Tensor, Tensor) {
-    let sig_1 = Tensor::from_slice(
-        pulses_in_const(
-            n,
-            &[
-                // (10, pulse_v(8., 3., 20, 2.)),
-                // (30, pulse_v(8., 3., 20, 2.))
-                (100, pulse_v(80., 30., 200, 20.)),
-                (300, pulse_v(80., 30., 200, 20.)),
-            ],
-        )
-        .as_slice(),
-    );
-
-    let sig_2 = Tensor::from_slice(pulse_in_rand(n, &[], 10., 0.001, 0.1).as_slice());
-    (sig_1, sig_2)
-}
-
-//f(x)=-sin(3x)+x^2+0.7 *x
-pub fn sin3_pow2(
-    n: i64,
-    min: f32,
-    max: f32,
-    with_noise: Option<f32>,
-) -> (Tensor, Tensor, Vec<f32>) {
-    let mut rng = rand::rng();
-    let x = (0..n)
-        .map(|i| min + (i as f32 / (n - 1) as f32) * (max - min))
-        .into_iter()
-        .collect::<Vec<f32>>();
-
-    let y_train_full = Tensor::from_slice(
-        x.iter()
-            .map(|x| sin3_pow2_with_noise_f(with_noise, &mut rng, *x))
-            .collect::<Vec<f32>>()
-            .as_slice(),
-    )
-    .view((1, -1))
-    .totype(Float); //.transpose(0,1);
-
-    let x_t = Tensor::from_slice(x.as_slice()).totype(Float).view((-1, 1));
-
-    (y_train_full, x_t, x)
-}
-
-fn sin3_pow2_with_noise_f(with_noise: Option<f32>, rng: &mut ThreadRng, x: f32) -> f32 {
-    sin3_pow2_f(x) + with_noise.map(|v| v * rng.random::<f32>()).unwrap_or(0.)
-}
-
-pub fn sin3_pow2_f(x: f32) -> f32 {
-    -(3. * x).sin() + x.powi(2) + 0.7 * x
-}
-
-pub fn sin3_pow2_t(t: &Tensor) -> Tensor {
-    t.multiply_scalar(-3.).sin() + t.pow_tensor_scalar(2) + t.multiply_scalar(0.7) //TODO noise?
-}
-
-pub fn gauss_t(μ: f32, σ: f32, n: i64) -> Tensor {
-    Tensor::from(gauss_i(μ, σ, n).collect::<Vec<_>>().as_slice())
-}
-
-pub fn pulse_t(μ: f32, σ: f32, n: i64, f: f32) -> Tensor {
-    Tensor::from(pulse_v(μ, σ, n, f).as_slice())
-}
-
-pub fn three_sigs_tensor(
-    n: u32,
-    sig_0_v: &Vec<f32>,
-    sig_1_v: &Vec<f32>,
-    sig_2_v: &Vec<f32>,
-) -> (Tensor, Tensor, Tensor, Tensor) {
-    let t_0_0 = t_0_0(n, sig_0_v, sig_2_v);
-
-    // debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
-
-    let t_0_1 = t_0_1(n, sig_0_v, sig_2_v);
-
-    // debug!("t_0_1 mean={} max-min={}", t_0_1.mean(None).double_value(&[]), t_0_1.max() - t_0_1.min());
-
-    let t_1_0 = t_1_0(n, sig_1_v, sig_2_v);
-
-    // debug!("t_1_0 mean={} max-min={}", t_1_0.mean(None).double_value(&[]), t_1_0.max() - t_1_0.min());
-
-    let t_1_1 = t_1_1(n, sig_1_v, sig_2_v);
-    (t_0_0, t_0_1, t_1_0, t_1_1)
-}
-
-pub fn t_0_0(n: u32, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
-    Tensor::vstack(&[
-        Tensor::from_slice([sig_0_v.clone(), saw(n), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice()),
-    ])
-}
-
-pub fn t_0_1(n: u32, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
-    Tensor::vstack(&[
-        Tensor::from_slice([saw(n), sig_0_v.clone(), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-        Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
-    ])
-}
-
-pub fn t_1_0(n: u32, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
-    Tensor::vstack(&[
-        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n), sig_1_v.clone(), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice()),
-    ])
-}
-
-pub fn t_1_1(n: u32, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
-    Tensor::vstack(&[
-        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-        Tensor::from_slice([sig_1_v.clone(), saw(n), saw(n)].concat().as_slice()),
-        Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
-    ])
-}
-
-pub fn reset_print_options() {
-    let mut printer_options = PrinterOptions::default();
-
-    unsafe {
-        let printer_options_ptr: *mut PrinterOptions = &mut printer_options;
-
-        let threshold_ptr =
-            (printer_options_ptr as *mut u8).add(size_of::<usize>() * 1) as *mut usize;
-        let line_width_ptr =
-            (printer_options_ptr as *mut u8).add(size_of::<usize>() * 3) as *mut usize;
-
-        ptr::write(threshold_ptr, usize::MAX);
-        ptr::write(line_width_ptr, 10_000);
-    }
-    tch::display::set_print_options(printer_options);
-}
-
-pub fn tensor_mem_size(t: &Tensor) -> usize {
-    t.numel() * t.kind().elt_size_in_bytes()
-}
-
-pub fn vs_mem_size(opt: &VarStore) -> usize {
-    opt.trainable_variables()
-        .iter()
-        .map(|t| tensor_mem_size(t))
-        .sum()
-}
-
-pub fn optimizer_mem_size(opt: &Optimizer) -> usize {
-    opt.trainable_variables()
-        .iter()
-        .map(|t| tensor_mem_size(t))
-        .sum()
-}
-
-pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad: bool) {
-    for (name, tensor) in vsd.variables() {
-        if name.contains("batch_norm") {
-            continue;
-        }
-        let freezing = name.starts_with(subpath);
-        debug!("freeze_subpath: name={name:?} freezing={freezing}");
-
-        if freezing {
-            _ = tensor.set_requires_grad(requires_grad);
-        }
-    }
-}
-
-//TODO check GPT
-pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&[i64]>, x_0: &Tensor, lengths_0: Option<&[i64]>) -> Result<(Tensor, Option<Vec<i64>>, Tensor), ThoError> {
-    let [ma, _na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
-    let [mb, _nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
-    // assert_eq!((na, nb), (na, na), "X1 and X0 must have same n");
-    // assert_eq!(ma, mb, "X1 and X0 must have same m");
-    assert_eq!(x_0.device(), x_1.device(), "A and B must be on the same device");
-
-    let device = x_0.device();
-    let two_m = ma * 2;
-
-    // X0 = [A; B]
-    let x0 = Tensor::f_cat(&[x_1, x_0], 0)?;
-
-    // Choose a reasonable dtype for Y (float if A is floating, else Float)
-    let y_kind = match x_0.kind() {
-        Kind::Double | Kind::Float | Kind::Half | Kind::BFloat16 => x_0.kind(),
-        _ => Kind::Float,
-    };
-
-    // Y0 = [ones(m,1); zeros(m,1)]
-    let y0 = Tensor::f_cat(
-        &[
-            Tensor::f_ones(&[ma, 1], (y_kind, device))?,
-            Tensor::f_zeros(&[mb, 1], (y_kind, device))?,
-        ],
-        0,
-    )?;
-
-    // Single random permutation applied to both X and Y
-    let perm = Tensor::f_randperm(two_m, (Kind::Int64, device))?;
-    let x = x0.f_index_select(0, &perm)?;
-    let y = y0.f_index_select(0, &perm)?;
-
-    let lengths = match (lengths_1, lengths_0) {
-        (None, None) => None,
-        (Some(lengths_1), Some(lengths_0)) => {
-            if lengths_1.len() != ma as usize {
-                return Err(ThoError::new(format!("lengths_1 len mismatch: expected={ma} got={}", lengths_1.len())));
-            }
-            if lengths_0.len() != mb as usize {
-                return Err(ThoError::new(format!("lengths_0 len mismatch: expected={mb} got={}", lengths_0.len())));
-            }
-            let mut lengths = Vec::with_capacity((ma + mb) as usize);
-            lengths.extend_from_slice(lengths_1);
-            lengths.extend_from_slice(lengths_0);
-            let perm_cpu = perm.to_device(Device::Cpu);
-            let perm_vec: Vec<i64> = (&perm_cpu).try_into().map_err(|e| ThoError::from_error("mix_x_binary_with_labels: perm to vec", e))?;
-            let mut lengths_perm = Vec::with_capacity(lengths.len());
-            for idx in perm_vec {
-                lengths_perm.push(lengths[idx as usize]);
-            }
-            Some(lengths_perm)
-        }
-        _ => return Err(ThoError::new("lengths_1 and lengths_0 must both be Some or None")),
-    };
-
-    Ok((x, lengths, y))
-}
-
-
-///sums and multiplies inputs by k
-pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
-    num_features: u32,
-    k: f64,
-    device: Device,
-    _descr: &str,
-) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
-    let vs = VarStore::new(device);
-
-
-    let builder = Arc::new( move |path:&nn::Path|SeqBuilder::new(num_features, None)
-        .linear_s_with_conf(
-            "todo",
-            1,
-            LinearConfig {
-                ws_init: nn::Init::Const(k), //conflicts with ctor's init
-                bs_init: None,
-                bias: false,
-            },
-            #[cfg(debug_assertions)]
-            "test",
-        )
-        .end_seq().build_tch_module(path));
-
-    Ok(Box::new(ThoModuleWithStore::with_factory(
-        "test_net",
-        Arc::clone(&builder)(&vs.root())?,
-        vs,
-        Some(builder)
-    )))
-
-}
-
-
-pub fn motif_test_net(
-    motif_width: u32,
-    k: f64,
-    device: Device,
-) -> (
-    Box<dyn Fn() -> MotifNetParams + Sync + Send>,
-    Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
-) {
-    (
-        Box::new(move || MotifNetParams::new(motif_width, 1, 100, 32, 10)),
-        Box::new(move || {
-            *test_net(motif_width, k, device, "test_motif_net").unwrap()
-        }),
-    )
-}
-
-pub fn assert_close<A:Into<f64> + Display, B:Into<f64> + Display>(val_a: A, val_b: B, max_diff: f64) {
-    let a = <A as Into<f64>>::into(val_a);
-    let b = <B as Into<f64>>::into(val_b);
-    let diff = (a - b).abs();
-    assert!(
-        diff <= max_diff,
-        "values not close enough: {a} vs {b} (diff={diff}, max_diff={max_diff})"
-    );
-}
-
-pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], channels: i64, max_input: i64) -> Result<(Tensor, Vec<i64>), ThoError> {
-    let mut stack = Vec::with_capacity(tensors.len());
-    let mut lengths = Vec::with_capacity(tensors.len());
-
-    for v in tensors {
-        let t = v.as_ref();
-        let size = t.size();
-        if size.len() != 2 {
-            return Err(ThoError::new(format!("pad_stack_with_mask expects 2D tensors, got size={size:?}")));
-        }
-        if size[0] != channels {
-            return Err(ThoError::new(format!("pad_stack_with_mask channels mismatch: expected={channels} got={}", size[0])));
-        }
-
-        let mut t = t.shallow_clone();
-        let len = size[1].min(max_input);
-        if size[1] > max_input {
-            t = t.f_narrow(1, 0, max_input)?;
-        }
-        let pad_right = max_input - len;
-        if pad_right > 0 {
-            t = t.f_pad(&[0, pad_right, 0, 0], "constant", 0.0)?;
-        }
-        stack.push(t);
-        lengths.push(len);
-    }
-
-    let stack = Tensor::f_stack(stack.as_slice(), 0)?;
-
-    Ok((stack, lengths))
 }
