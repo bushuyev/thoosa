@@ -162,7 +162,7 @@ impl FsWorkspace {
         let module = ThoModuleWithStore::load(
             mono_key!("MotifNet", "MotifNet")
                 + &mono_key!(model_path.to_string_lossy().to_string(), "motif_model"),
-            move |path: &nn::Path| params_for_builder.motif_net().build_tch_module(path),
+            move |path: &nn::Path| params_for_builder.motif_net()?.build_tch_module(path),
             model_path,
             *device,
         )?;
@@ -456,7 +456,7 @@ impl Workspace for FsWorkspace {
 
             let module = ThoModuleWithStore::load(
                 mono_key!("MotifNet", "MotifNet") + &mono_key!(motif_id, "motif_id"),
-                move |path: &nn::Path| params_for_builder.motif_net().build_tch_module(path),
+                move |path: &nn::Path| params_for_builder.motif_net()?.build_tch_module(path),
                 model,
                 device.clone(),
             )?;
@@ -948,15 +948,17 @@ impl WsMockBuilder {
 mod tests {
     use super::{FsWorkspace, Workspace};
     use crate::dims::AnyDims;
-    use crate::my_tch::ThoModule;
+    use crate::my_tch::{MyCosineConv1d, ThoModule};
     use crate::train_nets::{conv_motif_node, cosine_motif_node, FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams, MotifNetParams, MotifNetTypeParams};
     use log::debug;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
-    use tch::nn::VarStore;
+    use tch::nn::{ConvConfig, VarStore};
     use tch::Tensor;
     use thoosa_shared::{ThoError, cdt_for_dir};
+    use thoosa_shared::traits::SimpleId;
+    use crate::tho_tensor::ThoTensor;
 
     #[ctor::ctor]
     fn init() {
@@ -1061,7 +1063,7 @@ mod tests {
             conv_motif_node(match &params.net_type {
                 MotifNetTypeParams::ConvNetParams(v) => v,
                 _ => unreachable!(),
-            }).build_tch_module(&vs.root())?;
+            })?.build_tch_module(&vs.root())?;
         vs.freeze();
 
         let net_id = ws.save_motif_net(&0, &0, &0, &vs, &params)?;
@@ -1074,6 +1076,20 @@ mod tests {
 
         Ok(())
     }
+    // #[test]
+    // fn test_x()-> Result<(), ThoError>{
+    //    let m =  MyCosineConv1d::new(&VarStore::new(Cpu).root(), 8, 10, ConvConfig::default())?;
+    //
+    //     <MyCosineConv1d as ThoModule<AnyDims, AnyDims>>::tho_forward(&m, &ThoTensor::<AnyDims, SimpleId>::new("".into(), Tensor::rand(
+    //         [
+    //             10,
+    //             1234i64,
+    //         ],
+    //         FLOAT_CPU,
+    //     )).unwrap(), None, true).unwrap();
+    //
+    //     Ok(())
+    // }
 
     #[test]
     fn test_load_cosine_motif_net() -> Result<(), ThoError> {
@@ -1086,9 +1102,9 @@ mod tests {
             cosine_motif_node(match &params.net_type {
                 MotifNetTypeParams::CosineNetParams(v) => v,
                 _ => unreachable!(),
-            }).build_tch_module(&vs.root())?;
+            })?.build_tch_module(&vs.root())?;
 
-        net.tho_forward(
+        let out = net.tho_forward(
             &Tensor::rand(
                 [
                     10,
@@ -1100,6 +1116,8 @@ mod tests {
             None,
             false,
         )?;
+
+        debug!("out={out:?}");
 
 
         vs.freeze();

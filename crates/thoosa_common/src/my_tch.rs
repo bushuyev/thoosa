@@ -402,9 +402,11 @@ impl MyCosineConv1d {
     /// Create a cosine-conv bank with K filters, C input channels, kernel length L.
     /// Weights are N(0, 0.02).
     pub fn new(vs: &nn::Path, c: i64, l: i64, config: ConvConfig) -> Result<Self, TchError> {
-        let k = 1;//for single motif
+        debug!("MyCosineConv1d: c={c} l={l} config={config:?}");
+        let c = 1;//for single motif
+        let k =c ;
         let device = vs.device();
-        let w = vs.var("W", &[1, c, l], nn::Init::Randn { mean: 0.0, stdev: 0.02 });
+        let w = vs.var("W", &[k, c, l], nn::Init::Randn { mean: 0.0, stdev: 0.02 });
         // fixed boxcar (sum over L) to build window norms; kept as a (non-trainable) buffer
         let ones = Tensor::ones([1, 1, l], (Kind::Float, device));
         Ok(Self { w, ones, k, c, l, config })
@@ -422,6 +424,8 @@ impl MyCosineConv1d {
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
     fn tho_forward(&self, x_in: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        debug!("MyCosineConv1d::tho_forward: x_in.size={:?} lengths={lengths:?}", x_in.size());
+
         if let Some(lengths) = lengths.as_deref_mut() {
             for len in lengths.iter_mut() {
                 if *len < 0 {
