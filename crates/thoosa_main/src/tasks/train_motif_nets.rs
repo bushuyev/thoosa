@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use async_trait::async_trait;
 use futures_util::{FutureExt, StreamExt, TryStreamExt};
 use futures_util::stream::BoxStream;
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
 use tch::Device::{Cpu, Cuda};
@@ -170,7 +170,7 @@ where
 
         let select_motifs_run_ids_clone = select_motifs_run_ids.clone();
         let futures = select_motifs_run_ids_clone.iter().flat_map(|select_motifs_run_id| {
-            let selected_motifs = self.store.read().list_selected_motifs(*select_motifs_run_id, channels).unwrap();
+            let selected_motifs = self.store.read().list_selected_motifs(*select_motifs_run_id, channels).expect("list_selected_motifs failed");
 
             debug!("TrainMotifNets::run: select_motifs_run_id={select_motifs_run_id} selected_motifs={selected_motifs:?}");
 
@@ -284,7 +284,7 @@ where
                 },
                 Err(e) => {
                     err+=1;
-                    error!("train motif failed: {e:?}");
+                    warn!("train motif failed: {e:?}");
                 }
             }
         }

@@ -258,7 +258,6 @@ impl Node {
             } => Box::new(MyCosineConv1d::new(
                 &(vs / path),
                 in_channels as i64,
-                out_channels as i64,
                 kernel as i64,
                 config,
             )?),
@@ -483,18 +482,7 @@ impl SeqBuilder {
         out_channels: u32,
         config: ConvConfig,
     ) -> &mut Self {
-        // self.elts.push(Node::Conv2d {
-        //     kernel,
-        //     in_channels,
-        //     out_channels,
-        //     config,
-        // });
-        //
-        // self.num_features = clc_conv1d_out(self.num_features, kernel, config).unwrap() as u32; //TODO 2d
-        // self.kernel = Some(kernel);
-        //self
         todo!()
-
     }
 
     pub fn max_pool(&mut self, kernel: u32, stride: u32, padding: u32) -> &mut Self {

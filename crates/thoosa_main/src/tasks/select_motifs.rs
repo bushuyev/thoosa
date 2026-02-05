@@ -974,7 +974,7 @@ where
                 return Err(ThoError::new(format!("can't unwrap motif_added_slices for {:?}", select_motifs_run_config)))
             }
 
-            let good_motif_ids = futures::stream::iter(
+            let extened_motif_ids = futures::stream::iter(
                 Arc::into_inner(channels_motifs_added_slices)
                     .expect("can't unwrap motif_added_slices")
                     .into_iter()
@@ -1041,29 +1041,28 @@ where
             .collect::<Vec<_>>()
             .await;
 
-            debug!("SelectMotifsStage::run: 0. good_motif_ids.len={}", good_motif_ids.len());
+            debug!("SelectMotifsStage::run: 0. good_motif_ids.len={}", extened_motif_ids.len());
 
-            let good_motif_ids = good_motif_ids.into_iter().filter(|v|v.1 < f64::MAX).collect::<Vec<_>>();
+            let extened_motif_ids = extened_motif_ids.into_iter().filter(|v|v.1 < f64::MAX).collect::<Vec<_>>();
 
-            debug!("SelectMotifsStage::run: 1. good_motif_ids.len={}", good_motif_ids.len());
+            debug!("SelectMotifsStage::run: 1. good_motif_ids.len={}", extened_motif_ids.len());
 
-            let avg_dist_05 = good_motif_ids.iter().map(|v|v.1).sum::<f64>()/good_motif_ids.len() as f64 / 0.5;//TODO config
+            let avg_dist_05 = extened_motif_ids.iter().map(|v|v.1).sum::<f64>()/ extened_motif_ids.len() as f64 / 0.5;//TODO config
 
-            debug!("SelectMotifsStage::run: avg_dist={avg_dist_05:?} good_motif_ids.len={}", good_motif_ids.len());
+            debug!("SelectMotifsStage::run: avg_dist={avg_dist_05:?} good_motif_ids.len={}", extened_motif_ids.len());
 
-            let good_motif_ids = good_motif_ids.into_iter().filter(|v|v.1 <= avg_dist_05).collect::<Vec<_>>();
+            let good_motif_ids = extened_motif_ids.into_iter().filter(|v|v.1 <= avg_dist_05).collect::<Vec<_>>();
 
             debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered good_motif_ids.len={}", good_motif_ids.len());
 
             run_config_good_motif_ids.push((select_motifs_run_config.clone(), good_motif_ids));
-
 
         }
 
 
         debug!("SelectMotifsStage::run: good_motif_ids={run_config_good_motif_ids:?}");
 
-        Ok(Arc::new(DevicesWrap::wrap(SelectMotifsSavableResult::new2(run_config_good_motif_ids), CacheArea::default())))
+        Ok(Arc::new(DevicesWrap::wrap(SelectMotifsSavableResult::new(run_config_good_motif_ids), CacheArea::default())))
     }
 }
 
