@@ -748,51 +748,51 @@ pub fn configure_dense(
     num_layers_in_block: usize,
     kernel: u32,
     channels: u32,
-) -> Node {
-    let mut builder = SeqBuilder::new(num_features, None);
+) -> Result<Node, ThoError> {
+    let mut builder = SeqBuilder::new(num_features, None)?;
 
-    let dense_block = |b: &mut SeqBuilder| {
+    let dense_block = |b: &mut SeqBuilder| -> Result<(), ThoError> {
         b.n_blocks(
             |b: &mut SeqBuilder, _i| {
-                b.func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
-                    .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)
-                    .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
-                    .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)
+                b.func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+                    .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
+                    .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+                    .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
                     .end()
             },
             num_layers_in_block,
-        )
-        .end()
+        )?;
+        b.end()
     };
 
     builder
-        .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)
-        .func(|t| t.f_elu().map_err(|e|e.into()))
-        .max_pool(3, 2, 1)
+        .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
+        .func(|t| t.f_elu().map_err(|e|e.into()))?
+        .max_pool(3, 2, 1)?
         .n_blocks(
             |b: &mut SeqBuilder, _i| {
-                b.block(dense_block)
+                b.block(dense_block)?
                     .block(|b: &mut SeqBuilder| {
-                        b.func(|t|Tensor::f_elu(t).map_err(|e|e.into()))
-                            .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)
-                            .func(|t|Tensor::f_elu(t).map_err(|e|e.into()))
-                            .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)
+                        b.func(|t|Tensor::f_elu(t).map_err(|e|e.into()))?
+                            .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
+                            .func(|t|Tensor::f_elu(t).map_err(|e|e.into()))?
+                            .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
                             .end()
-                    })
+                    })?
                     .end()
             },
             num_blocks,
-        )
-        .block(dense_block)
-        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
-        .avg_pool(7, 3, 0)
-        .dropout()
+        )?
+        .block(dense_block)?
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+        .avg_pool(7, 3, 0)?
+        .dropout()?
         .linear_s(
             6,
             #[cfg(debug_assertions)]
             "test".to_string(),
             "todo",
-        )
+        )?
         .end_seq()
 }
 
@@ -898,22 +898,23 @@ mod tch_tests {
     }
 
     #[test]
-    pub fn test_seq_linear_same_size() {
-        let seq = SeqBuilder::new(2, None)
+    pub fn test_seq_linear_same_size() -> Result<(), ThoError> {
+        let seq = SeqBuilder::new(2, None)?
             .linear(
                 "todo",
                 #[cfg(debug_assertions)]
                 "test".to_string(),
-            )
-            .end_seq();
+            )?
+            .end_seq()?;
 
         let vs = nn::VarStore::new(Device::Cpu);
 
-        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = seq.build_tch_module(&vs.root()).unwrap();
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = seq.build_tch_module(&vs.root())?;
 
-        let y_p = net.tho_forward(&Tensor::randn([10, 2], (Float, Cpu)).into(), None, true).unwrap();
+        let y_p = net.tho_forward(&Tensor::randn([10, 2], (Float, Cpu)).into(), None, true)?;
 
-        assert_eq!(vec![10, 2], y_p.size())
+        assert_eq!(vec![10, 2], y_p.size());
+        Ok(())
     }
 
     #[test]
@@ -922,26 +923,26 @@ mod tch_tests {
         //     let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         // }
 
-        let res_seq = SeqBuilder::new(10, None)
+        let res_seq = SeqBuilder::new(10, None)?
             .linear_s(
                 1,
                 #[cfg(debug_assertions)]
                 "test".to_string(),
                 "todo",
-            )
-            .end_seq();
+            )?
+            .end_seq()?;
 
-        let conv_seq = SeqBuilder::new(10, None)
-            .conv_1d("conv", 5, 1, 1, ConvConfig::default(), None)
+        let conv_seq = SeqBuilder::new(10, None)?
+            .conv_1d("conv", 5, 1, 1, ConvConfig::default(), None)?
             .linear_s(
                 1,
                 #[cfg(debug_assertions)]
                 "test".to_string(),
                 "todo",
-            )
-            .end_seq();
+            )?
+            .end_seq()?;
 
-        let main = SeqBuilder::new(10, None)
+        let main = SeqBuilder::new(10, None)?
             .split(
                 vec![res_seq, conv_seq],
                 Box::new(|t: &Tensor| {
@@ -951,8 +952,8 @@ mod tch_tests {
                     ])
                 }),
                 Box::new(|t: Vec<Tensor>| Ok(Tensor::stack(t.as_slice(), 1).squeeze())),
-            )
-            .end_seq();
+            )?
+            .end_seq()?;
 
         let vs = nn::VarStore::new(Cpu);
 
@@ -962,7 +963,7 @@ mod tch_tests {
             &Tensor::randn([10, 2, 10], (Kind::Float, Device::Cpu)).into(),
             None,
             true,
-        ).unwrap();
+        )?;
 
         assert_eq!(vec![10, 2], y_p.size());
 
@@ -983,15 +984,15 @@ mod tch_tests {
 
     #[test]
     pub fn test_cosine_conv_1d_output_bounds() -> Result<(), ThoError> {
-        let node = SeqBuilder::new(10, None)
+        let node = SeqBuilder::new(10, None)?
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                     Ok(t.unsqueeze(1))
                 })),
                 None,
-            )
-            .cosine_conv_1d("cosine", 3, 1, 2, ConvConfig { stride: 1, bias: false, ..ConvConfig::default() })
-            .end_seq();
+            )?
+            .cosine_conv_1d("cosine", 3, 1, 2, ConvConfig { stride: 1, bias: false, ..ConvConfig::default() })?
+            .end_seq()?;
 
         let vs = nn::VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = node.build_tch_module(&vs.root())?;
@@ -1025,23 +1026,23 @@ mod tch_tests {
         vs: &VarStore,
         num_features: u32,
     ) -> Result<Box<dyn ThoModule<Batch<AnyDims>, AnyDims>>, ThoError> {
-        SeqBuilder::new(num_features, None)
-            .batch_norm(BatchNormConfig::default())
+        SeqBuilder::new(num_features, None)?
+            .batch_norm(BatchNormConfig::default())?
             .closure(
                 Arc::new(Box::new(|t: &Tensor, _lengths: Option<&[i64]>| {
                     Ok(t.view((t.size()[0], 1, t.size()[1]))) //channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
                 })),
                 None,
-            )
-            .conv_1d("conv", num_features / 10, 1, 1, ConvConfig::default(), None)
+            )?
+            .conv_1d("conv", num_features / 10, 1, 1, ConvConfig::default(), None)?
             .linear_s(
                 1,
                 #[cfg(debug_assertions)]
                 "test".to_string(),
                 "todo",
-            )
-            .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
-            .end_seq()
+            )?
+            .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
+            .end_seq()?
             .build_tch_module(&vs.root())
     }
 
@@ -1127,7 +1128,7 @@ mod tch_tests {
     pub fn test_save_load() -> Result<(), ThoError> {
         let vs_0 = VarStore::new(Cpu);
 
-        let node = test_node();
+        let node = test_node()?;
         let _my_mod: Box<dyn ThoModule<AnyDims, AnyDims>> = node.build_tch_module(&vs_0.root())?;
 
         debug!("variables={:?}", vs_0.variables());
@@ -1137,7 +1138,7 @@ mod tch_tests {
         vs_0.save("/tmp/test.safetensors")?;
 
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-           |path: &nn::Path| test_node().build_tch_module(path),
+           |path: &nn::Path| test_node()?.build_tch_module(path),
            "/tmp/test.safetensors".into(),
            Cpu,
         )?;
@@ -1149,65 +1150,65 @@ mod tch_tests {
 
         assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
 
-        fn test_node() -> Node {
-            SeqBuilder::new(123, None)
+        fn test_node() -> Result<Node, ThoError> {
+            SeqBuilder::new(123, None)?
                 .split(
                     vec![
-                        SeqBuilder::new(123, None)
-                            .batch_norm(BatchNormConfig::default()) //3 weight bias running_var
+                        SeqBuilder::new(123, None)?
+                            .batch_norm(BatchNormConfig::default())? //3 weight bias running_var
                             .linear(
                                 "todo",
                                 #[cfg(debug_assertions)]
                                 "test_node".to_string(),
-                            ) //2 weight bias
-                            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
+                            )? //2 weight bias
+                            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
                             .linear(
                                 "todo",
                                 #[cfg(debug_assertions)]
                                 "test_node".to_string(),
-                            ) //2 weight bias
-                            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
+                            )? //2 weight bias
+                            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
                             .linear_s(
                                 1,
                                 #[cfg(debug_assertions)]
                                 "test".to_string(),
                                 "todo",
-                            ) //2 weight bias
-                            .end_seq(),
-                        SeqBuilder::new(321, None)
-                            .batch_norm(BatchNormConfig::default()) //3 weight bias running_var
+                            )? //2 weight bias
+                            .end_seq()?,
+                        SeqBuilder::new(321, None)?
+                            .batch_norm(BatchNormConfig::default())? //3 weight bias running_var
                             .linear(
                                 "todo",
                                 #[cfg(debug_assertions)]
                                 "test_node".to_string(),
-                            ) //2 weight bias
-                            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
+                            )? //2 weight bias
+                            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
                             .linear_s(
                                 1,
                                 #[cfg(debug_assertions)]
                                 "test".to_string(),
                                 "todo",
-                            ) //2 weight bias
-                            .end_seq(),
+                            )? //2 weight bias
+                            .end_seq()?,
                     ],
                     Box::new(move |t: &Tensor| Ok(vec![t.i((.., 0, ..)), t.i((.., 1, ..))])),
                     Box::new(move |t: Vec<Tensor>| Ok(Tensor::concat(t.as_slice(), 1))),
-                )
+                )?
                 .linear_s(
                     10,
                     #[cfg(debug_assertions)]
                     "test".to_string(),
                     "todo",
-                ) //2 weight bias
-                .conv_1d("conv", 3, 1, 2, ConvConfig::default(), None) //2 weight bias
-                .conv_1d("conv", 5, 1, 2, ConvConfig::default(), None) //2 weight bias
+                )? //2 weight bias
+                .conv_1d("conv", 3, 1, 2, ConvConfig::default(), None)? //2 weight bias
+                .conv_1d("conv", 5, 1, 2, ConvConfig::default(), None)? //2 weight bias
                 .linear_s(
                     20,
                     #[cfg(debug_assertions)]
                     "test".to_string(),
                     "todo",
-                ) //2 weight bias
-                .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
+                )? //2 weight bias
+                .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
                 .end_seq()
         }
 

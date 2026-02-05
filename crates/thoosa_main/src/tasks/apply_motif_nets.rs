@@ -481,7 +481,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
     let tho_tensor: Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::from(t));
     let ones: Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::from(Tensor::ones([1, 1, l], FLOAT_CPU)));
 
-    let node = SeqBuilder::new(num_features, None)
+    let node = SeqBuilder::new(num_features, None)?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
 
@@ -492,25 +492,25 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
                 Ok(r)
             })),
             None,
-        )
+        )?
         .split(
             vec![
-                SeqBuilder::new(num_features, None).conv_1d("conv", l as u32, 1, 1, cfg, Some(Arc::clone(&tho_tensor))).end_seq(),
-                SeqBuilder::new(num_features, None)
+                SeqBuilder::new(num_features, None)?.conv_1d("conv", l as u32, 1, 1, cfg, Some(Arc::clone(&tho_tensor)))?.end_seq()?,
+                SeqBuilder::new(num_features, None)?
                     .closure(
                         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                             Ok(t.f_pow_tensor_scalar(2)?)
                         })),
                         None,
-                    )
-                    .conv_1d("energy", l as u32, 1, 1, cfg, Some(Arc::clone(&ones)))
+                    )?
+                    .conv_1d("energy", l as u32, 1, 1, cfg, Some(Arc::clone(&ones)))?
                     .closure(
                         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                             Ok(t.f_clamp_min(1e-12)?) //.sqrt()
                         })),
                         None,
-                    )
-                    .end_seq()
+                    )?
+                    .end_seq()?
             ],
             Box::new(move |t: &Tensor| {
                 Ok(vec![
@@ -523,7 +523,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 
                 Ok((num / denom).squeeze_dim(1))
             }),
-        )
+        )?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
 
@@ -532,8 +532,8 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
                 Ok(t.shallow_clone())
             })),
             None,
-        )
-        .end_seq();
+        )?
+        .end_seq()?;
 
 
 
