@@ -1020,20 +1020,22 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 ) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
     let vs = VarStore::new(device);
 
-
-    let builder = Arc::new( move |path:&nn::Path|SeqBuilder::new(num_features, None)
-        .linear_s_with_conf(
-            "todo",
-            1,
-            LinearConfig {
-                ws_init: nn::Init::Const(k), //conflicts with ctor's init
-                bs_init: None,
-                bias: false,
-            },
-            #[cfg(debug_assertions)]
-            "test",
-        )
-        .end_seq().build_tch_module(path));
+    let builder = Arc::new(move |path: &nn::Path| -> Result<Box<dyn crate::my_tch::ThoModule<DI, DO>>, ThoError> {
+        SeqBuilder::new(num_features, None)?
+            .linear_s_with_conf(
+                "todo",
+                1,
+                LinearConfig {
+                    ws_init: nn::Init::Const(k), //conflicts with ctor's init
+                    bs_init: None,
+                    bias: false,
+                },
+                #[cfg(debug_assertions)]
+                "test",
+            )?
+            .end_seq()?
+            .build_tch_module(path)
+    });
 
     Ok(Box::new(ThoModuleWithStore::with_factory(
         "test_net",
