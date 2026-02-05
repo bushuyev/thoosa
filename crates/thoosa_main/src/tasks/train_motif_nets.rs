@@ -150,7 +150,7 @@ where
     }
 
 }
-// #[async_trait]
+
 impl <L, C> AsyncStage for TrainMotifNets<L, C>
 where
     C: RunCtx + Adjustable + 'static,
@@ -167,7 +167,9 @@ where
 
         let channels = self.ws.read().channels();
 
-        let results = futures::stream::iter(select_motifs_run_ids.iter().flat_map(|select_motifs_run_id|{
+
+        let select_motifs_run_ids_clone = select_motifs_run_ids.clone();
+        let futures = select_motifs_run_ids_clone.iter().flat_map(|select_motifs_run_id| {
             let selected_motifs = self.store.read().list_selected_motifs(*select_motifs_run_id, channels).unwrap();
 
             debug!("TrainMotifNets::run: select_motifs_run_id={select_motifs_run_id} selected_motifs={selected_motifs:?}");
@@ -175,7 +177,7 @@ where
             selected_motifs.into_iter()
                 .flat_map(move |channels_motifs|
                     channels_motifs.into_iter().map(move |motif_id_rate| (motif_id_rate, select_motifs_run_id)))
-        }))
+        })
         .map(|(motif_id_rate, select_motifs_run_id)|{
             let motif_loader = Arc::clone(&self.motif_loader);
             let random_slices_loader = Arc::clone(&self.random_slices_loader);
@@ -203,8 +205,8 @@ where
 
 
                 let motif_width = with_data!(ctx.branch(Some("train_motif_nets_motif_width"), false, false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
-                    Ok::<_, ThoError>(motif.extra().window)
-                })?;
+                Ok::<_, ThoError>(motif.extra().window)
+            })?;
 
                 let random_slices_for_batch = Arc::clone(&random_slices);
 
@@ -215,7 +217,7 @@ where
                         async move {
                             MotifsBatch::new(motif, Arc::clone(&random_slices), rc.common_training_args.batch_size as i64, device_idx, cache_area, ctx).await
                         }.boxed()
-                   },
+                    },
                     move |rc:&TrainMotifsNetsRunConfig, vs: &VarStore| {
                         let params = match &rc.net {
                             MotifNetTypeArgs::ConvNet(_) => MotifNetParams::new_conv(motif_width, rc.num_layers, rc.step, rc.channels, rc.kernel),
@@ -263,18 +265,29 @@ where
             }
 
         })
-        .buffer_unordered(crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT)
-        .filter_map(|join_res| async move {
-            match join_res {
-                Ok(opt_i) => Some(opt_i),
+        .collect::<Vec<_>>();
+
+        let mut results = Vec::with_capacity(futures.len());
+
+        let (mut ok, mut err) = (0usize, 0usize);
+        let total = futures.len();
+        let mut stream = futures::stream::iter(futures)
+            .buffer_unordered(crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT);
+
+        while let Some(r) = stream
+            .next().await {
+            match r {
+                Ok(opt_i) => {
+                    ok += 1;
+                    info!("done {} ({}/{}) out of {}", ok + err, ok, err, total);
+                    results.push(opt_i);
+                },
                 Err(e) => {
+                    err+=1;
                     error!("train motif failed: {e:?}");
-                    None
                 }
             }
-        })
-        .collect::<Vec<_>>()
-        .await;
+        }
 
 
         Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(select_motifs_run_ids, results), CacheArea::default())))
