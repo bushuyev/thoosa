@@ -7,7 +7,7 @@ use tch::kind::FLOAT_CPU;
 #[cfg(test)]
 use crate::gaussian::{Gaussian, GaussianProcessFit};
 #[cfg(test)]
-use crate::utils::vec_f32_from;
+use crate::utils::to_vec_f32;
 
 //http://arxiv.org/abs/1012.2599, (4)
 #[cfg(test)]
@@ -30,9 +30,9 @@ where
     debug!(
         "expected_improvement: ξ={} x={:?} y_best={:?} impr={:?}",
         ξ,
-        vec_f32_from(&x),
-        vec_f32_from(&y_best),
-        vec_f32_from(&impr)
+        to_vec_f32(&x),
+        to_vec_f32(&y_best),
+        to_vec_f32(&impr)
     );
 
     let z = impr.divide(&σ);
@@ -46,12 +46,12 @@ where
     let pdf = g.pdf(&z);
     debug!(
         "expected_improvement: x={:?} µ={:?} σ={:?} z={:?} cdf={:?} pdf={:?}",
-        vec_f32_from(&x),
-        vec_f32_from(&μ),
-        vec_f32_from(&σ),
-        vec_f32_from(&z),
-        vec_f32_from(&cdf),
-        vec_f32_from(&pdf)
+        to_vec_f32(&x),
+        to_vec_f32(&μ),
+        to_vec_f32(&σ),
+        to_vec_f32(&z),
+        to_vec_f32(&cdf),
+        to_vec_f32(&pdf)
     );
 
     let ei = impr * cdf + σ * pdf;
@@ -87,7 +87,7 @@ mod tests {
     use crate::argmin::{TensorProblem, run_lbfgs};
     use crate::gaussian::GaussianProcess;
     use crate::opt::kernel_rbf;
-    use crate::utils::{from, plot_series_with_points, sin3_pow2, vec_f32_from};
+    use crate::utils::{from, plot_series_with_points, sin3_pow2, to_vec_f32};
 
     #[test]
     fn test_expected_improvement() -> Result<(), ThoError> {
@@ -122,7 +122,7 @@ mod tests {
         )?;
 
 
-        let x_vec = vec_f32_from(&x_t);
+        let x_vec = to_vec_f32(&x_t);
         let _ei_for_all_x = x_vec
             .iter()
             .map(|x_i| {

@@ -151,7 +151,7 @@ mod tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::Simple;
     use thoosa_common::utils::{
-        from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, vec_f32_from,
+        from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32,
     };
     use thoosa_common::ws::FsWorkspace;
     use thoosa_common::ws::Workspace;
