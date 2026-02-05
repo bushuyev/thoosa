@@ -1550,6 +1550,7 @@ mod cli_tests {
     use tch::display::{set_print_options, PrinterOptions};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{nn, Device, IndexOp, Tensor};
+    use tch::Kind::Float;
     use thoosa_common::find_motifs_run_config::{
         FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue,
     };
@@ -1583,7 +1584,7 @@ mod cli_tests {
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
-    use thoosa_shared::traits::DataId;
+    use thoosa_shared::traits::{Data, DataId};
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
     use crate::tasks::slices_stats::{Aggr, AverageDistanceValue, Metrics, SlicesStats};
     use crate::tasks::cross_dims::MotifSlices;
@@ -2054,11 +2055,13 @@ mod cli_tests {
     }
      */
 
-    #[test]
-    fn test_apply_moitf_net() -> Result<(), ThoError>{
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_apply_moitf_net() -> Result<(), ThoError>{
+        GlobalCtx::init_devices(2);
         let ws = Arc::new(RwLock::new(FsWorkspace::new("/home/bu/tmp/ws_test_hbac", 20, 684400, 200)?));
         let tensors_path = ws.read().tensors_path().clone();
         let store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
+        let mut ctx = RunCtxWithPermits::new(0, "run_plot_motif_slices");
 
         let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
             move |key, _| {
@@ -2087,43 +2090,58 @@ mod cli_tests {
             Arc::new(SlicesStats::<RunCtxWithPermits>::new()),
         ));
 
+        let resource = "2722809500"; //3879494837";
 
-
-        let t = Tensor::load("/home/bu/tmp/ws_test_hbac/tensors/1_2722809500.pt")?;
+        let t = Tensor::load(format!("/home/bu/tmp/ws_test_hbac/tensors/1_{resource}.pt"))?;
 
         let channel = 16;
-        let channel_16_t = t.i((channel, ..)).view((1, -1));
-        plot_t(&channel_16_t, "1_2722809500")?;
-        let t_1 = white_tophat1d(&channel_16_t, 101)?;
+        let motif_id= 23100;
+        let run_id = 5792;
+
+        let motif = Arc::clone(&motif_loader_impl).run(
+            Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(DataId(motif_id as u32), None), CacheArea::default())),
+            ctx.branch(Some("plot_motif_loader"), false, false),
+        ).await?;
+
+        let motif_t = Arc::into_inner(motif).expect("no motif").take_data(0).await?;
+
+
+        let channel_t = t.i((channel, ..));
+        plot_t(&channel_t.view((1, -1)), &format!("1_{resource}_{channel}"))?;
+        debug!("motif_t.data.size={:?}", motif_t.data().size());
+        plot_t(&motif_t.data().as_ref().view((1, -1)), &format!("1_{motif_id}"))?;
+
+
+
+        /*let t_1 = white_tophat1d(&channel_16_t, 101)?;
         debug!("t_1={:?}", t_1.size());
         let mask = local_max_1d(&t_1.view((1,1,-1)), 101)?;
         let t_1_masked = t_1 * mask;
-        plot_t(&t_1_masked.squeeze_dim(1), "1_2722809500_t_1_masked")?;
+        plot_t(&t_1_masked.squeeze_dim(1), "1_2722809500_t_1_masked")?;*/
 
-        // let motif_id= 15781;
-        //
-        //
-        //
-        // let (params, module)  = ws.read().load_motif_net(&PathBuf::from(format!("{channel}/{motif_id}_3852/")), &Cuda(0))?;
-        // match params.net_type {
-        //     MotifNetTypeParams::LinNetParams(_) => {
-        //         debug!("LinNetParams");
-        //         todo!()
-        //     }
-        //     MotifNetTypeParams::ConvNetParams(_) => {
-        //         debug!("ConvNetParams");
-        //         todo!()
-        //     }
-        //     MotifNetTypeParams::CosineNetParams(MotifCosineNetParams{ num_features, stride, channels, kernel }) => {
-        //         debug!("CosineNetParams");
-        //
-        //         let out = module.tho_forward(&t.unfold(0, num_features as i64, stride as i64).into(), None, false)?;
-        //
-        //         debug!("out.size={:?}", out.size());
-        //
-        //         plot_t(&out.t.view((1, -1)), "7511 applied")?;
-        //     }
-        // }
+
+
+        let (params, module)  = ws.read().load_motif_net(&PathBuf::from(format!("{channel}/{motif_id}_{run_id}/")), &Cpu)?;
+        match params.net_type {
+            MotifNetTypeParams::LinNetParams(_) => {
+                debug!("LinNetParams");
+                todo!()
+            }
+            MotifNetTypeParams::ConvNetParams(_) => {
+                debug!("ConvNetParams");
+                todo!()
+            }
+            MotifNetTypeParams::CosineNetParams(MotifCosineNetParams{ num_features, stride, channels, kernel }) => {
+                debug!("CosineNetParams: num_features={num_features} stride={stride} channels={channels} kernel={kernel}");
+
+                let out = module.tho_forward(&channel_t.unfold(0, num_features as i64, stride as i64).into(), None, false)?;
+
+                debug!("out.size={:?}", out.size());
+
+                // plot_t(&out.t.softmax(0, Float).view((1, -1)), &format!("{motif_id}_applied_to_{resource}"))?;
+                plot_t(&out.t.view((1, -1)), &format!("{motif_id}_applied_to_{resource}"))?;
+            }
+        }
 
 
 

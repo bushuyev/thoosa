@@ -953,7 +953,9 @@ mod tests {
     use log::debug;
     use std::path::Path;
     use tch::Device::Cpu;
+    use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
+    use tch::Tensor;
     use thoosa_shared::{ThoError, cdt_for_dir};
 
     #[ctor::ctor]
@@ -1078,13 +1080,28 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
 
-        let params = MotifNetParams::new_cosine(10, 100, 32, 10);
+        let params = MotifNetParams::new_cosine(0, 1, 8, 10);
         let mut vs = VarStore::new(Cpu);
-        let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> =
             cosine_motif_node(match &params.net_type {
                 MotifNetTypeParams::CosineNetParams(v) => v,
                 _ => unreachable!(),
             }).build_tch_module(&vs.root())?;
+
+        net.tho_forward(
+            &Tensor::rand(
+                [
+                    10,
+                    1234i64,
+                ],
+                FLOAT_CPU,
+            )
+                .into(),
+            None,
+            false,
+        )?;
+
+
         vs.freeze();
 
         let net_id = ws.save_motif_net(&0, &0, &0, &vs, &params)?;
