@@ -1094,7 +1094,7 @@ pub mod tests {
     use thoosa_shared::runner::permits::MAX_PERMITS;
     use thoosa_common::find_motifs_run_config::{ByAvgEucDist, FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig};
     use thoosa_common::runs::{Labeled, Simple};
-    use thoosa_common::utils::{draw_function_plot, reset_print_options, vec_f32_from, z_norm, z_norm_2};
+    use thoosa_common::utils::{draw_function_plot, reset_print_options, to_vec_f32, z_norm, z_norm_2};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::generators::noise::generate_motifs_with_avg_distance;

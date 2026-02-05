@@ -129,7 +129,7 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor
 mod tests {
     use crate::transforms::filters::{band_pass_filter, clc_frequencies};
     use crate::transforms::utils::sin_t;
-    use crate::utils::{from, plot_series, vec_f32_from};
+    use crate::utils::{from, plot_series, to_vec_f32};
     use log::debug;
     use rand::SeedableRng;
     use rand::rngs::StdRng;

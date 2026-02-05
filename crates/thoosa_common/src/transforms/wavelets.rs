@@ -21,7 +21,7 @@ mod tests {
     use crate::transforms::filters::clc_frequencies;
     use crate::transforms::utils::{complex_conv, generate_signal, sin_t};
     use crate::transforms::wavelets::generate_morlet_wavelet;
-    use crate::utils::{from, plot_series, vec_f32_from};
+    use crate::utils::{from, plot_series, to_vec_f32};
     use log::debug;
     use rand::SeedableRng;
     use rand::rngs::StdRng;

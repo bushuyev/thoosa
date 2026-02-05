@@ -575,7 +575,7 @@ pub(crate) mod tests {
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
-    use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, plot_t, reset_print_options, test_net, vec_f32_from};
+    use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, plot_t, reset_print_options, test_net, to_vec_f32};
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_motifs::generators::non_overlapping::Interval;
     use thoosa_properties_map::ToHashmap;
@@ -628,7 +628,7 @@ pub(crate) mod tests {
                 if end > resource_len {
                     return Err(ThoError::new("motif placement exceeds resource length"));
                 }
-                let values = vec_f32_from(pattern);
+                let values = to_vec_f32(pattern);
                 for (offset, value) in values.iter().enumerate() {
                     signal[current + offset] = *value;
                 }
@@ -948,8 +948,8 @@ pub(crate) mod tests {
 
         plot_series_with_lanes(
             vec![
-                (format!("Tensor"), BLACK, vec_f32_from(&resource_a_t.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
-                (format!("Motif_0"), BLUE, vec_f32_from(&motif_t.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
+                (format!("Tensor"), BLACK, to_vec_f32(&resource_a_t.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
+                (format!("Motif_0"), BLUE, to_vec_f32(&motif_t.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
                 // (format!("Results"), RED, vec_f32_from(&out.transpose(1,2).upsample_linear1d(&[1000], false, None)).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
             ],
             format!("sig").as_str(),
@@ -962,7 +962,7 @@ pub(crate) mod tests {
 
         plot_series_with_lanes(
              vec![
-                 (format!("Results"), RED, vec_f32_from(&out.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
+                 (format!("Results"), RED, to_vec_f32(&out.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
              ],
              format!("sig").as_str(),
              (2000, 1000),
