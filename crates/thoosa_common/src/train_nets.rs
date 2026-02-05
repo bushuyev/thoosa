@@ -675,6 +675,7 @@ impl MotifNetParams {
         )
     }
 
+    //TODO
     pub fn num_features(&self) -> u32 {
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => v.num_features,
@@ -683,6 +684,7 @@ impl MotifNetParams {
         }
     }
 
+    //TODO
     pub fn stride(&self) -> u32 {
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => v.stride,
@@ -691,7 +693,8 @@ impl MotifNetParams {
         }
     }
 
-    pub fn motif_net(&self) -> Node {
+    //TODO
+    pub fn motif_net(&self) -> Result<Node, ThoError> {
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => lin_motif_node(v),
             MotifNetTypeParams::ConvNetParams(v) => conv_motif_node(v),
@@ -701,7 +704,7 @@ impl MotifNetParams {
 }
 
 
-pub fn conv_motif_node(params: &MotifConvNetParams) -> Node {
+pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
     debug!("motif_node: params={params:?}");
     let build = || -> Result<Node, ThoError> {
         let mut builder = SeqBuilder::new(params.num_features, None)?;
@@ -770,10 +773,10 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Node {
             .end_seq()
     };
 
-    build().unwrap_or_else(|e| panic!("conv_motif_node failed: {e:?}"))
+    build()
 }
 
-pub fn cosine_motif_node(params: &MotifCosineNetParams) -> Node {
+pub fn cosine_motif_node(params: &MotifCosineNetParams) -> Result<Node, ThoError> {
     debug!("cosine_motif_node: params={params:?}");
     let build = || -> Result<Node, ThoError> {
         let mut builder = SeqBuilder::new(params.num_features, None)?;
@@ -791,7 +794,7 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams) -> Node {
                 None,
             )?
             .cosine_conv_1d("cosine_bank", params.kernel, params.channels, params.channels, bank_cfg)?
-            .conv_1d("head_conv_1d", params.kernel, 1, 1, ConvConfig::default(), None)?
+            // .conv_1d("head_conv_1d", params.kernel, 1, 1, ConvConfig::default(), None)?
             // .closure(
             //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
             //         Ok(t.f_transpose(1, 2)?)
@@ -821,11 +824,11 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams) -> Node {
             .end_seq()
     };
 
-    build().unwrap_or_else(|e| panic!("cosine_motif_node failed: {e:?}"))
+    build()
 }
 
 
-pub fn lin_motif_node(params: &MotifLinNetParams) -> Node {
+pub fn lin_motif_node(params: &MotifLinNetParams) -> Result<Node, ThoError> {
     debug!("motif_node: params={params:?}");
     let build = || -> Result<Node, ThoError> {
         let mut builder = SeqBuilder::new(params.num_features, None)?;
@@ -863,7 +866,7 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> Node {
             .end_seq()
     };
 
-    build().unwrap_or_else(|e| panic!("lin_motif_node failed: {e:?}"))
+    build()
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -2749,7 +2752,7 @@ mod train_tests {
     ) -> Result<(), ThoError> {
         let mut vs_0 = VarStore::new(Cpu);
         let _test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            train_nets::lin_motif_node(&MotifLinNetParams::new(window, 1, 100))
+            train_nets::lin_motif_node(&MotifLinNetParams::new(window, 1, 100))?
                 .build_tch_module(&vs_0.root())?;
 
         let test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> = SeqBuilder::new(100, None)?
