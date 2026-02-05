@@ -470,6 +470,57 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BinaryHeadPool {
+    Max,
+    Mean,
+    Lse { tau: f64 },
+}
+
+#[derive(Debug)]
+pub struct BinaryHead {
+    alpha: Tensor,
+    beta: Tensor,
+    pool: BinaryHeadPool,
+}
+
+impl BinaryHead {
+    pub fn new(vs: &nn::Path, pool: BinaryHeadPool) -> Self {
+        let alpha = vs.var("alpha", &[], nn::Init::Const(5.0));
+        let beta = vs.var("beta", &[], nn::Init::Const(0.0));
+        Self { alpha, beta, pool }
+    }
+
+    pub fn forward_max(&self, sims: &Tensor) -> Result<Tensor, ThoError> {
+        let pooled = pool_time_max(sims).map_err(|e| ThoError::from_error("BinaryHead::forward_max", e))?;
+        pooled.f_mul(&self.alpha)?.f_add(&self.beta).map_err(|e| e.into())
+    }
+
+    pub fn forward_lse(&self, sims: &Tensor, tau: f64) -> Result<Tensor, ThoError> {
+        if tau <= 0.0 {
+            return Err(ThoError::new(format!("BinaryHead::forward_lse tau must be > 0, got {tau}")));
+        }
+        let pooled = pool_time_lse(sims, tau).map_err(|e| ThoError::from_error("BinaryHead::forward_lse", e))?;
+        pooled.f_mul(&self.alpha)?.f_add(&self.beta).map_err(|e| e.into())
+    }
+
+    pub fn forward_mean(&self, sims: &Tensor) -> Result<Tensor, ThoError> {
+        let pooled = pool_time_mean(sims).map_err(|e| ThoError::from_error("BinaryHead::forward_mean", e))?;
+        pooled.f_mul(&self.alpha)?.f_add(&self.beta).map_err(|e| e.into())
+    }
+}
+
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for BinaryHead {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        let logits = match self.pool {
+            BinaryHeadPool::Max => self.forward_max(t.as_ref())?,
+            BinaryHeadPool::Mean => self.forward_mean(t.as_ref())?,
+            BinaryHeadPool::Lse { tau } => self.forward_lse(t.as_ref(), tau)?,
+        };
+        Ok(logits.into())
+    }
+}
+
 #[derive(Debug)]
 pub struct MySharpeningHead1d {
     cls: nn::Conv1D,
