@@ -6,7 +6,7 @@ pub use crate::find_motifs_run_config::{FindMotifsRunConfigRangeOrValue, InputFi
 pub use thoosa_shared::RangeOrValue;
 
 use crate::builder::{Node, SeqBuilder};
-use crate::my_tch::{MyLinear, ThoModule};
+use crate::my_tch::{BinaryHeadPool, MyLinear, ThoModule};
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
 use crate::utils::{mask_from_lengths, masked_max, masked_mean, tensor_mem_size};
@@ -794,6 +794,7 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams) -> Result<Node, ThoError
                 None,
             )?
             .cosine_conv_1d("cosine_bank", params.kernel, params.channels, params.channels, bank_cfg)?
+            .binary_head("binary_head", BinaryHeadPool::Max)?
             // .conv_1d("head_conv_1d", params.kernel, 1, 1, ConvConfig::default(), None)?
             // .closure(
             //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
