@@ -4,7 +4,7 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use log::{debug, error};
-use tch::{nn, Kind, Tensor};
+use tch::{nn, Kind, TchError, Tensor};
 
 use tch::nn::{ConvConfig, Module};
 use tch::nn::{
@@ -321,8 +321,8 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveMaxPool1d {
             }
         }
         Ok(t.as_ref()
-            .f_adaptive_avg_pool1d(self.output_size as i64)?
-            .into())
+            .f_adaptive_max_pool1d(self.output_size as i64)?
+            .0.into())
     }
 }
 
@@ -390,70 +390,79 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 2]> {
 
 #[derive(Debug)]
 pub struct MyCosineConv1d {
-    ws: Tensor,
-    kernel: u32,
-    config: ConvConfig,
+    pub w: Tensor,       // [K, C, L] learnable filters
+    ones: Tensor,        // [1, 1, L] buffer for sliding energy
+    k: i64,              // out_channels (num filters)
+    c: i64,              // in_channels
+    l: i64,
+    config: ConvConfig
 }
 
 impl MyCosineConv1d {
-    pub fn new(vs: &nn::Path, in_channels: i64, out_channels: i64, kernel: i64, config: ConvConfig) -> Result<Self, ThoError> {
-        if config.padding != 0 {
-            return Err(ThoError::new(format!("MyCosineConv1d::new supports padding=0 only, got {}", config.padding)));
-        }
-        if config.dilation != 1 {
-            return Err(ThoError::new(format!("MyCosineConv1d::new supports dilation=1 only, got {}", config.dilation)));
-        }
-        if config.groups != 1 {
-            return Err(ThoError::new(format!("MyCosineConv1d::new supports groups=1 only, got {}", config.groups)));
-        }
+    /// Create a cosine-conv bank with K filters, C input channels, kernel length L.
+    /// Weights are N(0, 0.02).
+    pub fn new(vs: &nn::Path, c: i64, l: i64, config: ConvConfig) -> Result<Self, TchError> {
+        let k = 1;//for single motif
+        let device = vs.device();
+        let w = vs.var("W", &[1, c, l], nn::Init::Randn { mean: 0.0, stdev: 0.02 });
+        // fixed boxcar (sum over L) to build window norms; kept as a (non-trainable) buffer
+        let ones = Tensor::ones([1, 1, l], (Kind::Float, device));
+        Ok(Self { w, ones, k, c, l, config })
+    }
 
-        let ws = vs.f_var("weight", &[out_channels, in_channels, kernel], Init::Randn { mean: 0.0, stdev: 0.02 })?;
-        Ok(Self { ws, kernel: kernel as u32, config })
+    /// Ensure input is 3D [B, C, T] (adds singleton channel if needed).
+    pub fn ensure_3d(x: &Tensor) -> Tensor {
+        match x.size().as_slice() {
+            // [B, T] -> [B, 1, T]
+            [b, t] => x.f_unsqueeze(1).unwrap_or_else(|_| x.shallow_clone()).f_view([*b, 1, *t]).unwrap(),
+            _      => x.shallow_clone(),
+        }
     }
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, x_in: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         if let Some(lengths) = lengths.as_deref_mut() {
             for len in lengths.iter_mut() {
                 if *len < 0 {
                     return Err(ThoError::new(format!("MyCosineConv1d::tho_forward length must be >= 0, got {len}")));
                 }
-                *len = clc_conv1d_out(*len as u32, self.kernel, self.config)? as i64;
+                *len = clc_conv1d_out(*len as u32, self.l as u32, self.config)? as i64;
             }
         }
 
-        let x = t.as_ref();
-        let x_shape = x.size();
-        if x_shape.len() != 3 {
-            return Err(ThoError::new(format!("MyCosineConv1d::tho_forward expected [B,C,T], got {:?}", x_shape)));
-        }
+        let x = Self::ensure_3d(x_in.as_ref());
 
-        let window = self.kernel as i64;
-        let x_unfold = x.f_unfold(2, window, self.config.stride)?.f_transpose(1, 2)?.f_contiguous()?; // [B,T',C,K]
-        let unfolded_shape = x_unfold.size();
-        let (batch, out_len, channels, kernel) = (unfolded_shape[0], unfolded_shape[1], unfolded_shape[2], unfolded_shape[3]);
-        if self.ws.size()[1] != channels {
-            return Err(ThoError::new(format!("MyCosineConv1d::tho_forward unexpected channels: weights={} input={channels}", self.ws.size()[1])));
-        }
-        let x_flat = x_unfold.f_view([batch, out_len, channels * kernel])?; // [B,T',C*K]
+        // ---- Normalize filters per out-channel: Wn = W / ||W||_2 (over C,L) ----
+        // denom: [K, 1, 1]
+        let w2      = self.w.f_mul(&self.w)?;                                  // [K,C,L]
+        let sum_cl  = w2.f_sum_dim_intlist(&[1, 2][..], true, Kind::Float)?;       // [K,1,1]
+        let denom_w = sum_cl.f_sqrt()?.f_clamp_min(1e-12)?;                    // [K,1,1]
+        let w_norm  = self.w.f_div(&denom_w)?;                                  // [K,C,L]
 
-        let w_flat = self.ws.f_view([self.ws.size()[0], channels * kernel])?; // [K,C*K]
-        let w_norm = w_flat
-            .f_pow_tensor_scalar(2.0)?
-            .f_sum_dim_intlist(1, true, Kind::Float)?
-            .f_clamp_min(1e-12)?
-            .f_sqrt()?;
-        let w_unit = w_flat.f_div(&w_norm)?; // [K,C*K]
+        // ---- Numerator: standard cross-correlation with normalized kernels ----
+        // y_num: [B, K, T-L+1]
+        let y_num = x.f_conv1d(
+            &w_norm,              // weight [K,C,L]
+            None::<Tensor>,                // bias
+            &[1],                 // stride
+            &[0],                 // padding
+            &[1],                 // dilation
+            1,                    // groups
+        )?;
 
-        let num = x_flat.f_matmul(&w_unit.f_transpose(0, 1)?)?; // [B,T',K]
-        let denom = x_flat
-            .f_pow_tensor_scalar(2.0)?
-            .f_sum_dim_intlist(2, true, Kind::Float)?
-            .f_clamp_min(1e-12)?
-            .f_sqrt()?; // [B,T',1]
+        // ---- Denominator: sliding L2 norm of the window across *all* channels ----
+        // energy over channels: sum_c x^2 -> [B,1,T]
+        let x2        = x.f_mul(&x)?;                                          // [B,C,T]
+        let x2_sum_c  = x2.f_sum_dim_intlist(1, true, Kind::Float)?;        // [B,1,T]
+        // convolve with ones to get sum of squares per window: [B,1,T-L+1]
+        let win_energy = x2_sum_c.f_conv1d(&self.ones, None::<Tensor>, &[1], &[0], &[1], 1)?;
+        let denom_x    = win_energy.f_sqrt()?.f_clamp_min(1e-12)?;             // [B,1,T-L+1]
 
-        Ok(num.f_div(&denom)?.f_transpose(1, 2)?.into()) // [B,K,T']
+        // ---- Cosine similarity: divide per-position ----
+        // broadcasting: [B,K,T’] / [B,1,T’]
+        let y = y_num.f_div(&denom_x)?;
+        Ok(y.into())
     }
 }
 

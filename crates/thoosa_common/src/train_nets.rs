@@ -785,32 +785,34 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams) -> Node {
             })),
             None,
         )
-        .cosine_conv_1d("cosine_bank", params.kernel, 1, params.channels, bank_cfg)
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                Ok(t.f_transpose(1, 2)?)
-            })),
-            Some(params.channels),
-        )
-        .linear_s(
-            1,
-            #[cfg(debug_assertions)]
-            "cosine_head".to_string(),
-            "cosine_head",
-        )
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                Ok(t.f_transpose(1, 2)?)
-            })),
-            Some(1),
-        )
-        .adaptive_max_pool(1, 1)
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                Ok(t.squeeze_dim(2))
-            })),
-            Some(1),
-        )
+        .cosine_conv_1d("cosine_bank", params.kernel, params.channels, params.channels, bank_cfg)
+        .conv_1d("head_conv_1d", params.kernel, 1, 1, ConvConfig::default(), None)
+        // .closure(
+        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+        //         Ok(t.f_transpose(1, 2)?)
+        //     })),
+        //     Some(params.channels),
+        // )
+        // .linear_s(
+        //     1,
+        //     #[cfg(debug_assertions)]
+        //     "cosine_head".to_string(),
+        //     "cosine_head",
+        // )
+        // .closure(
+        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+        //         Ok(t.f_transpose(1, 2)?)
+        //     })),
+        //     Some(1),
+        // )
+        // // .adaptive_max_pool(1, 1)
+        // .max_pool(10, 1, 1)
+        // .closure(
+        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+        //         Ok(t.squeeze_dim(2))
+        //     })),
+        //     Some(1),
+        // )
         .end_seq()
 }
 

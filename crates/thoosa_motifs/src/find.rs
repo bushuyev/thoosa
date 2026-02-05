@@ -278,13 +278,6 @@ impl WithId for SelectMotifsSavableResult {
 
 impl SelectMotifsSavableResult {
     pub fn new(
-        find_motif_run_id: &[RunId],
-        run_config: Vec<SelectMotifsRunConfig>,
-        good_motif_ids_rates: Vec<(u32, f64)>,
-    ) {
-        todo!() //remove it, used from old code
-    }
-    pub fn new2(
         run_config_good_motif_ids: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)>,
     ) -> Self {
         Self {
