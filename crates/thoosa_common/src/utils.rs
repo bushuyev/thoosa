@@ -1182,6 +1182,32 @@ pub fn local_max_1d(xs: &Tensor, kernel: i64) -> Result<Tensor, TchError> {
     xs.f_mul(&mask_f)
 }
 
+/// Global-max over time: [B,1,T’] -> [B,1]
+pub fn pool_time_max(sims: &Tensor) -> Result<Tensor, TchError> {
+    // dim=2 is time; keepdim=false to drop it
+    let (pooled, _idx) = sims.f_max_dim(2, /*keepdim=*/false)?;
+    Ok(pooled) // [B,1]
+}
+
+/// LogSumExp (soft-max) pooling with temperature tau: [B,1,T’] -> [B,1]
+pub fn pool_time_lse(sims: &Tensor, tau: f64) -> Result<Tensor, TchError> {
+    // Stable LSE: m + τ*log(Σ exp((x-m)/τ))
+    let (m, _idx) = sims.f_max_dim(2, /*keepdim=*/true)?;           // [B,1,1]
+    let x_centered = sims.f_sub(&m)?.f_div_scalar(tau)?;            // [B,1,T’]
+    let ex = x_centered.f_exp()?;                                   // [B,1,T’]
+    let s = ex.f_sum_dim_intlist(2, /*keepdim=*/false, Kind::Float)?; // [B,1]
+    let lse = s.f_log()?.f_mul_scalar(tau)?;                         // [B,1]
+    Ok(lse.f_add(&m.f_squeeze_dim(2)?)?)                             // [B,1]
+}
+
+/// Mean over time (simple baseline): [B,1,T’] -> [B,1]
+pub fn pool_time_mean(sims: &Tensor) -> Result<Tensor, TchError> {
+    let tprime = sims.size()[2] as f64;
+    let sum = sims.f_sum_dim_intlist(2, /*keepdim=*/false, Kind::Float)?; // [B,1]
+    sum.f_div_scalar(tprime)
+}
+
+
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
 pub mod tests {

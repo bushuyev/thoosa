@@ -224,15 +224,14 @@ where
                             MotifNetTypeArgs::LinNet(_) => MotifNetParams::new_lin(motif_width, rc.num_layers, rc.step),
                             MotifNetTypeArgs::CosineNet(_) => MotifNetParams::new_cosine(motif_width, rc.step, rc.channels, rc.kernel),
                         };
-                        let node = params.motif_net();
-                        Ok((node.build_tch_module(&vs.root())?, params))
+                        Ok((params.motif_net()?.build_tch_module(&vs.root())?, params))
                     },
                     opt_config.clone(), //TODO clone
                     train_motifs_nodes_run_configs.clone(), //TODO clone
                     |pred_y: &Tensor, target: &Tensor| {
 
                         // let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean).set_requires_grad(true);
-                        let loss = pred_y.binary_cross_entropy_with_logits::<Tensor>(&target.totype(Float), None, None, Reduction::Mean).set_requires_grad(true);
+                        let loss = pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.totype(Float), None, None, Reduction::Mean)?.f_set_requires_grad(true)?;
                         debug!("run_train_motif_net: pred_y ={pred_y} target={target} loss={loss}");
 
                         Ok(loss)
