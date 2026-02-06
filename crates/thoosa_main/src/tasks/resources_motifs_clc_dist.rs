@@ -139,7 +139,7 @@ where
         let resources_iter = SlicesIter::new_with_offsets(unfold_params.step() as usize, resource_ids_sizes);
 
         let mut mask_makers = vec![
-            LocalMin { dim: 2 },
+            LocalMin { dim: 2, radius: 0 },
             Le {
                 v: input
                     .stacked_motifs_output

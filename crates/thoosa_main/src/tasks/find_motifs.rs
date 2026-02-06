@@ -198,8 +198,8 @@ where
                             let mut mask_makers = match &means_ctx {
                                 MasksCtx::Mean{k, ctx} => {
                                     vec![
-                                        LocalMin { dim: 1 },
-                                        LocalMin { dim: 2 },
+                                        LocalMin { dim: 1, radius: run_config.window as u64 /2 },
+                                        LocalMin { dim: 2, radius: run_config.window as u64 /2 },
                                         LeRunningMean {
                                             k: *k,
                                             avg: &ctx.means_acc,
@@ -209,8 +209,8 @@ where
                                 }
                                 MasksCtx::MaxDist{dists} => {
                                     vec![
-                                        LocalMin { dim: 1 },
-                                        LocalMin { dim: 2 },
+                                        LocalMin { dim: 1, radius: run_config.window as u64 /2 },
+                                        LocalMin { dim: 2, radius: run_config.window as u64 /2 },
                                         // LeQuantile {
                                         //     q: 0.1,
                                         //     with_mask: false,

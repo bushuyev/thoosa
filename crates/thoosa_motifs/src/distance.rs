@@ -53,7 +53,7 @@ pub enum MaskMaker<'a> {
     Gt {
         v: Tensor,
     }, //channels x thresholds
-    LocalMin {dim:i64},
+    LocalMin { dim: i64, radius: u64 },
 }
 
 impl<'a> MaskMaker<'a> {
@@ -106,8 +106,8 @@ impl<'a> MaskMaker<'a> {
                 Self::apply_prev(&prev_mask, le)
             }
             MaskMaker::Gt { v } => Self::apply_prev(&prev_mask, dists.f_gt_tensor(v)?),
-            MaskMaker::LocalMin {dim} => {
-                Self::apply_prev(&prev_mask, local_min_mask(&dists, *dim)?)
+            MaskMaker::LocalMin { dim, radius } => {
+                Self::apply_prev(&prev_mask, local_min_mask_suppressed(&dists, *dim, *radius as i64)?)
             },
             MaskMaker::LeRunningMean {
                 k,
@@ -308,6 +308,71 @@ fn local_min_mask(distances: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
     debug!("local_min_mask: full_mask.size={:?}", full_mask.size());
 
     Ok(full_mask)
+}
+
+/// Minimum over a sliding window of size (2*radius+1) along `dim`.
+/// Implemented as: minpool(x) = -maxpool(-x) using max_pool2d on a [B,1,1,L] view.
+fn window_min_along_dim(x: &Tensor, dim: i64, radius: i64) -> Result<Tensor, ThoError> {
+    if radius <= 0 {
+        return Ok(x.shallow_clone());
+    }
+
+    let sizes = x.size();
+    let ndim = sizes.len() as i64;
+    let dim = if dim < 0 { dim + ndim } else { dim };
+    if dim < 0 || dim >= ndim {
+        return Err(ThoError::new(format!("window_min_along_dim: invalid dim={dim} for ndim={ndim}")));
+    }
+
+    // permute so that `dim` becomes the last dimension
+    let mut perm: Vec<i64> = (0..ndim).filter(|&d| d != dim).collect();
+    perm.push(dim);
+
+    let x_perm = x.f_permute(&perm)?;
+
+    let mut perm_sizes = x_perm.size();
+    let l = perm_sizes.pop().unwrap(); // last dim length
+    let b: i64 = perm_sizes.iter().product(); // flatten all leading dims
+
+    // [B, 1, L] -> [B, 1, 1, L]
+    let x_flat = x_perm.f_reshape(&[b, 1, l])?;
+    let x_4d = x_flat.f_unsqueeze(2)?;
+
+    let k = 2 * radius + 1;
+
+    // minpool(x) = -maxpool(-x)
+    let neg = x_4d.f_neg()?;
+    let pooled = neg.f_max_pool2d(&[1, k], &[1, 1], &[0, radius], &[1, 1], false)?;
+    let win_min_4d = pooled.f_neg()?;
+
+    // back: [B, 1, 1, L] -> [.., L] -> unpermute to original layout
+    let win_min_flat = win_min_4d.f_squeeze_dim(2)?;
+    let win_min_perm = win_min_flat.f_reshape(&x_perm.size())?;
+
+    // invert permutation
+    let mut inv = vec![0i64; perm.len()];
+    for (i, &p) in perm.iter().enumerate() {
+        inv[p as usize] = i as i64;
+    }
+
+    Ok(win_min_perm.f_permute(&inv)?)
+}
+
+/// Keep only "well-separated" local minima:
+/// a point must be a local minimum AND the minimum in its ±radius neighborhood.
+fn local_min_mask_suppressed(distances: &Tensor, dim: i64, radius: i64) -> Result<Tensor, ThoError> {
+    let local = local_min_mask(distances, dim)?;
+
+    if radius <= 0 {
+        return Ok(local);
+    }
+
+    let win_min = window_min_along_dim(distances, dim, radius)?;
+
+    // `win_min` comes from the input values (via pooling), so exact equality is typically fine here.
+    let is_best_in_window = distances.f_eq_tensor(&win_min)?;
+
+    Ok(local.f_logical_and(&is_best_in_window)?)
 }
 
 /// distances - [channels x slices 0 x slices 1]
@@ -513,7 +578,7 @@ mod distance_tests {
     use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeRunningMean, LocalMin, Tril};
     use crate::distance::{
         MaskMaker, average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, local_min_mask,
-        mean_mask, slice_t, z_normalized_euclidean,
+        local_min_mask_suppressed, mean_mask, slice_t, z_normalized_euclidean,
     };
     use chrono::Utc;
     use log::__private_api::enabled;
@@ -791,7 +856,7 @@ mod distance_tests {
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
         let (mask, Some(dist_t)) =
-            super::clc_dist_d2_and_mask(slice_0, slice_1, true, &mut [LocalMin{dim:1}]).unwrap()
+            super::clc_dist_d2_and_mask(slice_0, slice_1, true, &mut [LocalMin { dim: 1, radius: 0 }]).unwrap()
         else {
             panic!("no dists");
         };
@@ -1173,6 +1238,18 @@ mod distance_tests {
                 false, true, true, false, false, false, true, true, false, false
             ])
             .view((1, 5, 2)),
+            mask
+        );
+    }
+
+    #[test]
+    fn test_local_min_mask_suppressed() {
+        let distances = Tensor::from_slice(&[5.0, 2.0, 3.0, 1.0, 4.0]).view((1, 5, 1));
+
+        let mask = local_min_mask_suppressed(&distances, 1, 2).unwrap();
+
+        assert_eq!(
+            Tensor::from_slice(&[false, false, false, true, false]).view((1, 5, 1)),
             mask
         );
     }
@@ -1726,7 +1803,7 @@ mod distance_tests {
 
         debug!("distances={distances:?}");
 
-        let mask = LocalMin{dim: 1}.make_mask(None, &distances).unwrap();
+        let mask = LocalMin { dim: 1, radius: 0 }.make_mask(None, &distances).unwrap();
 
         trace!("mask=\n{mask}");
         debug!("mask.nonzero=\n{}", mask.nonzero());
