@@ -555,7 +555,7 @@ pub fn pulse_in_rand(
     pulse_scale: f32,
     max_slope: f32,
 ) -> Vec<f32> {
-    let random = random_v(n, random_amplitude, max_slope);
+    let random = test_utils::random_v(n, random_amplitude, max_slope);
     let _pulses_len: usize = pulses.iter().map(|(offset, _pulse)| *offset).sum();
 
     join_with_offset::<f32>(0., pulse_scale, pulses, random)
@@ -659,66 +659,6 @@ pub fn pulse_v(μ: f32, σ: f32, n: i64, f: f32) -> Vec<f32> {
         .collect::<Vec<_>>()
 }
 
-pub enum MotifKind {
-    Triangle,
-    Sin,
-    Pulse
-}
-
-
-pub fn gen_motif(motif_len: usize, motif_kind: &MotifKind) -> Vec<f32> {
-    match motif_kind {
-        MotifKind::Triangle => generate_triangle_wave(motif_len).into_iter().map(|v| v as f32).collect(),
-        MotifKind::Sin => generate_sine_wave::<f32>(motif_len),
-        MotifKind::Pulse => pulse_v(motif_len as f32 / 2., motif_len as f32 / 4., motif_len as i64, 10.)
-    }
-}
-
-
-pub fn random_v(n: u32, amplitude: f32, max_slope: f32) -> Vec<f32> {
-    let mut signal = Vec::with_capacity(n as usize);
-
-    let mut current_value = 0.0;
-    let mut prev_value = 0.0;
-
-    let rnd_vals_0 = (0..n)
-        .flat_map(move |_i| {
-            std::iter::repeat(rand::rng().random_range(-max_slope..max_slope)).take(1)
-        })
-        .collect::<Vec<f32>>();
-    let rnd_vals_1 = (0..n / 10)
-        .flat_map(move |_i| {
-            std::iter::repeat(rand::rng().random_range(-max_slope..max_slope)).take(10)
-        })
-        .collect::<Vec<f32>>();
-    let rnd_vals_2 = (0..n / 60)
-        .flat_map(move |_i| {
-            std::iter::repeat(rand::rng().random_range(-max_slope..max_slope)).take(100)
-        })
-        .collect::<Vec<f32>>();
-    let rnd_vals_3 = (0..n / 120)
-        .flat_map(move |_i| {
-            std::iter::repeat(rand::rng().random_range(-max_slope..max_slope)).take(300)
-        })
-        .collect::<Vec<f32>>();
-
-    rnd_vals_0
-        .into_iter()
-        .zip(
-            rnd_vals_1
-                .into_iter()
-                .zip(rnd_vals_2.into_iter().zip(rnd_vals_3.into_iter())),
-        )
-        .for_each(|(r_0, (r_1, (r_2, r_3)))| {
-            // debug!("random_v: r_0={:?}, r_1={:?}, r_2={:?}, r_3={:?}", r_0, r_1, r_2, r_3);
-
-            current_value = prev_value + 10. * r_0 + r_1 + r_2 + r_3;
-            signal.push(current_value * amplitude);
-            prev_value = current_value;
-        });
-
-    signal
-}
 
 pub fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Sync + 'static>>
 where
@@ -1353,8 +1293,8 @@ mod shared_tests {
     use crate::val::NamedVal;
     use crate::{
         add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
-        make_combos, parse_range_str, snake_to_camel, test_utils, RangeOrValue,
-        Cause, ResourceType, ThoError,
+        make_combos, parse_range_str, snake_to_camel, test_utils, Cause,
+        RangeOrValue, ResourceType, ThoError,
     };
     use std::sync::Arc;
     use clap::{Args, Parser};
