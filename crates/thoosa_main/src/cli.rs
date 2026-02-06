@@ -572,6 +572,7 @@ where
             let store_in_find_motifs = Arc::clone(&store);
             let ws_in_find_motifs = Arc::clone(&ws);
             let loader_in_find_motifs = Arc::clone(&loader);
+
             let find_motif_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
                 None,
                 find_motifs_run_config_range_or_value,
@@ -631,9 +632,6 @@ where
             info!("select motifs done: find_motif_run_ids={find_motif_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
 
             debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
-
-
-
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
                 TrainMotifNetInput::new(select_motifs_run_ids.clone(), Arc::clone(&opt_config)),
@@ -1951,11 +1949,20 @@ mod cli_tests {
             || ctx.branch(Some("find_motifs_test"), false, false),
         ).await?;
 
+
+        let train_motif_net_run_config =
+            serde_json5::from_str::<TrainMotifsNetsRunConfigRangeOrValue>(
+                r#"{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'opt_max_evals':'3', 'opt_n_init': '3'}, 'num_layers': '3..4', 'step':'10', 'channels':'32', 'kernel':'10', 'net': {CosineNet:{'_dummy':0}}}"#,
+            )?;
+
+
+        ////
+
         let train_label_net_run_config =
         serde_json5::from_str::<TrainLabelNetsRunConfigRangeOrValue>(
             r#"{
                 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'opt_max_evals':'3', 'opt_n_init': '3'},
-                'net': {ConvNet:{'num_conv_layers':'3..10','hidden_conv_channels':'64', 'num_head_layers':'10',  'kernel':'100'}}
+                'net': {ConvNet:{'num_conv_layers':'3..10','hidden_conv_channels':'64', 'num_head_layers':'10', 'num_head_features':'10', 'kernel':'100','joint':{AttnPool1d:{'_dummy':0}}}}
             }"#,
         )?;
 
@@ -2090,13 +2097,13 @@ mod cli_tests {
             Arc::new(SlicesStats::<RunCtxWithPermits>::new()),
         ));
 
-        let resource = "2722809500"; //3879494837";
+        let resource = "1315636310"; //3879494837";
 
         let t = Tensor::load(format!("/home/bu/tmp/ws_test_hbac/tensors/1_{resource}.pt"))?;
 
-        let channel = 16;
-        let motif_id= 23100;
-        let run_id = 5792;
+        let channel = 13;
+        let motif_id= 22127;
+        let run_id = 7777772;
 
         let motif = Arc::clone(&motif_loader_impl).run(
             Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(DataId(motif_id as u32), None), CacheArea::default())),
@@ -2107,9 +2114,9 @@ mod cli_tests {
 
 
         let channel_t = t.i((channel, ..));
-        plot_t(&channel_t.view((1, -1)), &format!("1_{resource}_{channel}"))?;
+        plot_t(&channel_t.view((1, -1)), &format!("resource_1_{resource}_{channel}"))?;
         debug!("motif_t.data.size={:?}", motif_t.data().size());
-        plot_t(&motif_t.data().as_ref().view((1, -1)), &format!("1_{motif_id}"))?;
+        plot_t(&motif_t.data().as_ref().view((1, -1)), &format!("motif_{motif_id}"))?;
 
 
 
