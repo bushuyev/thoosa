@@ -187,8 +187,9 @@ where
         device_idx: usize,
         vs: Arc<Mutex<VarStore>>,
         run_config: RC,
+        descr:String
     ) -> BoxFuture<'static, Result<(f32, NP), ThoError>> {
-
+        debug!("TrainNet::run_inner: descr={descr}");
         let (node, params) = {
             let vs_guard = vs.lock();
             match (self.net)(&run_config, &vs_guard) {
@@ -232,10 +233,10 @@ where
         Box::pin(async move {
 
             let batch = (self.batch)(ctx.branch(Some("train_batch"), false, false), &run_config).await?;
-            debug!("TrainNet::run_inner: device={:?} cycles={}", train_step.device(), epochs);
+            debug!("TrainNet::run_inner: descr={descr} device={:?} cycles={}", train_step.device(), epochs);
             {
                 let opt = train_step.opt.lock();
-                debug!("TrainNet::run_inner: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
+                debug!("TrainNet::run_inner: descr={descr}  opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
             }
 
             let oom_handler = OOMHandler::new(
@@ -258,15 +259,15 @@ where
             let mut saved_best = false;
 
             for idx in 1..epochs {
-                debug!("TrainNet::run_inner, train:  0. cuda_mem={:?}",maybe_cuda_mem(&device));
+                debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?}",maybe_cuda_mem(&device));
 
                 let mut batches = batch.train_batch_stream().await;
-                debug!("TrainNet::run_inner, train:  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
+                debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
                 while let Some(Ok((x_t_0, lengths, expected_y))) = batches.next().await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, lengths, expected_y));
 
-                    debug!("TrainNet::run_inner, train:  before oom input.id={:?}", input.id());
+                    debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?}", input.id());
 
                     oom_handler.run(
                         &train_step,
@@ -282,7 +283,7 @@ where
                         ),
                     ).await?;
 
-                    debug!("TrainNet::run_inner, train:  after oom input.id={:?}", input.id());
+                    debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?}", input.id());
 
                 }
 
@@ -290,10 +291,10 @@ where
 
                 if idx % validation_step == 0 || idx == epochs - 1 {
 
-                    debug!("TrainNet::run_inner, valid:  0. cuda_mem={:?}",maybe_cuda_mem(&device));
+                    debug!("TrainNet::run_inner, valid: descr={descr}  0. cuda_mem={:?}",maybe_cuda_mem(&device));
 
                     let mut batches = batch.valid_batch_stream().await;
-                    debug!("TrainNet::run_inner, valid:  1. cuda_mem={:?}",maybe_cuda_mem(&device));
+                    debug!("TrainNet::run_inner, valid: descr={descr}  1. cuda_mem={:?}",maybe_cuda_mem(&device));
                     let mut valid_loss_sum = 0f32;
                     let mut valid_loss_count = 0u32;
 
@@ -326,13 +327,13 @@ where
                         } else {
                             bad_epochs += 1;
                             if bad_epochs >= patience {
-                                debug!("train: early stopping triggered valid_loss={valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
+                                debug!("TrainNet::run_inner: descr={descr}  early stopping triggered valid_loss={valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
                                 break;
                             }
                         }
-                        debug!("train: valid_loss={valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
+                        debug!("TrainNet::run_inner: descr={descr}  valid_loss={valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
                     } else {
-                        debug!("train: valid_loss skipped, no validation batches");
+                        debug!("TrainNet::run_inner: descr={descr}  valid_loss skipped, no validation batches");
                     }
 
                 }
@@ -343,10 +344,10 @@ where
             if saved_best {
                 let mut vs_guard = vs.lock();
                 vs_guard.load(&best_checkpoint_path)?;
-                debug!("train: final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
+                debug!("TrainNet::run_inner: descr={descr}  final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
                 std::fs::remove_file(best_checkpoint_path)?;
             } else {
-                warn!("train: done without saving best for run_config={run_config:?}");
+                warn!("TrainNet::run_inner: descr={descr}  done without saving best for run_config={run_config:?}");
             }
 
 
@@ -402,15 +403,15 @@ where
             let self_for_train = Arc::clone(&self);
             let device_idx_for_train = device_idx;
 
-
+            let descr = self.descr.clone();
             let (var_store, node_params, run_config, loss) = opt_train::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),
                 move |vs: Arc<Mutex<VarStore>>, run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
-                    debug!("TrainNet::run, about to call run_inner: run_config={:?}", run_config);
+                    debug!("TrainNet::run, about to call run_inner: descr={descr:?} run_config={:?}", run_config);
 
                     let self_arc = Arc::clone(&self_for_train);
 
-                    self_arc.run_inner(ctx.branch(/*TODO impl WithId for RunConfigs*/Some(&format!("train on run_config={run_config:?}")), false, false), device_idx_for_train, vs, run_config)
+                    self_arc.run_inner(ctx.branch(/*TODO impl WithId for RunConfigs*/Some(&format!("train on run_config={run_config:?}")), false, false), device_idx_for_train, vs, run_config, descr.clone())
                 },
                 run_config_source,
                 ThoDevice::from(device_idx).into(),

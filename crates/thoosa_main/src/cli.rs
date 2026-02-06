@@ -39,12 +39,12 @@ use tch::{Device, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::{ThoDevice};
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{ByAvgEucDist, ByAvgEucDistRangeOrValue, DistanceRunningMean, DistanceRunningMeanRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_common::find_motifs_run_config::{ByAvgEucDist, ByAvgEucDistRangeOrValue, DistanceRunningMean, DistanceRunningMeanRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MaxDistanceRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{load_final_model, opt_train, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
+use thoosa_common::train_nets::{load_final_model, opt_train, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
 use thoosa_common::utils::{cuda_mem, from, lin_t, list_devices, plot_series, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
@@ -673,7 +673,7 @@ async fn run_all(
     let ws_in_find_motifs = Arc::clone(&ws);
     let loader_in_find_motifs = Arc::clone(&loader);
 
-    let find_motif_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
+    let find_motifs_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
         None,
         find_motifs_run_config_range_or_value,
         find_motifs_input,
@@ -696,12 +696,12 @@ async fn run_all(
         || root_ctx.branch(Some("find motifs"), true, false),
     ).await?;
 
-    info!("find motifs done, find_motif_run_ids={find_motif_run_ids:?}");
+    info!("find motifs done, find_motif_run_ids={find_motifs_run_ids:?}");
 
     debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
     let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
-        Some(find_motif_run_ids.clone()),
+        Some(find_motifs_run_ids.clone()),
         select_motifs_run_config,
         select_motifs_input,
         &ws,
@@ -718,7 +718,7 @@ async fn run_all(
                     &ws
                 )),
                 run_configs,
-                find_motif_run_ids.clone(),
+                find_motifs_run_ids.clone(),
                 run_all_args.max_chunk_size as i64,
                 #[cfg(test)]
                 None
@@ -727,7 +727,14 @@ async fn run_all(
         || root_ctx.branch(Some("select motifs"), true, false),
     ).await?;
 
-    info!("select motifs done: find_motif_run_ids={find_motif_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
+    info!("select motifs done: find_motifs_run_ids={find_motifs_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
+
+    for find_motifs_run_id in &find_motifs_run_ids {
+
+            run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: Some(select_motifs_run_ids.clone()) }), &Cpu).await?;
+
+    }
+
 
     debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
@@ -876,6 +883,66 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
     (find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value)
 }
 
+fn run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrValue, FixedFindMotifsConfig, SelectMotifsRunConfigRangeOrValue, Arc<OptConfig>, TrainMotifsNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue) {
+    let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
+        id: None,
+        step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+        window: RangeOrValue::Value(100),
+        filter: None,
+        slices_filter: SlicesFilterRangeOrValue::DistanceRunningMean(DistanceRunningMeanRangeOrValue { k: RangeOrValue::Value(0.02) }),
+        // slices_filter: SlicesFilterRangeOrValue::MaxDistance(MaxDistanceRangeOrValue{k:RangeOrValue::Value(0.01), slices: RangeOrValue::Value(10)}),
+    };
+    let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
+    //////////////////////select
+    let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
+        id: None,
+        motif_selector: MotifSelectorRangeOrValue::ByAvgEucDist(ByAvgEucDistRangeOrValue { k: RangeOrValue::Value(0.5) })
+    };
+    /////////////////////train_motifs
+    let common_training_args = CommonTrainingRunConfigRangeOrValue {
+        cycles: RangeOrValue::Value(30),
+        batch_size: RangeOrValue::Value(20),
+        lr: RangeOrValue::Value(0.0001),
+    };
+    let opt_config = Arc::new(OptConfig::new(30, 10));
+
+    let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
+        id: None,
+        common_training_args: common_training_args.clone(),
+        // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
+        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{ _dummy: 0 }),
+        num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
+        step: RangeOrValue::Value(10),
+        channels: RangeOrValue::Value(32),
+        kernel: RangeOrValue::Value(10),
+    };
+    //////////////////////train labels
+    let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
+        id: None,
+        common_training_args: common_training_args.clone(),
+
+        net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
+            num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
+            hidden_conv_channels: RangeOrValue::Value(64),
+            num_head_layers: RangeOrValue::Value(10),
+            num_head_features: RangeOrValue::Value(256),
+            kernel: RangeOrValue::Value(10),
+            // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+            joint: ConvNetJointArgsRangeOrValue::MinMax(MinMaxArgsRangeOrValue{ _dummy: 0 }),
+        }),
+    };
+    //////////////////////train final
+    let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
+        id: None,
+        common_training_args,
+        net: FinalNetArgsRangeOrValue {
+            num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
+        },
+    };
+    (find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value)
+}
+
+
 
 fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrValue, FixedFindMotifsConfig, SelectMotifsRunConfigRangeOrValue, Arc<OptConfig>, TrainMotifsNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue) {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
@@ -987,7 +1054,6 @@ impl TrainLabelNetApplicable {
 }
 
 
-
 pub fn import_resources<F, R>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
@@ -996,6 +1062,22 @@ pub fn import_resources<F, R>(
     resource_to_tensor: R, //None for tests - do not import parquet files
     insert_label: bool,
     save_pure_sets: bool,
+) -> Result<Vec<ResourceId>, ThoError>
+where
+    F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
+    R: Fn(String) -> Result<Tensor, ThoError> + Sync + Send,
+{
+    import_resources_with_pure_sets(ws, store, labels, labeled_resources, resource_to_tensor, insert_label, Some(&[(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)]))
+}
+
+ pub fn import_resources_with_pure_sets<F, R>(
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
+    labels: &[&str],
+    labeled_resources: F,
+    resource_to_tensor: R, //None for tests - do not import parquet files
+    insert_label: bool,
+    pure_sets_lens: Option<&[(usize, bool)]>,
 ) -> Result<Vec<ResourceId>, ThoError>
 where
     F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
@@ -1060,22 +1142,21 @@ where
         failed_tensors.len()
     );
 
-    if save_pure_sets {
-        store_guard.save_pure_sets(3, true, &t)?;
-        store_guard.save_pure_sets(10, true, &t)?;
-        store_guard.save_pure_sets(50, true, &t)?;
-        store_guard.save_pure_sets(100, true, &t)?;
-        store_guard.save_pure_sets(150, true, &t)?;
-        store_guard.save_pure_sets(10000, false, &t)?;
+    if let Some(pure_sets_lens) = pure_sets_lens {
+        for pure_sets_len in pure_sets_lens {
+            store_guard.save_pure_sets(3, true, &t)?;//
+        }
 
-        store_guard.save_pure_balanced_sets("A10", Some(10), 0.6, 0.2, &t)?;
-        store_guard.save_pure_balanced_sets("B10", Some(10), 0.6, 0.2, &t)?;
-        store_guard.save_pure_balanced_sets("C10", Some(10), 0.6, 0.2, &t)?;
-        store_guard.save_pure_balanced_sets("A100", Some(100), 0.6, 0.2, &t)?;
-        store_guard.save_pure_balanced_sets("B100", Some(100), 0.6, 0.2, &t)?;
-        store_guard.save_pure_balanced_sets("C100", Some(100), 0.6, 0.2, &t)?;
-        store_guard.save_pure_balanced_sets("All", None,  0.6, 0.2, &t)?;
     }
+
+
+    // store_guard.save_pure_balanced_sets("A10", Some(10), 0.6, 0.2, &t)?;
+    // store_guard.save_pure_balanced_sets("B10", Some(10), 0.6, 0.2, &t)?;
+    // store_guard.save_pure_balanced_sets("C10", Some(10), 0.6, 0.2, &t)?;
+    // store_guard.save_pure_balanced_sets("A100", Some(100), 0.6, 0.2, &t)?;
+    // store_guard.save_pure_balanced_sets("B100", Some(100), 0.6, 0.2, &t)?;
+    // store_guard.save_pure_balanced_sets("C100", Some(100), 0.6, 0.2, &t)?;
+    // store_guard.save_pure_balanced_sets("All", None,  0.6, 0.2, &t)?;
 
     store_guard.save_groups_by_label_cnt(100, &t)?;
     t.commit()?;
@@ -1553,7 +1634,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, run_all, run_all_config_0, run_all_grid_step, run_grid, run_opt_step, run_plot_motif_slices, Cli, RunAllArgs};
+    use crate::cli::{import_resources, import_resources_with_pure_sets, run_all, run_all_config_0, run_all_config_1, run_all_grid_step, run_grid, run_opt_step, run_plot_motif_slices, Cli, RunAllArgs};
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Info, Trace, Warn};
@@ -1584,6 +1665,7 @@ mod cli_tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Simple};
+    use thoosa_common::tch_test_utils;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
@@ -1599,8 +1681,8 @@ mod cli_tests {
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
     use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::run_configs::RunId;
-    use thoosa_shared::test_utils::set_panic_hook;
-    use thoosa_shared::{cdt, cdt_for_dir, mono_key, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoError};
+    use thoosa_shared::test_utils::{set_panic_hook, MotifKind};
+    use thoosa_shared::{cdt, cdt_for_dir, mono_key, panic_to_err_async, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoError};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
@@ -1672,73 +1754,6 @@ mod cli_tests {
 
         Ok(resources)
     }
-
-
-    fn label_1_t(n: u32, max_y: f32) -> Tensor {
-        Tensor::vstack(&[Tensor::from_slice(
-            [
-                sig_one_imp(n, max_y, Some(10. ..12.), Some(10. ..12.), 0.1),
-                sig_one_imp(n, max_y, Some(10. ..12.), Some(10. ..12.), 0.1),
-            ]
-            .concat()
-            .as_slice(),
-        )])
-    }
-
-    fn label_0_t(n: u32, max_y: f32) -> Tensor {
-        Tensor::vstack(&[Tensor::from_slice(
-            [
-                sig_three_imp(n, max_y, Some(10. ..12.), Some(10. ..12.)),
-                sig_two_imp(n, max_y, Some(10. ..12.), Some(10. ..12.), 0.1),
-            ]
-            .concat()
-            .as_slice(),
-        )])
-    }
-
-    /*
-
-       input: batch x channels x n ->
-       unfold: -> batch x channels x slices x slice len
-       motif net: -> batch x channels x slices x 1(distance)
-       label net: batch x channels * motif nets x slices x 1(distance, flattened) -> batch x labels(p)
-       final net: batch x labels x labels(p) -> batch x labels(p)
-
-    */
-
-
-    fn _saw(n: u32) -> Vec<f32> {
-        saw_with_steps(n as usize, 10, 5.)
-    }
-
-    fn label_0_t_rs(n: u32, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>, max_y: f32) -> Tensor {
-        Tensor::vstack(&[
-            Tensor::from_slice(
-                [sig_0_v.clone(), _saw(n), sig_0_v.clone()]
-                    .concat()
-                    .as_slice(),
-            ),
-            // Tensor::from_slice([sig_2_v.clone(), _saw(n),          sig_2_v.clone()].concat().as_slice()),
-            // Tensor::from_slice([_saw(n),          sig_2_v.clone(), _saw(n)].concat().as_slice()),
-            Tensor::from_slice([_saw(n), _saw(n), _saw(n)].concat().as_slice()),
-            Tensor::from_slice([_saw(n), _saw(n), _saw(n)].concat().as_slice()),
-        ])
-    }
-
-    fn label_1_t_rs(n: u32, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>, max_y: f32) -> Tensor {
-        Tensor::vstack(&[
-            Tensor::from_slice(
-                [sig_1_v.clone(), _saw(n), sig_1_v.clone()]
-                    .concat()
-                    .as_slice(),
-            ),
-            // Tensor::from_slice([sig_2_v.clone(), _saw(n),          sig_2_v.clone()].concat().as_slice()),
-            // Tensor::from_slice([_saw(n),          sig_2_v.clone(), _saw(n)].concat().as_slice())
-            Tensor::from_slice([_saw(n), _saw(n), _saw(n)].concat().as_slice()),
-            Tensor::from_slice([_saw(n), _saw(n), _saw(n)].concat().as_slice()),
-        ])
-    }
-
 
 
     #[test]
@@ -1813,11 +1828,10 @@ mod cli_tests {
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;
 
-        let sig_0_v = sig_one_imp(n, max_y, None, None, 0.1);
-        let sig_1_v = sig_two_imp(n, max_y, None, None, 0.1);
-        let sig_2_v = sig_three_imp(n, max_y, None, None);
 
-        let x = lin_t(n);
+
+
+        // let x = lin_t(n);
         // plot_series(
         //     vec![
         //         (
@@ -1849,36 +1863,46 @@ mod cli_tests {
         //     (2000, 1000),
         //     &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str(),
         // )?;
+        let mut import_hash = HashMap::new();
+        for i in 0..20 {
+            let (t, _intervals) = tch_test_utils::resource_tensor(1000usize, &[
+                vec![(2, 100, MotifKind::Pulse)],
+                vec![],
+                vec![]
+            ], 100)?;
 
-        let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
-        debug!(
-            "t_0_0.size()={:?}, t_0_1.size()={:?}, t_1_0.size()={:?}, t_1_1.size()={:?}",
-            t_0_0.size(),t_0_1.size(),t_1_0.size(),t_1_1.size()
-        );
+            let stem = format!("t_0_{i}");
+            t.save(ws.read().tensors_path().join(&format!("{stem}.pt")))?;
+            t.save(ws.read().tensors_path().join(&stem))?;
 
-        t_0_0.save(ws.read().tensors_path().join(format!("t_0_0.pt")))?;
-        t_0_1.save(ws.read().tensors_path().join(format!("t_0_1.pt")))?;
-        t_1_0.save(ws.read().tensors_path().join(format!("t_1_0.pt")))?;
-        t_1_1.save(ws.read().tensors_path().join(format!("t_1_1.pt")))?;
+            import_hash.insert(stem, vec![("label_0".to_string(), 1.0)]);
 
-        // debug!("t_1_1 mean={} max-min={}", t_1_1.mean(None).double_value(&[]), t_1_1.max() - t_1_1.min());
+            let (t, _intervals) = tch_test_utils::resource_tensor(1000usize, &[
+                vec![(2, 100, MotifKind::Sin)],
+                vec![],
+                vec![]
+            ], 100)?;
+
+            let stem = format!("t_1_{i}");
+            t.save(ws.read().tensors_path().join(&format!("{stem}.pt")))?;
+            import_hash.insert(stem, vec![("label_1".to_string(), 1.0)]);
+        }
+
+
         let channels = 3;
         let tensors_path = ws.read().tensors_path().clone();
         let tensors_path_for_import = ws.read().tensors_path().clone();
 
         let mut store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
 
-        let imported_ids = import_resources(
+        debug!("test_run_all: import_hash={import_hash:?}");
+
+        let imported_ids = import_resources_with_pure_sets(
             &ws,
             &store,
             &["label_0", "label_1"],
-            || {
-                Ok(HashMap::from([
-                    ("t_0_0".to_string(), vec![("label_0".to_string(), 1.0)]),
-                    ("t_0_1".to_string(), vec![("label_0".to_string(), 1.0)]),
-                    ("t_1_0".to_string(), vec![("label_1".to_string(), 1.0)]),
-                    ("t_1_1".to_string(), vec![("label_1".to_string(), 1.0)]),
-                ]))
+            move || {
+                Ok(import_hash.clone())
             },
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
             |key| {
@@ -1886,29 +1910,10 @@ mod cli_tests {
                     .map_err(ThoError::from)
             },
             true,
-            false,//TODO more resources
+            Some(&[(5, true), (10, true)])
         )?;
 
         let resources = store.read().list_resources_by_ids(&imported_ids)?;
-
-        let resources_0_0 = resources
-            .iter()
-            .find(|r| r.file_stem().eq("t_0_0"))
-            .expect("t_0_0");
-        let resources_0_1 = resources
-            .iter()
-            .find(|r| r.file_stem().eq("t_0_1"))
-            .expect("t_0_1");
-        let resources_1_0 = resources
-            .iter()
-            .find(|r| r.file_stem().eq("t_1_0"))
-            .expect("t_1_0");
-        let resources_1_1 = resources
-            .iter()
-            .find(|r| r.file_stem().eq("t_1_1"))
-            .expect("t_1_1");
-
-        debug!("test_motifs: resources_0_0={resources_0_0:?}");
 
         let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
             move |key, _| {
@@ -1919,26 +1924,16 @@ mod cli_tests {
             ThoDevice::from(Device::Cpu),
         ));
 
-        let mut ctx = RunCtxWithPermits::new(1, "aa");
+        let mut ctx = RunCtxWithPermits::new(1, "test_run_all");
         ctx.add_permit(global_ctx.acquire_many(0, 1, Arc::new(SynKey::new([mono_key!("test", "test")]))).await?);
 
-        let cache_area = ctx.cache_area();
-        let resources_input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(Simple::new(ResourceType::List(
-                vec!["t_0_0", "t_0_1", "t_1_0", "t_1_1"]
-                    .into_iter()
-                    .map(|v| v.to_string())
-                    .collect(),
-            ))),
-            CacheArea::default()
-        ));
 
         let run_all_args = RunAllArgs{
             find_resources: "group:group 1 labels/all".to_string(),
             select_resources: "group:group 1 labels/all".to_string(),
             max_chunk_size: 10,
-            train_resource_group: "group:group 1 labels/all".to_string(),
-            valid_resource_group: "group:group 1 labels/all".to_string(),
+            train_resource_group: "group 1 labels/all".to_string(),
+            valid_resource_group: "group 1 labels/all".to_string(),
             run_config_cnt: "".to_string(),
         };
 
@@ -1949,9 +1944,9 @@ mod cli_tests {
             train_motif_nets_run_config_range_or_value,
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value)
-            = run_all_config_0(&run_all_args);
+            = run_all_config_1(&run_all_args);
 
-        run_all(
+        match panic_to_err_async!({run_all(
             &ws,
             &store,
             &loader,
@@ -1964,8 +1959,16 @@ mod cli_tests {
             train_motif_nets_run_config_range_or_value,
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value
-        ).await?;
+        ).await}){
+            Ok(_) => {
+                debug!("ok");
+            }
+            Err(e) => {
+                debug!("e={e:?}");
+            }
+        };
 
+        global_ctx.shutdown().await;
 
         /* let step_10_window_100 = r#"{
              step:"10",

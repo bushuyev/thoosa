@@ -353,7 +353,7 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
         }
 
         let mut offsets = vec![0usize; segments];
-        let mut weights: Vec<f32> = (0..segments).map(|_| rng.random::<f32>().max(f32::MIN_POSITIVE)).collect();
+        let weights: Vec<f32> = (0..segments).map(|_| rng.random::<f32>().max(f32::MIN_POSITIVE)).collect();
         let weight_sum: f32 = weights.iter().sum();
 
         if !weight_sum.is_finite() || weight_sum <= f32::MIN_POSITIVE {

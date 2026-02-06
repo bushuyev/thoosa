@@ -397,7 +397,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
 
                 let motif_width = net.extra().motif_net_params.num_features() as i64;
 
-                debug!("ApplyMotifNet::run, ok: motif_id={motif_id} c={c} motif_width={motif_width} input.t.size={:?} self.slice_step={}", input.t.size(), self.slice_step);
+                debug!("ApplyMotifNet::run, ok: motif_id={motif_id} c={c} motif_width={motif_width} input.id={:?} input.t.size={:?} self.slice_step={}", input.id(), input.t.size(), self.slice_step);
                 let t = input.t.f_i((c, ..))?;
                 let t  = if t.size()[0] >= motif_width {
                     t
@@ -406,10 +406,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
                     pad_to(&t, &[motif_width])?
                 };
 
-                static COUNT:AtomicU64 = AtomicU64::new(0);
 
-                // #[cfg(debug_assertions)]
-                plot_t(&t.view((1, -1)), &format!("{COUNT:?}_input_{motif_id}"))?;
 
                 let slices = t.f_unfold(0, motif_width, self.slice_step as i64)?; //.reshape([-1, motif_width]);
 
@@ -420,10 +417,14 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
                 let out = net.data().tho_forward(&slices_tensor, None, false)?;
 
 
-                // #[cfg(debug_assertions)]
-                plot_t(&out.as_ref().transpose(0,1), &format!("{COUNT:?}_applied_{motif_id}"))?;//.f_mul_scalar(100.)?
+                #[cfg(debug_assertions)]
+                {
+                    static COUNT:AtomicU64 = AtomicU64::new(0);
 
-                COUNT.fetch_add(1, Relaxed);
+                    plot_t(&t.view((1, -1)), &format!("{COUNT:?}_input_{}", input.id()))?;
+                    plot_t(&out.as_ref().transpose(0,1), &format!("{COUNT:?}_input_{}_motif_applied_{motif_id}_", input.id()))?;//.f_mul_scalar(100.)?
+                    COUNT.fetch_add(1, Relaxed);
+                }
 
                 let out = ThoTensor::new(out_id, out.t().f_sigmoid()?)?;
 

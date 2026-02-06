@@ -429,7 +429,7 @@ pub fn load_final_model(
     let final_params_for_builder = final_node_params.clone();
     let node = ThoModuleWithStore::load(
         mono_key!(run_id, "final_model").into(),
-        move |path: &nn::Path| final_net(&final_params_for_builder).build_tch_module(path),
+        move |path: &nn::Path| final_net(&final_params_for_builder)?.build_tch_module(path),
         model_path,
         *device,
     )?;
@@ -1204,44 +1204,40 @@ impl FinalNetParams {
     }
 }
 
-pub fn final_net(params: &FinalNetParams) -> Node {
+pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
     debug!("final_node: params={:?}", params);
 
-    let build = || -> Result<Node, ThoError> {
-        let mut builder = SeqBuilder::new(params.in_features, None)?;
-        let mut net = builder
+    let mut builder = SeqBuilder::new(params.in_features, None)?;
+    let mut net = builder
+        .linear_s(
+            2 * params.in_features,
+            #[cfg(debug_assertions)]
+            "final_net: first layer".to_string(),
+            "final_net_first_layer".to_string(),
+        )?
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+
+    for i in 0..params.num_layers {
+        net = net
             .linear_s(
-                2 * params.in_features,
+                params.in_features,
                 #[cfg(debug_assertions)]
-                "final_net: first layer".to_string(),
-                "todo",
+                format!("final_net: {i}th layer"),
+                format!("final_net_{i}th_layer"),
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+    }
 
-        for i in 0..params.num_layers {
-            net = net
-                .linear_s(
-                    params.in_features,
-                    #[cfg(debug_assertions)]
-                    format!("final_net: {i}th layer"),
-                    "todo",
-                )?
-                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
-        }
-
-        net
-            // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
-            .linear_s(
-                params.out_features,
-                #[cfg(debug_assertions)]
-                "final_net: last layer".to_string(),
-                "todo",
-            )?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-            .end_seq()
-    };
-
-    build().unwrap_or_else(|e| panic!("final_net failed: {e:?}"))
+net
+    // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
+    .linear_s(
+        params.out_features,
+        #[cfg(debug_assertions)]
+        "final_net: last layer".to_string(),
+        "final_net_last_layer",
+    )?
+    .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+    .end_seq()
 }
 
 pub struct PlotVecf32 {
@@ -2672,7 +2668,7 @@ mod train_tests {
 
         let mut vs_0 = VarStore::new(Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            train_nets::final_net(&FinalNetParams::new(features, 0, 1))
+            train_nets::final_net(&FinalNetParams::new(features, 0, 1))?
                 .build_tch_module(&vs_0.root())?;
 
         vs_0.freeze();

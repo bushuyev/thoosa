@@ -541,6 +541,7 @@ impl ResourceStore for SqlStore {
         &self,
         group_descr: &str,
     ) -> Result<Vec<(String, String)>, ThoError> {
+        debug!("list_group_labeled_resources_sets: group_descr={group_descr}");
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -1411,6 +1412,8 @@ impl Store for SqlStore {
         &self,
         resource_ids: &Vec<ResourceId>,
     ) -> Result<Vec<Resource>, ThoError> {
+        assert!(!resource_ids.is_empty(), "resource_ids are empty");
+
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 

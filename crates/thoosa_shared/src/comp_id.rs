@@ -2,7 +2,7 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
 use thoosa_named_derive::Named;
@@ -13,6 +13,18 @@ pub enum ElvVal {
     Num(usize),
 }
 
+impl Display for ElvVal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ElvVal::Str(v) => {
+                write!(f, "{}", v)
+            }
+            ElvVal::Num(v) => {
+                write!(f, "{}", v)
+            }
+        }
+    }
+}
 impl From<u32> for ElvVal {
     fn from(value: u32) -> Self {
         ElvVal::Num(value as usize)
@@ -50,6 +62,16 @@ pub struct MonoKey {
 
     #[cfg(debug_assertions)]
     name: Cow<'static, str>,
+}
+
+impl Display for MonoKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if cfg!(debug_assertions) {
+            write!(f, "{}_{}", self.val, self.name)
+        } else {
+            write!(f, "{}", self.val)
+        }
+    }
 }
 
 impl From<&str> for MonoKey {
@@ -135,6 +157,16 @@ impl Hash for MonoKey {
 #[derive(Eq, PartialEq, Hash, Clone, Ord, PartialOrd, Named)]
 pub struct SynKey {
     vals: Box<[MonoKey]>,
+}
+
+impl Display for SynKey{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        for val in &self.vals {
+            write!(f, "_{}_", val)?;
+        }
+
+        Ok(())
+    }
 }
 
 impl fmt::Debug for SynKey {

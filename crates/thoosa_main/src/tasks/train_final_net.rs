@@ -215,17 +215,17 @@ where
                 },
                 move |rc: &TrainFinalNetRunConfig, vs: &VarStore| {
                     let net_params = FinalNetParams::new(num_label_nets, labels_len as u32, rc.net.num_layers);
-                    Ok((final_net(&net_params).build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&vs.root())?, net_params))
+                    Ok((final_net(&net_params)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&vs.root())?, net_params))
                 },
                 opt_config,
                 train_final_run_configs,
                 |pred: &Tensor, target: &Tensor| {
-                    trace!("train_final_net: pred.size={:?} target.size={:?}", pred.size(), target.size());
+                    trace!("TrainFinalNet::run, loss_fn: pred.size={:?} target.size={:?}", pred.size(), target.size());
                     Ok(pred.binary_cross_entropy_with_logits::<Tensor>(target, None, None, Reduction::Mean).set_requires_grad(true))
                 },
                 move |rc: &TrainFinalNetRunConfig, vs: &VarStore| AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e| e.into()),
                 |t: ThoBatch<LabelProbability>| {
-                    debug!("train_final_net: t=\n{t}");
+                    debug!("TrainFinalNet::run, x_f: t=\n{t}");
 
                     t
                 },
@@ -239,6 +239,7 @@ where
                 .await?;
 
             let final_result = TrainFinalNetsRunConfigResult::new(Some(&label_net_run_ids), result.min_loss, result.var_store, result.node_params, result.run_config);
+            debug!("TrainFinalNet::run: final_result={final_result:?}");
 
             Ok(Arc::new(DevicesWrap::wrap(TrainFinalNetOutput::new(SynKey::new([mono_key!("", "empty")]), final_result), cache_area.into())))
         }

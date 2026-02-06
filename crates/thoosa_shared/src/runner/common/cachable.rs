@@ -79,6 +79,9 @@ where
                 async move {
 
                     if let Some(value) = Self::cache().await.get_mut(&key_for_purger) {
+                        if GlobalCtx::global().is_shutting_down() {
+                            return Ok(());
+                        }
                         let shared_fut = value.value().clone();
                         debug!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
 
