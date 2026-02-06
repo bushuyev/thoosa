@@ -30,7 +30,8 @@ pub struct GlobalCtx {
     caches_areas: parking_lot::RwLock<CacheAreasKeeper>,
     cache_age: AtomicU64, //for tracking CPU-only lifetime
     purge_lock: tokio::sync::Mutex<()>,
-    purger: Purger
+    purger: Purger,
+    shutting_down:AtomicBool
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
@@ -68,7 +69,8 @@ impl GlobalCtx {
 
             cache_age: Default::default(),
             purge_lock: tokio::sync::Mutex::new(()),
-            purger: Purger::new()
+            purger: Purger::new(),
+            shutting_down: false.into()
         }
     }
 
@@ -254,12 +256,17 @@ impl GlobalCtx {
 
 
     pub async fn shutdown(&self) {
+        self.shutting_down.store(true, Relaxed);
         //TODO
-        self.purger.shutdown();
+
         for a in &self.semaphores {
             a.shutdown().await;
         }
 
+    }
+
+    pub fn is_shutting_down(&self)->bool {
+        self.shutting_down.load(Relaxed)
     }
 }
 

@@ -233,7 +233,7 @@ impl FsWorkspace {
 
         let module = ThoModuleWithStore::load(
             mono_key!(run_id, "final_model").into(),
-            move |path: &nn::Path| final_net(&params_for_builder).build_tch_module(path),
+            move |path: &nn::Path| final_net(&params_for_builder)?.build_tch_module(path),
             model_path,
             *device,
         )?;
@@ -1144,8 +1144,7 @@ mod tests {
             LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
         );
         let mut vs = VarStore::new(Cpu);
-        let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            LabelNetParams::label_net(&params).build_tch_module(&vs.root())?;
+        let _: Box<dyn ThoModule<AnyDims, AnyDims>> = LabelNetParams::label_net(&params).build_tch_module(&vs.root())?;
         vs.freeze();
 
         let net_id = ws.save_label_net(7, &"label_0", &vs, &params)?;
@@ -1166,8 +1165,7 @@ mod tests {
 
         let params = FinalNetParams::new(8, 2, 1);
         let mut vs = VarStore::new(Cpu);
-        let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            crate::train_nets::final_net(&params).build_tch_module(&vs.root())?;
+        let _: Box<dyn ThoModule<AnyDims, AnyDims>> = crate::train_nets::final_net(&params)?.build_tch_module(&vs.root())?;
         vs.freeze();
 
         let net_id = ws.save_final_net(3, &vs, &params)?;

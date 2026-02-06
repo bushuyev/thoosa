@@ -19,18 +19,16 @@ pub enum PurgeCmd {
 pub struct Purger {
     tx: mpsc::UnboundedSender<PurgeCmd>,
     _worker: Option<JoinHandle<()>>,
-    shutdown: Arc<AtomicBool>,
 }
 
 impl Purger {
     pub fn new() -> Self {
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let shutdown_in_loop = Arc::clone(&shutdown);
+
         let (tx, mut rx) = mpsc::unbounded_channel::<PurgeCmd>();
         let worker = tokio::spawn(async move {
             // cache is owned here
             loop {
-                if shutdown_in_loop.load(Relaxed) {
+                if GlobalCtx::global().is_shutting_down() {
                     return
                 }
 
@@ -40,7 +38,7 @@ impl Purger {
 
 
                         for purge_cl in &closures {
-                            if shutdown_in_loop.load(Relaxed) {
+                            if GlobalCtx::global().is_shutting_down() {
                                 break;
                             }
                             // A shutdown can still occur while inside the purge_cl call spitting CUDA_ERROR_DEINITIALIZED, so it would need to be checked somewhere in cuda_utils::copy_h2d_from_ptr.
@@ -63,20 +61,18 @@ impl Purger {
             }
         });
 
-        Self { tx, _worker: Some(worker), shutdown:  Arc::clone(&shutdown) }
+        Self { tx, _worker: Some(worker),  }
     }
 
     //TODO rename to send_purge_gpu_rq
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>, cache_area: u64) -> Result<(), ThoError>{
         debug!("Purger::run_purge_gpu: closures.len={}", closures.len());
-        if self.shutdown.load(Relaxed) {
+        if GlobalCtx::global().is_shutting_down() {
             debug!("Purger::run_purge_gpu: shutdown set, skipping purge");
             return Ok(());
         }
         self.tx.send(PurgeCmd::Gpu {cache_area, closures}).map_err(|e|e.into())
     }
 
-    pub fn shutdown(&self) {
-        self.shutdown.store(true,Ordering::Relaxed);
-    }
+
 }

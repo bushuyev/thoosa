@@ -3,6 +3,8 @@ use std::fmt::{format, Debug, Formatter};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering::Relaxed;
 use async_trait::async_trait;
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
@@ -177,10 +179,11 @@ where
         let device_idx = ctx.device_idx();
         let cache_area = ctx.cache_area();
 
-        let ctx_for_input = ctx.branch(Some("motif_loader_input"), false, false);
-        let motif_id = with_data!(ctx_for_input, input; |_ctx, input: &MotifLoaderInput| {
+        let motif_id = with_data!(ctx.branch(Some("motif_loader_input"), false, false), input; |_ctx, input: &MotifLoaderInput| {
             Ok::<DataId, ThoError>(input.motif_id.clone())
         })?;
+
+
 
         let motif_id_value = motif_id.clone().0;
         let (channel, find_motifs_run_id, slices, resources_map) =
@@ -188,10 +191,19 @@ where
                 .read()
                 .list_motif_slices(motif_id_value, None, Some(1000), None)?;//TODO config
 
+        debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
+
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), &mut ctx, &self.ws, "motif_loader").await?;
 
 
-        // plot_t(motif.as_ref(), &format!("motif_{motif_id}"))?;
+        #[cfg(debug_assertions)]
+        {
+            static COUNT: AtomicU64 = AtomicU64::new(0);
+
+            plot_t(&motif.as_ref(), &format!("motif_{motif_id}__{COUNT:?}"))?; //.f_mul_scalar(100.)?
+
+            COUNT.fetch_add(1, Relaxed);
+        }
 
         Ok(Arc::new(DevicesWrap::wrap(
             DataWithExtra::new(
@@ -274,12 +286,10 @@ where
     where
             for<'a> Self::In<'a>: Send + Sync,
     {
-        let device_idx = ctx.device_idx();
-        let cache_area = ctx.cache_area();
-        let ctx_for_input = ctx.branch(Some("random_slices_input"), false, false);
-        let (motif_id, limit) = with_data!(ctx_for_input, input; |_ctx, input: &SlicesLoaderInput| {
+        let (motif_id, limit) = with_data!(ctx.branch(Some("random_slices_input"), false, false), input; |_ctx, input: &SlicesLoaderInput| {
             Ok::<(DataId, u32), ThoError>((input.motif_id.clone(), input.limit))
         })?;
+
 
         let (channel, find_motifs_run_id) = self.store.read().get_motif_meta(*motif_id)?;
 
@@ -288,7 +298,8 @@ where
             &self.store.read().list_run_config_values(find_motifs_run_id)?,
         )?;
 
-        debug!("RandomSlicesLoader::run: motif_id={motif_id} channel={channel} find_motifs_run_config={find_motifs_run_config:?}");
+
+        debug!("RandomSlicesLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
 
         let motif_id_value = motif_id.clone().0;
         let (channel, find_motifs_run_id, slices, resources_map) =
@@ -303,11 +314,18 @@ where
 
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), &mut ctx, &self.ws, "random loader").await?;
 
-        // plot_t(motif.as_ref(), &format!("random_motif_{motif_id}"))?;
+        #[cfg(debug_assertions)]
+        {
+            static COUNT: AtomicU64 = AtomicU64::new(0);
+
+            plot_t(&motif.as_ref(), &format!("random_motif_{motif_id}__{COUNT:?}"))?; //.f_mul_scalar(100.)?
+
+            COUNT.fetch_add(1, Relaxed);
+        }
 
         Ok(Arc::new(DevicesWrap::wrap(
             motif,
-            cache_area.into(),
+            ctx.cache_area().into(),
         )))
     }
 }

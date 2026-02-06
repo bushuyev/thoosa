@@ -13,7 +13,7 @@ use crate::val::{NamedRange, NamedVal, Val};
 use bytemuck::{Pod, Zeroable};
 use chrono::SecondsFormat;
 use lazy_static::lazy_static;
-use log::{debug, trace};
+use log::{debug, info, trace, warn};
 use num_traits::PrimInt;
 use rand::Rng;
 use regex::Regex;
@@ -33,6 +33,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::{fmt, fs};
 use std::time::{SystemTime, UNIX_EPOCH};
+use futures::stream::StreamExt;
 use async_trait::async_trait;
 use ambassador::delegatable_trait;
 use mockall::automock;
@@ -168,6 +169,37 @@ where
         builder.push(ln, pair);
     }
     Ok(builder.finish())
+}
+
+pub async fn collect_futures_with_progress<T, F>(
+    futures: Vec<F>,
+    buffer_limit: usize,
+    error_label: &str,
+) -> Vec<T>
+where
+    F: std::future::Future<Output = Result<T, ThoError>> + Send,
+    T: Send,
+{
+    let mut results = Vec::with_capacity(futures.len());
+    let (mut ok, mut err) = (0usize, 0usize);
+    let total = futures.len();
+    let mut stream = futures::stream::iter(futures).buffer_unordered(buffer_limit);
+
+    while let Some(r) = stream.next().await {
+        match r {
+            Ok(item) => {
+                ok += 1;
+                info!("done {} ({}/{}) out of {}", ok + err, ok, err, total);
+                results.push(item);
+            }
+            Err(e) => {
+                err += 1;
+                warn!("{error_label}: {e:?}");
+            }
+        }
+    }
+
+    results
 }
 
 #[repr(C)]
