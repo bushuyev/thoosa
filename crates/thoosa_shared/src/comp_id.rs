@@ -66,11 +66,13 @@ pub struct MonoKey {
 
 impl Display for MonoKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if cfg!(debug_assertions) {
-            write!(f, "{}_{}", self.val, self.name)
-        } else {
-            write!(f, "{}", self.val)
-        }
+        #[cfg(debug_assertions)]
+        write!(f, "{}_{}", self.val, self.name)?;
+
+        #[cfg(not(debug_assertions))]
+        write!(f, "{}", self.val)?;
+
+        Ok(())
     }
 }
 
