@@ -1093,11 +1093,12 @@ pub mod tests {
     use thoosa_shared::runner::permits::MAX_PERMITS;
     use thoosa_common::find_motifs_run_config::{ByAvgEucDist, FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig};
     use thoosa_common::runs::{Labeled, Simple};
+    use thoosa_common::tch_test_utils;
     use thoosa_common::utils::{draw_function_plot, reset_print_options, to_vec_f32, z_norm, z_norm_2};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
-    use thoosa_motifs::generators::noise::generate_motifs_with_avg_distance;
-    use thoosa_motifs::generators::non_overlapping::Interval;
+    use thoosa_common::tch_test_utils::generate_motifs_with_avg_distance;
+    use thoosa_common::tch_test_utils::Interval;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::Resource;
@@ -1109,7 +1110,6 @@ pub mod tests {
     use thoosa_shared::mono_key;
     use thoosa_store::{IdSlice, MockStoreBuilder};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_motifs::generators::noise;
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
@@ -1155,7 +1155,7 @@ pub mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = noise::resource_tensor(resource_a.length() as usize, &[vec![(30, 100, MotifKind::Pulse)]], 100)?;
+        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(30, 100, MotifKind::Pulse)]], 100)?;
         let resources_channels_intervals = [(&resource_a, &[channel_0_motifs_ids.as_slice()][..], &resource_a_intervals)];
 
         let mut store = Arc::new(RwLock::new(
@@ -1231,8 +1231,8 @@ pub mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = noise::resource_tensor(resource_a.length() as usize, &[vec![(3, 100, MotifKind::Pulse)]], 100)?;
-        let (resource_b_t, resource_b_intervals) = noise::resource_tensor(resource_b.length() as usize, &[vec![(2, 100, MotifKind::Pulse)]], 200)?;
+        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(3, 100, MotifKind::Pulse)]], 100)?;
+        let (resource_b_t, resource_b_intervals) = tch_test_utils::resource_tensor(resource_b.length() as usize, &[vec![(2, 100, MotifKind::Pulse)]], 200)?;
         let resources_channels_intervals = [(&resource_a, &[channel_0_motifs_ids.as_slice()][..], &resource_a_intervals), (&resource_b, &[channel_0_motifs_ids.as_slice()][..],  &resource_b_intervals)];
 
         let mut store = Arc::new(RwLock::new(
@@ -1312,7 +1312,7 @@ pub mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = noise::resource_tensor(resource_a.length() as usize, &[vec![(1, 100, MotifKind::Pulse), (1, 100, MotifKind::Triangle)]], 300)?;
+        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(1, 100, MotifKind::Pulse), (1, 100, MotifKind::Triangle)]], 300)?;
 
         let resources_channels_intervals = [(&resource_a, &[motifs_ids.as_slice()][..], &resource_a_intervals)];
 
@@ -1421,17 +1421,17 @@ pub mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = noise::resource_tensor(resource_a.length() as usize, &[
+        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[
             vec![(3, 100, MotifKind::Pulse)],
             vec![(2, 100, MotifKind::Sin)],
             vec![]
         ], 100)?;
-        let (resource_b_t, resource_b_intervals) = noise::resource_tensor(resource_b.length() as usize, &[
+        let (resource_b_t, resource_b_intervals) = tch_test_utils::resource_tensor(resource_b.length() as usize, &[
             vec![(2, 100, MotifKind::Pulse)],
             vec![(1, 100, MotifKind::Sin)],
             vec![]
         ], 100)?;
-        let (resource_c_t, resource_c_intervals) = noise::resource_tensor(resource_c.length() as usize, &[
+        let (resource_c_t, resource_c_intervals) = tch_test_utils::resource_tensor(resource_c.length() as usize, &[
             vec![(2, 100, MotifKind::Triangle)],
             vec![(1, 100, MotifKind::Sin)],
             vec![]
@@ -1534,7 +1534,7 @@ pub mod tests {
 
     #[test]
     fn resource_tensor_supports_multiple_kinds_per_channel() -> Result<(), ThoError> {
-        let (tensor, intervals) = noise::resource_tensor(
+        let (tensor, intervals) = tch_test_utils::resource_tensor(
             1000,
             &[vec![(1, 50, MotifKind::Pulse), (1, 60, MotifKind::Sin)], vec![(2, 80, MotifKind::Triangle)]], 300,
         )?;
@@ -1555,7 +1555,7 @@ pub mod tests {
 
     #[test]
     fn resource_tensor_offsets_channels_when_space_allows() -> Result<(), ThoError> {
-        let (_, intervals) = noise::resource_tensor(
+        let (_, intervals) = tch_test_utils::resource_tensor(
             1000,
             &[vec![(1, 100, MotifKind::Pulse)], vec![(1, 120, MotifKind::Triangle)]], 300,
         )?;
@@ -1810,7 +1810,7 @@ pub mod tests {
                 .with_run_cached(
                     resources_label_0.iter().chain(resources_label_1.iter()).map(|resouce|{
                         (resouce.clone(),
-                            noise::resource_tensor(resource_len as usize, &[
+                            tch_test_utils::resource_tensor(resource_len as usize, &[
                                 vec![(3, 100, MotifKind::Pulse)],
                                 vec![(3, 100, MotifKind::Sin)],
                                 vec![]

@@ -735,7 +735,7 @@ mod tests {
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, LabelNetTypeArgsFields, LinNetArgsFields, OptConfig, TrainLabelNetsRunConfigFields};
     use thoosa_common::utils::{mix_x_binary_with_labels, reset_print_options};
     use thoosa_common::ws::{mock_ws_simp, WsMockBuilder};
-    use thoosa_motifs::generators::noise::resource_tensor;
+    use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
