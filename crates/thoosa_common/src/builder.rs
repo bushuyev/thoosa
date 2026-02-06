@@ -547,7 +547,7 @@ impl SeqBuilder {
     }
 
     pub fn dropout(&mut self) -> Result<&mut Self, ThoError> {
-        Ok(self)
+        Ok(self)//TODO
     }
 
     pub fn linear<P:ToString>(&mut self, path: P, #[cfg(debug_assertions)] descr: String) -> Result<&mut Self, ThoError> {

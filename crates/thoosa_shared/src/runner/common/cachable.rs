@@ -74,7 +74,7 @@ where
                 let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
                 let key_for_purger = key_for_purger.clone();
-                debug!("Cachable::purge_gpu_cache_area: 1  key={key_for_purger:?}");
+                trace!("Cachable::purge_gpu_cache_area: 1  key={key_for_purger:?}");
 
                 async move {
 
@@ -83,17 +83,17 @@ where
                             return Ok(());
                         }
                         let shared_fut = value.value().clone();
-                        debug!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
+                        trace!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
 
                         if let Some( Ok(data)) = shared_fut.peek()  { //to avoid locking on itself
 
                             data.remove_cache_area(cache_area);
 
-                            debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} data.cache_area={:?} ", data.cache_area);
+                            trace!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} data.cache_area={:?} ", data.cache_area);
                             if data.cache_area.assigned_count() == 0 {
                                 data.dump_to_cpu(device_idx).await?;
 
-                                debug!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
+                                trace!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
                             }
                         }
                     } else {
