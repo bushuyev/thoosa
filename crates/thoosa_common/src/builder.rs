@@ -5,7 +5,7 @@ use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
-use crate::my_tch::{AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, Split1, ThoModule, my_linear};
+use crate::my_tch::{AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, Split1, ThoModule, my_linear};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 use crate::tho_tensor::ThoTensor;
@@ -137,6 +137,9 @@ pub enum Node {
         kernel_size: u32,
         stride: u32,
         padding: u32,
+    },
+    Dropout {
+        p: f64,
     },
     Closure {
         cl: Arc<Box<dyn Fn(&Tensor, Option<&[i64]>) -> Result<Tensor, ThoError>>>
@@ -341,6 +344,8 @@ impl Node {
                 padding as i64,
             )),
 
+            Node::Dropout { p } => Box::new(MyDropout::new(p)),
+
             Node::Func { func } => Box::new(MyFuncModule::new(func)),
 
             Node::Closure { cl: closure } => {
@@ -532,8 +537,6 @@ impl SeqBuilder {
         Ok(self)
     }
 
-
-
     pub fn avg_pool(&mut self, kernel: u32, stride: u32, padding: u32) -> Result<&mut Self, ThoError> {
         self.elts.push(Node::AvgPool {
             kernel_size: kernel,
@@ -546,8 +549,9 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn dropout(&mut self) -> Result<&mut Self, ThoError> {
-        Ok(self)//TODO
+    pub fn dropout(&mut self, p: f64) -> Result<&mut Self, ThoError> {
+        self.elts.push(Node::Dropout { p });
+        Ok(self)
     }
 
     pub fn linear<P:ToString>(&mut self, path: P, #[cfg(debug_assertions)] descr: String) -> Result<&mut Self, ThoError> {
