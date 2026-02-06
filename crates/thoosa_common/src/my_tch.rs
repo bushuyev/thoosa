@@ -652,6 +652,23 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAvgPool1d {
     }
 }
 
+#[derive(Debug)]
+pub struct MyDropout {
+    p: f64,
+}
+
+impl MyDropout {
+    pub fn new(p: f64) -> Self {
+        Self { p }
+    }
+}
+
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyDropout {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        Ok(t.as_ref().f_dropout(self.p, train)?.into())
+    }
+}
+
 
 
 
@@ -841,7 +858,7 @@ pub fn configure_dense(
         .block(dense_block)?
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
         .avg_pool(7, 3, 0)?
-        .dropout()?
+        .dropout(0.5)?
         .linear_s(
             6,
             #[cfg(debug_assertions)]
