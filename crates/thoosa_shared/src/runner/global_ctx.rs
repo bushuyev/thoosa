@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 use futures_util::future::BoxFuture;
 use thoosa_shared::traits::CachableIdTr;
-use thoosa_shared::{Cause, ThoError};
+use thoosa_shared::{backtrace_head_lines, Cause, ThoError};
 use tokio::sync::RwLock as AsyncRwLock;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
@@ -154,7 +154,7 @@ impl GlobalCtx {
 
         let mut num_tries = 0;
 
-        debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} asking for one permit, self.semaphores[{device_idx}]={:?} \nbacktrace={}", self.semaphores[device_idx], Backtrace::capture());
+        debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} asking for one permit, self.semaphores[{device_idx}]={:?} \nbacktrace={}", self.semaphores[device_idx], backtrace_head_lines(8));
 
         //can't handle OutOfPermits in with_data! and similar calls - acquire_one is needed to ensure no other thread acquired 100 permits and can drop all to cpu.
         loop {

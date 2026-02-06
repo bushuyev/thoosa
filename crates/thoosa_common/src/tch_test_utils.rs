@@ -330,7 +330,6 @@ pub fn generate_motifs_with_avg_distance(
 ///returns Tensor [channels x resource_len] + channels[ motifs[ intervals[Interval] ] ]
 pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, usize, MotifKind)>], gap: usize) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
     use rand::{rngs::StdRng, Rng, SeedableRng};
-    use rand::seq::SliceRandom;
     use log::debug;
     use thoosa_shared::test_utils::gen_motif;
     const STEP_SIGMA: f32 = 0.4;
@@ -343,49 +342,8 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
         sigma * r * theta.cos()
     }
 
-    fn distribute_slack(rng: &mut StdRng, segments: usize, slack: usize) -> Vec<usize> {
-        if segments == 0 {
-            return Vec::new();
-        }
-
-        if slack == 0 {
-            return vec![0; segments];
-        }
-
-        let mut offsets = vec![0usize; segments];
-        let weights: Vec<f32> = (0..segments).map(|_| rng.random::<f32>().max(f32::MIN_POSITIVE)).collect();
-        let weight_sum: f32 = weights.iter().sum();
-
-        if !weight_sum.is_finite() || weight_sum <= f32::MIN_POSITIVE {
-            offsets[0] = slack;
-            return offsets;
-        }
-
-        let mut allocated = 0usize;
-        for (offset, weight) in offsets.iter_mut().zip(weights.iter()) {
-            let share = ((*weight / weight_sum) * slack as f32).floor() as usize;
-            *offset = share;
-            allocated = allocated.saturating_add(share);
-        }
-
-        let allocated = allocated.min(slack);
-        let remainder = slack.saturating_sub(allocated);
-
-        if remainder > 0 {
-            let mut indices: Vec<usize> = (0..segments).collect();
-            indices.shuffle(rng);
-            for idx in indices.into_iter().cycle().take(remainder) {
-                offsets[idx] += 1;
-            }
-        }
-
-        offsets
-    }
-
     let mut channels_signals = Vec::with_capacity(channels_motif_kinds.len());
     let mut channels_intervals = Vec::with_capacity(channels_motif_kinds.len());
-
-    let channels_count = channels_motif_kinds.len().max(1);
 
     for (channel_idx, channel_kinds) in channels_motif_kinds.iter().enumerate() {
         let total_repeats: usize = channel_kinds.iter().map(|(repeats, _, _)| *repeats).sum();
@@ -415,68 +373,71 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
             )));
         }
 
-        let extra_space = resource_len - required_space;
-        let channel_start = resource_len * channel_idx / channels_count;
-        let channel_end = resource_len * (channel_idx + 1) / channels_count;
-        let segment_len = channel_end.saturating_sub(channel_start);
-        let use_segment = segment_len >= required_space;
-        let slack = if use_segment {
-            segment_len - required_space
-        } else {
-            extra_space
-        };
-        let start_bound = if use_segment { channel_start } else { 0 };
-        let end_bound = if use_segment { channel_end } else { resource_len };
-
-        let segment_offsets = distribute_slack(&mut rng, total_repeats + 1, slack);
-        let mut current = start_bound
-            .checked_add(segment_offsets.get(0).copied().unwrap_or(0))
-            .ok_or_else(|| ThoError::new(format!(
-                "motif placement exceeds resource length for channel {channel_idx}"
-            )))?;
+        let available_motif_space = resource_len.checked_sub(total_gap_space).ok_or_else(|| ThoError::new("motif layout exceeds addressable range"))?;
+        let slot_len_base = available_motif_space / total_repeats;
+        let slot_len_remainder = available_motif_space % total_repeats;
+        let mut slot_index = 0usize;
+        let mut slot_cursor = 0usize;
         let mut channel_motif_intervals = Vec::with_capacity(channel_kinds.len());
-        let mut placed = 0usize;
 
         for (repeats, motif_len, kind) in channel_kinds.iter() {
-            if *repeats == 0 || *motif_len == 0 {
+            if *repeats == 0 {
                 channel_motif_intervals.push(Vec::new());
                 continue;
             }
 
-            let motifs = generate_motifs_with_avg_distance(
-                gen_motif(*motif_len, kind).as_slice(),
-                (*repeats).max(2),
-                0.1,
-                0.2,//should be lower than in motif where it's 0.2-0.3, TODO move to params
-                None,
-            ).0;
-
+            let motifs = if *motif_len == 0 {
+                Vec::new()
+            } else {
+                generate_motifs_with_avg_distance(
+                    gen_motif(*motif_len, kind).as_slice(),
+                    (*repeats).max(2),
+                    0.1,
+                    0.2,//should be lower than in motif where it's 0.2-0.3, TODO move to params
+                    None,
+                ).0
+            };
             let mut motif_intervals = Vec::with_capacity(*repeats);
 
-            for motif in motifs.into_iter().take(*repeats) {
-                let start = current;
-                let end = start.checked_add(*motif_len).ok_or_else(|| ThoError::new(format!(
-                    "motif placement exceeds resource length for channel {channel_idx}"
-                )))?;
-                if end > end_bound {
-                    return Err(ThoError::new(format!(
-                        "motif placement exceeds resource length for channel {channel_idx}"
-                    )));
-                }
-
-                for (offset, value) in motif.iter().enumerate() {
-                    signal[start + offset] = *value;
-                }
-
-                motif_intervals.push(Interval { start, end });
-                placed += 1;
-                current = end;
-                if placed < total_repeats {
-                    let extra_gap = segment_offsets.get(placed).copied().unwrap_or(0);
-                    let spacing = gap.checked_add(extra_gap).ok_or_else(|| ThoError::new("motif gap sizing overflows usize"))?;
-                    current = current.checked_add(spacing).ok_or_else(|| ThoError::new(format!(
+            for repeat_idx in 0..*repeats {
+                let slot_len = slot_len_base + usize::from(slot_index < slot_len_remainder);
+                if *motif_len > 0 {
+                    if *motif_len > slot_len {
+                        return Err(ThoError::new(format!(
+                            "motif len={motif_len} exceeds slot_len={slot_len} (gap={gap}, total_repeats={total_repeats}, resource_len={resource_len})"
+                        )));
+                    }
+                    let max_offset = slot_len - *motif_len;
+                    let slot_offset = if max_offset == 0 { 0 } else { rng.random_range(0..=max_offset) };
+                    let start = slot_cursor.checked_add(slot_offset).ok_or_else(|| ThoError::new(format!(
                         "motif placement exceeds resource length for channel {channel_idx}"
                     )))?;
+                    let end = start.checked_add(*motif_len).ok_or_else(|| ThoError::new(format!(
+                        "motif placement exceeds resource length for channel {channel_idx}"
+                    )))?;
+                    if end > resource_len {
+                        return Err(ThoError::new(format!(
+                            "motif placement exceeds resource length for channel {channel_idx}"
+                        )));
+                    }
+                    let motif = motifs.get(repeat_idx).ok_or_else(|| ThoError::new(format!(
+                        "missing motif for repeat {repeat_idx} in channel {channel_idx}"
+                    )))?;
+                    for (offset, value) in motif.iter().enumerate() {
+                        signal[start + offset] = *value;
+                    }
+                    motif_intervals.push(Interval { start, end });
+                }
+                slot_index += 1;
+                let next_cursor = slot_cursor.checked_add(slot_len).ok_or_else(|| ThoError::new(format!(
+                    "motif placement exceeds resource length for channel {channel_idx}"
+                )))?;
+                if slot_index < total_repeats {
+                    slot_cursor = next_cursor.checked_add(gap).ok_or_else(|| ThoError::new(format!(
+                        "motif placement exceeds resource length for channel {channel_idx}"
+                    )))?;
+                } else {
+                    slot_cursor = next_cursor;
                 }
             }
 

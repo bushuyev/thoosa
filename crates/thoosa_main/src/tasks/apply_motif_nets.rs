@@ -134,10 +134,10 @@ where
         };
 
         if motif_width.len() != 1 {//TODO  group motif nets by width. all motifs should be of same width so that tensors can be batched for label training
-            return Err(ThoError::new("ApplyMotifNets failed, motif_width={motif_width:?} should haven len=1 in ApplyMotifNets={select_motifs_run_id}"));
+            return Err(ThoError::new(format!("ApplyMotifNets failed, motif_width={motif_width:?} should haven len=1 in train_motif_nets_run_ids={train_motif_nets_run_ids:?}, motif_width.len={}", motif_width.len())));
         }
         if slice_step.len() != 1 {
-            return Err(ThoError::new("ApplyMotifNets failed, slice_step={slice_step:?}  should haven len=1 in  ApplyMotifNets={select_motifs_run_id}"));
+            return Err(ThoError::new(format!("ApplyMotifNets failed, slice_step={slice_step:?} should haven len=1 in train_motif_nets_run_ids={train_motif_nets_run_ids:?}, motif_width.len={}", motif_width.len())));
         }
 
         let motif_width = motif_width.into_iter().next().expect("no motif_width");

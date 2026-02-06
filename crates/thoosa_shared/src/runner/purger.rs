@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::atomic::Ordering::Relaxed;
 use futures_util::future::BoxFuture;
-use log::{debug, error};
+use log::{debug, error, trace};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use thoosa_shared::runner::global_ctx::GlobalCtx;
@@ -34,7 +34,7 @@ impl Purger {
 
                 match rx.recv().await {
                     Some(PurgeCmd::Gpu { closures, cache_area }) => {
-                        debug!("Purger::new, loop, got cmd: closures.len={}, cache_area={cache_area:064b} ", closures.len());
+                        trace!("Purger::new, loop, got cmd: closures.len={}, cache_area={cache_area:064b} ", closures.len());
 
 
                         for purge_cl in &closures {
@@ -45,7 +45,7 @@ impl Purger {
                             // However, that would be rather wasteful since the app is not going to shut down very often.
                             match purge_cl().await {
                                 Ok(()) => {
-                                    debug!("Purger::new, loop: done purging ")
+                                    trace!("Purger::new, loop: done purging ")
                                 }
                                 Err(e) => {
                                     error!("Purger::new, loop:  purge failed: {e:?}")
