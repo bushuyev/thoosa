@@ -254,7 +254,7 @@ mod tests {
             ThoDevice::from(Device::Cpu),
         ));
 
-        let ctx = Arc::new(parking_lot::RwLock::new(RunCtxWithPermits::new(0, "aa")));
+        let ctx = Arc::new(parking_lot::RwLock::new(RunCtxWithPermits::new(0, "test_load")));
 
         let load_ctx = ctx.write().branch(Some("tensor_loader_load"), false, false);
         let loaded = loader

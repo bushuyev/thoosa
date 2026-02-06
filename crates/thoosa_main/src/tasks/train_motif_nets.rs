@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use async_trait::async_trait;
-use futures_util::{FutureExt, StreamExt, TryStreamExt};
+use futures_util::{FutureExt, StreamExt};
 use futures_util::stream::BoxStream;
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
@@ -35,7 +35,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::{mono_key, CopyToDevice, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, ThoError};
 use thoosa_shared::traits::{Adjustable, Data, DataId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
@@ -266,27 +266,11 @@ where
         })
         .collect::<Vec<_>>();
 
-        let mut results = Vec::with_capacity(futures.len());
-
-        let (mut ok, mut err) = (0usize, 0usize);
-        let total = futures.len();
-        let mut stream = futures::stream::iter(futures)
-            .buffer_unordered(crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT);
-
-        while let Some(r) = stream
-            .next().await {
-            match r {
-                Ok(opt_i) => {
-                    ok += 1;
-                    info!("done {} ({}/{}) out of {}", ok + err, ok, err, total);
-                    results.push(opt_i);
-                },
-                Err(e) => {
-                    err+=1;
-                    warn!("train motif failed: {e:?}");
-                }
-            }
-        }
+        let results = collect_futures_with_progress(
+            futures,
+            crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT,
+            "train motif failed",
+        ).await;
 
 
         Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(select_motifs_run_ids, results), CacheArea::default())))
