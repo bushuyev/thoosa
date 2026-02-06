@@ -913,7 +913,7 @@ fn run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
         net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{ _dummy: 0 }),
         num_layers: RangeOrValue::Range { range: Range { start: 2, end: 16 }, step: None },
-        step: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: None },
+        step: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
         channels: RangeOrValue::Range { range: Range { start: 2, end: 16 }, step: None },
         kernel: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
     };
