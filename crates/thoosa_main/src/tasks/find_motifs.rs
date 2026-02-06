@@ -448,7 +448,7 @@ mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::DataId;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::{mono_key, MotifKind};
+    use thoosa_shared::mono_key;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::{cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoError};
     use thoosa_store::{MockStoreBuilder, SqlStore};
@@ -456,6 +456,7 @@ mod tests {
     use thoosa_motifs::generators::noise;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::ResourceType::Group;
+    use thoosa_shared::test_utils::MotifKind;
     use thoosa_with_data::with_data;
     use crate::tasks::slices_stats::SlicesStats;
     use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;

@@ -1,7 +1,7 @@
 use std::ops::Deref;
-use log::debug;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use thoosa_shared::{gen_motif, pulse_v, MotifKind, ThoError};
+use thoosa_shared::ThoError;
+use thoosa_shared::test_utils::{gen_motif, MotifKind};
 use crate::generators::noise::generate_motifs_with_avg_distance;
 
 #[derive(Debug, Clone, Copy)]
@@ -97,11 +97,6 @@ pub fn generate_series_with_motif(
 
 #[cfg(test)]
 mod demo {
-    use std::path::Path;
-    use log::debug;
-    use plotters::prelude::BLACK;
-    use thoosa_common::utils::{draw_function_plot, plot_series, plot_series_with_lanes};
-    use thoosa_shared::{cdt, cdt_for_dir};
     use super::*;
 
     #[ctor::ctor]

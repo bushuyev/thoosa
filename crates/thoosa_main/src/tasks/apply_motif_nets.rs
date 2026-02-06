@@ -37,7 +37,7 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, SimpleId, WithId};
-use thoosa_shared::comp_id::{SynKey, MonoKey, ElvVal};
+use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_common::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
@@ -581,17 +581,18 @@ pub(crate) mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
-    use thoosa_shared::{gen_motif, MotifKind, TensorIdSliceIdx, ThoError};
+    use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_shared::perf_logging::PERF;
     use thoosa_shared::traits::{Named, SimpleId};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
+    use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
     use crate::tasks::apply_motif_nets::{dummy_motif_net, motif_test_net_, ApplyMotifNets};
     use crate::tasks::tensor_loader::mock_tensor_loader;
 
-    fn deterministic_noise(len: usize, seed: u32, amp: f32) -> Vec<f32> {
+    pub fn deterministic_noise(len: usize, seed: u32, amp: f32) -> Vec<f32> {
         let mut out = Vec::with_capacity(len);
         let mut state = seed;
         for _ in 0..len {
@@ -602,7 +603,7 @@ pub(crate) mod tests {
         out
     }
 
-    fn resource_tensor_from_patterns(resource_len: usize, channels_patterns: &[Vec<Tensor>], gap: usize, step: usize) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+    pub fn resource_tensor_from_patterns(resource_len: usize, channels_patterns: &[Vec<Tensor>], gap: usize, step: usize) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
         let step = step.max(1);
         let mut channels_signals = Vec::with_capacity(channels_patterns.len());
         let mut channels_intervals = Vec::with_capacity(channels_patterns.len());
@@ -649,7 +650,7 @@ pub(crate) mod tests {
         Ok((t, channels_intervals))
     }
 
-    fn motifs_tensor_fixed(motif_len: usize, num_slices: usize, motif_kind: MotifKind) -> Tensor {
+    pub fn motifs_tensor_fixed(motif_len: usize, num_slices: usize, motif_kind: MotifKind) -> Tensor {
         let mut motif = vec![0.0f32; motif_len];
         let width = motif_len; //(motif_len / 10).max(1);
         let (start, end) = match motif_kind {

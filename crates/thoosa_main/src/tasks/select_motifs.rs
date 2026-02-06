@@ -1101,7 +1101,7 @@ pub mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::{cdt_for_dir, gen_motif, MotifKind, TensorIdSliceIdx, ThoError};
+    use thoosa_shared::{cdt_for_dir, TensorIdSliceIdx, ThoError};
     use thoosa_shared::ResourceType::NotInGroup;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::traits::DataId;
@@ -1117,6 +1117,7 @@ pub mod tests {
     use crate::tasks::motif_loader::mock_motif_loader::MockMotifLoader;
     use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use crate::tasks::select_motifs::{fold_dists, fold_mask, SelectMotifsSavableResultBuilder, SelectMotifsStage};
     use crate::tasks::slices_iter::SlicesIter;
     use crate::tasks::stacked_moitfs_loader::StackedMotifsOutputId;

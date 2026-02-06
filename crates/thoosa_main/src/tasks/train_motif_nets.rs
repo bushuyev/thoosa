@@ -24,7 +24,7 @@ use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
-use thoosa_common::train_nets::{MotifNetParams, MotifNetTypeArgs, OptConfig, TensorsDataBatch, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, opt_train};
+use thoosa_common::train_nets::{opt_train, MotifNetParams, MotifNetTypeArgs, OptConfig, TensorsDataBatch, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields};
 use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, plot_t, to_vec_f32, DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -484,15 +484,16 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
-    use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoError};
+    use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_shared::traits::Named;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
     use thoosa_motifs::generators::noise::resource_tensor;
+    use thoosa_shared::test_utils::MotifKind;
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::train_motif_nets::{TrainMotifNets, TrainMotifNetInput};
+    use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_train_motif_nets() -> Result<(), ThoError> {

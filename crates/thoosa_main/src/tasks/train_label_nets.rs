@@ -738,12 +738,13 @@ mod tests {
     use thoosa_motifs::generators::noise::resource_tensor;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
-    use thoosa_shared::{MotifKind, TensorIdSliceIdx, ThoError};
+    use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_shared::traits::Named;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
+    use thoosa_shared::test_utils::MotifKind;
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;

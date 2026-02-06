@@ -1,7 +1,8 @@
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tch::Tensor;
-use thoosa_shared::{MotifKind, ThoError};
+use thoosa_shared::ThoError;
+use thoosa_shared::test_utils::MotifKind;
 use crate::generators::non_overlapping::Interval;
 
 fn z_norm(x: &mut [f32]) {
@@ -122,7 +123,7 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use rand::seq::SliceRandom;
     use log::debug;
-    use thoosa_shared::gen_motif;
+    use thoosa_shared::test_utils::gen_motif;
     const STEP_SIGMA: f32 = 0.4;
 
     fn normal_step(rng: &mut StdRng, sigma: f32) -> f32 {
