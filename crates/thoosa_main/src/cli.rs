@@ -44,7 +44,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{load_final_model, opt_train, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
+use thoosa_common::train_nets::{load_final_model, opt_train, AttnPool1dArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
 use thoosa_common::utils::{cuda_mem, from, lin_t, list_devices, plot_series, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
@@ -900,21 +900,22 @@ fn run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
     };
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(30),
+        cycles: RangeOrValue::Value(100),
         batch_size: RangeOrValue::Value(20),
-        lr: RangeOrValue::Value(0.0001),
+        // lr: RangeOrValue::Value(0.0001),
+        lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
     };
-    let opt_config = Arc::new(OptConfig::new(30, 10));
+    let opt_config = Arc::new(OptConfig::new(50, 10));
 
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
         common_training_args: common_training_args.clone(),
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
         net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{ _dummy: 0 }),
-        num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
-        step: RangeOrValue::Value(10),
-        channels: RangeOrValue::Value(32),
-        kernel: RangeOrValue::Value(10),
+        num_layers: RangeOrValue::Range { range: Range { start: 2, end: 16 }, step: None },
+        step: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
+        channels: RangeOrValue::Range { range: Range { start: 2, end: 16 }, step: None },
+        kernel: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
     };
     //////////////////////train labels
     let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
@@ -928,7 +929,8 @@ fn run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
             num_head_features: RangeOrValue::Value(256),
             kernel: RangeOrValue::Value(10),
             // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-            joint: ConvNetJointArgsRangeOrValue::MinMax(MinMaxArgsRangeOrValue{ _dummy: 0 }),
+            // joint: ConvNetJointArgsRangeOrValue::MinMax(MinMaxArgsRangeOrValue{ _dummy: 0 }),
+            joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{_dummy:0}),
         }),
     };
     //////////////////////train final

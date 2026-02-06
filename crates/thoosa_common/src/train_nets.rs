@@ -945,7 +945,7 @@ impl LabelNetParams {
             })
     }
 
-    pub fn label_net(&self) -> Node {
+    pub fn label_net(&self) -> Result<Node, ThoError> {
         match &self.net_type {
             LabelNetTypeParams::LinNetParams(_) => {
                 lin_label_node(&self)
@@ -958,7 +958,7 @@ impl LabelNetParams {
 
 }
 
-pub fn conv_label_node(params: &LabelNetParams) -> Node {
+pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
     let LabelNetTypeParams::ConvNetParams(cnn_params) = &params.net_type else {
         panic!("Unexpected params type: {:?}", params.net_type);
     };
@@ -983,6 +983,12 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
             cnn_params.hidden_conv_channels,
             ConvConfig::default(),
             None,
+        )?.closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                debug!("cnn_label_node: cnn_label_conv_1d output={t:?}");
+                Ok(t.shallow_clone())
+            })),
+            None,
         )?;
 
         for layer in 0..cnn_params.num_conv_layers {
@@ -993,6 +999,13 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
                 cnn_params.hidden_conv_channels,
                 ConvConfig::default(),
                 None,
+            )?
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    debug!("cnn_label_node: cnn_label_conv_1d_{layer} output={t:?}");
+                    Ok(t.shallow_clone())
+                })),
+                None,
             )?;
         }
 
@@ -1002,19 +1015,33 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
                     "attn_pool",
                     cnn_params.hidden_conv_channels,
                     2*cnn_params.hidden_conv_channels
+                )?
+                .closure(
+                    Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                        debug!("cnn_label_node: attn_pool output={t:?}");
+                        Ok(t.shallow_clone())
+                    })),
+                    None,
                 )?.linear_feats(
                     "cnn_label_head",
                     cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
                     #[cfg(debug_assertions)]
                     "cnn_label_head".to_string(),
                 )?
+                .closure(
+                    Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                        debug!("cnn_label_node: cnn_label_head output={t:?}");
+                        Ok(t.shallow_clone())
+                    })),
+                    None,
+                )?
             }
 
             ConvNetJoint::MinMax => {
                 builder.closure(
                     Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
-                        debug!("cnn_label_node: leaner input={t:?} lengths={lengths:?}");
-                        let lengths = lengths.expect("no mask");//TODO
+                        debug!("cnn_label_node: MinMax leaner input={t:?} lengths={lengths:?}");
+                        let lengths = lengths.unwrap_or(&[]);//TODO
                         let mask = mask_from_lengths(lengths, *lengths.iter().max().unwrap(), t.device())?;
 
                         let mean = t.f_mean_dim(2, false, None)?;
@@ -1026,12 +1053,27 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
 
                     })),
                     None,
-                )?.linear_feats(
+                )?
+                .closure(
+                    Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                        debug!("cnn_label_node: MinMax output={t:?}");
+                        Ok(t.shallow_clone())
+                    })),
+                    None,
+                )?
+                .linear_feats(
                     "cnn_label_head",
                     2* cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
                     #[cfg(debug_assertions)]
                     "cnn_label_head".to_string(),
                 )?
+                    .closure(
+                        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                            debug!("cnn_label_node: cnn_label_head output={t:?}");
+                            Ok(t.shallow_clone())
+                        })),
+                        None,
+                    )?
             }
         };
 
@@ -1042,6 +1084,13 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
                 format!("cnn_label_head_{layer}"),
                 format!("cnn_label_head_{layer}"),
             )?
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    debug!("cnn_label_node: cnn_label_head_{layer} output={t:?}");
+                    Ok(t.shallow_clone())
+                })),
+                None,
+            )?
             .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
         }
 
@@ -1051,15 +1100,22 @@ pub fn conv_label_node(params: &LabelNetParams) -> Node {
             "cnn_label_head_last".to_string(),
             "cnn_label_head_last",
         )?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                debug!("cnn_label_node: cnn_label_head_last={t:?}");
+                Ok(t.shallow_clone())
+            })),
+            None,
+        )?
         // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
     };
 
-    build().unwrap_or_else(|e| panic!("conv_label_node failed: {e:?}"))
+    build()
 }
 
 
-pub fn lin_label_node(params: &LabelNetParams) -> Node {
+pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
 
     let LabelNetTypeParams::LinNetParams(lin_params) = &params.net_type else {
         // return Err(ThoError::new(format!("Unexpected params type: {cnn_params:?}")));
@@ -1177,7 +1233,7 @@ pub fn lin_label_node(params: &LabelNetParams) -> Node {
             .end_seq()
     };
 
-    build().unwrap_or_else(|e| panic!("lin_label_node failed: {e:?}"))
+    build()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -2153,7 +2209,7 @@ mod train_tests {
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            lin_label_node(&params).build_tch_module(&vs_0.root())?;
+            lin_label_node(&params)?.build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
         let batch = 11i64;
@@ -2184,7 +2240,7 @@ mod train_tests {
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
+           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
            model_base_path.join(NET_WEIGHTS_FILE),
            Cpu,
         )?;
@@ -2241,7 +2297,7 @@ mod train_tests {
         );
 
         let mut vs_0 = VarStore::new(Cpu);
-        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = conv_label_node(&params).build_tch_module(&vs_0.root())?;
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = conv_label_node(&params)?.build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
         for slices in all_slices {
@@ -2270,7 +2326,7 @@ mod train_tests {
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder).build_tch_module(path),
+           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
            model_base_path.join(NET_WEIGHTS_FILE),
            Cpu,
         )?;
@@ -2311,7 +2367,7 @@ mod train_tests {
         );
 
         let mut vs_0 = VarStore::new(Cpu);
-        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = conv_label_node(&params).build_tch_module(&vs_0.root())?;
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = conv_label_node(&params)?.build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
         let max_len = 32;
@@ -2697,7 +2753,7 @@ mod train_tests {
 
         let mut vs_0 = VarStore::new(Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            LabelNetParams::label_net(&label_node_params).build_tch_module(&vs_0.root())?;
+            LabelNetParams::label_net(&label_node_params)?.build_tch_module(&vs_0.root())?;
         vs_0.freeze();
         debug!(
             "save_test_corr_model: channels={}, max_motif_nets={}, max_motif_batches={}, motif_batch_size={} vs_0.variables()={:?}",

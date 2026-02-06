@@ -2081,3 +2081,12 @@ pub fn os_thread_id() -> u64 {
         unsafe { libc::syscall(libc::SYS_gettid) as u64 }
     }
 }
+
+pub fn backtrace_head_lines(n: usize) -> String {
+    let bt = Backtrace::capture();
+    format!("{bt:?}")
+        .lines()
+        .take(n)
+        .collect::<Vec<_>>()
+        .join("\n")
+}

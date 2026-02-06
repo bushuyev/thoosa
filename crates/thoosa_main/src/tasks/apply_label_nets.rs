@@ -318,8 +318,7 @@ where
                 let out = net.tho_forward(&batch_input, None/*TODO mask*/, false);
                 debug!("ApplyLabelNet::run: out={out:?}");
                 let out = out?;
-                debug!("ApplyLabelNet::run: out.t_ref()=\n{}", out.t_ref());
-                debug!("ApplyLabelNet::run: out.t_ref()=\n{}", out.t_ref());
+                debug!("ApplyLabelNet::run: out.t_ref=\n{}", out.t_ref());
 
                 let out = out.t_ref().f_i(0)?;
                 let out = ThoTensor::new(out_id, out)?;

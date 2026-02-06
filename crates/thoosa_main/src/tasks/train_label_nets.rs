@@ -371,14 +371,14 @@ where
                                     //TODO impl From<(num_nets, LabelNetTypeArgs)> for LabelNetParams
                                     let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(ConvNetParams::new(num_conv_layers, hidden_conv_channels, kernel, num_head_layers, num_head_features, joint.into())));
 
-                                    Ok((conv_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
+                                    Ok((conv_label_node(&net_params)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
                                 LabelNetTypeArgs::LinNet(LinNetArgs {
                                      num_layers, slices_len
                                 }) => {
                                     let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(slices_len, num_layers)));
 
-                                    Ok((lin_label_node(&net_params).build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
+                                    Ok((lin_label_node(&net_params)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
                             }
 
