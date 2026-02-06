@@ -105,6 +105,8 @@ where
             run_ids
         };
 
+        debug!("ApplyLabelNets::new: train_label_nets_run_ids={train_label_nets_run_ids:?} label_net_run_ids={label_net_run_ids:?}");
+
         let mut label_net_run_ids = label_net_run_ids.into_iter().collect::<Vec<_>>();
         label_net_run_ids.sort();
         if label_net_run_ids.is_empty() {
