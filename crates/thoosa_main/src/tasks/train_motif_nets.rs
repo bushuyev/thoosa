@@ -251,7 +251,7 @@ where
 
                 let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), CacheArea::default())), ctx.branch(Some("train_motif_net"), false, false)).await?).unwrap().take_data(0).await?;
 
-                debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} loss={}", result.min_loss);
+                debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", result.min_loss);
 
                 store.read().get_motif_meta(motif_id_rate.0).map(|(channel, find_motifs_run_id)|{
                     TrainMotifNetResult::new(
