@@ -4,7 +4,7 @@ use crate::transforms::filters::*;
 use log::debug;
 use serde::Deserialize;
 use std::collections::HashMap;
-use thoosa_properties_map::FromHashmap;
+use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::run_configs::{RunConfig, RunId};
@@ -65,7 +65,7 @@ impl FindMotifsRunConfig {
             window,
             filter,
             slices_filter: SlicesFilter::AccumulateStats(AccumulateStats {
-                k: mean_k.unwrap_or(0.5),
+                aggr: Aggr::Mean(MeanAggr { k: mean_k.unwrap_or(0.5) }),
             }),
         }
     }
@@ -83,7 +83,7 @@ impl FindMotifsRunConfig {
             step,
             window,
             filter,
-            slices_filter: SlicesFilter::PrecalculateStats(PrecalculateStats { k, slices}),
+            slices_filter: SlicesFilter::PrecalculateStats(PrecalculateStats { aggr: Aggr::Mean(MeanAggr { k }), slices}),
         }
     }
 
@@ -101,6 +101,26 @@ impl FindMotifsRunConfig {
 pub enum InputFilter {
     Conv1(Conv1Params),
     BandPassFilter(BandPassFilterParams),
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
+pub enum Aggr {
+    Mean(MeanAggr),
+    Quantile(QuantileAggr),
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
+pub struct MeanAggr {
+    #[in_map]
+    #[run_config]
+    pub k: f32,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
+pub struct QuantileAggr {
+    #[in_map]
+    #[run_config]
+    pub q: f32,
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
@@ -134,18 +154,33 @@ pub enum SlicesFilter {
     PrecalculateStats(PrecalculateStats),
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(ThoosaRunConfig, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct AccumulateStats {
-    #[in_map]
     #[run_config]
-    pub k: f32,
+    pub aggr: Aggr,
+}
+
+impl ToHashmap for AccumulateStats {
+    fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
+        let prefix = parent.unwrap_or("AccumulateStats::".to_string());
+        self.aggr.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "aggr.")))
+    }
+}
+
+impl FromHashmap for AccumulateStats {
+    fn from_properties_map(parent: Option<String>, properties: &HashMap<String, thoosa_shared::val::Val>) -> Result<Self, thoosa_shared::ThoError> {
+        let prefix = parent.unwrap_or("AccumulateStats::".to_string());
+        Ok(Self {
+            aggr: Aggr::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "aggr.")), properties)?,
+        })
+    }
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct PrecalculateStats {
     #[in_map]
     #[run_config]
-    pub k: f32,
+    pub aggr: Aggr,
 
     #[in_map]
     #[run_config]
@@ -155,7 +190,7 @@ pub struct PrecalculateStats {
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue, SlicesFilterRangeOrValue};
+    use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue, MeanAggrRangeOrValue, SlicesFilterRangeOrValue};
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use log::debug;
     use tch::Tensor;
@@ -183,7 +218,7 @@ mod tests {
                 },
             )),
             slices_filter: SlicesFilterRangeOrValue::AccumulateStats(
-                AccumulateStatsRangeOrValue { k: 0.5.into() },
+                AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: 0.5.into() }) },
             ),
         };
         // debug!("{:#}", serde_json5::to_string(&rc).unwrap());

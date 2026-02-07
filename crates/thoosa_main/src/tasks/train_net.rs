@@ -418,6 +418,8 @@ where
                 &self.descr,
             ).await?;
 
+            debug!("TrainNet::run, done: descr={:?} run_config={:?}", self.descr, run_config);
+
             Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")]), var_store, node_params, run_config, loss), CacheArea::default())))
         }
     }

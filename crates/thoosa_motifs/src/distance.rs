@@ -40,9 +40,14 @@ pub enum MaskMaker<'a> {
         q: f32,
         with_mask: bool,
     },
-    LeRunningMean {
+    LeAccumulatedMean {
         k: f32,
         avg: &'a Mutex<Tensor>,
+        total_samples: &'a Mutex<Tensor>,
+    },
+    LeAccumulatedQuantile {
+        q: f32,
+        quantiles: &'a Mutex<Tensor>,
         total_samples: &'a Mutex<Tensor>,
     },
     Diagonal,
@@ -109,13 +114,21 @@ impl<'a> MaskMaker<'a> {
             MaskMaker::LocalMin { dim, radius } => {
                 Self::apply_prev(&prev_mask, local_min_mask_suppressed(&dists, *dim, *radius as i64)?)
             },
-            MaskMaker::LeRunningMean {
+            MaskMaker::LeAccumulatedMean {
                 k,
                 avg,
                 total_samples,
             } => Self::apply_prev(
                 &prev_mask,
-                mean_mask(*k as f64, dists, prev_mask.as_ref(), *avg, total_samples)?,
+                accumulating_mean_mask(*k as f64, dists, prev_mask.as_ref(), *avg, total_samples)?,
+            ),
+            MaskMaker::LeAccumulatedQuantile {
+                q,
+                quantiles,
+                total_samples,
+            } => Self::apply_prev(
+                &prev_mask,
+                accumulating_quantile_mask(*q as f64, dists, prev_mask.as_ref(), *quantiles, total_samples)?,
             ),
         }
     }
@@ -377,7 +390,7 @@ fn local_min_mask_suppressed(distances: &Tensor, dim: i64, radius: i64) -> Resul
 
 /// distances - [channels x slices 0 x slices 1]
 /// calculates accumulated means between distances
-fn mean_mask(
+fn accumulating_mean_mask(
     k: f64,
     distances: &Tensor,
     pre_mask: Option<&Tensor>,
@@ -481,6 +494,102 @@ fn mean_mask(
     Ok(le)
 }
 
+/// distances - [channels x slices 0 x slices 1]
+/// calculates accumulated quantiles between distances
+fn accumulating_quantile_mask(
+    q: f64,
+    distances: &Tensor,
+    pre_mask: Option<&Tensor>,
+    quantiles_acc: &Mutex<Tensor>,
+    total_samples: &Mutex<Tensor>,
+) -> Result<Tensor, ThoError> {
+    let distances_size = distances.size();
+    let q = q.clamp(0.0, 1.0);
+
+    debug!("running_quantile_mask: q={q} distances={distances:?} pre_mask={pre_mask:?} quantiles_acc={quantiles_acc:?} total_samples={total_samples:?}");
+    trace!("running_quantile_mask: after pre_mask distances=\n{distances}");
+
+    let (quantile_t, counts_t) = if let Some(pm) = pre_mask {
+        let prev_quantiles = quantiles_acc.lock().shallow_clone();
+        let mut quantiles = Vec::with_capacity(distances_size[0] as usize);
+        let mut counts = Vec::with_capacity(distances_size[0] as usize);
+
+        for channel in 0..distances_size[0] {
+            let channel_dists_t =
+                distances
+                    .f_i((channel, .., ..))?
+                    .f_masked_select(&pm.f_i((channel, .., ..))?)?;
+            if channel_dists_t.numel() == 0 {
+                let prev_quantile = prev_quantiles.f_i((channel, 0))?;
+                trace!("running_quantile_mask: channel={channel} has no samples, reusing prev_quantile={prev_quantile}");
+                quantiles.push(prev_quantile);
+                counts.push(0);
+                continue;
+            }
+            let quantile = channel_dists_t.f_quantile_scalar(q, 0, true, "lower")?;
+            trace!("running_quantile_mask: channel={channel} channel_dists_t=\n{channel_dists_t} quantile={quantile}");
+            quantiles.push(quantile);
+            counts.push(channel_dists_t.size()[0])
+        }
+        (
+            Tensor::f_stack(quantiles.as_slice(), 0)?.f_view((distances_size[0], 1))?,
+            Tensor::f_from_slice(counts.as_slice())?
+                .f_to_device(distances.device())?
+                .f_view((distances_size[0], 1))?,
+        )
+    } else {
+        (
+            distances.f_view((distances_size[0], -1))?.f_quantile_scalar(q, 1, true, "lower")?,
+            Tensor::f_from_slice(&[distances_size[1] * distances_size[2]])?
+                .f_to_device(distances.device())?
+                .f_view((1, 1))?
+                .f_broadcast_to([distances_size[0], 1])?,
+        )
+    };
+
+    trace!("running_quantile_mask: full. quantile_t=\n{quantile_t}");
+    debug!("running_quantile_mask: samples.size={:?} quantile_t.size={:?}", distances.size(), quantile_t.size());
+    debug!("running_quantile_mask: total_samples={total_samples:?} counts={counts_t:?}");
+    debug!("running_quantile_mask: total_samples.device={:?} counts.device={:?}", total_samples.lock().device(), counts_t.device());
+
+    let (quantile_t, counts_t) = (
+        quantile_t.f_to_device(distances.device())?,
+        counts_t.f_to_device(distances.device())?,
+    );
+
+    let mut quantiles_guard = quantiles_acc.lock();
+    debug!("running_quantile_mask: 0. quantiles_guard=\n{quantiles_guard}");
+
+    let mut total_samples_guard = total_samples.lock();
+    debug!("running_quantile_mask: 1. total_samples_guard=\n{total_samples_guard}");
+
+    let count_t_added = counts_t.f_add(&total_samples_guard)?;
+    debug!("running_quantile_mask: 1. count_t_added=\n{count_t_added} device={:?} thread name={:?}", count_t_added.device(), std::thread::current().name());
+
+    let weighted = quantiles_guard.f_multiply(&total_samples_guard)?;
+    let quantile_scaled = quantile_t.f_multiply(&counts_t)?;
+    *quantiles_guard = weighted.f_add(&quantile_scaled)?.f_div(&count_t_added)?;
+    debug!("running_quantile_mask: 2.0 quantiles_guard=\n{quantiles_guard}");
+
+    let _ = total_samples_guard.f_add_(&counts_t)?;
+    debug!("running_quantile_mask: 2.1 total_samples_guard=\n{total_samples_guard}");
+
+    let quantiles_threshold = quantiles_guard.f_view((-1, 1, 1))?.f_broadcast_to(distances_size)?;
+    trace!("running_quantile_mask: quantiles_threshold=\n{quantiles_threshold}");
+    debug!("running_quantile_mask: distances.dev={:?} quantiles_threshold.device={:?}", distances.device(), quantiles_threshold.device());
+
+    let le = distances
+        .f_le_tensor(&quantiles_threshold)
+        .map_err(|e| {
+            error!("running_quantile_mask: distances.f_le_tensor e={e:?}");
+            e
+        })?;
+
+    trace!("running_quantile_mask: le=\n{le}");
+
+    Ok(le)
+}
+
 pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoError> {
     let t_0 = t_0.f_unsqueeze(dim + 1)?; // channels x num_slices x 1 x slice_len
     let t_1 = t_1.f_unsqueeze(dim)?; // channels x 1 x num_slices x slice_len
@@ -572,10 +681,10 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoError> {
 
 #[cfg(test)]
 mod distance_tests {
-    use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeRunningMean, LocalMin, Tril};
+    use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeAccumulatedMean, LeAccumulatedQuantile, LocalMin, Tril};
     use crate::distance::{
         MaskMaker, average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, local_min_mask,
-        local_min_mask_suppressed, mean_mask, slice_t, z_normalized_euclidean,
+        local_min_mask_suppressed, accumulating_mean_mask, slice_t, z_normalized_euclidean,
     };
     use chrono::Utc;
     use log::__private_api::enabled;
@@ -1007,7 +1116,7 @@ mod distance_tests {
         let dists_t = tensor_3_7_5_lin();
         let mut means = Mutex::new(Tensor::zeros([3], FLOAT_CPU));
 
-        let mask = LeRunningMean {
+        let mask = LeAccumulatedMean {
             k: 1.0,
             avg: &mut means,
             total_samples: &mut Mutex::new(Tensor::zeros([3], INT64_CPU)),
@@ -1044,13 +1153,13 @@ mod distance_tests {
         let mut means = Mutex::new(Tensor::zeros([3], FLOAT_CPU));
 
         let mut total_samples = Mutex::new(Tensor::zeros([3], INT64_CPU));
-        let mask = LeRunningMean {
+        let mask = LeAccumulatedMean {
             k: 1.0,
             avg: &mut means,
             total_samples: &mut total_samples,
         }
         .make_mask(None, &dists_t_0);
-        let mask = LeRunningMean {
+        let mask = LeAccumulatedMean {
             k: 1.0,
             avg: &mut means,
             total_samples: &mut total_samples,
@@ -1091,6 +1200,53 @@ mod distance_tests {
     }
 
     #[test]
+    fn test_running_quantile_mask_two_chunks() {
+        const CHANNELS: i64 = 1;
+
+        let dists_t_0 = Tensor::from_slice(&[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0,
+        ]).view((CHANNELS, 3, 2));
+        let dists_t_1 = Tensor::from_slice(&[
+            7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ]).view((CHANNELS, 3, 2));
+
+        let mut quantiles_acc = Mutex::new(Tensor::zeros([CHANNELS, 1], FLOAT_CPU));
+        let mut total_samples = Mutex::new(Tensor::zeros([CHANNELS, 1], INT64_CPU));
+
+        let _ = LeAccumulatedQuantile {
+            q: 0.5,
+            quantiles: &mut quantiles_acc,
+            total_samples: &mut total_samples,
+        }
+        .make_mask(None, &dists_t_0).unwrap();
+
+        let mask = LeAccumulatedQuantile {
+            q: 0.5,
+            quantiles: &mut quantiles_acc,
+            total_samples: &mut total_samples,
+        }
+        .make_mask(None, &dists_t_1).unwrap();
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                false, false, false,
+                false, false, false,
+            ]).view((CHANNELS, 3, 2)),
+            mask
+        );
+
+        assert_eq!(
+            &Tensor::from_slice(&[6.0]).view((CHANNELS, 1)).totype(Float),
+            quantiles_acc.lock().deref()
+        );
+
+        assert_eq!(
+            &Tensor::from_slice(&[12]).view((CHANNELS, 1)).totype(Int64),
+            total_samples.lock().deref()
+        );
+    }
+
+    #[test]
     fn test_mean_mask() {
         // set_max_level(Trace);
 
@@ -1099,7 +1255,7 @@ mod distance_tests {
         let mut means_acc = Mutex::new(Tensor::zeros([CHANNELS, 1], INT64_CPU));
         let mut total_samples = Mutex::new(Tensor::zeros([CHANNELS, 1], INT64_CPU));
 
-        let mask = mean_mask(
+        let mask = accumulating_mean_mask(
             0.5,
             &Tensor::from_slice(&[
                 // distances 3x2 slices
@@ -1128,7 +1284,7 @@ mod distance_tests {
             total_samples.lock().deref()
         );
 
-        let mask = mean_mask(
+        let mask = accumulating_mean_mask(
             0.5,
             &Tensor::from_slice(&[
                 // distances 3x2 slices
@@ -1157,7 +1313,7 @@ mod distance_tests {
             total_samples.lock().deref()
         );
 
-        let mask = mean_mask(
+        let mask = accumulating_mean_mask(
             0.5,
             &Tensor::from_slice(&[
                 // distances 3x2 slices
@@ -1190,7 +1346,7 @@ mod distance_tests {
         );
 
 
-        let mask = mean_mask(
+        let mask = accumulating_mean_mask(
             0.0,
             &Tensor::from_slice(&[
                 // distances 3x2 slices
