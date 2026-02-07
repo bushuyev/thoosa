@@ -50,7 +50,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 use crate::cli::Commands::SelectMotifs;
-use crate::tasks::slices_stats::{Aggr, AverageDistanceValue, Metrics, SlicesStats};
+use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
 use crate::tasks::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
 use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
@@ -985,17 +985,16 @@ where
 
                 let clc_dist = Arc::clone(&self.clc_dist);
                 let store = Arc::clone(&self.store);
-                let motif_selector = select_motifs_run_config.motif_selector.clone();
                 let select_motifs_run_config_id =  select_motifs_run_config.id.unwrap().clone();
                 let mut ctx_for_channel = ctx.branch(Some("select_motifs_channel"), false, false);
 
                 stream::iter(lock.into_inner()).map(move |(motif_id, slices)| {
                     debug!("SelectMotifsStage::run: motif_id={motif_id} slices.len={}", slices.len());
 
+                    //it's being added here with select_motifs_run_config_id so it's possible to distinguish between original motif slices and added by (select ... from slices s join motifs m on m.id=s.motif_id where s.run_id!=m.run_id;)
                     store.write().add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices).unwrap(); //TODO unwrap + calculate dist before adding slices and add only if dist decreased?
 
                     let clc_dist = Arc::clone(&clc_dist);
-                    let motif_selector = motif_selector.clone();
                     let mut ctx_for_motif = ctx_for_channel.branch(Some("select_motifs_motif"), false, false);
                     async move {
 
@@ -1005,7 +1004,7 @@ where
                         ML::cache().await.remove(&ML::out_id(&clc_dist.motif_loader, &motif_id)); //purges cache so motif is reloaded in clc_dist and its average dist recalculated - TODO add flag to motif loader input to trigger motif reload + load only from added resources
 
                         let clc_ctx = ctx_for_motif.branch(Some("select_motifs_clc_dist"), false, false);
-                        let dist: Arc<DevicesWrap<AverageDistanceValue>> = clc_dist
+                        let dist: Arc<DevicesWrap<ScalarStatsValue>> = clc_dist
                             .run(
                                 Arc::new(DevicesWrap::wrap(
                                     LoadMotifAndClcDistanceInput::new(MotifLoaderInput::all_slices(DataId(*motif_id)), Metrics::EucDist, Aggr::Mean(1.0)),//TODO config
@@ -1019,7 +1018,7 @@ where
                                 e
                             })?;
 
-                        with_data!(ctx_for_motif.branch(Some("select_motifs_dist_value"), false, false), dist; |_ctx, dist:&AverageDistanceValue|{
+                        with_data!(ctx_for_motif.branch(Some("select_motifs_dist_value"), false, false), dist; |_ctx, dist:&ScalarStatsValue|{
                             Ok::<_, ThoError>((*motif_id, dist.value() as f64))
                         })
 

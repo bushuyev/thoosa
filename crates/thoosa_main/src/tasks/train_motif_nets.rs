@@ -9,6 +9,7 @@ use futures_util::stream::BoxStream;
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
+use plotters::style::RED;
 use tch::Device::{Cpu, Cuda};
 use tch::kind::FLOAT_CUDA;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
@@ -232,7 +233,7 @@ where
 
                         // let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean).set_requires_grad(true);
                         let loss = pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.totype(Float), None, None, Reduction::Mean)?.f_set_requires_grad(true)?;
-                        debug!("run_train_motif_net: pred_y ={pred_y} target={target} loss={loss}");
+                        debug!("TrainMotifNets::run, loss_fn: pred_y ={pred_y} target={target} loss={loss}");
 
                         Ok(loss)
                     },
@@ -249,6 +250,8 @@ where
                 ));
 
                 let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), CacheArea::default())), ctx.branch(Some("train_motif_net"), false, false)).await?).unwrap().take_data(0).await?;
+
+                debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} loss={}", result.min_loss);
 
                 store.read().get_motif_meta(motif_id_rate.0).map(|(channel, find_motifs_run_id)|{
                     TrainMotifNetResult::new(
@@ -392,19 +395,19 @@ where
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
 
 
-           // let test_dir = Path::new("/tmp/motifs");//.join(cdt_for_dir());
-           //  plot_series_with_lanes(
-           //      // (0..random.size()[0]).map(|i| {
-           //      //     (format!("i={i}"), BLACK, vec_f32_from(&random.i((i, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>())
-           //      // }).collect::<Vec<_>>(),
-           //       (0..motifs.size()[0]).map(|i| {
-           //          (format!("i={i}"), BLACK, vec_f32_from(&motifs.i((i, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>())
-           //      }).collect::<Vec<_>>(),
-           //      format!("sig").as_str(),
-           //      (2000, 1000),
-           //      &test_dir.join(&format!("motif__{}.png", COUNTER.fetch_add(1, Relaxed))),
-           //      &[(0, 1000)]
-           //  ).unwrap();
+           let test_dir = Path::new("/tmp/motifs");//.join(cdt_for_dir());
+            plot_series_with_lanes(
+                (0..random.size()[0]).map(|i| {
+                    (format!("i={i}"), RED, to_vec_f32(&random.i((i, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>())
+                }).chain(//.collect::<Vec<_>>(),
+                 (0..motifs.size()[0]).map(|i| {
+                    (format!("i={i}"), BLACK, to_vec_f32(&motifs.i((i, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>())
+                })).collect::<Vec<_>>(),
+                format!("sig").as_str(),
+                (2000, 1000),
+                &test_dir.join(&format!("motif__{}.png", COUNTER.fetch_add(1, Relaxed))),
+                &[(0, 1000)]
+            ).unwrap();
 
 
             let (x, _lengths, y) = mix_x_binary_with_labels(&motifs, None, &random, None)?;

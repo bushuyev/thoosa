@@ -39,7 +39,7 @@ use tch::{Device, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::{ThoDevice};
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{ByAvgEucDist, ByAvgEucDistRangeOrValue, DistanceRunningMean, DistanceRunningMeanRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MaxDistanceRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_common::find_motifs_run_config::{ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStats, AccumulateStatsRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, PrecalculateStatsRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -81,7 +81,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::perf_logging::{format_perf_map, maybe_init_perf_tracing_stdout_simplelog_like, PERF};
 use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
-use crate::tasks::slices_stats::{Aggr, AverageDistanceValue, Metrics, SlicesStats};
+use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
 use crate::tasks::cross_dims::ChannelsMotifsDists;
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
@@ -730,11 +730,8 @@ async fn run_all(
     info!("select motifs done: find_motifs_run_ids={find_motifs_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
 
     for find_motifs_run_id in &find_motifs_run_ids {
-
-            run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: Some(select_motifs_run_ids.clone()) }), &Cpu).await?;
-
+        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: Some(select_motifs_run_ids.clone()) }), &Cpu).await?;
     }
-
 
     debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
@@ -832,7 +829,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Value(1000),
         filter: None,
-        slices_filter: SlicesFilterRangeOrValue::DistanceRunningMean(DistanceRunningMeanRangeOrValue { k: RangeOrValue::Value(0.02) }),
+        slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { k: RangeOrValue::Value(0.02) }),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select
@@ -883,14 +880,14 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
     (find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value)
 }
 
-fn run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrValue, FixedFindMotifsConfig, SelectMotifsRunConfigRangeOrValue, Arc<OptConfig>, TrainMotifsNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue) {
+fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrValue, FixedFindMotifsConfig, SelectMotifsRunConfigRangeOrValue, Arc<OptConfig>, TrainMotifsNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue) {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Value(100),
         filter: None,
-        slices_filter: SlicesFilterRangeOrValue::DistanceRunningMean(DistanceRunningMeanRangeOrValue { k: RangeOrValue::Value(0.02) }),
-        // slices_filter: SlicesFilterRangeOrValue::MaxDistance(MaxDistanceRangeOrValue{k:RangeOrValue::Value(0.01), slices: RangeOrValue::Value(10)}),
+        // slices_filter: SlicesFilterRangeOrValue::DistanceRunningMean(DistanceRunningMeanRangeOrValue { k: RangeOrValue::Value(0.02) }),
+        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{k:RangeOrValue::Value(0.01), slices: RangeOrValue::Value(10)}),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select
@@ -960,7 +957,7 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
             padding: RangeOrValue::Value(0),
         })),
         // filter: None,
-        slices_filter: SlicesFilterRangeOrValue::DistanceRunningMean(DistanceRunningMeanRangeOrValue { k: RangeOrValue::Value(0.02) }),
+        slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { k: RangeOrValue::Value(0.02) }),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select
@@ -1146,9 +1143,8 @@ where
 
     if let Some(pure_sets_lens) = pure_sets_lens {
         for pure_sets_len in pure_sets_lens {
-            store_guard.save_pure_sets(3, true, &t)?;//
+            store_guard.save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t)?;//
         }
-
     }
 
 
@@ -1301,7 +1297,7 @@ async fn plot_motif(
     let dist = clc_dist
         .run_cached(clc_input, ctx.branch(Some("plot_motif_clc_dist"), false, false))
         .await?
-        .with_data_ref(0, &mut ctx_for_dist, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
+        .with_data_ref(0, &mut ctx_for_dist, None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
         .await?;
 
 
@@ -1636,7 +1632,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, import_resources_with_pure_sets, run_all, run_all_config_0, run_all_config_1, run_all_grid_step, run_grid, run_opt_step, run_plot_motif_slices, Cli, RunAllArgs};
+    use crate::cli::{import_resources, import_resources_with_pure_sets, run_all, run_all_config_0, test_run_all_config_1, run_all_grid_step, run_grid, run_opt_step, run_plot_motif_slices, Cli, RunAllArgs};
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Info, Trace, Warn};
@@ -1696,7 +1692,7 @@ mod cli_tests {
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::traits::{Data, DataId};
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
-    use crate::tasks::slices_stats::{Aggr, AverageDistanceValue, Metrics, SlicesStats};
+    use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
     use crate::tasks::cross_dims::MotifSlices;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_motifs::FindMotifsStage;
@@ -1819,18 +1815,15 @@ mod cli_tests {
         fs::create_dir_all(&test_dir)?;
         let base_path = test_dir.to_string_lossy().to_string();
 
-        let n = 1234;
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir.clone(),
             3,
-            n as u32,
+            0,
             100,
         )?));
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;
-
-
 
 
         // let x = lin_t(n);
@@ -1866,7 +1859,7 @@ mod cli_tests {
         //     &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str(),
         // )?;
         let mut import_hash = HashMap::new();
-        for i in 0..20 {
+        for i in 0..30 {
             let (t, _intervals) = tch_test_utils::resource_tensor(1000usize, &[
                 vec![(2, 100, MotifKind::Pulse)],
                 vec![],
@@ -1912,7 +1905,7 @@ mod cli_tests {
                     .map_err(ThoError::from)
             },
             true,
-            Some(&[(5, true), (10, true)])
+            Some(&[(20, true), (10, true)])
         )?;
 
         let resources = store.read().list_resources_by_ids(&imported_ids)?;
@@ -1931,11 +1924,11 @@ mod cli_tests {
 
 
         let run_all_args = RunAllArgs{
-            find_resources: "group:group 1 labels/all".to_string(),
-            select_resources: "group:group 1 labels/all".to_string(),
+            find_resources: "group:pure group 10".to_string(),
+            select_resources: "group:pure group 20".to_string(),
             max_chunk_size: 10,
-            train_resource_group: "group 1 labels/all".to_string(),
-            valid_resource_group: "group 1 labels/all".to_string(),
+            train_resource_group: "pure group 20".to_string(),
+            valid_resource_group: "pure group 10".to_string(),
             run_config_cnt: "".to_string(),
         };
 
@@ -1946,7 +1939,7 @@ mod cli_tests {
             train_motif_nets_run_config_range_or_value,
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value)
-            = run_all_config_1(&run_all_args);
+            = test_run_all_config_1(&run_all_args);
 
         match panic_to_err_async!({run_all(
             &ws,

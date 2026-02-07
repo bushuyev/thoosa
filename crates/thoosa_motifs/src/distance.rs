@@ -376,6 +376,7 @@ fn local_min_mask_suppressed(distances: &Tensor, dim: i64, radius: i64) -> Resul
 }
 
 /// distances - [channels x slices 0 x slices 1]
+/// calculates accumulated means between distances
 fn mean_mask(
     k: f64,
     distances: &Tensor,
@@ -446,11 +447,7 @@ fn mean_mask(
 
     let count_t_added =  counts_t.f_add(&total_samples_guard)?;
 
-    debug!(
-        "new_total_means: 1. count_t_added=\n{count_t_added} device={:?} thread name={:?}",
-        count_t_added.device(),
-        std::thread::current().name()
-    );
+    debug!("new_total_means: 1. count_t_added=\n{count_t_added} device={:?} thread name={:?}",count_t_added.device(),std::thread::current().name());
 
     let weighted = means_guard.f_multiply(&total_samples_guard)?;
     let mean_scaled = mean_t.f_multiply(&counts_t)?;

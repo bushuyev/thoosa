@@ -1,6 +1,6 @@
 use crate::tasks::cross_dims::MotifSlices;
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
-use crate::tasks::slices_stats::{Aggr, AverageDistanceValue, Metrics, SlicesStats, SlicesStatsInput};
+use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats, SlicesStatsInput};
 use cached_derive::Cached;
 use log::debug;
 use std::fmt::{Debug, Formatter};
@@ -81,7 +81,7 @@ where
             Ctx = C,
         > + Cached + OutId + 'static,
 
-    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out = AverageDistanceValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
+    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out =ScalarStatsValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
 {
     id: SynKey,
     pub motif_loader: Arc<ML>,
@@ -97,7 +97,7 @@ where
             Ctx = C,
         > + Cached + OutId + 'static,
 
-    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out = AverageDistanceValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
+    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out =ScalarStatsValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LoadMotifAndClcDistanceStage").finish()
@@ -113,7 +113,7 @@ where
             Ctx = C,
         > + Cached + OutId + 'static,
 
-    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out = AverageDistanceValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
+    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out =ScalarStatsValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
 {
     type ID = SynKey;
 
@@ -131,7 +131,7 @@ where
             Ctx = C,
         > + Cached + OutId + 'static,
 
-    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out = AverageDistanceValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
+    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out =ScalarStatsValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
 {
     pub fn new(motif_loader: Arc<ML>, clc_dist: Arc<CLC>) -> Self {
         Self {
@@ -152,7 +152,7 @@ where
             Ctx = C,
         > + Cached + OutId + 'static,
 
-    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out = AverageDistanceValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
+    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out =ScalarStatsValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SynKey::new([mono_key!(format!("{input_id:?}"), format!("{input_id:?}_avg_ec_dist"))])
@@ -168,11 +168,11 @@ where
             Ctx = C,
         > + Cached + OutId + 'static,
 
-    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out = AverageDistanceValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
+    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out =ScalarStatsValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
 {
     type In<'a> = LoadMotifAndClcDistanceInput;
 
-    type Out = AverageDistanceValue;
+    type Out = ScalarStatsValue;
     type Ctx = C;
 }
 
@@ -186,7 +186,7 @@ where
             Ctx = C,
         > + Cached + OutId + 'static,
 
-    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out = AverageDistanceValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
+    for<'i> CLC: SyncStage<In<'i> = SlicesStatsInput, Out =ScalarStatsValue, Ctx = C> + Adjustable + OutId + Sync + Send + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifAndClcDistanceStage::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
@@ -264,7 +264,7 @@ impl DistOutputBuilder {
 }
 
 impl OutputBuilder for DistOutputBuilder {
-    type O = AverageDistanceValue;
+    type O = ScalarStatsValue;
 
     async fn add_partial_output(&mut self, o: Self::O) {
         debug!("DistOutputBuilder::add_partial_output: o={o:?}");
@@ -283,7 +283,7 @@ impl OutputBuilder for DistOutputBuilder {
             }
         };
 
-        Ok(AverageDistanceValue::new(self.id.clone(), value))
+        Ok(ScalarStatsValue::new(self.id.clone(), value))
     }
 }
 
@@ -291,7 +291,7 @@ impl OutputBuilder for DistOutputBuilder {
 mod tests {
     use super::{DistOutputBuilder, LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage};
     use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
-    use crate::tasks::slices_stats::{mock_average_stage, Aggr, AverageDistanceValue, Metrics};
+    use crate::tasks::slices_stats::{mock_average_stage, Aggr, ScalarStatsValue, Metrics};
     use parking_lot::{Mutex, RwLock};
     use std::sync::Arc;
     use tch::Tensor;
@@ -328,8 +328,8 @@ mod tests {
             mock_average_stage::builder()
                 .fail_while_dim0_gt(3)
                 .with_do_run(vec![
-                    AverageDistanceValue::new(SynKey::new([mono_key!(0u32, "avg_0")]), 10.0),
-                    AverageDistanceValue::new(SynKey::new([mono_key!(1u32, "avg_1")]), 30.0),
+                    ScalarStatsValue::new(SynKey::new([mono_key!(0u32, "avg_0")]), 10.0),
+                    ScalarStatsValue::new(SynKey::new([mono_key!(1u32, "avg_1")]), 30.0),
                 ])
                 .with_call_log(Arc::clone(&call_log))
                 .finish(),
@@ -347,7 +347,7 @@ mod tests {
         let result = stage.run_cached(Arc::clone(&input), stage_ctx).await?;
 
         let mut ctx_for_data = ctx.write().branch(Some("load_motif_and_clc_dist_data"), false, false);
-        let result_value: AverageDistanceValue = result.with_data_ref(0, &mut ctx_for_data, None, |val: &AverageDistanceValue, _ctx| Ok(val.clone())).await?;
+        let result_value: ScalarStatsValue = result.with_data_ref(0, &mut ctx_for_data, None, |val: &ScalarStatsValue, _ctx| Ok(val.clone())).await?;
 
         assert_eq!(result_value.value(), 20.0);
         assert_eq!(result_value.id(), &expected_id);

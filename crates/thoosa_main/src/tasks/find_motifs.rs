@@ -39,7 +39,7 @@ use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_common::cuda_utils::{pack_bits_bool, with_cuda_stream};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::data_with_extra::DataWithExtra;
-use crate::tasks::slices_stats::AverageDistanceValue;
+use crate::tasks::slices_stats::ScalarStatsValue;
 use crate::tasks::motif_loader::MotifMeta;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_common::tho_tensor::ThoTensor;
@@ -101,8 +101,8 @@ where
 }
 
 pub enum MasksCtx {
-    Mean{k:f32, ctx:MeanDistsCtx},
-    MaxDist{dists:ThoTensor<ChannelsMotifsDists, SynKey>}
+    AccumulatedMeanDist {k:f32, ctx:MeanDistsCtx},
+    PrecalculatedDist {dists:ThoTensor<ChannelsMotifsDists, SynKey>}
 }
 
 pub struct MeanDistsCtx {
@@ -122,6 +122,7 @@ impl MeanDistsCtx {
     }
 }
 
+/// Searches for repeating patterns (motifs) in the resources by cross-comparing slices within and across resources, computing a metric (currently only Euclidean distance), building a mask of minima, and then saving it (see DistsTracker).
 #[derive(Debug, Named)]
 pub struct FindMotifsStage<RC, L, C>
 where
@@ -151,8 +152,8 @@ where
         
         debug!("FindMotifsStage::new: fixed_config={fixed_config:?}");
 
-        let avg_dists = Arc::new(RandomStats::new(Arc::clone(&store), Arc::clone(&loader), &ws));
-        let avg_dists_arc = Arc::clone(&avg_dists);
+        let random_stats = Arc::new(RandomStats::new(Arc::clone(&store), Arc::clone(&loader), &ws));
+        let random_stats_arc = Arc::clone(&random_stats);
 
 
         let cross_loaders = futures::stream::iter(run_configs
@@ -160,7 +161,7 @@ where
             .map( |run_config| {
                 let fixed_config = fixed_config.clone();
                 let loader = Arc::clone(&loader);
-                let avg_dists_arc = Arc::clone(&avg_dists_arc);
+                let random_stats_arc = Arc::clone(&random_stats_arc);
                 let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {:?}", run_config.id)), false, false);
 
                 async move {
@@ -170,17 +171,17 @@ where
                     let filter = run_config.slices_filter.clone();
 
                     let masks_ctx = match &filter {
-                        SlicesFilter::DistanceRunningMean(v) => {
-                            MasksCtx::Mean{k: v.k, ctx:MeanDistsCtx::new(channels, device.into())}
+                        SlicesFilter::AccumulateStats(v) => {
+                            MasksCtx::AccumulatedMeanDist {k: v.k, ctx:MeanDistsCtx::new(channels, device.into())}
                         }
-                        SlicesFilter::MaxDistance(v) => {
+                        SlicesFilter::PrecalculateStats(v) => {
 
-                            let dists = avg_dists_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_config.id.unwrap(), Metrics::EucDist, Aggr::Quantile(0.1)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
+                            let dists = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_config.id.unwrap(), Metrics::EucDist, Aggr::Mean(0.01)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
                             let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
                                 ThoTensor::new(t.id().clone(), t.t.view((-1, 1, 1)))
                             })?;
-                            MasksCtx::MaxDist{ dists }
+                            MasksCtx::PrecalculatedDist { dists }
                         }
                     };
 
@@ -191,12 +192,12 @@ where
                         MasksCtx,
                         C,
                     > = CrossUnfoldClc::new(
-                        Box::new(move |t_0, t_1, input, means_ctx, ctx| {
+                        Box::new(move |t_0, t_1, input, masks_ctx, ctx| {
                             let device_idx = ctx.device_idx();
                             let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
 
-                            let mut mask_makers = match &means_ctx {
-                                MasksCtx::Mean{k, ctx} => {
+                            let mut mask_makers = match &masks_ctx {
+                                MasksCtx::AccumulatedMeanDist {k, ctx} => {
                                     vec![
                                         LocalMin { dim: 1, radius: run_config.window as u64 /2 },
                                         LocalMin { dim: 2, radius: run_config.window as u64 /2 },
@@ -207,21 +208,12 @@ where
                                         },
                                     ]
                                 }
-                                MasksCtx::MaxDist{dists} => {
+                                MasksCtx::PrecalculatedDist {dists} => {
                                     vec![
                                         LocalMin { dim: 1, radius: run_config.window as u64 /2 },
                                         LocalMin { dim: 2, radius: run_config.window as u64 /2 },
-                                        // LeQuantile {
-                                        //     q: 0.1,
-                                        //     with_mask: false,
-                                        // }
                                         Le {
-                                            v: dists.t.shallow_clone(),//TODO
-                                            // v: Tensor::full(
-                                            //     &[channels as i64, 1, 1],
-                                            //     0.01f64,
-                                            //     (Float, t_0.device()),
-                                            // ),//TODO
+                                            v: dists.t.shallow_clone(),
                                         }
                                     ]
                                 }
@@ -462,7 +454,7 @@ mod tests {
     use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::cross_dims::MotifSlices;
-    use crate::tasks::slices_stats::AverageDistanceValue;
+    use crate::tasks::slices_stats::ScalarStatsValue;
     use crate::tasks::random_slices_stats::RANDOM_AVG_DIST_GROUP;
     use crate::tasks::select_motifs::SelectMotifsStage;
 
