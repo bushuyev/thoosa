@@ -32,7 +32,7 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics,
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
-use crate::tasks::slices_stats::{Aggr, AverageDistanceValue, Metrics, SlicesStats};
+use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
 use crate::tasks::cross_dims::{ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage};
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
@@ -244,7 +244,7 @@ where
                     let avg_motif_dist = load_and_clc_avg_dist_clone
                         .run_cached(clc_input, ctx.branch(Some("stacked_motifs_loader_clc_run"), false, false))
                         .await?
-                        .with_data_ref(0, &mut ctx, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
+                        .with_data_ref(0, &mut ctx, None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
                         .await?;
 
                     let motif = motif_loader_clone.run_cached(

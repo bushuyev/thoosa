@@ -162,12 +162,13 @@ where
 
 #[derive(Debug, Clone, DummyData)]
 #[dummy_data(clone)]
-pub struct AverageDistanceValue {
+pub struct ScalarStatsValue {
+    //TODO add type
     id: SynKey,
     value: f32,
 }
 
-impl AverageDistanceValue {
+impl ScalarStatsValue {
     pub fn new(id: SynKey, value: f32) -> Self {
         Self { id, value }
     }
@@ -177,17 +178,17 @@ impl AverageDistanceValue {
     }
 }
 
-impl WithId for AverageDistanceValue {
+impl WithId for ScalarStatsValue {
     type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
     }
 }
-impl Output for AverageDistanceValue {}
+impl Output for ScalarStatsValue {}
 
 #[async_trait]
-impl CopyToDevice for AverageDistanceValue {
+impl CopyToDevice for ScalarStatsValue {
     async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
         Ok(self.clone())
     }
@@ -208,7 +209,7 @@ where
 {
     type Ctx = C;
     type In<'a> = SlicesStatsInput;
-    type Out = AverageDistanceValue;
+    type Out = ScalarStatsValue;
 }
 impl<C> SyncStage for SlicesStats<C>
 where
@@ -221,7 +222,7 @@ where
             Metrics::PearsonCorr => panic_to_err!(pearson_corr_distance_matrix_0_2_single(input.slices().data().t_ref(), 1e-8, input.aggr()))?,
         };
 
-        Ok(AverageDistanceValue::new(SynKey::new([mono_key!("AverageDistanceValue", "AverageDistanceValue")]), value))
+        Ok(ScalarStatsValue::new(SynKey::new([mono_key!("AverageDistanceValue", "AverageDistanceValue")]), value))
     }
 }
 
@@ -310,7 +311,7 @@ mod tests {
 pub mod mock_average_stage {
     use crate::tasks::cross_dims::MotifSlices;
     use crate::tasks::motif_loader::MotifMeta;
-    use crate::tasks::slices_stats::{AverageDistanceValue, SlicesStatsInput};
+    use crate::tasks::slices_stats::{ScalarStatsValue, SlicesStatsInput};
     use async_trait::async_trait;
     use log::debug;
     use mockall::mock;
@@ -331,7 +332,7 @@ pub mod mock_average_stage {
         impl Stage for SlicesStats {
             type Ctx = MockRunCtx;
             type In<'a> = SlicesStatsInput;
-            type Out = AverageDistanceValue;
+            type Out = ScalarStatsValue;
         }
 
         impl OutId for SlicesStats {
@@ -352,7 +353,7 @@ pub mod mock_average_stage {
     }
 
     pub struct MockSlicesStatsBuilder {
-        outputs: Vec<AverageDistanceValue>,
+        outputs: Vec<ScalarStatsValue>,
         fail_first: bool,
         fail_while_dim0_gt: Option<i64>,
         call_log: Option<Arc<Mutex<Vec<i64>>>>,
@@ -364,7 +365,7 @@ pub mod mock_average_stage {
     impl MockSlicesStatsBuilder {
         pub fn with_do_run<I>(mut self, outputs: I) -> Self
         where
-            I: Into<Vec<AverageDistanceValue>>,
+            I: Into<Vec<ScalarStatsValue>>,
         {
             self.outputs = outputs.into();
             self

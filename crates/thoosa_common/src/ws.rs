@@ -351,7 +351,7 @@ impl Workspace for FsWorkspace {
         params: &FinalNetParams,
     ) -> Result<PathBuf, ThoError> {
         debug!(
-            "save_final_model: run_id={run_id}  params={params:?} final_models_path={:?}",
+            "FsWorkspace::save_final_net: run_id={run_id}  params={params:?} final_models_path={:?}",
             self.final_nets_path
         );
 
@@ -387,7 +387,7 @@ impl Workspace for FsWorkspace {
         fs::create_dir_all(&base_path)?;
         let vs_path = base_path.join(NET_WEIGHTS_FILE);
 
-        info!("train_on_motif:  motif_id={motif_id} motif_model_run_id={train_motif_net_run_id} saved to {vs_path:?}");
+        info!("FsWorkspace::save_motif_net:  motif_id={motif_id} motif_model_run_id={train_motif_net_run_id} saved to {vs_path:?}");
 
         vs.save(vs_path)?;
 
@@ -450,7 +450,7 @@ impl Workspace for FsWorkspace {
         channel_motif_models_paths.into_iter().map(|(model, config)| {
             let motif_node_params = MotifNetParams::from_file(&config)?;
 
-            debug!("load_motif_models_ws: model={model:?} config={config:?} motif_node_params={motif_node_params:?}");
+            debug!("FsWorkspace::load_motif_nets: model={model:?} config={config:?} motif_node_params={motif_node_params:?}");
 
             let params_for_builder = motif_node_params.clone();
 

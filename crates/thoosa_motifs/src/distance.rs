@@ -446,11 +446,7 @@ fn mean_mask(
 
     let count_t_added =  counts_t.f_add(&total_samples_guard)?;
 
-    debug!(
-        "new_total_means: 1. count_t_added=\n{count_t_added} device={:?} thread name={:?}",
-        count_t_added.device(),
-        std::thread::current().name()
-    );
+    debug!("new_total_means: 1. count_t_added=\n{count_t_added} device={:?} thread name={:?}",count_t_added.device(),std::thread::current().name());
 
     let weighted = means_guard.f_multiply(&total_samples_guard)?;
     let mean_scaled = mean_t.f_multiply(&counts_t)?;

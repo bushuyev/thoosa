@@ -49,9 +49,9 @@ pub struct RandomStatsInput {
 impl RandomStatsInput {
     pub fn new(max_slices: u32, find_motifs_run_id: RunId, metrics: Metrics, aggr: Aggr) -> Self {
         Self {
+            //TODO
             id: SynKey::new([
                 mono_key!("RandomStatsInput", "stage"),
-                mono_key!(max_slices, format!("max_slices={max_slices}")),
                 mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
                 mono_key!(format!("{metrics:?}"), format!("metrics={metrics:?}")),
                 mono_key!(format!("{aggr:?}"), format!("aggr={aggr:?}")),
@@ -74,7 +74,7 @@ impl WithId for RandomStatsInput {
     }
 }
 
-#[derive(Debug, Named, Cached)]
+#[derive(Debug, Named)]
 pub struct RandomStats<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
@@ -83,7 +83,7 @@ where
     store: Arc<RwLock<Box<dyn Store>>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    clc_dist: Arc<SlicesStats<C>>,
+    clc_stats: Arc<SlicesStats<C>>,
     pd: PhantomData<C>,
 }
 
@@ -97,7 +97,7 @@ where
             store,
             loader,
             ws: Arc::clone(ws),
-            clc_dist: Arc::new(SlicesStats::<C>::new()),
+            clc_stats: Arc::new(SlicesStats::<C>::new()),
             pd: PhantomData,
         }
     }
@@ -181,10 +181,10 @@ where
             );
             let stats_input = Arc::new(DevicesWrap::wrap(stats_input, cache_area.into()));
             let stats_input_size = stats_input.size().clone();
-            let stats_out_id = self.clc_dist.out_id(stats_input.id());
+            let stats_out_id = self.clc_stats.out_id(stats_input.id());
             let stats = OOMHandler::new(vec![Adjusters::Input(Box::new(SplitsAdjuster::<MotifSlicesSelector, MonoMetrics<0, 2>>::new([2, -1].into())))], None)
                 .run(
-                    &self.clc_dist,
+                    &self.clc_stats,
                     Arc::clone(&stats_input),
                     channel_ctx.branch(Some("random_stats_dist"), false, false),
                     Contexts::new(
