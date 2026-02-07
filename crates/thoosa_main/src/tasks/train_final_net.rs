@@ -239,7 +239,7 @@ where
                 .await?;
 
             let final_result = TrainFinalNetsRunConfigResult::new(Some(&label_net_run_ids), result.min_loss, result.var_store, result.node_params, result.run_config);
-            debug!("TrainFinalNet::run: final_result={final_result:?}");
+            debug!("TrainFinalNet::run, done: min_loss={:?}", final_result.loss);
 
             Ok(Arc::new(DevicesWrap::wrap(TrainFinalNetOutput::new(SynKey::new([mono_key!("", "empty")]), final_result), cache_area.into())))
         }
