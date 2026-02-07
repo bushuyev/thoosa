@@ -579,7 +579,7 @@ mod tests {
                 };
                 Ok(DistsMask::new(mask, Some(dists), mask_type, None)?)
             },
-            MasksCtx::Mean{k:1.0, ctx: MeanDistsCtx::new(3, Cuda(0))},
+            MasksCtx::AccumulatedMeanDist {k:1.0, ctx: MeanDistsCtx::new(3, Cuda(0))},
             UnfoldParams::new(1, 2, 1),
         ));
 
