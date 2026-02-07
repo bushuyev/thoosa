@@ -101,8 +101,8 @@ where
 }
 
 pub enum MasksCtx {
-    RunningMean {k:f32, ctx:MeanDistsCtx},
-    MaxDist{dists:ThoTensor<ChannelsMotifsDists, SynKey>}
+    AccumulatedMeanDist {k:f32, ctx:MeanDistsCtx},
+    PrecalculatedDist {dists:ThoTensor<ChannelsMotifsDists, SynKey>}
 }
 
 pub struct MeanDistsCtx {
@@ -152,8 +152,8 @@ where
         
         debug!("FindMotifsStage::new: fixed_config={fixed_config:?}");
 
-        let avg_dists = Arc::new(RandomStats::new(Arc::clone(&store), Arc::clone(&loader), &ws));
-        let avg_dists_arc = Arc::clone(&avg_dists);
+        let random_stats = Arc::new(RandomStats::new(Arc::clone(&store), Arc::clone(&loader), &ws));
+        let random_stats_arc = Arc::clone(&random_stats);
 
 
         let cross_loaders = futures::stream::iter(run_configs
@@ -161,7 +161,7 @@ where
             .map( |run_config| {
                 let fixed_config = fixed_config.clone();
                 let loader = Arc::clone(&loader);
-                let avg_dists_arc = Arc::clone(&avg_dists_arc);
+                let random_stats_arc = Arc::clone(&random_stats_arc);
                 let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {:?}", run_config.id)), false, false);
 
                 async move {
@@ -172,16 +172,16 @@ where
 
                     let masks_ctx = match &filter {
                         SlicesFilter::AccumulateStats(v) => {
-                            MasksCtx::RunningMean {k: v.k, ctx:MeanDistsCtx::new(channels, device.into())}
+                            MasksCtx::AccumulatedMeanDist {k: v.k, ctx:MeanDistsCtx::new(channels, device.into())}
                         }
                         SlicesFilter::PrecalculateStats(v) => {
 
-                            let dists = avg_dists_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_config.id.unwrap(), Metrics::EucDist, Aggr::Mean(0.01)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
+                            let dists = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_config.id.unwrap(), Metrics::EucDist, Aggr::Mean(0.01)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
                             let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
                                 ThoTensor::new(t.id().clone(), t.t.view((-1, 1, 1)))
                             })?;
-                            MasksCtx::MaxDist{ dists }
+                            MasksCtx::PrecalculatedDist { dists }
                         }
                     };
 
@@ -197,7 +197,7 @@ where
                             let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
 
                             let mut mask_makers = match &masks_ctx {
-                                MasksCtx::RunningMean {k, ctx} => {
+                                MasksCtx::AccumulatedMeanDist {k, ctx} => {
                                     vec![
                                         LocalMin { dim: 1, radius: run_config.window as u64 /2 },
                                         LocalMin { dim: 2, radius: run_config.window as u64 /2 },
@@ -208,7 +208,7 @@ where
                                         },
                                     ]
                                 }
-                                MasksCtx::MaxDist{dists} => {
+                                MasksCtx::PrecalculatedDist {dists} => {
                                     vec![
                                         LocalMin { dim: 1, radius: run_config.window as u64 /2 },
                                         LocalMin { dim: 2, radius: run_config.window as u64 /2 },

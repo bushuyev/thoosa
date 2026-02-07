@@ -376,6 +376,7 @@ fn local_min_mask_suppressed(distances: &Tensor, dim: i64, radius: i64) -> Resul
 }
 
 /// distances - [channels x slices 0 x slices 1]
+/// calculates accumulated means between distances
 fn mean_mask(
     k: f64,
     distances: &Tensor,

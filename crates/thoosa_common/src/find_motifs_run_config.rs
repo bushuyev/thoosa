@@ -149,7 +149,7 @@ pub struct PrecalculateStats {
 
     #[in_map]
     #[run_config]
-    pub slices: u32,
+    pub slices: u32, //number of random slices to load for statistics calculations
 }
 
 #[cfg(test)]
