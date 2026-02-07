@@ -24,11 +24,11 @@ use tch::kind::FLOAT_CPU;
 use tokio::runtime::Handle;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::copy_ctx::CopyCtx;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SlicesFilter};
+use thoosa_common::find_motifs_run_config::{Aggr as FilterAggr, FindMotifsRunConfig, SlicesFilter};
 use thoosa_common::loader::LoadRunner;
 use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
-use thoosa_motifs::distance::MaskMaker::{Le, LeQuantile, LeRunningMean, LocalMin, Tril};
+use thoosa_motifs::distance::MaskMaker::{Le, LeAccumulatedMean, LeAccumulatedQuantile, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
@@ -45,7 +45,7 @@ use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_named_derive::Named;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, MotifSlices};
-use crate::tasks::slices_stats::{Aggr, Metrics};
+use crate::tasks::slices_stats::{Aggr as StatsAggr, Metrics};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use thoosa_shared::comp_id::SynKey;
@@ -102,6 +102,7 @@ where
 
 pub enum MasksCtx {
     AccumulatedMeanDist {k:f32, ctx:MeanDistsCtx},
+    AccumulatedQuantileDist {q:f32, ctx:QuantileDistsCtx},
     PrecalculatedDist {dists:ThoTensor<ChannelsMotifsDists, SynKey>}
 }
 
@@ -119,6 +120,30 @@ impl MeanDistsCtx {
             means_acc,
             total_samples,
         }
+    }
+}
+
+pub struct QuantileDistsCtx {
+    quantiles_acc: Mutex<Tensor>,
+    total_samples: Mutex<Tensor>,
+}
+
+impl QuantileDistsCtx {
+    pub fn new(channels: u32, device: Device) -> Self {
+        let quantiles_acc = Mutex::new(Tensor::zeros([channels as i64, 1], (Kind::Float, device)));
+        let total_samples = Mutex::new(Tensor::zeros([channels as i64, 1], (Kind::Int64, device)));
+
+        Self {
+            quantiles_acc,
+            total_samples,
+        }
+    }
+}
+
+fn to_stats_aggr(aggr: FilterAggr) -> StatsAggr {
+    match aggr {
+        FilterAggr::Mean(v) => StatsAggr::Mean(v.k),
+        FilterAggr::Quantile(v) => StatsAggr::Quantile(v.q),
     }
 }
 
@@ -172,11 +197,14 @@ where
 
                     let masks_ctx = match &filter {
                         SlicesFilter::AccumulateStats(v) => {
-                            MasksCtx::AccumulatedMeanDist {k: v.k, ctx:MeanDistsCtx::new(channels, device.into())}
+                            match v.aggr {
+                                FilterAggr::Mean(aggr) => MasksCtx::AccumulatedMeanDist {k: aggr.k, ctx:MeanDistsCtx::new(channels, device.into())},
+                                FilterAggr::Quantile(aggr) => MasksCtx::AccumulatedQuantileDist {q: aggr.q, ctx:QuantileDistsCtx::new(channels, device.into())},
+                            }
                         }
                         SlicesFilter::PrecalculateStats(v) => {
 
-                            let dists = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_config.id.unwrap(), Metrics::EucDist, Aggr::Mean(0.01)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
+                            let dists = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_config.id.unwrap(), Metrics::EucDist, to_stats_aggr(v.aggr)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
                             let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
                                 ThoTensor::new(t.id().clone(), t.t.view((-1, 1, 1)))
@@ -201,9 +229,20 @@ where
                                     vec![
                                         LocalMin { dim: 1, radius: run_config.window as u64 /2 },
                                         LocalMin { dim: 2, radius: run_config.window as u64 /2 },
-                                        LeRunningMean {
+                                        LeAccumulatedMean {
                                             k: *k,
                                             avg: &ctx.means_acc,
+                                            total_samples: &ctx.total_samples,
+                                        },
+                                    ]
+                                }
+                                MasksCtx::AccumulatedQuantileDist {q, ctx} => {
+                                    vec![
+                                        LocalMin { dim: 1, radius: run_config.window as u64 /2 },
+                                        LocalMin { dim: 2, radius: run_config.window as u64 /2 },
+                                        LeAccumulatedQuantile {
+                                            q: *q,
+                                            quantiles: &ctx.quantiles_acc,
                                             total_samples: &ctx.total_samples,
                                         },
                                     ]
