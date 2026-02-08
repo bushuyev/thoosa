@@ -683,7 +683,7 @@ pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send {
 }
 
 pub type Fp = fn(&Tensor) -> Result<Tensor, ThoError>;
-pub type LossFp = fn(&Tensor, &Tensor) -> Result<Tensor, ThoError>;
+pub type LossFp = fn(&Tensor, &Tensor) -> Result<Tensor, ThoError>;//TODO add RC as param and make loss function net-specific
 
 pub struct MyFuncModule {
     func: Fp,

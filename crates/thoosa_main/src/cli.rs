@@ -1803,7 +1803,7 @@ mod cli_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn test_run_all() -> Result<(), ThoError> {
+    async fn heavy_test_run_all() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
