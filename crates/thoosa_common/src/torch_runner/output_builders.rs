@@ -98,6 +98,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use thoosa_shared::runner::adjusters::splits::OutputBuilder;
     use crate::dims::{AnyMetrics, AnySub, Dims};
+    use thoosa_shared::simple_id;
     use thoosa_shared::ThoError;
     use thoosa_shared::traits::SimpleId;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
@@ -111,13 +112,13 @@ mod tests {
     #[tokio::test]
     async fn test_append() -> Result<(), ThoError>{
         let mut builder: Box<SingleDimTensorOutputBuilder<SimpleId, TestDims>> = Box::new(
-            SingleDimTensorOutputBuilder::new("test".into(), 0, &[10], FLOAT_CPU, BuildAs::Append),
+            SingleDimTensorOutputBuilder::new(simple_id!("test"), 0, &[10], FLOAT_CPU, BuildAs::Append),
         );
 
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[0, 1, 2]))?).await;
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5]))?).await;
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8]))?).await;
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[9]))?).await;
+        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await;
+        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[3, 4, 5]))?).await;
+        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[6, 7, 8]))?).await;
+        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[9]))?).await;
 
         let out = builder.build().await?;
 
@@ -136,12 +137,12 @@ mod tests {
     #[tokio::test]
     async fn test_sum() -> Result<(), ThoError>{
         let mut builder: Box<SingleDimTensorOutputBuilder<SimpleId, TestDims>> = Box::new(
-            SingleDimTensorOutputBuilder::new("test".into(), 0, &[3], FLOAT_CPU, BuildAs::Sum),
+            SingleDimTensorOutputBuilder::new(simple_id!("test"), 0, &[3], FLOAT_CPU, BuildAs::Sum),
         );
 
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[0, 1, 2]))?).await;
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[3, 4, 5]))?).await;
-        builder.add_partial_output(ThoTensor::new("1".into(), Tensor::from_slice(&[6, 7, 8]))?).await;
+        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await;
+        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[3, 4, 5]))?).await;
+        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[6, 7, 8]))?).await;
 
         let out = builder.build().await?;
 

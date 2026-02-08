@@ -368,7 +368,7 @@ impl From<(u32, &str)> for SynKey {
 #[cfg(test)]
 mod tests {
     use log::debug;
-    use crate::comp_id::{SynKey, MonoKey};
+    use crate::comp_id::SynKey;
 
     #[ctor::ctor]
     fn init() {
@@ -386,9 +386,9 @@ mod tests {
         assert_eq!(
             key_c.as_slice(),
             &[
-                MonoKey { val: 0.into(), name: "key1".into() },
-                MonoKey { val: 1.into(), name: "key2".into() },
-                MonoKey { val: 2.into(), name: "key3".into() },
+                mono_key!(0, "key1"),
+                mono_key!(1, "key2"),
+                mono_key!(2, "key3"),
             ]
         );
     }

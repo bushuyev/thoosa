@@ -268,7 +268,7 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            SimpleId::from(format!("features_{}", input_id.0))
+            simple_id!(format!("features_{}", input_id.0))
         }
     }
 
@@ -375,7 +375,7 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            SimpleId::from(format!("batch_{}", input_id))
+            simple_id!(format!("batch_{}", input_id))
         }
     }
 
@@ -603,7 +603,7 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            SimpleId::from(format!("cls_{}_inp_{}", self.id, input_id))
+            simple_id!(format!("cls_{}_inp_{}", self.id, input_id))
         }
     }
 
@@ -786,7 +786,7 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            SimpleId::from(format!("cls_{}_inp_{}", self.clf.id, input_id))
+            simple_id!(format!("cls_{}_inp_{}", self.clf.id, input_id))
         }
     }
 
@@ -889,7 +889,7 @@ mod tests {
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         let clf = Arc::new(Classifier::new(
-            SimpleId::from("lin_cls"),
+            simple_id!("lin_cls"),
             4,
             200,
             0.1,
@@ -905,7 +905,7 @@ mod tests {
         // Register file list (top-level owns labels) in registry keyed by input id
         let files = vec![("file_0", 1.0), ("file_1", 0.0)];
         registry().insert("files_0_1".to_string(), files.clone());
-        let input = FileListInput::new(files, SimpleId::from("files_0_1"));
+        let input = FileListInput::new(files, simple_id!("files_0_1"));
         let (device_idx, cache_area) = {
             (ctx.device_idx(), ctx.cache_area())
         };
@@ -941,7 +941,7 @@ mod tests {
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         let clf = Arc::new(Classifier::new(
-            SimpleId::from("lin_cls_many"),
+            simple_id!("lin_cls_many"),
             4,
             100,
             0.1,
@@ -962,7 +962,7 @@ mod tests {
             ("file_3", 0.0),
         ];
         registry().insert("files_0_1_2_3".to_string(), files.clone());
-        let input = FileListInput::new(files, SimpleId::from("files_0_1_2_3"));
+        let input = FileListInput::new(files, simple_id!("files_0_1_2_3"));
         let (device_idx, cache_area) = {
             let guard = ctx.read();
             (guard.device_idx(), guard.cache_area())
@@ -998,7 +998,7 @@ mod tests {
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         // Require MAX_PERMITS to proceed and also enforce MemLimit until splits reduce size
         let clf = Arc::new(Classifier::new(
-            SimpleId::from("lin_cls_oom"),
+            simple_id!("lin_cls_oom"),
             4,
             50,
             0.1,
@@ -1024,7 +1024,7 @@ mod tests {
         })
         .collect();
         registry().insert("files_oom_permits".to_string(), files.clone());
-        let input = FileListInput::new(files, SimpleId::from("files_oom_permits"));
+        let input = FileListInput::new(files, simple_id!("files_oom_permits"));
         let (device_idx, cache_area) = {
             (ctx.device_idx(), ctx.cache_area())
         };
