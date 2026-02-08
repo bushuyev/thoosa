@@ -30,7 +30,7 @@ mod tests {
     use std::sync::OnceLock;
     use crate::tho_device::ThoDevice;
     use crate::dims::Dims;
-    use thoosa_shared::CopyToDevice;
+    use thoosa_shared::{simple_id, CopyToDevice};
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{CachableIdTr, Metrics, SimpleId, WithId};
     use thoosa_shared::{Cause, ThoError};
@@ -463,7 +463,7 @@ mod tests {
             let ctx_for_data = ctx.branch(Some("batch_builder_data"), false, false);
             let output = with_data!(ctx_for_data, [feats];|_ctx, data:&[&ThoTensor<ABData, SimpleId>]|{
 
-                let ax_id = SimpleId::from(format!("ax_{}", input.id()));
+                let ax_id = simple_id!(format!("ax_{}", input.id()));
                 let first = data
                     .first()
                     .ok_or_else(|| Cause::SomethingElse("no tensors".into()))?;

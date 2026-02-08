@@ -221,9 +221,9 @@ where
                     },
                     move |rc:&TrainMotifsNetsRunConfig, vs: &VarStore| {
                         let params = match &rc.net {
-                            MotifNetTypeArgs::ConvNet(_) => MotifNetParams::new_conv(motif_width, rc.num_layers, rc.step, rc.channels, rc.kernel),
-                            MotifNetTypeArgs::LinNet(_) => MotifNetParams::new_lin(motif_width, rc.num_layers, rc.step),
-                            MotifNetTypeArgs::CosineNet(_) => MotifNetParams::new_cosine(motif_width, rc.step, rc.channels, rc.kernel),
+                            MotifNetTypeArgs::ConvNet(net) => MotifNetParams::new_conv(motif_width, net.num_layers, net.step, net.channels, net.kernel),
+                            MotifNetTypeArgs::LinNet(net) => MotifNetParams::new_lin(motif_width, net.num_layers, net.step),
+                            MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.step, net.channels, net.kernel),
                         };
                         Ok((params.motif_net()?.build_tch_module(&vs.root())?, params))
                     },
@@ -465,12 +465,12 @@ mod tests {
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::dims::{Batch, MotifProbability, Slice};
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, OptConfig, ThoModuleWithStore, TrainMotifsNetsResult, TrainMotifsNetsRunConfigFields};
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, OptConfig, ThoModuleWithStore, TrainMotifsNetsResult, TrainMotifsNetsRunConfigFields};
     use thoosa_common::utils::{reset_print_options, test_net};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::run_configs::{OptRunConfigs, RunId};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_shared::traits::Named;
     use thoosa_shared::hyperparameter::Hyperparameter;
@@ -521,7 +521,6 @@ mod tests {
        });
 
 
-        // let motif_slices = [resource_a_intervals_a, resource_a_intervals_b].into_iter().enumerate().flat_map(|(intervals|)
 
         let motif_id = 10u32;
         let mut store = Arc::new(RwLock::new(
@@ -546,28 +545,8 @@ mod tests {
 
                 .build()));
 
-        let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(
-            thoosa_shared::run_configs::GridRunConfigs::new(
-                thoosa_shared::run_configs::ConstConfigs::new(vec![
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(100)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(11)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Step, Val::Int(1)),
-                    // NamedVal::new(TrainMotifsNetsRunConfigFields::Channels, Val::Int(8)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Kernel, Val::Int(100)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Dummy)), Val::Int(1)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(8)),
-
-                ]),
-                vec![
-                    // NamedRange::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
-                ],
-            ),
-            vec![
-                // Hyperparameter::UniformInt{name: TrainMotifsNetsRunConfigFields::NumLayers, lower: 6, upper: 8},
-                Hyperparameter::UniformInt{name: TrainMotifsNetsRunConfigFields::Channels, lower: 30, upper: 32}
-            ],
-        );
+        // let run_configs = cos_net_run_configs();
+        let run_configs = cosine_net_run_configs();
 
         let loader = Arc::new(
             mock_tensor_loader::build()
@@ -596,10 +575,56 @@ mod tests {
 
             assert!(r.train_motif_nets_results[0].loss < 0.69);
 
+
+
             Ok::<_, ThoError>(())
         })?;
 
         Ok(())
+    }
+
+    fn cos_net_run_configs() -> OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields> {
+        thoosa_shared::run_configs::OptRunConfigs::new(
+            thoosa_shared::run_configs::GridRunConfigs::new(
+                thoosa_shared::run_configs::ConstConfigs::new(vec![
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(100)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(11)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Step)), Val::Int(1)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Kernel)), Val::Int(100)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::NumLayers)), Val::Int(8)),
+                ]),
+                vec![
+                    // NamedRange::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
+                ],
+            ),
+            vec![
+                // Hyperparameter::UniformInt{name: TrainMotifsNetsRunConfigFields::NumLayers, lower: 6, upper: 8},
+                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Channels)), lower: 30, upper: 32 }
+            ],
+        )
+    }
+
+    fn cosine_net_run_configs() -> OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields> {
+        thoosa_shared::run_configs::OptRunConfigs::new(
+            thoosa_shared::run_configs::GridRunConfigs::new(
+                thoosa_shared::run_configs::ConstConfigs::new(vec![
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(100)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(11)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Step)), Val::Int(1)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Kernel)), Val::Int(100)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::NumLayers)), Val::Int(8)),
+                ]),
+                vec![
+                    // NamedRange::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
+                ],
+            ),
+            vec![
+                // Hyperparameter::UniformInt{name: TrainMotifsNetsRunConfigFields::NumLayers, lower: 6, upper: 8},
+                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Channels)), lower: 30, upper: 32 }
+            ],
+        )
     }
 
 }
