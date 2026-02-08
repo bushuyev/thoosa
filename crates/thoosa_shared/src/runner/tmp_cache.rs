@@ -203,6 +203,7 @@ mod tests {
     use crate::{CopyToDevice, ThoError};
     use crate::applicables_runner::Output;
     use crate::copy_mode::CpuOrGpu;
+    use crate::simple_id;
     // use crate::common::Data;
     use crate::runner::global_ctx::mock_global_ctx;
     use crate::traits::{Data, SimpleId, WithId};
@@ -226,7 +227,7 @@ mod tests {
 
         impl Output for Foo {  }
 
-        let foo = Foo(SimpleId::from("foo"));
+        let foo = Foo(simple_id!("foo"));
         let cloned = foo.clone();
 
         assert_eq!(foo.0, cloned.0);
@@ -296,7 +297,7 @@ mod tests {
         let tmp_cache:TmpCached<TestData> = TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await;
 
 
-        tmp_cache.insert(TestData::new("foo".into(), 1));
+        tmp_cache.insert(TestData::new(simple_id!("foo"), 1));
 
 
         GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await?;

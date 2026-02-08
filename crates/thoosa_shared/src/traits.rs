@@ -131,6 +131,7 @@ pub trait Named {// like Type name
     }
 }
 ///////////////////////////////////
+///this should be used when id is only needed for debug. In release build is empty struct. TODO - make it static counter in release?
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Named)]
 pub struct SimpleId(
     #[cfg(debug_assertions)]

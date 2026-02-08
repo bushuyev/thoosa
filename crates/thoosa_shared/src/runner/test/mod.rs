@@ -361,7 +361,7 @@ pub(crate) mod fixtures {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            SimpleId::from(format!("loaded_{}", input_id.0))
+            crate::simple_id!(format!("loaded_{}", input_id.0))
         }
 
     }
@@ -538,7 +538,7 @@ mod tests {
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::traits::{Data, SimpleId, WithId};
+    use thoosa_shared::traits::{Data, WithId};
     use thoosa_shared::{Cause, ThoError};
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::{OutId, PermitsCtx, RunCtx};
@@ -628,7 +628,7 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            SimpleId::from(format!("loaded_{}", input_id.0))
+            crate::simple_id!(format!("loaded_{}", input_id.0))
         }
     }
 

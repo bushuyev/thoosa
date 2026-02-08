@@ -512,7 +512,6 @@ impl PermitSource for Arbiter {
 mod tests {
     use super::*;
     use rand::random_range;
-    use thoosa_shared::traits::SimpleId;
     use tokio::task::JoinSet;
 
     #[derive(Debug)]
@@ -547,6 +546,7 @@ mod tests {
     use log::debug;
     use std::sync::Arc;
     use crate::mono_key;
+    use crate::simple_id;
     use crate::runner::permits::MAX_PERMITS;
 
 
@@ -579,7 +579,7 @@ mod tests {
 
         for mut task in tasks {
             let arb = Arc::clone(&arb);
-            let id = Arc::new(SimpleId::from(format!("task-{}", task.i))) as Arc<dyn CachableIdTr>;
+            let id = Arc::new(simple_id!(format!("task-{}", task.i))) as Arc<dyn CachableIdTr>;
             js.spawn(async move {
                 loop {
                     // Clamp to capacity to avoid waiting forever on >capacity.
@@ -628,7 +628,7 @@ mod tests {
         let arb = Arbiter::new(1, 0);
         // Hold the only permit so next acquire waits
         let permit = arb
-            .send_acquire_rq(1, Arc::new(SimpleId::from("a")) as Arc<dyn CachableIdTr>)
+            .send_acquire_rq(1, Arc::new(simple_id!("a")) as Arc<dyn CachableIdTr>)
             .await
             .unwrap();
 
@@ -640,7 +640,7 @@ mod tests {
             .send(Req {
                 needed: 1,
                 reply,
-                requester_id: Arc::new(SimpleId::from("b")) as Arc<dyn CachableIdTr>,
+                requester_id: Arc::new(simple_id!("b")) as Arc<dyn CachableIdTr>,
             })
             .await
             .unwrap();
@@ -667,7 +667,7 @@ mod tests {
         use tokio::time::{Duration, sleep};
 
         let arb = Arbiter::new(2, 0);
-        let requester_id = Arc::new(SimpleId::from("granted-tracking")) as Arc<dyn CachableIdTr>;
+        let requester_id = Arc::new(simple_id!("granted-tracking")) as Arc<dyn CachableIdTr>;
 
         let permit_0 = arb
             .send_acquire_rq(1, Arc::clone(&requester_id))
@@ -701,7 +701,7 @@ mod tests {
         let mut arb = Arbiter::new(1, 0);
         drop(arb.tx.take());
         let res = arb
-            .send_acquire_rq(1, Arc::new(SimpleId::from("c")) as Arc<dyn CachableIdTr>)
+            .send_acquire_rq(1, Arc::new(simple_id!("c")) as Arc<dyn CachableIdTr>)
             .await;
         assert!(matches!(
             res,
