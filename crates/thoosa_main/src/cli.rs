@@ -848,11 +848,13 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
         common_training_args: common_training_args.clone(),
-        net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
-        num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
-        step: RangeOrValue::Value(10),
-        channels: RangeOrValue::Value(32),
-        kernel: RangeOrValue::Value(10),
+        net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
+            num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
+            step: RangeOrValue::Value(10),
+            channels: RangeOrValue::Value(32),
+            kernel: RangeOrValue::Value(10),
+        }),
+
     };
     //////////////////////train labels
     let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
@@ -908,12 +910,14 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         id: None,
         common_training_args: common_training_args.clone(),
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
-        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{ _dummy: 0 }),
+        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
+            num_layers: RangeOrValue::Value(8),
+            step: RangeOrValue::Value(10),
+            channels: RangeOrValue::Value(8),
+            kernel: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+        }),
         // num_layers: RangeOrValue::Range { range: Range { start: 2, end: 8 }, step: None },
-        num_layers: RangeOrValue::Value(8),
-        step: RangeOrValue::Value(10),
-        channels: RangeOrValue::Value(8),
-        kernel: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+
     };
     //////////////////////train labels
     let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
@@ -980,11 +984,13 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
         common_training_args: common_training_args.clone(),
-        net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
-        num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
-        step: RangeOrValue::Value(10),
-        channels: RangeOrValue::Value(32),
-        kernel: RangeOrValue::Value(10),
+        net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
+            num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+            step: RangeOrValue::Value(10),
+            channels: RangeOrValue::Value(32),
+            kernel: RangeOrValue::Value(10),
+        }),
+
     };
     //////////////////////train labels
     let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
