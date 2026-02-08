@@ -424,7 +424,7 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
                         "missing motif for repeat {repeat_idx} in channel {channel_idx}"
                     )))?;
                     for (offset, value) in motif.iter().enumerate() {
-                        signal[start + offset] = *value;
+                        signal[start + offset] = *value;//signal[start] + 
                     }
                     motif_intervals.push(Interval { start, end });
                 }

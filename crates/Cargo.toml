@@ -19,7 +19,7 @@ members = [
     "thoosa_macros/cached_derive",
     "thoosa_macros/thoosa_named_derive",
     "thoosa_projects/thoosa_hbac",
-    "thoosa_projects/thoosa_bird_clef",
+#    "thoosa_projects/thoosa_bird_clef",
     "thoosa_macros/macros_tests",
     "thoosa_shims", "thoosa_macros/thoosa_with_data",
 ]
@@ -27,6 +27,13 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+
+
+[workspace.lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = [
+    "cfg(thoosa_release_extra)",
+]
 
 [workspace.dependencies]
 cached_derive = { path = "thoosa_macros/cached_derive" }

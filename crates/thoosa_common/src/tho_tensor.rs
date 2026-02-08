@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use crate::tho_device::ThoDevice;
 use crate::copy_ctx::CopyCtx;
 use crate::dims::{AnyDims, Dimensional, Dims};
-use thoosa_shared::{panic_to_err, simple_id};
+use thoosa_shared::{backtrace_head_lines, panic_to_err, simple_id};
 use async_trait::async_trait;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
@@ -214,6 +214,7 @@ impl<D: Dims, Id: Named + Debug + Clone> Debug for ThoTensor<D, Id> {
 
 impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     pub fn new(id: Id, tensor: Tensor) -> Result<Self, ThoError> {
+        debug!("ThoTensor::new: id={:?} trace={}", id, backtrace_head_lines(8));
         Ok(Self {
             id,
             t: if tensor.is_contiguous() {

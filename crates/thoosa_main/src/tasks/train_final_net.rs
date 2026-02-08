@@ -233,8 +233,10 @@ where
                 "final".to_string(),
             ));
 
-            let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), cache_area.into())), ctx.branch(Some("train_final_net"), false, false)).await?)
-                .unwrap()
+            let result = Arc::into_inner(train_net.run(
+                Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), cache_area.into())),
+                ctx.branch(Some("train_final_net"), false, false)).await?
+            ).unwrap()
                 .take_data(0)
                 .await?;
 

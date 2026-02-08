@@ -4,6 +4,7 @@ target-dir = "target"
 rustflags = [
     "-C", "link-arg=-Wl,--no-as-needed", "--cfg", "tokio_unstable",
 #    "-C", "link-arg=-Wl,-rpath,$LIBTORCH",
+#    "--cfg", "thoosa_debug_plots",
     "-Zhigher-ranked-assumptions"
 ]
 

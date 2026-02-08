@@ -1,5 +1,6 @@
 export LD_LIBRARY_PATH=$LIBTORCH/lib/ && ...
 
+RUSTFLAGS="--cfg thoosa_debug_plots"
 
 cargo run --bin thoosa_hbac --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path="/home/bu/tmp/ws_test_hbac" import-resources --source-path=/home/bu/dvl/data/kaggle/hbac
 
