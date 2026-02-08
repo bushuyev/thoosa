@@ -458,19 +458,58 @@ impl TrainMotifsNetsArgs {
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct MotifConvNetArgs {
     #[in_map]
-    pub _dummy: u32, //TODO fix ThoosaRunConfig to let empty configs
+    #[run_config]
+    pub num_layers: u32,
+
+    #[in_map]
+    #[run_config]
+    pub step: u32,//TODO renamed to Conv stride
+
+    #[in_map]
+    #[run_config]
+    pub channels:u32,
+
+    #[in_map]
+    #[run_config]
+    pub kernel: u32
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct MotifLinNetArgs {
     #[in_map]
-    pub _dummy: u32,
+    #[run_config]
+    pub num_layers: u32,
+
+    #[in_map]
+    #[run_config]
+    pub step: u32,//TODO renamed to Conv stride
+
+    #[in_map]
+    #[run_config]
+    pub channels:u32,
+
+    #[in_map]
+    #[run_config]
+    pub kernel: u32
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct MotifCosineNetArgs {
     #[in_map]
-    pub _dummy: u32,
+    #[run_config]
+    pub num_layers: u32,
+
+    #[in_map]
+    #[run_config]
+    pub step: u32,//TODO renamed to Conv stride
+
+    #[in_map]
+    #[run_config]
+    pub channels:u32,
+
+    #[in_map]
+    #[run_config]
+    pub kernel: u32
 }
 
 #[allow(non_snake_case, unused_assignments, unused_variables)]
@@ -503,21 +542,7 @@ pub struct TrainMotifsNetsRunConfig {
     #[serde(default)]
     pub net: MotifNetTypeArgs,
 
-    #[in_map]
-    #[run_config]
-    pub num_layers: u32,
 
-    #[in_map]
-    #[run_config]
-    pub step: u32,//TODO renamed to Conv stride
-
-    #[in_map]
-    #[run_config]
-    pub channels:u32,
-
-    #[in_map]
-    #[run_config]
-    pub kernel: u32
 }
 
 
