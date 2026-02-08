@@ -66,6 +66,7 @@ use crate::tasks::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResourc
 pub use crate::tasks::resources_motifs_clc_dist::{fold_dists, fold_mask};
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 
+//Searches for matches between motifs from previous FindMotifsStage runs in specified resources, then selects motifs according to certain criteria.
 pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
@@ -1046,7 +1047,7 @@ where
 
             debug!("SelectMotifsStage::run: 1. good_motif_ids.len={}", extened_motif_ids.len());
 
-            let avg_dist_05 = extened_motif_ids.iter().map(|v|v.1).sum::<f64>()/ extened_motif_ids.len() as f64 / 0.5;//TODO config
+            let avg_dist_05 = extened_motif_ids.iter().map(|v|v.1).sum::<f64>()/ extened_motif_ids.len() as f64 * 0.5;//TODO config
 
             debug!("SelectMotifsStage::run: avg_dist={avg_dist_05:?} good_motif_ids.len={}", extened_motif_ids.len());
 

@@ -417,12 +417,12 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
                 let out = net.data().tho_forward(&slices_tensor, None, false)?;
 
 
-                #[cfg(debug_assertions)]
+                #[cfg(thoosa_debug_plots)]
                 {
                     static COUNT:AtomicU64 = AtomicU64::new(0);
 
-                    plot_t(&t.view((1, -1)), &format!("{COUNT:?}_input_{}", input.id()))?;
-                    plot_t(&out.as_ref().transpose(0,1), &format!("{COUNT:?}_input_{}_motif_applied_{motif_id}_", input.id()))?;//.f_mul_scalar(100.)?
+                    plot_t(&t.view((1, -1)), &format!("{COUNT:?}_input_{}", input.id()), false)?;
+                    plot_t(&out.as_ref().transpose(0,1), &format!("{COUNT:?}_input_{}_motif_applied_{motif_id}_", input.id()), false)?;//.f_mul_scalar(100.)?
                     COUNT.fetch_add(1, Relaxed);
                 }
 
@@ -818,7 +818,7 @@ pub(crate) mod tests {
             trigger_oom_len //Some(1000)
         ).await?);
 
-        plot_t(motif_0_0.t_ref(), "motif_test")?;
+        plot_t(motif_0_0.t_ref(), "motif_test", false)?;
 
         let channels_patterns = vec![vec![motif_0_0.t_ref().i((0, ..))]];
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 200, step as usize)?;

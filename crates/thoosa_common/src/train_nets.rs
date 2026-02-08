@@ -28,7 +28,7 @@ use std::{fmt, fs};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
-use tch::nn::{init, ConvConfig, LinearConfig, VarStore};
+use tch::nn::{init, BatchNormConfig, ConvConfig, LinearConfig, VarStore};
 use tch::Device::Cpu;
 use tch::{nn, Device, Tensor};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
@@ -96,6 +96,12 @@ pub struct TrainLabelNetsRunConfig {
     #[in_map]
     #[run_config]
     pub net: LabelNetTypeArgs,
+}
+
+impl AsRef<CommonTrainingRunConfig> for TrainLabelNetsRunConfig {
+    fn as_ref(&self) -> &CommonTrainingRunConfig {
+        &self.common_training_args
+    }
 }
 
 impl TrainLabelNetsRunConfig {
@@ -495,9 +501,6 @@ pub struct MotifLinNetArgs {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct MotifCosineNetArgs {
-    #[in_map]
-    #[run_config]
-    pub num_layers: u32,
 
     #[in_map]
     #[run_config]
@@ -545,6 +548,12 @@ pub struct TrainMotifsNetsRunConfig {
 
 }
 
+impl AsRef<CommonTrainingRunConfig> for TrainMotifsNetsRunConfig {
+    fn as_ref(&self) -> &CommonTrainingRunConfig {
+        &self.common_training_args
+    }
+}
+
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct CommonTrainingRunConfig {
@@ -560,6 +569,13 @@ pub struct CommonTrainingRunConfig {
     #[run_config]
     pub lr: f64,
 
+    #[in_map]
+    #[run_config]
+    pub patience:u32,
+
+    #[in_map]
+    #[run_config]
+    pub min_delta:f32
 }
 
 impl CommonTrainingRunConfig {
@@ -572,6 +588,21 @@ impl CommonTrainingRunConfig {
             cycles,
             batch_size,
             lr,
+            patience: 0,
+            min_delta: 0.0,
+        }
+    }
+}
+
+//for tests
+impl Default for CommonTrainingRunConfig {
+    fn default() -> Self {
+        CommonTrainingRunConfig {
+            cycles: 10,
+            batch_size: 10,
+            lr: 0.0001,
+            patience: 5,
+            min_delta: 1e-4_f32,
         }
     }
 }
@@ -812,8 +843,10 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams) -> Result<Node, ThoError
         };
 
         builder
+            // .batch_norm(BatchNormConfig::default())?
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    debug!("cosine_motif_node: t.size={:?}", t.size());
                     Ok(t.unsqueeze(1))
                 })),
                 None,
@@ -1380,8 +1413,8 @@ pub struct TrainMotifNetResult {
     pub loss: f32, //TODO pub
     channel: u32,
     motif_id: u32,
-    vs: VarStore,
-    params: MotifNetParams,
+    pub vs: VarStore,
+    pub params: MotifNetParams,
     run_config_values: TrainMotifsNetsRunConfig,
     #[allow(dead_code)]
     select_motifs_run_id: RunId,
@@ -1845,6 +1878,12 @@ pub struct FinalNetArgs {
     #[in_map]
     #[run_config]
     pub num_layers: u32,
+}
+
+impl AsRef<CommonTrainingRunConfig> for TrainFinalNetRunConfig {
+    fn as_ref(&self) -> &CommonTrainingRunConfig {
+        &self.common_training_args
+    }
 }
 
 impl FinalNetArgs {

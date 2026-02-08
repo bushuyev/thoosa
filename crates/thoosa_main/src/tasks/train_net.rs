@@ -29,7 +29,7 @@ use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{opt_train, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{opt_train, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult, CommonTrainingRunConfig};
 use thoosa_common::utils::{optimizer_mem_size, TrainListener};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -125,7 +125,7 @@ where
     B:AsyncDataBatch<DX, DY> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
+    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
@@ -151,7 +151,7 @@ where
     B:AsyncDataBatch<DX, DY> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
+    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
@@ -170,7 +170,7 @@ where
     B:AsyncDataBatch<DX, DY> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
+    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
@@ -225,10 +225,10 @@ where
 
 
         let validation_step = 1;//TODO config
-        //TODO config
+
         let mut bad_epochs = 0u32;
-        let patience = 5u32;
-        let min_delta = 1e-4_f32;
+        let patience = run_config.as_ref().patience;
+        let min_delta = run_config.as_ref().min_delta;
 
         Box::pin(async move {
 
@@ -363,7 +363,7 @@ where
     B:AsyncDataBatch<DX, DY>,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
+    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
@@ -383,7 +383,7 @@ where
     B:AsyncDataBatch<DX, DY> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static,
+    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
@@ -418,7 +418,7 @@ where
                 &self.descr,
             ).await?;
 
-            debug!("TrainNet::run, done: descr={:?} run_config={:?}", self.descr, run_config);
+            debug!("TrainNet::run: descr={:?} run_config={:?}", self.descr, run_config);
 
             Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")]), var_store, node_params, run_config, loss), CacheArea::default())))
         }
@@ -713,7 +713,7 @@ mod tests {
     use thoosa_common::batches::BatchLengths;
     use thoosa_common::dims::{Batch, Dims, ThoBatch};
     use thoosa_common::my_tch::{my_linear, ThoModule};
-    use thoosa_common::train_nets::OptConfig;
+    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, OptConfig};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -767,11 +767,21 @@ mod tests {
         #[in_map]
         #[run_config]
         pub num_layers: u32,
+
+        #[in_map]
+        #[run_config]
+        common_config:CommonTrainingRunConfig
     }
 
     impl DummyRunConfig {
         pub fn new(id: Option<RunId>, num_layers: u32) -> Self {
-            Self { id, num_layers }
+            Self { id, num_layers, common_config: CommonTrainingRunConfig::new(10, 10, 0.0001) }
+        }
+    }
+
+    impl AsRef<CommonTrainingRunConfig> for DummyRunConfig {
+        fn as_ref(&self) -> &CommonTrainingRunConfig {
+            &self.common_config
         }
     }
 
@@ -800,6 +810,13 @@ mod tests {
             DummyRunConfigRangeOrValue {
                 id: Some(1),
                 num_layers: RangeOrValue::Range { range: 1..3, step: None },
+                common_config: CommonTrainingRunConfigRangeOrValue{
+                    cycles: RangeOrValue::Value(10),
+                    batch_size: RangeOrValue::Value(10),
+                    lr: RangeOrValue::Value(0.0001),
+                    patience: RangeOrValue::Value(5),
+                    min_delta: RangeOrValue::Value(0.0001),
+                },
             }
             .opt_run_configs(),
         );
