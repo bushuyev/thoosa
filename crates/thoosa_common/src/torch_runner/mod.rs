@@ -258,14 +258,14 @@ mod tests {
             let k_t =
             if use_matmul {
                 ThoTensor::new(
-                    SimpleId::from("mul_k"),
+                    simple_id!("mul_k"),
                     Tensor::ones([dim, 1], (kind, device))
                         .f_mul_scalar_(k)
                         .unwrap(),
                 ).unwrap()
             } else {
                 ThoTensor::new(
-                    SimpleId::from("mul_k"),
+                    simple_id!("mul_k"),
                     Tensor::ones([dim], (kind, device))
                         .f_mul_scalar_(k)
                         .unwrap(),
@@ -594,7 +594,7 @@ mod tests {
             "device_1_ctx",
         )));
 
-        ctx_device_0.write().add_permit(GlobalCtx::global().acquire_many(loader_ctx_device, 1, Arc::new(SimpleId::from("zzz"))).await?);
+        ctx_device_0.write().add_permit(GlobalCtx::global().acquire_many(loader_ctx_device, 1, Arc::new(simple_id!("zzz"))).await?);
 
         let (ctx_device_idx, cache_area) = {
             let guard = ctx_device_0.read();
@@ -1079,7 +1079,7 @@ mod tests {
         loaded_tensors_ids.insert(&loaded_tensor_3 as &dyn CachableIdTr);
 
         let mut multed_tensors_ids = HashSet::new();
-        let mult_mul_task_0_inp_loaded_resource_3 = SimpleId::from("mult_mul_task_0_inp_loaded_resource_3");
+        let mult_mul_task_0_inp_loaded_resource_3 = simple_id!("mult_mul_task_0_inp_loaded_resource_3");
         multed_tensors_ids.insert(&mult_mul_task_0_inp_loaded_resource_3 as &dyn CachableIdTr);
 
         let mut required_ids = HashMap::new();
