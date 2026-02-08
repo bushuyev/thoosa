@@ -3,7 +3,7 @@ use std::iter::Map;
 
 use std::ops::Range;
 use std::{fs, ptr};
-
+use std::path::PathBuf;
 use log::{debug, error, trace};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
@@ -19,13 +19,14 @@ use tch::nn::{LinearConfig, Optimizer};
 use tch::nn::VarStore;
 use tch::Kind::Float;
 use tch::{nn, Device, IndexOp, Kind, TchError, Tensor};
-use thoosa_shared::{gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoError};
+use thoosa_shared::{cdt_for_dir, gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoError};
 use torch_sys::cuda::atc_cuda_device_count;
 
 use crate::builder::SeqBuilder;
 use crate::dims::{Batch, Dims, MotifProbability, Slice};
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
+use lazy_static::lazy_static;
 use thoosa_shared::colors_iter::DistinctColorIter;
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
@@ -81,7 +82,11 @@ pub fn list_devices() -> Vec<Device> {
     }
 }
 
-pub fn plot_t(t_0: &Tensor, label: &str) -> Result<(), ThoError> {
+pub fn plot_t(t_0: &Tensor, label: &str, replace: bool) -> Result<(), ThoError> {
+
+    lazy_static! {
+        static ref path: String = format!("/tmp/plots/{:?}", cdt_for_dir());
+    }
     plot_series(
         (0..t_0.size()[0])
             .into_iter()
@@ -101,11 +106,13 @@ pub fn plot_t(t_0: &Tensor, label: &str) -> Result<(), ThoError> {
             .collect(),
         label,
         (2000, 1000),
-        &format!(
-            "/tmp/plots/{label}_{:?}.png",
-            chrono::Utc::now().to_rfc3339()
-        )
-            .as_str(),
+        &if !replace {
+
+            fs::create_dir_all(path.as_str())?;
+            format!("{}/{label}.png", path.as_str())
+        } else {
+            format!("/tmp/plots/{label}.png")
+        },
     )?;
     Ok(())
 }

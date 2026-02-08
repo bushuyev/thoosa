@@ -196,11 +196,11 @@ where
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), &mut ctx, &self.ws, "motif_loader").await?;
 
 
-        #[cfg(debug_assertions)]
+        #[cfg(thoosa_debug_plots)]
         {
             static COUNT: AtomicU64 = AtomicU64::new(0);
 
-            plot_t(&motif.as_ref(), &format!("motif_{motif_id}__{COUNT:?}"))?; //.f_mul_scalar(100.)?
+            plot_t(&motif.as_ref(), &format!("motif_{motif_id}__{COUNT:?}"), false)?; //.f_mul_scalar(100.)?
 
             COUNT.fetch_add(1, Relaxed);
         }
@@ -314,11 +314,11 @@ where
 
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), &mut ctx, &self.ws, "random loader").await?;
 
-        #[cfg(debug_assertions)]
+        #[cfg(thoosa_debug_plots)]
         {
             static COUNT: AtomicU64 = AtomicU64::new(0);
 
-            plot_t(&motif.as_ref(), &format!("random_motif_{motif_id}__{COUNT:?}"))?; //.f_mul_scalar(100.)?
+            plot_t(&motif.as_ref(), &format!("random_motif_{motif_id}__{COUNT:?}"), false)?; //.f_mul_scalar(100.)?
 
             COUNT.fetch_add(1, Relaxed);
         }

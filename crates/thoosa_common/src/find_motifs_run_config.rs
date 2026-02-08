@@ -52,6 +52,7 @@ impl FindMotifsRunConfig {
 }
 
 impl FindMotifsRunConfig {
+    //TODO rename to new_with_accumulate_mean
     pub fn new_with_running_mean(
         id: Option<u32>,
         step: u32,
@@ -70,6 +71,7 @@ impl FindMotifsRunConfig {
         }
     }
 
+    //TODO rename to new_with_precalculate_stats
     pub fn new_with_max_dist(
         id: Option<u32>,
         step: u32,

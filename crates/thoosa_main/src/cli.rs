@@ -39,7 +39,7 @@ use tch::{Device, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::{ThoDevice};
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStatsRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MeanAggrRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, PrecalculateStatsRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStatsRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MeanAggrRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, PrecalculateStatsRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, QuantileAggrRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -698,6 +698,11 @@ async fn run_all(
 
     info!("find motifs done, find_motif_run_ids={find_motifs_run_ids:?}");
 
+    // for find_motifs_run_id in find_motifs_run_ids {
+    //     run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
+    // }
+    // return Ok(());
+
     debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
     let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
@@ -842,6 +847,9 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         cycles: RangeOrValue::Value(100),
         batch_size: RangeOrValue::Value(20),
         lr: RangeOrValue::Value(0.0001),
+        patience: RangeOrValue::Value(100),
+        min_delta: RangeOrValue::Value(1e-4_f32),
+
     };
     let opt_config = Arc::new(OptConfig::new(200, 10));
 
@@ -888,8 +896,12 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Value(100),
         filter: None,
-        // slices_filter: SlicesFilterRangeOrValue::DistanceRunningMean(DistanceRunningMeanRangeOrValue { k: RangeOrValue::Value(0.02) }),
-        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.01) }), slices: RangeOrValue::Value(10)}),
+        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.1) }) }),
+        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.01) })}),
+        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))}})}),
+        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0005..0.01, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(100) }),
+        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.0005..0.005, step: Some((0.0005, 4))} }), slices: RangeOrValue::Value(100)}),
+        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.0045) }), slices: RangeOrValue::Value(100)}),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select
@@ -903,15 +915,16 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         batch_size: RangeOrValue::Value(10),
         // lr: RangeOrValue::Value(0.0001),
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+        patience: RangeOrValue::Value(10),
+        min_delta: RangeOrValue::Value(1e-4_f32),
     };
-    let opt_config = Arc::new(OptConfig::new(30, 10));
+    let opt_config = Arc::new(OptConfig::new(100, 10));
 
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
         common_training_args: common_training_args.clone(),
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
         net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
-            num_layers: RangeOrValue::Value(8),
             step: RangeOrValue::Value(10),
             channels: RangeOrValue::Value(8),
             kernel: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
@@ -978,6 +991,9 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
         // batch_size: RangeOrValue::Range { range: Range { start: 5, end: 25 }, step: Some((5, 1)) },
         lr: RangeOrValue::Range { range: Range { start: 0.00001, end: 0.0001 }, step: None },
         // lr: RangeOrValue::Value(0.0001),
+        patience: RangeOrValue::Value(100),
+        min_delta: RangeOrValue::Value(1e-4_f32),
+
     };
     let opt_config = Arc::new(OptConfig::new(200, 10));
 
@@ -1048,18 +1064,6 @@ fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
         })
         .collect()
 }
-
-#[derive(Debug)]
-pub struct TrainLabelNetApplicable {
-    device: Device,
-}
-
-impl TrainLabelNetApplicable {
-    pub fn new(device: Device) -> Self {
-        Self { device }
-    }
-}
-
 
 pub fn import_resources<F, R>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -1826,7 +1830,7 @@ mod cli_tests {
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir.clone(),
-            3,
+            1,
             0,
             100,
         )?));
@@ -1870,8 +1874,6 @@ mod cli_tests {
         for i in 0..30 {
             let (t, _intervals) = tch_test_utils::resource_tensor(1000usize, &[
                 vec![(2, 100, MotifKind::Pulse)],
-                vec![],
-                vec![]
             ], 100)?;
 
             let stem = format!("t_0_{i}");
@@ -1882,8 +1884,6 @@ mod cli_tests {
 
             let (t, _intervals) = tch_test_utils::resource_tensor(1000usize, &[
                 vec![(2, 100, MotifKind::Sin)],
-                vec![],
-                vec![]
             ], 100)?;
 
             let stem = format!("t_1_{i}");
@@ -1973,109 +1973,6 @@ mod cli_tests {
 
         global_ctx.shutdown().await;
 
-        /* let step_10_window_100 = r#"{
-             step:"10",
-             window:"100",
-             slices_filter: {'DistanceRunningMean':{'k':'0.2'}}
-         }"#;
-
-
-         let step_10_window_100_with_filter = r#"{
-             step:'10',
-             window:'100',
-             'filter': {'BandPassFilter': {'low_hz':'20.', 'band_hz':'10.', kernel_size:'10', stride:'1', 'padding':'0'}},
-             'slices_filter':{'DistanceRunningMean':{'k':'0.02'}}}
-         "#;
-         let init_ctx = ctx.branch(Some("init find_motifs_test"), false, false);
-         let run_ids = run_grid::<_, _, _, _, _>(
-             None,
-             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(
-                 // &step_10_window_100,
-                 &step_10_window_100_with_filter,
-             ).unwrap(),
-             resources_input,
-             &ws,
-             &store,
-             true,
-             async |run_configs| {//TODO move init_ctx
-
-                 Arc::new(
-                     FindMotifsStage::new(
-                         &ws,
-                         &store,
-                         Arc::clone(&loader),
-                         run_configs,
-                         FixedFindMotifsConfig::new(30000, false),
-                         ThoDevice::from(1),
-                         init_ctx
-                     ).await.expect("FindMotifsStage::new failed in test"),
-                 )
-             },
-             || ctx.branch(Some("find_motifs_test"), false, false),
-         ).await?;
-
-
-         let train_motif_net_run_config =
-             serde_json5::from_str::<TrainMotifsNetsRunConfigRangeOrValue>(
-                 r#"{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'opt_max_evals':'3', 'opt_n_init': '3'}, 'num_layers': '3..4', 'step':'10', 'channels':'32', 'kernel':'10', 'net': {CosineNet:{'_dummy':0}}}"#,
-             )?;
-
-
-         ////
-
-         let train_label_net_run_config =
-         serde_json5::from_str::<TrainLabelNetsRunConfigRangeOrValue>(
-             r#"{
-                 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'opt_max_evals':'3', 'opt_n_init': '3'},
-                 'net': {ConvNet:{'num_conv_layers':'3..10','hidden_conv_channels':'64', 'num_head_layers':'10', 'num_head_features':'10', 'kernel':'100','joint':{AttnPool1d:{'_dummy':0}}}}
-             }"#,
-         )?;
-
-         let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::new(
-             Arc::clone(&store),
-             Arc::clone(&loader),
-             &ws
-         ));
-
-         let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
-             Arc::clone(&motif_loader_impl),
-             Arc::new(SlicesStats::<RunCtxWithPermits>::new())
-         ));
-
-         let motifs = store.read().list_motifs(run_ids[0])?;
-
-         debug!("test_find_motifs: motifs={motifs:?}");
-
-         for motif_id_raw in motifs {
-             let motif_id_value = DataId::from(&(motif_id_raw as u32));
-             let motif_loader_input = MotifLoaderInput::all_slices(motif_id_value.clone());
-             let motif_id = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), CacheArea::default()));
-             let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, Metrics::EucDist, Aggr::Mean(0.1)), CacheArea::default()));
-
-             let motif = Arc::clone(&motif_loader_impl).run(
-                 Arc::clone(&motif_id),
-                 ctx.branch(Some("find_motifs_motif_loader"), false, false),
-             )
-                 .await?;
-
-             motif
-                 .with_data_ref(1, &mut ctx.branch(Some("find_motifs_motif_data"), false, false), None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, _ctx| {
-                     debug!("test_find_motifs: motif_id={motif_id_raw} slices={:?}", t.data());
-
-                     Ok(())
-                 })
-                 .await?;
-
-             let dist = Arc::clone(&clc_dist)
-                 .run_cached(clc_input, ctx.branch(Some("find_motifs_clc_dist"), false, false))
-                 .await?
-                 .with_data_ref(0, &mut ctx.branch(Some("find_motifs_dist_value"), false, false), None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
-                 .await?;
-
-             debug!("test_find_motifs:  dist={dist:?} motif_id={motif_id_raw}");
-
-             //TODO
-         }*/
 
         Ok(())
     }
@@ -2179,9 +2076,9 @@ mod cli_tests {
 
 
         let channel_t = t.i((channel, ..));
-        plot_t(&channel_t.view((1, -1)), &format!("resource_1_{resource}_{channel}"))?;
+        plot_t(&channel_t.view((1, -1)), &format!("resource_1_{resource}_{channel}"), false)?;
         debug!("motif_t.data.size={:?}", motif_t.data().size());
-        plot_t(&motif_t.data().as_ref().view((1, -1)), &format!("motif_{motif_id}"))?;
+        plot_t(&motif_t.data().as_ref().view((1, -1)), &format!("motif_{motif_id}"), false)?;
 
 
 
@@ -2211,7 +2108,7 @@ mod cli_tests {
                 debug!("out.size={:?}", out.size());
 
                 // plot_t(&out.t.softmax(0, Float).view((1, -1)), &format!("{motif_id}_applied_to_{resource}"))?;
-                plot_t(&out.t.view((1, -1)), &format!("{motif_id}_applied_to_{resource}"))?;
+                plot_t(&out.t.view((1, -1)), &format!("{motif_id}_applied_to_{resource}"), false)?;
             }
         }
 

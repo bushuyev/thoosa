@@ -249,7 +249,10 @@ where
                     "motifs".to_string()
                 ));
 
-                let result = Arc::into_inner(train_net.run(Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), CacheArea::default())), ctx.branch(Some("train_motif_net"), false, false)).await?).unwrap().take_data(0).await?;
+                let result = Arc::into_inner(train_net.run(
+                    Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), CacheArea::default())),
+                    ctx.branch(Some("train_motif_net"), false, false)
+                ).await?).unwrap().take_data(0).await?;
 
                 debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", result.min_loss);
 
@@ -327,6 +330,7 @@ impl Data for DataWithLabels {
 
 #[derive(Debug)]
 pub struct MotifsBatch<C> {
+    motif_id: DataId,
     batch_size: u32,
 
     train_motifs:Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>,
@@ -367,6 +371,7 @@ where
 
             Ok::<_, ThoError>(Self {
 
+                motif_id: motif.id().clone(),
                 train_motifs:  Arc::new(DevicesWrap::wrap(train_motifs, cache_area.into())),
                 valid_motifs: Arc::new(DevicesWrap::wrap(valid_motifs, cache_area.into())),
                 random_slices,
@@ -378,9 +383,7 @@ where
         })
     }
 
-    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
-
-        static COUNTER:AtomicU32 = AtomicU32::new(0);
+    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id:&DataId) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
 
         let random_slices = Arc::clone(&self.random_slices);
 
@@ -394,20 +397,13 @@ where
             let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;//TODO config
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
 
+             #[cfg(thoosa_debug_plots)]
+            {
+                static COUNTER:AtomicU32 = AtomicU32::new(0);
 
-           let test_dir = Path::new("/tmp/motifs");//.join(cdt_for_dir());
-            plot_series_with_lanes(
-                (0..random.size()[0]).map(|i| {
-                    (format!("i={i}"), RED, to_vec_f32(&random.i((i, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>())
-                }).chain(//.collect::<Vec<_>>(),
-                 (0..motifs.size()[0]).map(|i| {
-                    (format!("i={i}"), BLACK, to_vec_f32(&motifs.i((i, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>())
-                })).collect::<Vec<_>>(),
-                format!("sig").as_str(),
-                (2000, 1000),
-                &test_dir.join(&format!("motif__{}.png", COUNTER.fetch_add(1, Relaxed))),
-                &[(0, 1000)]
-            ).unwrap();
+                plot_t(&motifs.as_ref(), &format!("batch_motif_{motif_id}__{}", COUNTER.fetch_add(1, Relaxed)), false)?;
+                plot_t(&motifs.as_ref(), &format!("batch_random_motif_in_batch_{motif_id}__{}", COUNTER.fetch_add(1, Relaxed)), false)?;
+            }
 
 
             let (x, _lengths, y) = mix_x_binary_with_labels(&motifs, None, &random, None)?;
@@ -426,7 +422,7 @@ where
     C: RunCtx,
 {
     async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
-        futures_util::stream::once( self.make_batch(Arc::clone(&self.train_motifs)))//TODO this corresponds to number of resources in label training , replace with configurable val?
+        futures_util::stream::once( self.make_batch(Arc::clone(&self.train_motifs), &self.motif_id))//TODO this corresponds to number of resources in label training , replace with configurable val?
         .map(|fut_res|{
             fut_res.map(|v|{
                 (v.0, None,  v.1.into())
@@ -436,7 +432,7 @@ where
     }
 
     async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
-        futures_util::stream::once( self.make_batch(Arc::clone(&self.valid_motifs)))
+        futures_util::stream::once( self.make_batch(Arc::clone(&self.valid_motifs), &self.motif_id))
             .map(|fut_res|{
                 fut_res.map(|v|{
                     (v.0, None, v.1.into())
@@ -455,7 +451,9 @@ mod tests {
     use log::debug;
     use log::LevelFilter::{Debug, Trace};
     use parking_lot::RwLock;
-    use tch::Device;
+    use tch::{Device, IndexOp};
+    use tch::Device::Cuda;
+    use tch::nn::VarStore;
     use tokio::fs;
     use thoosa_shared::runner::common::cachable::DevicesWrap;
     use thoosa_shared::runner::cache_areas::CacheArea;
@@ -465,8 +463,9 @@ mod tests {
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::dims::{Batch, MotifProbability, Slice};
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_common::tch_test_utils;
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, OptConfig, ThoModuleWithStore, TrainMotifsNetsResult, TrainMotifsNetsRunConfigFields};
-    use thoosa_common::utils::{reset_print_options, test_net};
+    use thoosa_common::utils::{plot_t, reset_print_options, test_net};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
@@ -479,6 +478,7 @@ mod tests {
     use thoosa_with_data::with_data;
     use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_shared::test_utils::MotifKind;
+    use crate::tasks::cross_dims::MotifSlices;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 
@@ -519,8 +519,6 @@ mod tests {
            a.insert(v.id().clone(), v.clone());
            a
        });
-
-
 
         let motif_id = 10u32;
         let mut store = Arc::new(RwLock::new(
@@ -563,11 +561,30 @@ mod tests {
             run_configs
         ));
 
-        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(1, 1))), CacheArea::default()));
+        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(100, 10))), CacheArea::default()));
 
         let mut run_ctx = mock_run_ctx::default(1);
         let run_ctx_branch = run_ctx.branch(Some("train_motif_nets_run"), false, false);
         let r = train_motif_net.run(input, run_ctx_branch).await?;
+
+        fn run_test_net(params:&MotifNetParams, vs:&VarStore)->Result<(), ThoError>{
+            let net = params.motif_net()?.build_tch_module::<MotifSlices, MotifProbability>(&vs.root())?;
+
+            let (t, intervals) = tch_test_utils::resource_tensor(1000usize, &[
+                vec![(2, 100, MotifKind::Pulse)],
+            ], 100)?;
+
+            debug!("intervals={intervals:?} t.size={:?}", t.size());
+            plot_t(&t, "channel_0", true)?;
+
+            let output = net.tho_forward(&t.to_device(Cuda(0)).i((0, ..)).unfold(0, 100, 1).into(), None, false)?;
+
+            debug!("output.t=\n{}", output.t.view((1,-1)));
+
+            plot_t(&output.t.view((1,-1)), "applied 0", true)?;
+
+            Ok(())
+        }
 
         with_data!(run_ctx.branch(Some("train_motif_nets_assert"), false, false), r; |_ctx, r:&TrainMotifsNetsResult|{
 
@@ -575,7 +592,7 @@ mod tests {
 
             assert!(r.train_motif_nets_results[0].loss < 0.69);
 
-
+            run_test_net(&r.train_motif_nets_results[0].params, &r.train_motif_nets_results[0].vs)?;
 
             Ok::<_, ThoError>(())
         })?;
@@ -587,9 +604,11 @@ mod tests {
         thoosa_shared::run_configs::OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(100)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(11)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(300)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(10)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(10)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
+                    // NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Step)), Val::Int(1)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Kernel)), Val::Int(100)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::NumLayers)), Val::Int(8)),
@@ -600,7 +619,8 @@ mod tests {
             ),
             vec![
                 // Hyperparameter::UniformInt{name: TrainMotifsNetsRunConfigFields::NumLayers, lower: 6, upper: 8},
-                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Channels)), lower: 30, upper: 32 }
+                Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
+                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Channels)), lower: 8, upper: 32 }
             ],
         )
     }
@@ -609,12 +629,13 @@ mod tests {
         thoosa_shared::run_configs::OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(100)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(11)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(300)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(10)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(10)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
+                    // NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Step)), Val::Int(1)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Kernel)), Val::Int(100)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::NumLayers)), Val::Int(8)),
                 ]),
                 vec![
                     // NamedRange::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
@@ -622,7 +643,8 @@ mod tests {
             ),
             vec![
                 // Hyperparameter::UniformInt{name: TrainMotifsNetsRunConfigFields::NumLayers, lower: 6, upper: 8},
-                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Channels)), lower: 30, upper: 32 }
+                Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
+                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Channels)), lower: 2, upper: 32 }
             ],
         )
     }
