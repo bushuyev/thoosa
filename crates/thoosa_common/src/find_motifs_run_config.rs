@@ -106,19 +106,27 @@ pub enum InputFilter {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy, Default)]
-pub struct ComparisonMethodConfig {
+pub struct EucDistConfig {
 
 }
 
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy, Default)]
+pub struct PearsonCorrConfig {
+
+}
+
+
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
 pub enum ComparisonMethod {
-    EucDist(ComparisonMethodConfig),
-    PearsonCorr(ComparisonMethodConfig),
+    #[run_config_default]
+    EucDist(EucDistConfig),
+    PearsonCorr(PearsonCorrConfig),
 }
 
 impl Default for ComparisonMethod {
     fn default() -> Self {
-        Self::EucDist(ComparisonMethodConfig::default())
+        Self::EucDist(EucDistConfig::default())
     }
 }
 
@@ -282,7 +290,7 @@ impl SelectMotifsRunConfig {
     pub fn new_(id: Option<RunId>, motif_selector: MotifSelector) -> Self {
         Self {
             id,
-            slices_selector_metric: ComparisonMethod::EucDist(ComparisonMethodConfig::default()),
+            slices_selector_metric: ComparisonMethod::EucDist(EucDistConfig::default()),
             slices_selector_aggr: Aggr::Mean(MeanAggr { k: 1.0 }),
             global_k: 0.5,
         }
@@ -291,32 +299,12 @@ impl SelectMotifsRunConfig {
     pub fn new() -> Self {
         Self {
             id: None,
-            slices_selector_metric: ComparisonMethod::EucDist(ComparisonMethodConfig::default()),
+            slices_selector_metric: ComparisonMethod::EucDist(EucDistConfig::default()),
             slices_selector_aggr: Aggr::Mean(MeanAggr { k: 1.0 }),
             global_k: 0.5,
         }
     }
 }
-#[cfg(test)]
-mod test_zz{
-    use thoosa_shared::RangeOrValue;
-    use crate::find_motifs_run_config::{AggrRangeOrValue, MeanAggrRangeOrValue, ComparisonMethodConfigRangeOrValue, ComparisonMethodRangeOrValue, SelectMotifsRunConfigRangeOrValue};
-
-    #[test]
-    fn test_0(){
-        let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
-            id: None,
-            slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(ComparisonMethodConfigRangeOrValue {  }),
-            // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
-            slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.8..1.2, step: Some((0.1, 1))} }),
-            // global_k: RangeOrValue::Value(0.5),
-            global_k: RangeOrValue::Range{range: 0.4..0.7, step: Some((0.1, 1))},
-        };
-
-    }
-}
-
-
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
 pub struct ByAvgEucDist {
     #[in_map]
