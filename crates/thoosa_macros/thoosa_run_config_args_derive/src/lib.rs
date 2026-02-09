@@ -1,18 +1,25 @@
 use proc_macro::TokenStream;
-use proc_macro2::Ident;
+use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{ToTokens, format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{DeriveInput, parse_macro_input};
 use thoosa_macros_utils::*;
 
 const RUN_CONFIG_ATTR: &'static str = "run_config";
+// Used on enum variants to define the fallback when no variant selection can be inferred.
+const RUN_CONFIG_DEFAULT_ATTR: &'static str = "run_config_default";
+
 
 #[proc_macro_derive(
     ThoosaRunConfig,
-    attributes(run_config, run_config_opt, run_config_grid)
+    attributes(run_config, run_config_opt, run_config_grid, run_config_default)
 )]
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
+    thoosa_args_derive_impl(ast).into()
+}
+
+fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
     let target_struct_ident = &ast.ident;
     let target_struct_name = &ast.ident.to_string();
@@ -292,8 +299,14 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                     let add_val_match_cases = token_streams.builder_add_val_match_cases;
                     let builder_assignments = token_streams.builder_assignments;
                     let is_empty_struct = field_names.is_empty();
+                    let empty_marker_ident = format_ident!("__Empty");
+                    let enum_fields_tokens = if is_empty_struct {
+                        quote! { #empty_marker_ident, }
+                    } else {
+                        quote! { #(# enum_fields,)* }
+                    };
                     let enum_fields_for_display = if is_empty_struct {
-                        quote! { _ => f.write_str("") }
+                        quote! { Self::#empty_marker_ident => f.write_str("") }
                     } else {
                         quote! { #( Self::#enum_fields => { write!(f, #field_names)})* }
                     };
@@ -303,14 +316,19 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         quote! { match path { #(# add_val_match_cases)*} }
                     };
                     let range_or_value_add_calls = if is_empty_struct {
-                        quote! { let _ = (append, const_params, grid_params, opt_params); }
+                        quote! {
+                            const_params.push(thoosa_shared::val::NamedVal::from((
+                                append(#fields_enum_ident::#empty_marker_ident),
+                                thoosa_shared::val::Val::Bool(true),
+                            )));
+                        }
                     } else {
                         quote! { #(# add_range_or_value_calls)* }
                     };
 
                     (
                         quote! { #(# range_or_value_fields)* },
-                        quote! { #(# enum_fields,)* },
+                        enum_fields_tokens,
                         enum_fields_for_display,
                         range_or_value_add_calls,
                         quote! {struct},
@@ -342,60 +360,109 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             }
         }
         syn::Data::Enum(data_enum) => {
+            // NOTE: Enum builder selection is driven by "paths" seen in add_val calls.
+            // When a variant's inner config emits no params (e.g., empty struct or all Option=None),
+            // we emit a synthetic marker field (<Variant>__Selected) to force a path and lock the variant.
+            // This prevents falling back to the default variant when a specific enum variant was chosen.
             let builder_enum_field = Ident::new(
                 &thoosa_shared::camel_to_snake(&builder_enum_ident.to_string()),
                 data_enum.variants.span(),
             );
-
-            let mut token_streams = data_enum.variants.iter().fold(TokenStreams::new(), |mut a, variant| {
+            let mut default_variant: Option<(Ident, syn::Type)> = None;
+            let mut default_variant_error: Option<syn::Error> = None;
+            let mut token_streams = TokenStreams::new();
+            for variant in data_enum.variants.iter() {
                 let variant_ident = &variant.ident;
-
-
 
                 if let syn::Fields::Unnamed(fields) = &variant.fields {
                     if fields.unnamed.len() == 1 {
                         let ty = &fields.unnamed.first().expect("no config type").ty;
+                        if variant
+                            .attrs
+                            .iter()
+                            .any(|attr| attr.path().is_ident(RUN_CONFIG_DEFAULT_ATTR))
+                        {
+                            // Only one default is allowed; it is used when *no* variant was inferred.
+                            if default_variant.is_some() {
+                                default_variant_error = Some(syn::Error::new_spanned(
+                                    variant_ident,
+                                    "run_config_default can only be set on one variant",
+                                ));
+                            } else {
+                                default_variant = Some((variant_ident.clone(), ty.clone()));
+                            }
+                        }
 
                         let ty_string = ty.to_token_stream().to_string();
-                        let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", ty_string), variant.ident.span());
+                        let field_type_range_or_value =
+                            Ident::new(&format!("{}RangeOrValue", ty_string), variant.ident.span());
 
-                        a.range_or_value_fields.push(quote! {
+                        token_streams.range_or_value_fields.push(quote! {
                             #variant_ident(#field_type_range_or_value),
 
                         });
 
-                        let field_type_fields = Ident::new(&format!("{}Fields", ty_string), variant.ident.span());
+                        let field_type_fields =
+                            Ident::new(&format!("{}Fields", ty_string), variant.ident.span());
 
-                        a.enum_fields.push(quote! {
+                        // Synthetic marker for "this enum variant was chosen" when no fields are emitted.
+                        let marker_ident = Ident::new(&format!("{}__Selected", variant_ident), variant.ident.span());
+
+                        token_streams.enum_fields.push(quote! {
                             #variant_ident(#field_type_fields)
                         });
-                        a.field_names.push(format!("{}", variant_ident));
+                        token_streams.field_names.push(format!("{}", variant_ident));
+                        token_streams.enum_fields.push(quote! {
+                            #marker_ident
+                        });
+                        token_streams
+                            .field_names
+                            .push(format!("{}.__selected", variant_ident));
 
-                        a.range_or_value_add_calls.push(quote! {
+                        token_streams.range_or_value_add_calls.push(quote! {
                             #range_or_value_struct_ident::#variant_ident(v) => {
-                                v.fill_run_configs(|v|append(#fields_enum_ident::#variant_ident(v)), const_params, grid_params, opt_params);
+                                let added_any = std::cell::Cell::new(false);
+                                v.fill_run_configs(
+                                    |v| {
+                                        added_any.set(true);
+                                        append(#fields_enum_ident::#variant_ident(v))
+                                    },
+                                    const_params,
+                                    grid_params,
+                                    opt_params,
+                                );
+                                // If the inner config produced no params, emit the marker so the builder
+                                // can still infer the selected enum variant.
+                                if !added_any.get() {
+                                    const_params.push(thoosa_shared::val::NamedVal::from((
+                                        append(#fields_enum_ident::#marker_ident),
+                                        thoosa_shared::val::Val::Bool(true),
+                                    )));
+                                }
                             }
                         });
 
-                        let field_type_builder = Ident::new(&format!("{}Builder", ty_string), variant_ident.span());
-                        let field_ident =  Ident::new(&thoosa_shared::camel_to_snake(&variant_ident.to_token_stream().to_string()), variant.ident.span());
-                        a.builder_fields.push(quote! {
+                        let field_type_builder =
+                            Ident::new(&format!("{}Builder", ty_string), variant_ident.span());
+                        let field_ident = Ident::new(
+                            &thoosa_shared::camel_to_snake(&variant_ident.to_token_stream().to_string()),
+                            variant.ident.span(),
+                        );
+                        token_streams.builder_fields.push(quote! {
                             #field_ident:#field_type_builder,
                         });
 
-                        a.builder_enum_variants.push(quote! {
+                        token_streams.builder_enum_variants.push(quote! {
                             #variant_ident,
                         });
 
-                        a.builder_assignments.push(quote!{
-                            // #field_ident: self.#field_ident.build(),
-                            #builder_enum_ident::#variant_ident => {
+                        token_streams.builder_assignments.push(quote!{
+                            Some(#builder_enum_ident::#variant_ident) => {
                                 #target_struct_ident::#variant_ident(self.#field_ident.build())
                             }
                         });
 
-
-                        a.builder_add_val_match_cases.push(quote!{
+                        token_streams.builder_add_val_match_cases.push(quote!{
                             #fields_enum_ident::#variant_ident(sub_path) => {
                                 let prev = self.#builder_enum_field.replace(#builder_enum_ident::#variant_ident);
                                 assert!(prev.as_ref().map(|p|p==&#builder_enum_ident::#variant_ident).unwrap_or(true), "mixed fields from {:?} prev={prev:?}, path={path:?} ", #builder_enum_ident::#variant_ident);
@@ -403,11 +470,20 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                 self.#field_ident.add_val(sub_path, val);
                             }
                         });
+                        token_streams.builder_add_val_match_cases.push(quote!{
+                            #fields_enum_ident::#marker_ident => {
+                                let prev = self.#builder_enum_field.replace(#builder_enum_ident::#variant_ident);
+                                assert!(prev.as_ref().map(|p|p==&#builder_enum_ident::#variant_ident).unwrap_or(true), "mixed fields from {:?} prev={prev:?}, path={path:?} ", #builder_enum_ident::#variant_ident);
+                                let _ = val;
+                            }
+                        });
                     }
                 }
+            }
 
-                a
-            });
+            if let Some(err) = default_variant_error {
+                return err.to_compile_error().into();
+            }
 
             token_streams.builder_fields.push(quote! {
                     #builder_enum_field:Option<#builder_enum_ident>,
@@ -433,6 +509,13 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                 token_streams.builder_add_val_match_cases,
             );
             let expect_msg = format!("{} is required", target_struct_ident);
+            // Fallback is only used when no variant path was observed at all.
+            // This keeps explicit variant selection (including marker paths) authoritative.
+            let default_variant_fallback = default_variant.map(|(variant_ident, variant_ty)| {
+                quote! {
+                    #target_struct_ident::#variant_ident(<#variant_ty as std::default::Default>::default())
+                }
+            });
             (
                 quote! { #(# range_or_value_fields)* },
                 quote! { #(# enum_fields,)* },
@@ -445,9 +528,19 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         #(#builder_add_val_match_cases)*
                     }
                 },
-                quote! {
-                    match self.#builder_enum_field.as_ref().expect(#expect_msg) {
-                        #(#builder_assignments)*
+                if let Some(default_fallback) = default_variant_fallback {
+                    quote! {
+                        match self.#builder_enum_field.as_ref() {
+                            #(#builder_assignments)*
+                            None => { #default_fallback }
+                        }
+                    }
+                } else {
+                    quote! {
+                        match self.#builder_enum_field.as_ref() {
+                            #(#builder_assignments)*
+                            None => { panic!(#expect_msg) }
+                        }
                     }
                 },
                 quote! { #(#builder_enum_variants)*},
@@ -639,5 +732,31 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         #into_impl
     };
 
-    token_stream.into()
+    token_stream
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{thoosa_args_derive_impl};
+    use proc_macro::TokenStream;
+    use quote::quote;
+
+    #[test]
+    fn emits_enum_variant_marker_when_inner_has_no_params() {
+        let input = quote! {
+            pub enum Choice {
+                #[run_config_default]
+                A(EmptyConfig),
+                B(EmptyConfig),
+            }
+        };
+
+        let ast = syn::parse2::<syn::DeriveInput>(input).expect("derive input");
+        let output = thoosa_args_derive_impl(ast).to_string();
+
+        assert!(output.contains("A__Selected"));
+        assert!(output.contains("B__Selected"));
+        assert!(output.contains("added_any"));
+        assert!(output.contains("Val :: Bool"));
+    }
 }
