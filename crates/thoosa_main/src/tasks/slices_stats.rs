@@ -8,6 +8,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::Kind;
 use tch::Tensor;
+use tracing::debug;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -279,13 +280,16 @@ fn aggregate_distances(distances: &Tensor, aggr: Aggr) -> Result<f32, ThoError> 
     let scalar = match aggr {
         Aggr::Mean(k) =>k * distances.f_mean(Kind::Float)?,
         Aggr::Quantile(q) => {
+            debug!("aggregate_distances: q={q} distances=\n{distances}");
             let q = q.clamp(0.0, 1.0) as f64;
             let quantile = distances.f_quantile_scalar(q, 0, true, "lower")?;
             let mask = distances.f_le_tensor(&quantile)?;
             let selected = distances.f_masked_select(&mask)?;
             if selected.numel() == 0 {
+                debug!("aggregate_distances: selected.numel==0, quantile=\n{quantile}");
                 quantile
             } else {
+                debug!("aggregate_distances: selected.numel!=0, quantile=\n{quantile} selected.f_max={}", selected.max());
                 selected.f_max()?
             }
         }
@@ -296,9 +300,22 @@ fn aggregate_distances(distances: &Tensor, aggr: Aggr) -> Result<f32, ThoError> 
 
 #[cfg(test)]
 mod tests {
+    use super::{aggregate_distances, Aggr};
     use log::debug;
+    use tch::Tensor;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
+
+    #[test]
+    fn test_aggregate_distances_with_human_readable_values() {
+        let distances = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0]);
+
+        let mean_k_half = aggregate_distances(&distances, Aggr::Mean(0.5)).unwrap();
+        assert!((mean_k_half - 1.25).abs() < 1e-6, "expected mean([1,2,3,4]) * 0.5 = 1.25, got {mean_k_half}");
+
+        let median_lower = aggregate_distances(&distances, Aggr::Quantile(0.5)).unwrap();
+        assert!((median_lower - 2.0).abs() < 1e-6, "expected quantile(0.5, lower) for [1,2,3,4] to be 2.0, got {median_lower}");
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_debug() {

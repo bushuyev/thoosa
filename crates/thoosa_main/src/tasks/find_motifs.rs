@@ -178,7 +178,6 @@ where
         debug!("FindMotifsStage::new: fixed_config={fixed_config:?}");
 
         let random_stats = Arc::new(RandomStats::new(Arc::clone(&store), Arc::clone(&loader), &ws));
-        let random_stats_arc = Arc::clone(&random_stats);
 
 
         let cross_loaders = futures::stream::iter(run_configs
@@ -186,7 +185,7 @@ where
             .map( |run_config| {
                 let fixed_config = fixed_config.clone();
                 let loader = Arc::clone(&loader);
-                let random_stats_arc = Arc::clone(&random_stats_arc);
+                let random_stats_arc = Arc::clone(&random_stats);
                 let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {:?}", run_config.id)), false, false);
 
                 async move {
@@ -206,6 +205,8 @@ where
 
                             let dists = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_config.id.unwrap(), Metrics::EucDist, to_stats_aggr(v.aggr)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
                             let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
+
+                                debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: dists=\n{}", t.t);
 
                                 ThoTensor::new(t.id().clone(), t.t.view((-1, 1, 1)))
                             })?;

@@ -220,6 +220,7 @@ where
 
         let find_motifs_run_config_id = find_motifs_run_config.id;
         let motif_ids = self.store.read().list_motifs(find_motifs_run_config_id.expect("no id in find_motifs_run_config"))?;
+        debug!("StackedMotifsLoader::run: motif_ids={motif_ids:?}");
 
         if motif_ids.is_empty() {
             warn!("no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}");
