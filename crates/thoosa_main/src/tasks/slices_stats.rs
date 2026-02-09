@@ -37,6 +37,8 @@ impl Default for Metrics {
 #[derive(Debug, Copy, Clone, DummyData)]
 pub enum Aggr {
     Mean(f32),
+    Min(f32),
+    Max(f32),
     Quantile(f32),
 }
 
@@ -279,6 +281,8 @@ fn aggregate_distances(distances: &Tensor, aggr: Aggr) -> Result<f32, ThoError> 
 
     let scalar = match aggr {
         Aggr::Mean(k) =>k * distances.f_mean(Kind::Float)?,
+        Aggr::Min(k) => k * distances.f_min()?,
+        Aggr::Max(k) => k * distances.f_max()?,
         Aggr::Quantile(q) => {
             debug!("aggregate_distances: q={q} distances=\n{distances}");
             let q = q.clamp(0.0, 1.0) as f64;
@@ -312,6 +316,12 @@ mod tests {
 
         let mean_k_half = aggregate_distances(&distances, Aggr::Mean(0.5)).unwrap();
         assert!((mean_k_half - 1.25).abs() < 1e-6, "expected mean([1,2,3,4]) * 0.5 = 1.25, got {mean_k_half}");
+
+        let min_k_2 = aggregate_distances(&distances, Aggr::Min(2.0)).unwrap();
+        assert!((min_k_2 - 2.0).abs() < 1e-6, "expected min([1,2,3,4]) * 2.0 = 2.0, got {min_k_2}");
+
+        let max_k_2 = aggregate_distances(&distances, Aggr::Max(2.0)).unwrap();
+        assert!((max_k_2 - 8.0).abs() < 1e-6, "expected max([1,2,3,4]) * 2.0 = 8.0, got {max_k_2}");
 
         let median_lower = aggregate_distances(&distances, Aggr::Quantile(0.5)).unwrap();
         assert!((median_lower - 2.0).abs() < 1e-6, "expected quantile(0.5, lower) for [1,2,3,4] to be 2.0, got {median_lower}");
