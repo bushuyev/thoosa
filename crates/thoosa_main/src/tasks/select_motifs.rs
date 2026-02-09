@@ -820,7 +820,7 @@ where
         let mut total_processed_size = 0;
         let max_batch = self.max_batch;
 
-        let mut run_config_exteneded_motif_ids: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)> = vec![];
+        let mut run_config_extended_motif_ids: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)> = vec![];
         debug!("SelectMotifsStage::run: self.run_configs.len={}", self.run_configs.len());
         for select_motifs_run_config in self.run_configs.iter() {
             // This stays inside the run-config loop because selector metric/aggr can vary per config.
@@ -972,7 +972,7 @@ where
 
                                         for slice_1 in resources_iter {
                                             if let Some(mask) = mask_in_channel.next() {
-                                                trace!("SelectMotifsStage::run: motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} mask={mask}");
+                                                debug!("SelectMotifsStage::run: motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} mask={mask}");
                                                 if mask {
                                                     slices.insert(IdSlice(0, slice_1.0, slice_1.1));
                                                     added_slices += 1;
@@ -1021,7 +1021,7 @@ where
                 return Err(ThoError::new(format!("can't unwrap motif_added_slices for {:?}", select_motifs_run_config)))
             }
 
-            let exteneded_motif_ids = futures::stream::iter(
+            let extended_motif_ids = futures::stream::iter(
                 Arc::into_inner(channels_motifs_added_slices)
                     .expect("can't unwrap motif_added_slices")
                     .into_iter()
@@ -1087,28 +1087,29 @@ where
             .collect::<Vec<_>>()
             .await;
 
-            debug!("SelectMotifsStage::run: 0. exteneded_motif_ids.len={}", exteneded_motif_ids.len());
+            debug!("SelectMotifsStage::run: 0. extended_motif_ids.len={}", extended_motif_ids.len());
 
-            let extened_motif_ids = exteneded_motif_ids.into_iter().filter(|v|v.1 < f64::MAX).collect::<Vec<_>>();
+            let extended_motif_ids = extended_motif_ids.into_iter().filter(|v|v.1 < f64::MAX).collect::<Vec<_>>();
 
-            debug!("SelectMotifsStage::run: 1. exteneded_motif_ids.len={}", extened_motif_ids.len());
+            debug!("SelectMotifsStage::run: 1. extended_motif_ids.len={}", extended_motif_ids.len());
 
-            let avg_dist_global_k = extened_motif_ids.iter().map(|v|v.1).sum::<f64>() / extened_motif_ids.len() as f64 * select_motifs_run_config.global_k as f64;
+            let avg_dist_global_k = extended_motif_ids.iter().map(|v|v.1).sum::<f64>() / extended_motif_ids.len() as f64 * select_motifs_run_config.global_k as f64;
 
-            debug!("SelectMotifsStage::run: avg_dist={avg_dist_global_k:?} exteneded_motif_ids.len={}", extened_motif_ids.len());
+            debug!("SelectMotifsStage::run: avg_dist={avg_dist_global_k:?} extended_motif_ids.len={}", extended_motif_ids.len());
+            debug!("SelectMotifsStage::run: extend_motif_ids.dists={:?}", extended_motif_ids.iter().map(|v|v.1).collect::<Vec<_>>());
 
-            let exteneded_motif_ids = extened_motif_ids.into_iter().filter(|v|v.1 <= avg_dist_global_k).collect::<Vec<_>>();
+            let extended_motif_ids_filtered = extended_motif_ids.into_iter().filter(|v|v.1 <= avg_dist_global_k).collect::<Vec<_>>();
 
-            debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered exteneded_motif_ids.len={}", exteneded_motif_ids.len());
+            debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered extended_motif_ids.len={}", extended_motif_ids_filtered.len());
 
-            run_config_exteneded_motif_ids.push((select_motifs_run_config.clone(), exteneded_motif_ids));
+            run_config_extended_motif_ids.push((select_motifs_run_config.clone(), extended_motif_ids_filtered));
 
         }
 
 
-        debug!("SelectMotifsStage::run: exteneded_motif_ids={run_config_exteneded_motif_ids:?}");
+        debug!("SelectMotifsStage::run: extended_motif_ids={run_config_extended_motif_ids:?}");
 
-        Ok(Arc::new(DevicesWrap::wrap(SelectMotifsSavableResult::new(run_config_exteneded_motif_ids), CacheArea::default())))
+        Ok(Arc::new(DevicesWrap::wrap(SelectMotifsSavableResult::new(run_config_extended_motif_ids), CacheArea::default())))
     }
 }
 
