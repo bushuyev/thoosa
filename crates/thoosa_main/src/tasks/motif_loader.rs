@@ -187,7 +187,7 @@ where
                 .read()
                 .list_motif_slices(motif_id_value, None, None, None)?;
 
-        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), None, None, &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "motif_loader").await?;
+        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), None, &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "motif_loader").await?;
 
 
         Ok(Arc::new(DevicesWrap::wrap(
@@ -291,14 +291,14 @@ where
         let (channel, find_motifs_run_id, slices, resources_map) =
             self.store
                 .read()
-                .list_random_slices(
+                .list_random_motif_slices(
                     motif_id_value,
                     find_motifs_run_config.window,
                     None,
                     find_motifs_run_config.window//it's assumed that filter's kernel is of same size as window
                 )?;
 
-        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), Some(limit), Some((0, 0)), &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "random loader").await?;
+        let (window, motif) = load_motif_slices(motif_id, Arc::clone(&self.store), Arc::clone(&self.loader), Some((0, 0)), &mut ctx, find_motifs_run_id, slices, resources_map, channel, device_idx, cache_area, &self.ws, "random loader").await?;
 
 
         Ok(Arc::new(DevicesWrap::wrap(
@@ -308,12 +308,11 @@ where
     }
 }
 
-async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &mut C, find_motifs_run_id: u32, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, channel: i64, device_idx: usize, cache_area: u64, ws: &Arc<RwLock<Box<dyn Workspace>>>, descr: &str) -> Result<(u32, ThoTensor<MotifSlices, DataId>), ThoError>
+pub(crate) async fn load_motif_slices<L, C>(motif_id: DataId, store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, all_but_in_run_id: Option<(RunId, u32)>, ctx: &mut C, find_motifs_run_id: u32, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, channel: i64, device_idx: usize, cache_area: u64, ws: &Arc<RwLock<Box<dyn Workspace>>>, descr: &str) -> Result<(u32, ThoTensor<MotifSlices, DataId>), ThoError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
 {
-
 
     debug!("load_motif_slices: motif_id={motif_id} slices={slices:?} descr={descr}");
 
@@ -324,6 +323,7 @@ where
 
     let resource_ids_slices = slices
         .iter()
+        .take(100)//TODO input/config
         .fold(HashMap::new(), |mut a, slice| {
             a.entry(slice.0.clone()) //TODO clone
                 .or_insert_with(|| vec![])
@@ -341,16 +341,7 @@ where
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
 
-
-
     for (resource_id, slices) in resource_ids_slices {
-        let out_key = {
-            let out_id = SynKey::new([
-                mono_key!(motif_id.0, format!("motif_id={motif_id}")),
-                mono_key!(resource_id, format!("resource_id={resource_id}")),
-            ]);
-            Arc::new(out_id) as Arc<dyn CachableIdTr>
-        };
 
         let resource = resources_map
             .get(&resource_id)
@@ -618,7 +609,7 @@ mod tests {
             ]))))
             .with_list_run_config_values(
                 run_id,
-                Ok(FindMotifsRunConfig::new(Some(run_id), 100, 100, None, None).to_properties_iter(None).collect())
+                Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 100, 100, None, None).to_properties_iter(None).collect())
             )
             .build();
 
@@ -674,7 +665,7 @@ mod tests {
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
         let resource_b = Resource::new(2, 1, "tensor_b", 1000);
         let mut store = MockStoreBuilder::new()
-            .with_list_random_slices(motif_id, motif_width, None, Ok((0i64, run_id, vec![
+            .with_list_random_motif_slices(motif_id, motif_width, None, Ok((0i64, run_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
                 TensorIdSliceIdx(2, 100)
@@ -684,7 +675,7 @@ mod tests {
             ]))))
             .with_list_run_config_values(
                 run_id,
-                Ok(FindMotifsRunConfig::new(Some(run_id), 100, motif_width, None, None).to_properties_iter(None).collect())
+                Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 100, motif_width, None, None).to_properties_iter(None).collect())
             )
             .with_get_motif_meta( [(motif_id, Ok((0usize, run_id)))])
             .build();

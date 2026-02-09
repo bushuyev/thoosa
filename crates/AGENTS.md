@@ -24,7 +24,7 @@ async engine is Tokio, rayon is used to parallel sync functions.
 ## Build, Test, and Development Commands
 - Build workspace: `cargo build`
 - Build a crate: `cargo build -p torch_runner`
-- Run tests (all): `cargo nextest run --profile codex --no-fail-fast`
+- Run tests (all): `cargo nextest run --profile codex --no-fail-fast --retries=0`
 - Run tests for a crate: `cargo nextest run --profile codex -p [crate]`
 - Lint (if installed): `cargo clippy --all-targets -- -D warnings`
 Notes:

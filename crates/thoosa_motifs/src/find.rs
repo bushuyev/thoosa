@@ -699,7 +699,7 @@ mod motif_find_tests {
 
     #[test]
     fn test_find_motifs_run_config_to_from_map() {
-        let params = FindMotifsRunConfig::new(
+        let params = FindMotifsRunConfig::new_with_running_mean(
             Some(0),
             10,
             10,

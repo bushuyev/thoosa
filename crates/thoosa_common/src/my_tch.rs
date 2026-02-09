@@ -41,10 +41,16 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
         }
     }
 
-    fn run_layers(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn run_layers(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}",t.as_ref().size(),t.device_idx(),self.layers[0]);
+        let mask = match mask {
+            None => None,
+            Some(v) => {
+                Some(ThoTensor::<AnyDims, SimpleId>::new(t.id().clone(), v.t.shallow_clone())?)//FIXME
+            }
+        };
 
-        let output_t = self.layers[0].tho_forward(&t.as_ref().into(), train)?;
+        let output_t = self.layers[0].tho_forward(&t.as_ref().into(), mask.as_ref(), train)?;
 
         Ok(self.layers
             .iter()
@@ -53,7 +59,7 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
             .try_fold(output_t, |output_t, (i, layer)| {
                 debug!("MySequential::run_layers={i} output_t.size={:?} output_t.device={:?} layer={:?}",output_t.size(),output_t.device_idx(),layer);
 
-                layer.tho_forward(&output_t, train)
+                layer.tho_forward(&output_t, mask.as_ref(), train)
             })?
             .as_ref()
             .into())
@@ -67,12 +73,12 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
         }
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         if self.layers.is_empty() {
             Ok(t.shallow_clone())
         } else {
             match self.split_input {
-                None => self.run_layers(t, train),
+                None => self.run_layers(t, mask, train),
                 Some((dim, num_features)) => {
                     let splits = t.as_ref().f_split(num_features, dim)?;
                     debug!("MySequential::tho_forward splits.sizes={:?} num_features={num_features} dim={dim}",splits.iter().map(|t| t.size()).collect::<Vec<_>>());
@@ -85,7 +91,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
                                 if split.size()[dim as usize] == num_features {
                                     debug!("MySequential::tho_forward i={i} split={:?}",split.size());
 
-                                    let r = self.run_layers(&split.into(), train)?;
+                                    let r = self.run_layers(&split.into(), mask, train)?;
                                     debug!("MySequential::tho_forward i={i} r.size()={:?}",r.size());
 
                                     Ok(r)
@@ -147,13 +153,13 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyParallel<DI, DO> {
         }
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MyParallel::forward: xs={:?}", t.size());
         let t = (self.join)(
             (self.split)(t.as_ref())?
                 .into_iter()
                 .zip(self.layers.iter())
-                .map(|(t, net)| net.tho_forward(&t.into(), train).map(|v|v.as_ref().shallow_clone()))
+                .map(|(t, net)| net.tho_forward(&t.into(), None, train).map(|v|v.as_ref().shallow_clone()))
                 .collect::<Result<Vec<Tensor>, ThoError>>()?,
         )?;
 
@@ -195,12 +201,12 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for Split1<DI, DO> {
        self.layer.debug()
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MyParallel::forward: xs={:?}", t.size());
         let t = (self.join)(
             (self.split)(t.as_ref())?
                 .into_iter()
-                .map(|split_t| self.layer.tho_forward(&split_t.into(), train).map(|v|v.as_ref().shallow_clone()))
+                .map(|split_t| self.layer.tho_forward(&split_t.into(), None, train).map(|v|v.as_ref().shallow_clone()))
                 .collect::<Result<Vec<Tensor>, ThoError>>()?,
         )?;
 
@@ -244,7 +250,7 @@ impl MyMaxPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(t.as_ref()
             .f_max_pool1d(
                 self.kernel_size,
@@ -269,7 +275,7 @@ impl AdaptiveMaxPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(t.as_ref()
             .f_adaptive_avg_pool1d(self.output_size as i64)?
             .into())
@@ -294,7 +300,7 @@ impl MyBatchNorm1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyBatchNorm1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(self.batch_norm.forward_t(t.as_ref(), train).into())
     }
 }
@@ -314,13 +320,13 @@ impl<ND> MyConv<ND> {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 1]> {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
     }
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 2]> {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
     }
 }
@@ -350,7 +356,7 @@ impl MyAvgPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAvgPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(t.as_ref()
             .f_avg_pool1d(
                 self.kernel_size,
@@ -370,7 +376,7 @@ pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send {
         0
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError>;
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError>;
 }
 
 // unsafe impl <DI:Dims, DO:Dims>  Send for ThoModuleWithStore<DI, DO>{}
@@ -396,20 +402,21 @@ impl MyFuncModule {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyFuncModule {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         (self.func)(t.as_ref()).map(|t|t.into())
     }
 }
 
 pub struct MyClosureModule {
-    func: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoError>>>,
+    //TODO Tensor->ThoTensor
+    func: Arc<Box<dyn Fn(&Tensor, Option<&Tensor>) -> Result<Tensor, ThoError>>>,
 }
 
 unsafe impl Send for MyClosureModule {}
 unsafe impl Sync for MyClosureModule {}
 
 impl MyClosureModule {
-    pub fn new(func: Arc<Box<dyn Fn(&Tensor) -> Result<Tensor, ThoError>>>) -> Self {
+    pub fn new(func: Arc<Box<dyn Fn(&Tensor, Option<&Tensor>) -> Result<Tensor, ThoError>>>) -> Self {
         Self { func }
     }
 }
@@ -421,8 +428,11 @@ impl Debug for MyClosureModule {
 }
 
 impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyClosureModule {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        (self.func)(t.as_ref()).map(|v|v.into())
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mask: Option<&ThoTensor<DI, SimpleId>>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        (self.func)(
+            t.as_ref(),
+            mask.map(|v|v.as_ref())
+        ).map(|v|v.into())
     }
 }
 
@@ -449,7 +459,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLin
         );
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _mask: Option<&ThoTensor<DI, SimpleId>>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         #[cfg(debug_assertions)]
         {
             debug!("Module for MyLinear::forward: descr={}", self.descr);
@@ -615,7 +625,7 @@ mod tch_tests {
 
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = seq.build_tch_module(&vs.root()).unwrap();
 
-        let y_p = net.tho_forward(&Tensor::randn([10, 2], (Float, Cpu)).into(), true).unwrap();
+        let y_p = net.tho_forward(&Tensor::randn([10, 2], (Float, Cpu)).into(), None, true).unwrap();
 
         assert_eq!(vec![10, 2], y_p.size())
     }
@@ -662,6 +672,7 @@ mod tch_tests {
 
         let y_p = net.tho_forward(
             &Tensor::randn([10, 2, 10], (Kind::Float, Device::Cpu)).into(),
+            None,
             true,
         ).unwrap();
 
@@ -740,8 +751,8 @@ mod tch_tests {
 
         debug!(
             "net t_0={:?}, t_1={:?}",
-            from::<Vec<f32>>(&net_0.tho_forward(&batch_0, true)?.as_ref().view(-1)),
-            from::<Vec<f32>>(&net_0.tho_forward(&batch_1, true)?.as_ref().view(-1))
+            from::<Vec<f32>>(&net_0.tho_forward(&batch_0, None,  true)?.as_ref().view(-1)),
+            from::<Vec<f32>>(&net_0.tho_forward(&batch_1, None, true)?.as_ref().view(-1))
         );
 
         vs_0.freeze();
@@ -754,17 +765,17 @@ mod tch_tests {
 
         debug!(
             "net 1 t_0={:?}, t_1={:?}",
-            from::<Vec<f32>>(&net_1.tho_forward(&batch_0, true)?.as_ref().view(-1)),
-            from::<Vec<f32>>(&net_1.tho_forward(&batch_1, true)?.as_ref().view(-1))
+            from::<Vec<f32>>(&net_1.tho_forward(&batch_0, None,  true)?.as_ref().view(-1)),
+            from::<Vec<f32>>(&net_1.tho_forward(&batch_1, None,  true)?.as_ref().view(-1))
         );
 
         assert_eq!(
-            from::<Vec<f32>>(&net_0.tho_forward(&batch_0, true)?.as_ref().view(-1)),
-            from::<Vec<f32>>(&net_1.tho_forward(&batch_0, true)?.as_ref().view(-1))
+            from::<Vec<f32>>(&net_0.tho_forward(&batch_0, None, true)?.as_ref().view(-1)),
+            from::<Vec<f32>>(&net_1.tho_forward(&batch_0, None, true)?.as_ref().view(-1))
         );
         assert_eq!(
-            from::<Vec<f32>>(&net_0.tho_forward(&batch_1, true)?.as_ref().view(-1)),
-            from::<Vec<f32>>(&net_1.tho_forward(&batch_1, true)?.as_ref().view(-1))
+            from::<Vec<f32>>(&net_0.tho_forward(&batch_1, None, true)?.as_ref().view(-1)),
+            from::<Vec<f32>>(&net_1.tho_forward(&batch_1, None, true)?.as_ref().view(-1))
         );
 
         Ok(())
@@ -777,7 +788,7 @@ mod tch_tests {
         SeqBuilder::new(num_features, None)
             .batch_norm(BatchNormConfig::default())
             .closure(
-                Arc::new(Box::new(|t: &Tensor| {
+                Arc::new(Box::new(|t: &Tensor, _mask:Option<&Tensor>| {
                     Ok(t.view((t.size()[0], 1, t.size()[1]))) //channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
                 })),
                 None,

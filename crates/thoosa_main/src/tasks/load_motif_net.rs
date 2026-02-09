@@ -1,4 +1,5 @@
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::sync::Arc;
 use async_trait::async_trait;
 use log::debug;
@@ -11,7 +12,7 @@ use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice};
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
-use thoosa_common::ws::Workspace;
+use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::copy_mode::CpuOrGpu;
@@ -23,21 +24,19 @@ use thoosa_shared::comp_id::SynKey;
 #[derive(Debug, Clone, DummyData)]
 pub struct LoadMotifNetInput {
     id: SynKey,
-    motif_id:u32,
-    channel:u32,
+    net_id: PathBuf,
     // train_motif_nets_run_id:RunId
 }
 
 
 impl LoadMotifNetInput {
-    pub fn new(motif_id: u32, channel:u32/*train_motif_nets_run_id: RunId*/) -> Self {
+    pub fn new(net_id: PathBuf/*train_motif_nets_run_id: RunId*/) -> Self {
+        let net_id_str = net_id.to_string_lossy().to_string();
         Self {
             id: SynKey::new([
-                mono_key!(motif_id, format!("motif_id={motif_id}")),
-                mono_key!(channel, format!("channel={channel}")),
+                mono_key!(net_id_str.clone(), format!("net_id={net_id_str}")),
             ]),
-            motif_id,
-            channel,
+            net_id,
         }
     }
 }
@@ -122,14 +121,14 @@ where
         let (device_idx, cache_area) = (ctx.device_idx(), ctx.cache_area());
 
         let input = input.load_from_any_device_(0).await?;//TODO clone_from_cpu
-        let mut motif_nets = self.ws.read().load_motif_nets(input.channel, input.motif_id, &ThoDevice::from(device_idx).into())?;
+        let (params, module) = self
+            .ws
+            .read()
+            .load_motif_net(&input.net_id, &ThoDevice::from(device_idx).into())?;
 
-        debug!("LoadMotifNet::run: motif_nets.len={} motif_nets={motif_nets:?}", motif_nets.len());
+        let (channel, motif_id) = FsWorkspace::parse_motif_path(&input.net_id)?;
 
-        let (params, module) = motif_nets
-            .pop().ok_or_else(|| ThoError::new(format!("no nets for input={input:?}")))?;//TODO select best net or select with run config
-
-        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, MotifNetMeta::new(input.motif_id, input.channel, params)), cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, MotifNetMeta::new(motif_id, channel, params)), cache_area.into())))
     }
 }
 
@@ -146,6 +145,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::path::PathBuf;
     use parking_lot::RwLock;
     use tch::Device::Cuda;
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
@@ -164,19 +164,18 @@ mod tests {
 
         GlobalCtx::init_devices(2);
 
+        let net_id = PathBuf::from("0/0_0");
+        let (params_fn, module_fn) = utils::motif_test_net(100, 1., Cuda(0));
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 5, 100, 1000u32)
-                .with_load_motif_nets(vec![vec![
-                    //channel 0
-                    utils::motif_test_net(100, 1., Cuda(0)),
-                ]])
+                .with_load_motif_net(vec![(net_id.clone(), params_fn, module_fn)])
                 .build(),
         ));
 
 
         let load_motif_net = Arc::new(LoadMotifNet::<MockRunCtx>::new(&ws));
 
-        load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(0, 0), CacheArea::default())), mock_run_ctx::default(1)).await?;
+        load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(net_id), CacheArea::default())), mock_run_ctx::default(1)).await?;
 
         Ok(())
     }
