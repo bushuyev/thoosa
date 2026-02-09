@@ -3,21 +3,18 @@ use crate::runner::permits::{NumPermits, MAX_PERMITS};
 use crate::runner::permits::runner_queue::Arbiter;
 use crate::runner::permits::{PermitSource, RunnerPerm};
 use thoosa_shared::runner::purge::FuturesRunnerMapPurger;
-use log::debug;
+use log::{debug, error, info};
 #[allow(unused_imports)]
 use mockall::automock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 use futures_util::future::BoxFuture;
-use tokio::join;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{Cause, ThoError};
 use tokio::sync::RwLock as AsyncRwLock;
-use thoosa_shared::runner::purger::PurgeCmd;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
 
@@ -190,6 +187,18 @@ impl GlobalCtx {
         &self.semaphores[device_idx]
     }
 
+    // #[cfg(debug_assertions)] TODO
+    pub async fn debug_caches(&self, device_idx:usize) {
+        let maps = self.caches.read().await;
+
+        for (type_name, map) in maps.iter() {
+            info!("GlobalCtx::debug_caches: type_name={type_name}");
+            if let Err(e) = map.debug_gpu(device_idx).await {
+                error!("GlobalCtx::debug_caches: failed with {e:?}");
+            }
+        }
+    }
+
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
     pub async fn dump_all_to_cpu<'a>(
@@ -262,7 +271,6 @@ pub mod mock_global_ctx {
     use crate::Cause;
     use crate::ThoError;
     use async_trait::async_trait;
-    use ctor::ctor;
     use crate::traits::CachableIdTr;
     use mockall::predicate::eq;
     use tokio::sync::Semaphore;
@@ -318,7 +326,7 @@ pub mod mock_global_ctx {
 
         async fn wait_for_permits_hint(&self) {}
 
-        fn move_permits(&self, from: &SynKey, to: &SynKey) {}
+        fn move_permits(&self, _from: &SynKey, _to: &SynKey) {}
     }
 
     #[derive(Debug)]

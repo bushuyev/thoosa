@@ -44,7 +44,7 @@ impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey> {
         let stacked = if subs.is_empty() {
             Tensor::empty(&[0], (self.t_ref().kind(), self.t_ref().device()))
         } else {
-            Tensor::vstack(subs.as_slice())
+            Tensor::f_vstack(subs.as_slice())?
         };
 
         let ranges_key = SynKey::new([mono_key!(format!("{ranges:?}"), "ranges")]);
@@ -86,17 +86,6 @@ impl Adjustable for ChannelsData2Selector {}
 impl From<Range<MonoMetrics<1, 2>>> for ChannelsData2Selector {
     fn from(value: Range<MonoMetrics<1, 2>>) -> Self {
         ChannelsData2Selector(value)
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct BatchChannelsData2Selector(pub Range<MonoMetrics<0, 3>>);
-
-impl Select<BatchChannelsData2Selector> for ThoTensor<Batch<ChannelsData2>, SynKey> {
-    type Output = ThoTensor<Batch<ChannelsData2>, SynKey>;
-
-    fn subview(&self, selector: BatchChannelsData2Selector) -> Result<Self::Output, ThoError> {
-        todo!()
     }
 }
 

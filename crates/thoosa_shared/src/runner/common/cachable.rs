@@ -1,7 +1,6 @@
 #![allow(unused_parens)]
 #![allow(async_fn_in_trait)]
 
-use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 
@@ -11,12 +10,11 @@ use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
 use log::{debug, trace, warn};
 use mockall_double::double;
+use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::atomic::Ordering::Relaxed;
 use crate::CopyToDevice;
 use crate::Cause;
 use tokio::sync::{Notify, RwLockReadGuard};
@@ -81,19 +79,21 @@ where
 
                     if let Some(value) = Self::cache().await.get_mut(&key_for_purger) {
                         let shared_fut = value.value().clone();
-                        if shared_fut.peek().is_some() { //to avoid locking on itself
-                            let data: Arc<DevicesWrap<Self::Out>> = shared_fut.await?;
+                        debug!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
+
+                        if let Some( Ok(data)) = shared_fut.peek()  { //to avoid locking on itself
+
                             data.remove_cache_area(cache_area);
 
-                            debug!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} data.cache_area={:?} ", data.cache_area);
+                            debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} data.cache_area={:?} ", data.cache_area);
                             if data.cache_area.assigned_count() == 0 {
                                 data.dump_to_cpu(device_idx).await?;
 
-                                debug!("Cachable::purge_gpu_cache_area: 3  key={key_for_purger:?} done");
+                                debug!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
                             }
                         }
                     } else {
-                        warn!("Cachable::purge_gpu_cache_area: 4 key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //warning
+                        warn!("Cachable::purge_gpu_cache_area: 5 key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //warning
                     }
 
                     Ok(())
@@ -195,7 +195,7 @@ where
     async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoError>
         where Self:Sized;
 
-    async fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> bool
+    fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> impl Future<Output=bool> + Send
         where Self:Sized;
 }
 
@@ -363,7 +363,7 @@ where
             .into_boxed_slice();
 
         let inflights = (0..num_devices)
-            .map(|_device| tokio::sync::Mutex::new(None))
+            .map(|_device| Mutex::new(None))
             .collect::<Vec<_>>()
             .into_boxed_slice();
 
@@ -445,6 +445,11 @@ where
         S:Debug + Clone + 'static,
         P: PermitsCtx
     {
+        if permits_ctx.acquired_permits() == 0 {
+            let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?;
+            permits_ctx.add_permit(permit);
+        }
+
         let read_guard: RwLockReadGuard<'_, Option<O>> = wrap.cached_data[to_device_idx].read().await;
 
         if read_guard.is_some() {
@@ -452,11 +457,7 @@ where
                 .as_ref()
                 .expect("no value behind guard");
 
-            let _permit =  if permits_ctx.acquired_permits() == 0 {
-                Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
-            } else {
-                None
-            };
+
             let data: O = base.subview(selector.clone())?;
 
             return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, permits_ctx), data);
@@ -475,11 +476,7 @@ where
                 let sub_t: O = src.subview(selector.clone())?;
 
                 debug!("DataCacheWrapper::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
-                let _permit =  if permits_ctx.acquired_permits() == 0 {
-                    Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
-                } else {
-                    None
-                };
+
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
                 return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, permits_ctx), data);
@@ -497,6 +494,10 @@ where
         P:PermitsCtx,
         Self: Sized
     {
+        if permits_ctx.acquired_permits() == 0 {
+            let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?;
+            permits_ctx.add_permit(permit);
+        }
         let read_guard: RwLockReadGuard<'_, Option<O>> = wrap.cached_data[to_device_idx].read().await;
 
         if read_guard.is_some() {
@@ -520,11 +521,7 @@ where
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t = src.subview(selector.clone())?;
                 debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
-                let _permit =  if permits_ctx.acquired_permits() == 0 {
-                    Some(GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?)
-                } else {
-                    None
-                };
+
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
                 return do_run(data, permits_ctx);
@@ -633,7 +630,7 @@ where
     //cpu_only
     //gpu_copied
     cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,
-    inflights: Box<[tokio::sync::Mutex<Option<Arc<tokio::sync::Notify>>>]>,
+    inflights: Box<[Mutex<Option<Arc<Notify>>>]>,
     cache_area: CacheArea,
     size: O::Metrics,
     mem_size: u64,
@@ -782,8 +779,8 @@ where
         O::M::load_from_any_device_(self, to_device_idx).await
     }
 
-    pub async fn is_all_on_cpu(&self) -> bool {
-        O::M::is_all_on_cpu(self).await
+    pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {
+        O::M::is_all_on_cpu(self)
     }
 }
 
@@ -846,6 +843,46 @@ where
         src: Option<&O>,
         do_return: bool,
     ) -> Result<Option<RwLockReadGuard<'_, O>>, ThoError> {
+        // Ensures inflight slot is cleared and waiters are notified even if the leader is canceled or panics.
+        struct InflightGuard<'a> {
+            inflight: &'a Mutex<Option<Arc<Notify>>>,
+            notify: Arc<Notify>,
+            cleared: bool,
+        }
+
+        impl<'a> InflightGuard<'a> {
+            fn new(inflight: &'a Mutex<Option<Arc<Notify>>>, notify: Arc<Notify>) -> Self {
+                Self {
+                    inflight,
+                    notify,
+                    cleared: false,
+                }
+            }
+
+            fn clear(&mut self) {
+                if self.cleared {
+                    return;
+                }
+                self.cleared = true;
+                let mut g = self.inflight.lock();
+                if g
+                    .as_ref()
+                    .map(|n| Arc::ptr_eq(n, &self.notify))
+                    .unwrap_or(false)
+                {
+                    *g = None;
+                }
+                drop(g);
+                self.notify.notify_waiters();
+            }
+        }
+
+        impl Drop for InflightGuard<'_> {
+            fn drop(&mut self) {
+                self.clear();
+            }
+        }
+
         debug!("DevicesWrap::ensure_copied: self.id={:?} src_idx={src_idx} dst_idx={dst_idx} do_return={do_return} src={src:?}", self.id);
 
         loop {
@@ -866,16 +903,16 @@ where
 
             // ---- Try to join or become the leader
             // (Do not hold this lock while awaiting other locks, except briefly to set or read the notify)
-            let maybe_notify = {
-                let mut g = self.inflights[dst_idx].lock().await;
+            let (maybe_notify, leader_notify) = {
+                let mut g = self.inflights[dst_idx].lock();
                 if let Some(n) = &*g {
                     // someone is already copying → wait on their notify
-                    Some(n.clone())
+                    (Some(n.clone()), None)
                 } else {
                     // become the leader: install a notify and proceed
                     let n = Arc::new(Notify::new());
                     *g = Some(n.clone());
-                    None
+                    (None, Some(n))
                 }
             };
 
@@ -886,14 +923,14 @@ where
             }
 
             // ---- Leader path
+            let mut inflight_guard = InflightGuard::new(
+                &self.inflights[dst_idx],
+                leader_notify.expect("leader notify"),
+            );
+
             // Double-check: maybe dst was filled after we dropped the read lock
             if self.cached_data[dst_idx].read().await.is_some() {
-                // clear inflight and wake any waiters
-                let notify = {
-                    let mut g = self.inflights[dst_idx].lock().await;
-                    g.take().expect("leader must have set inflight")
-                };
-                notify.notify_waiters();
+                inflight_guard.clear();
                 continue;
             }
 
@@ -920,11 +957,6 @@ where
             let produced = match produced {
                 Ok(v) => v,
                 Err(e) => {
-                    let notify = {
-                        let mut g = self.inflights[dst_idx].lock().await;
-                        g.take().expect("leader must have set inflight")
-                    };
-                    notify.notify_waiters();
                     return Err(e);
                 }
             };
@@ -941,11 +973,7 @@ where
             }
 
             // Clear inflight and wake followers
-            let notify = {
-                let mut g = self.inflights[dst_idx].lock().await;
-                g.take().expect("leader must have set inflight")
-            };
-            notify.notify_waiters();
+            inflight_guard.clear();
         }
     }
 

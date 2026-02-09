@@ -237,7 +237,6 @@ where
 
                 async move {
                     let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id as u32).into()), cache_area.into()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
-                    let motif = motif_loader_clone.run_cached(Arc::clone(&motif_id_wrap), ctx.branch(Some("stacked_motifs_loader_motif"), false, false)).await?;
 
 
                     let avg_motif_dist = load_and_clc_avg_dist_clone
@@ -245,6 +244,10 @@ where
                         .await?
                         .with_data_ref(0, &mut ctx, None, |dist_val: &AverageDistanceValue, _ctx| Ok(dist_val.value()))
                         .await?;
+
+                    let motif = motif_loader_clone.run_cached(
+                        Arc::clone(&motif_id_wrap), ctx.branch(Some("stacked_motifs_loader_motif"), false, false)
+                    ).await?;
 
                     debug!("StackedMotifsLoader::run: find_motifs_run_id={:?}  motif={motif:?} avg_motif_dist={avg_motif_dist}", find_motifs_run_config_id);
 

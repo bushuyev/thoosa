@@ -579,7 +579,7 @@ impl CrossInputSelectorWrap {
 
 #[derive(Debug)]
 struct CrossLoaderAdjuster {
-    // batch_0_adjuster: SplitsAdjuster<Range<i64>, i64>,//TODO
+
     batch_1_adjuster: SplitsAdjuster<Range<i64>, i64>,
     batch_1_slice_adjuster: SplitsAdjuster<Range<i64>, i64>,
 }
@@ -1145,6 +1145,7 @@ pub(crate) mod mock_cross_loader_clc {
 }
 
 #[cfg(test)]
+#[allow(refining_impl_trait)]
 pub(crate) mod mock_cross_loader_receiver {
     use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
     use thoosa_shared::runner::common::RunCtx;
@@ -1695,7 +1696,7 @@ mod tests {
             "",
             HashMap::new(),
         )?;
-        let run_config = FindMotifsRunConfig::new(Some(run_id), 1, 2, None, None);
+        let run_config = FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, 2, None, None);
         let fixed_config = FixedFindMotifsConfig::new(2, false, None);
 
         let resource_key_refs = resource_keys.iter().map(|v| v.as_str()).collect::<Vec<_>>();

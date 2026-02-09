@@ -5,23 +5,19 @@ use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::common::{DropIf, OutId};
 #[double]
 use thoosa_shared::runner::global_ctx::GlobalCtx;
-use crate::runner::permits::MAX_PERMITS;
 use thoosa_shared::runner::statistics::Statistics;
 use async_trait::async_trait;
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use mockall::automock;
 use mockall_double::double;
-use parking_lot::RwLock;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use crate::{os_thread_id, panic_to_err_async};
 use thoosa_shared::CopyToDevice;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
+use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
 use thoosa_shared::{Cause, ThoError};
-use crate::comp_id::SynKey;
 
 #[derive(Debug)]
 pub enum AdjusterError<A: Adjustable> {
@@ -468,16 +464,16 @@ where
             runner(Arc::clone(&task), Arc::clone(&input), None, device_idx, run_context.branch(Some("oom_handler_run_initial"), false, false)).await
         }) {
             Err(te) => {
-                debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  te={te:?}", os_thread_id());
+                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  te={te:?}", os_thread_id());
 
                 match te.what() {
                     Cause::OutOfMemory => {
-                        debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  oom 0", os_thread_id());
+                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  oom 0", os_thread_id());
 
                         let mut task = task;
 
                         for adjuster in adjusters {
-                            debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} adjuster={adjuster:?} os_thread_id={}  starting adjuster", os_thread_id());
+                            debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} adjuster={adjuster:?} os_thread_id={}  starting adjuster", os_thread_id());
 
                             loop {
                                 i += 1;
@@ -485,7 +481,7 @@ where
                                     //TODO
                                     panic!("OOMHandler: ctx_id={ctx_id:?}  i={i}");
                                 }
-                                debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} oom i={i}", os_thread_id());
+                                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={} oom i={i}", os_thread_id());
 
                                 let adjust_result = match adjuster {
                                     Adjusters::Input(input_ad) => {
@@ -505,7 +501,7 @@ where
                                             }
                                             Err(v) => {
                                                 let msg = format!("adjuster failed: {te:?}");
-                                                error!("OOMHandler::run, Adjusters::Input: {msg:?}");
+                                                error!("OOMHandler::run, error, Adjusters::Input: msg={msg:?}");
 
                                                 match v {
                                                     AdjusterError::AdjustFailed(v) => {
@@ -533,7 +529,7 @@ where
                                             }
                                             Err(v) => {
                                                 let msg = format!("adjuster failed: {te:?}");
-                                                error!("OOMHandler::run, Adjusters::Task: {msg:?}");
+                                                error!("OOMHandler::run, error, Adjusters::Task: {msg:?}");
 
                                                 match v {
                                                     AdjusterError::AdjustFailed(v) => {
@@ -562,7 +558,7 @@ where
                                             }
                                             Err(v) => {
                                                 let msg = format!("adjuster failed: {te:?}");
-                                                error!("OOMHandler::run, Adjusters::RunContext: {msg:?}");
+                                                error!("OOMHandler::run, error, Adjusters::RunContext: {msg:?}");
 
                                                 match v {
                                                     AdjusterError::AdjustFailed(v) => {
@@ -577,10 +573,10 @@ where
                                         }
                                     }
                                 };
-                                debug!("OOMHandler::run: on adjust_result ={adjust_result:?} os_thread_id={} adjuster error ", os_thread_id());
+                                debug!("OOMHandler::run, error: on adjust_result ={adjust_result:?} os_thread_id={} adjuster error ", os_thread_id());
 
                                 if let Err(te) = adjust_result {
-                                    debug!("OOMHandler::run: on ctx_id={ctx_id:?} task={task:?} adjuster={adjuster:?} os_thread_id={} adjuster error te={te:?}", os_thread_id());
+                                    debug!("OOMHandler::run, error: on ctx_id={ctx_id:?} task={task:?} adjuster={adjuster:?} os_thread_id={} adjuster error te={te:?}", os_thread_id());
 
                                     match te.what() {
                                         Cause::OutOfMemory | Cause::AdjusterFailed => {
@@ -599,7 +595,7 @@ where
                                                     }
                                                 }
 
-                                                debug!("OOMHandler::run: on adjust_result moving to next adjuster adjust_result ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+                                                debug!("OOMHandler::run, error: on adjust_result moving to next adjuster adjust_result ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                 break;
                                             }
@@ -612,16 +608,18 @@ where
                                     }
                                 }
 
-                                debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",os_thread_id(), run_context.acquired_permits());
+                                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",os_thread_id(), run_context.acquired_permits());
 
-                                let run_result=  runner(
-                                    Arc::clone(&task),
-                                    Arc::clone(&input),
-                                    input_select_adjusted.clone(),
-                                    device_idx,
-                                    run_context.branch(None, false, true), //looses permits on ctx drop
-                                )
-                                .await;
+                                let run_result = panic_to_err_async!({
+                                    runner(
+                                        Arc::clone(&task),
+                                        Arc::clone(&input),
+                                        input_select_adjusted.clone(),
+                                        device_idx,
+                                        run_context.branch(None, false, true), //looses permits on ctx drop
+                                    )
+                                    .await
+                                });
 
                                 match run_result {
                                     Ok(v) => {
@@ -630,7 +628,7 @@ where
 
                                         let all_done = contexts.input.all_done();
 
-                                        debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}", os_thread_id());
+                                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}", os_thread_id());
 
                                         if all_done {
                                             run_context.drop_permits(DropIf::Always);
@@ -646,7 +644,7 @@ where
 
                                         match te.what() {
                                             Cause::OutOfMemory | Cause::AdjusterFailed => {
-                                                debug!("OOMHandler::run: on oom ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+                                                debug!("OOMHandler::run, error: on oom ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                 if !adjuster.degrade(&mut contexts) {
                                                     match adjuster {
@@ -660,13 +658,13 @@ where
                                                             last_context_adjuster.replace(v);
                                                         }
                                                     }
-                                                    debug!("OOMHandler::run: on oom moving to nexty adjuster adjust_result ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+                                                    debug!("OOMHandler::run, error: on oom moving to nexty adjuster adjust_result ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                     break;
                                                 }
                                             }
                                             _ => {
-                                                debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} other error 1", os_thread_id());
+                                                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={} other error 1", os_thread_id());
                                                 return Err(te);
                                             }
                                         }
@@ -676,18 +674,20 @@ where
                         }
                     }
                     _ => {
-                        debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  other error 2", os_thread_id());
+                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  other error 2", os_thread_id());
                         return Err(te);
                     }
                 }
 
-                // warn!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} all failed: input.mem_size={:?} semaphore={:?}", os_thread_id(), input.mem_size(), GlobalCtx::global().debug_semaphore(device_idx));
+                warn!("OOMHandler::run, error: ctx_id={ctx_id:?} out_key={out_key:?} os_thread_id={} all failed: input.mem_size={:?} semaphore={:?}", os_thread_id(), input.mem_size(), GlobalCtx::global().debug_semaphore(device_idx));
+
+                GlobalCtx::global().debug_caches(device_idx).await;
 
                 Err(Cause::SomethingElse(format!("all failed: task.out_key={out_key:?}")).into())
                 // Err(Cause::SomethingElse(format!("XXX")).into())
             }
             Ok(o) => {
-                debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} done without oom ", os_thread_id());
+                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={} done without oom ", os_thread_id());
 
                 Ok(o)
             },
@@ -1034,8 +1034,6 @@ mod tests {
     // use crate::common::runnable::Runnable;
     use crate::runner::common::{DropIf, MockRunCtx, OutId};
     use crate::runner::common::runnable::{AsyncStage, Stage};
-    use thoosa_shared::runner::global_ctx;
-    use thoosa_shared::runner::global_ctx::MockGlobalCtx;
     use std::collections::VecDeque;
     use std::ops::Range;
     use std::sync::{Arc, Mutex};
@@ -1044,7 +1042,6 @@ mod tests {
     use thoosa_shared::{Cause, ThoError};
     use thoosa_shared::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::traits::{Adjustable, WithId};
-    use crate::runner::global_ctx::mock_global_ctx;
     use super::{Adjuster, InputContext};
     type Selector = Range<[usize; 1]>;
 
@@ -1237,7 +1234,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_only_input_adjuster() {
-        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let (task, task_calls) = mock_runnable([
             Err(ThoError::from(Cause::OutOfMemory)),
@@ -1277,7 +1274,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_only_run_ctx_adjuster() {
-        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let (task, task_calls) = mock_runnable([
             Err(ThoError::from(Cause::OutOfMemory)),
@@ -1319,7 +1316,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_async_handler_with_input_adjuster() {
-        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let results = VecDeque::from([
             Err(ThoError::from(Cause::OutOfMemory)),

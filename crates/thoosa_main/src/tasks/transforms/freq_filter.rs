@@ -181,7 +181,7 @@ mod tests {
     use thoosa_shared::runner::common::RunCtx;
 
     #[tokio::test]
-    async fn test_freq_fultder() ->Result<(), ThoError> {
+    async fn test_freq_filter() ->Result<(), ThoError> {
         GlobalCtx::init_devices(2);
         let filter_config = InputFilter::BandPassFilter(BandPassFilterParams{
             low_hz: 0.0,

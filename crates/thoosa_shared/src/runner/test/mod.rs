@@ -8,19 +8,15 @@ use std::ops::{AddAssign, DivAssign, Range};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
-use mockall_double::double;
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Select, WithId};
 use tokio::task::JoinSet;
-use crate::mono_key;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use crate::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use crate::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{Stage, SyncStage};
-#[double]
-use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use crate::runner::permits::{NumPermits, PermitStep, MAX_PERMITS};
 
@@ -539,11 +535,10 @@ mod tests {
     use log::{debug, error};
     use thoosa_named_derive::Named;
     use mockall_double::double;
-    use parking_lot::RwLock;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::traits::{Data, Named, SimpleId, WithId};
+    use thoosa_shared::traits::{Data, SimpleId, WithId};
     use thoosa_shared::{Cause, ThoError};
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::{OutId, PermitsCtx, RunCtx};
@@ -1203,7 +1198,7 @@ mod tests_no_global_ctx_mock{
     use crate::runner::cache_areas::CacheArea;
     use crate::runner::common::cachable::{Cached, DevicesWrap};
     use crate::runner::common::RunCtx;
-    use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx, MockGlobalCtx};
+    use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::test::fixtures::{DLoaderInput, DummyLoader};
     use crate::runner::run_ctx_2::RunCtxWithPermits;
@@ -1216,7 +1211,7 @@ mod tests_no_global_ctx_mock{
 
         unsafe { mock_global_ctx::USE_REAL_CTX = true; }
 
-        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
 
         let loader = Arc::new(DummyLoader::new(10));

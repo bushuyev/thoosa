@@ -206,9 +206,8 @@ mod tests {
     // use crate::common::Data;
     use crate::runner::global_ctx::mock_global_ctx;
     use crate::traits::{Data, SimpleId, WithId};
-    use crate::runner::global_ctx;
     // use crate::common::Data;
-    use crate::runner::global_ctx::{GlobalCtx, MockGlobalCtx};
+    use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::tmp_cache::TmpCached;
 
     #[tokio::test]
@@ -241,7 +240,7 @@ mod tests {
         RealGlobalCtx::init_devices(2);
 
         unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         #[derive(Debug, Clone)]
         struct TestData {
