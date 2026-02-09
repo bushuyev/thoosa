@@ -200,7 +200,7 @@ where
         let motif = Arc::clone(&self.motif_loader).run_cached(Arc::clone(&motif_input), ctx.branch(Some("load_motif_and_clc_dist_motif"), false, false)).await?;
 
         let stats_input = with_data!(ctx.branch(Some("load_motif_and_clc_dist_stats_input"), false, false), motif; |_ctx, motif: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
-            let motif_tensor = ThoTensor::new(motif.data().id().clone(), motif.data().t_ref().shallow_clone())?;
+            let motif_tensor = ThoTensor::new(motif.data().id().clone(), motif.data().t_ref().shallow_clone())?;//TODO add *Wrapper like ClcResourcesMotifsDistInputDeviceWrapper
             Ok::<SlicesStatsInput, ThoError>(SlicesStatsInput::new(metrics, aggr, DataWithExtra::new(motif_tensor, motif.extra().clone())))
         })?;
 
