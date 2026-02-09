@@ -698,6 +698,11 @@ async fn run_all(
 
     info!("find motifs done, find_motif_run_ids={find_motifs_run_ids:?}");
 
+    // for find_motifs_run_id in find_motifs_run_ids {
+    //     run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
+    // }
+    // return Ok(());
+
     debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
     let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
@@ -893,9 +898,10 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         filter: None,
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.1) }) }),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.01) })}),
-        slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0005..0.05, step: Some((0.0005, 3))}})}),
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.01) }), slices: RangeOrValue::Value(100) }),
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.01) }), slices: RangeOrValue::Value(10)}),
+        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))}})}),
+        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0005..0.01, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(100) }),
+        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.0005..0.005, step: Some((0.0005, 4))} }), slices: RangeOrValue::Value(100)}),
+        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.0045) }), slices: RangeOrValue::Value(100)}),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select
@@ -1824,7 +1830,7 @@ mod cli_tests {
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir.clone(),
-            3,
+            1,
             0,
             100,
         )?));
@@ -1868,8 +1874,6 @@ mod cli_tests {
         for i in 0..30 {
             let (t, _intervals) = tch_test_utils::resource_tensor(1000usize, &[
                 vec![(2, 100, MotifKind::Pulse)],
-                vec![],
-                vec![]
             ], 100)?;
 
             let stem = format!("t_0_{i}");
@@ -1880,8 +1884,6 @@ mod cli_tests {
 
             let (t, _intervals) = tch_test_utils::resource_tensor(1000usize, &[
                 vec![(2, 100, MotifKind::Sin)],
-                vec![],
-                vec![]
             ], 100)?;
 
             let stem = format!("t_1_{i}");

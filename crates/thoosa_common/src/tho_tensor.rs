@@ -214,7 +214,7 @@ impl<D: Dims, Id: Named + Debug + Clone> Debug for ThoTensor<D, Id> {
 
 impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     pub fn new(id: Id, tensor: Tensor) -> Result<Self, ThoError> {
-        debug!("ThoTensor::new: id={:?} trace={}", id, backtrace_head_lines(8));
+        // debug!("ThoTensor::new: id={:?} trace={}", id, backtrace_head_lines(8));
         Ok(Self {
             id,
             t: if tensor.is_contiguous() {

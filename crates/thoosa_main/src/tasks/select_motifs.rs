@@ -1047,7 +1047,7 @@ where
 
             debug!("SelectMotifsStage::run: 1. good_motif_ids.len={}", extened_motif_ids.len());
 
-            let avg_dist_05 = extened_motif_ids.iter().map(|v|v.1).sum::<f64>()/ extened_motif_ids.len() as f64 / 0.5;//TODO config
+            let avg_dist_05 = extened_motif_ids.iter().map(|v|v.1).sum::<f64>()/ extened_motif_ids.len() as f64 * 0.5;//TODO config
 
             debug!("SelectMotifsStage::run: avg_dist={avg_dist_05:?} good_motif_ids.len={}", extened_motif_ids.len());
 
