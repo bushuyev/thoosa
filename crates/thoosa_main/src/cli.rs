@@ -910,8 +910,10 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
     let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
         id: None,
         slices_selector_metric: MetricsRangeOrValue::EucDist(MetricConfigRangeOrValue { v: RangeOrValue::Value(0) }),
-        slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
-        global_k: RangeOrValue::Value(0.5),
+        // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
+        slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.8..1.2, step: Some((0.1, 1))} }),
+        // global_k: RangeOrValue::Value(0.5),
+        global_k: RangeOrValue::Range{range: 0.4..0.7, step: Some((0.1, 1))},
     };
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
