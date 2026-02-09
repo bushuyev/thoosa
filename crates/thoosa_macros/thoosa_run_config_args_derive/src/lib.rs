@@ -291,15 +291,31 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                     let add_range_or_value_calls = token_streams.range_or_value_add_calls;
                     let add_val_match_cases = token_streams.builder_add_val_match_cases;
                     let builder_assignments = token_streams.builder_assignments;
+                    let is_empty_struct = field_names.is_empty();
+                    let enum_fields_for_display = if is_empty_struct {
+                        quote! { _ => f.write_str("") }
+                    } else {
+                        quote! { #( Self::#enum_fields => { write!(f, #field_names)})* }
+                    };
+                    let builder_add_val_match_cases = if is_empty_struct {
+                        quote! { let _ = (path, val); }
+                    } else {
+                        quote! { match path { #(# add_val_match_cases)*} }
+                    };
+                    let range_or_value_add_calls = if is_empty_struct {
+                        quote! { let _ = (append, const_params, grid_params, opt_params); }
+                    } else {
+                        quote! { #(# add_range_or_value_calls)* }
+                    };
 
                     (
                         quote! { #(# range_or_value_fields)* },
                         quote! { #(# enum_fields,)* },
-                        quote! { #( Self::#enum_fields => { write!(f, #field_names)})* },
-                        quote! { #(# add_range_or_value_calls)* },
+                        enum_fields_for_display,
+                        range_or_value_add_calls,
                         quote! {struct},
                         quote! { #(# builder_fields)* },
-                        quote! { match path { #(# add_val_match_cases)*} },
+                        builder_add_val_match_cases,
                         quote! {
 
                             #target_struct_ident {
