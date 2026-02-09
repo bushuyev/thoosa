@@ -133,11 +133,27 @@ impl Default for ComparisonMethod {
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
 pub enum Aggr {
     Mean(MeanAggr),
+    Min(MinAggr),
+    Max(MaxAggr),
     Quantile(QuantileAggr),
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
 pub struct MeanAggr {
+    #[in_map]
+    #[run_config]
+    pub k: f32,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
+pub struct MinAggr {
+    #[in_map]
+    #[run_config]
+    pub k: f32,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
+pub struct MaxAggr {
     #[in_map]
     #[run_config]
     pub k: f32,
