@@ -474,7 +474,7 @@ where
         .map(|tt| tt.t())
         .collect();
 
-    debug!("load_motif_slices: loaded {} tensors for motif_id={motif_id}", tensors.len());
+    debug!("load_motif_slices: loaded {} tensors for motif_id={motif_id} descr={descr}", tensors.len());
 
     assert!(!tensors.is_empty(), "no slice tensors loaded for motif_id={motif_id} ");
 
@@ -483,7 +483,7 @@ where
         Tensor::f_cat(tensors.as_slice(), 0)?,
     )?;
 
-    debug!("load_motif_slices: motif of size {:?} is built for motif_id={motif_id} device={:?}", motif.size(), motif.t.device());
+    debug!("load_motif_slices: motif of size {:?} is built for motif_id={motif_id} descr={descr} device={:?}", motif.size(), motif.t.device());
 
     Ok((window, motif))
 }
