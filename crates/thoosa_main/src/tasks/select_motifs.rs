@@ -32,7 +32,7 @@ use thoosa_shared::runner::tmp_cache::TmpCached;
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig};
+use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, FindMotifsRunConfig, Metrics as RunConfigMetrics, MotifSelector, SelectMotifsRunConfig};
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
@@ -85,7 +85,7 @@ use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 // Average motif distances are loaded together with motifs in StackedMotifsLoader,
 // then a mask is built by comparing local minima with motifs_avg_dists in ClcResourcesMotifsDist matches.
 // Finally, the average distance of each motif is recalculated, and motifs whose average distance
-// is less than 0.5 times the global average distance across all motifs are selected.
+// is less than global_k times the global average distance across all motifs are selected.
 pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
@@ -701,7 +701,23 @@ where
     }
 
     #[inline]
-    async fn load_stacked_motifs(store:&Arc<RwLock<Box<dyn Store>>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, ctx_for_loader: &mut C, find_motifs_run_ids: &Vec<RunId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
+    fn slices_selector_metric_to_stats(metric: RunConfigMetrics) -> Metrics {
+        match metric {
+            RunConfigMetrics::EucDist(_) => Metrics::EucDist,
+            RunConfigMetrics::PearsonCorr(_) => Metrics::PearsonCorr,
+        }
+    }
+
+    #[inline]
+    fn slices_selector_aggr_to_stats(aggr: RunConfigAggr) -> Aggr {
+        match aggr {
+            RunConfigAggr::Mean(mean_aggr) => Aggr::Mean(mean_aggr.k),
+            RunConfigAggr::Quantile(quantile_aggr) => Aggr::Quantile(quantile_aggr.q),
+        }
+    }
+
+    #[inline]
+    async fn load_stacked_motifs(store:&Arc<RwLock<Box<dyn Store>>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, ctx_for_loader: &mut C, find_motifs_run_ids: &Vec<RunId>, slices_selector_metric: Metrics, slices_selector_aggr: Aggr) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
         let find_motifs_run_configs = find_motifs_run_ids
             .iter()
             .map(|find_motifs_run_id| -> Result<_, ThoError> {
@@ -720,11 +736,15 @@ where
             .then(|find_motifs_run_config| {
                 let stacked_motifs_loader = Arc::clone(&stacked_motifs_loader);
                 let ctx_for_run = ctx_for_loader.branch(Some("select_motifs_stacked_motifs"), false, false);
+                let slices_selector_metric = slices_selector_metric;
+                let slices_selector_aggr = slices_selector_aggr;
 
                 async move {
                     let stacked_motifs_input = Arc::new(DevicesWrap::wrap(
                         StackedMotifsInput::new(
                             Arc::clone(&find_motifs_run_config),
+                            slices_selector_metric,
+                            slices_selector_aggr,
                         ),
                         CacheArea::default()
                     ));
@@ -795,9 +815,6 @@ where
         let num_channels = self.ws.read().channels() as usize;
 
 
-        let stacked_motifs_loader = Arc::clone(&self.stacked_motifs_loader);
-        let run_configs__stacked_motifs = Self::load_stacked_motifs(&self.store, &stacked_motifs_loader, &mut ctx, &self.find_motifs_run_ids).await?;
-
         let num_resources = resources.len();
         let total_size  = resources.iter().map(|resource|resource.length() as usize).sum::<usize>();
         let mut total_processed_size = 0;
@@ -806,6 +823,16 @@ where
         let mut run_config_exteneded_motif_ids: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)> = vec![];
         debug!("SelectMotifsStage::run: self.run_configs.len={}", self.run_configs.len());
         for select_motifs_run_config in self.run_configs.iter() {
+            // This stays inside the run-config loop because selector metric/aggr can vary per config.
+            // Repeated loads are acceptable because motifs are loaded through `run_cached` in LoadMotifAndClcDistanceStage.
+            let run_configs__stacked_motifs = Self::load_stacked_motifs(
+                &self.store,
+                &self.stacked_motifs_loader,
+                &mut ctx,
+                &self.find_motifs_run_ids,
+                Self::slices_selector_metric_to_stats(select_motifs_run_config.slices_selector_metric),
+                Self::slices_selector_aggr_to_stats(select_motifs_run_config.slices_selector_aggr),
+            ).await?;
 
             let mut channels_motifs_added_slices:Arc<Vec<tokio::sync::RwLock<HashMap<DataId, HashSet<IdSlice>>>>> = Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
 
@@ -1066,11 +1093,11 @@ where
 
             debug!("SelectMotifsStage::run: 1. exteneded_motif_ids.len={}", extened_motif_ids.len());
 
-            let avg_dist_05 = extened_motif_ids.iter().map(|v|v.1).sum::<f64>()/ extened_motif_ids.len() as f64 * 0.5;//TODO config
+            let avg_dist_global_k = extened_motif_ids.iter().map(|v|v.1).sum::<f64>() / extened_motif_ids.len() as f64 * select_motifs_run_config.global_k as f64;
 
-            debug!("SelectMotifsStage::run: avg_dist={avg_dist_05:?} exteneded_motif_ids.len={}", extened_motif_ids.len());
+            debug!("SelectMotifsStage::run: avg_dist={avg_dist_global_k:?} exteneded_motif_ids.len={}", extened_motif_ids.len());
 
-            let exteneded_motif_ids = extened_motif_ids.into_iter().filter(|v|v.1 <= avg_dist_05).collect::<Vec<_>>();
+            let exteneded_motif_ids = extened_motif_ids.into_iter().filter(|v|v.1 <= avg_dist_global_k).collect::<Vec<_>>();
 
             debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered exteneded_motif_ids.len={}", exteneded_motif_ids.len());
 

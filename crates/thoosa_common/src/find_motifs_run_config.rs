@@ -105,6 +105,25 @@ pub enum InputFilter {
     BandPassFilter(BandPassFilterParams),
 }
 
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy, Default)]
+pub struct MetricConfig {
+    #[in_map]
+    #[run_config]
+    pub v: u32,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
+pub enum Metrics {
+    EucDist(MetricConfig),
+    PearsonCorr(MetricConfig),
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        Self::EucDist(MetricConfig::default())
+    }
+}
+
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
 pub enum Aggr {
     Mean(MeanAggr),
@@ -248,20 +267,35 @@ pub struct SelectMotifsRunConfig {
 
     #[in_map]
     #[run_config]
-    pub motif_selector: MotifSelector,
+    pub slices_selector_metric: Metrics,
+
+    #[in_map]
+    #[run_config]
+    pub slices_selector_aggr: Aggr,
+
+    #[in_map]
+    #[run_config]
+    pub global_k: f32,
 }
 
 impl SelectMotifsRunConfig {
 
     // #[cfg(test)]
     pub fn new_(id: Option<RunId>, motif_selector: MotifSelector) -> Self {
-        Self { id, motif_selector }
+        Self {
+            id,
+            slices_selector_metric: Metrics::EucDist(MetricConfig::default()),
+            slices_selector_aggr: Aggr::Mean(MeanAggr { k: 1.0 }),
+            global_k: 0.5,
+        }
     }
 
     pub fn new() -> Self {
         Self {
             id: None,
-            motif_selector: MotifSelector::ByAvgEucDist(ByAvgEucDist::default()),
+            slices_selector_metric: Metrics::EucDist(MetricConfig::default()),
+            slices_selector_aggr: Aggr::Mean(MeanAggr { k: 1.0 }),
+            global_k: 0.5,
         }
     }
 }
