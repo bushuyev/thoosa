@@ -272,6 +272,8 @@ where
         })
         .collect::<Vec<_>>();
 
+        debug!("TrainMotifNets::run: futures.len={}", futures.len());
+
         let results = collect_futures_with_progress(
             futures,
             crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT,

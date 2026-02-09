@@ -1307,7 +1307,7 @@ async fn plot_motif(
 
     let mut ctx_for_dist = ctx.branch(Some("plot_motif_dist_value"), false, false);
     let dist = clc_dist
-        .run_cached(clc_input, ctx.branch(Some("plot_motif_clc_dist"), false, false))
+        .run/*_cached*/(clc_input, ctx.branch(Some("plot_motif_clc_dist"), false, false))
         .await?
         .with_data_ref(0, &mut ctx_for_dist, None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
         .await?;

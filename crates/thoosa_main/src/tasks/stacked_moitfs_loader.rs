@@ -242,7 +242,7 @@ where
 
 
                     let avg_motif_dist = load_and_clc_avg_dist_clone
-                        .run_cached(clc_input, ctx.branch(Some("stacked_motifs_loader_clc_run"), false, false))
+                        .run/*_cached*/(clc_input, ctx.branch(Some("stacked_motifs_loader_clc_run"), false, false))
                         .await?
                         .with_data_ref(0, &mut ctx, None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
                         .await?;
@@ -335,8 +335,9 @@ where
                     )
 
                 } else {
-                    //building dists tensors for each channel to compare matches with
-                    let channel_avg_dists_tensors = channel_motifs.iter()
+                    // building distance tensors for each channel to compare with the matches
+                    let channel_avg_dists_tensors = channel_motifs
+                    .iter()
                     .filter_map(|motif|  {
                         let read_guard = motif_avg_dists.read();
                         read_guard.get(&motif.id()).map(|avg_dist|{

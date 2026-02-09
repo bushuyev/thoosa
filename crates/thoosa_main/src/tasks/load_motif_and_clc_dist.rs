@@ -40,7 +40,7 @@ impl LoadMotifAndClcDistanceInput {
             id: SynKey::new([
                 mono_key!(motif_loader_input.id().0, format!("motif_id={}", motif_loader_input.id().0)),
                 mono_key!(format!("{metrics:?}"), format!("metrics={metrics:?}")),
-                mono_key!(format!("{aggr:?}"), format!("aggr={aggr:?}")),
+                mono_key!(format!("{aggr:?}"), format!("aggr={aggr:?}")),//TODO f32 should not be in key
             ]),
             motif_loader_input,
             metrics,
@@ -71,7 +71,7 @@ impl WithId for LoadMotifAndClcDistanceInput {
     }
 }
 
-#[derive(Cached, Named)]
+#[derive(Named)]//Cached,  is removed because input contains f32 in LoadMotifAndClcDistanceInput::Aggr
 pub struct LoadMotifAndClcDistanceStage<ML, CLC, C>
 where
     C: RunCtx + Adjustable + 'static,
@@ -300,6 +300,7 @@ mod tests {
     use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use thoosa_shared::runner::common::{mock_run_ctx, OutId, RunCtx};
+    use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::traits::{DataId, WithId};
     use thoosa_shared::ThoError;
@@ -344,7 +345,7 @@ mod tests {
         let expected_id = stage.out_id(input.id());
 
         let stage_ctx = ctx.write().branch(Some("load_motif_and_clc_dist"), false, false);
-        let result = stage.run_cached(Arc::clone(&input), stage_ctx).await?;
+        let result = stage.run/*_cached*/(Arc::clone(&input), stage_ctx).await?;
 
         let mut ctx_for_data = ctx.write().branch(Some("load_motif_and_clc_dist_data"), false, false);
         let result_value: ScalarStatsValue = result.with_data_ref(0, &mut ctx_for_data, None, |val: &ScalarStatsValue, _ctx| Ok(val.clone())).await?;
