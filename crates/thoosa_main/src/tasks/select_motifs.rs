@@ -67,6 +67,19 @@ pub use crate::tasks::resources_motifs_clc_dist::{fold_dists, fold_mask};
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 
 
+//The overall logic in Find and Select Motifs Stages is as following:
+// Find Motifs - either
+//  * accumulate distance statistics into threshold distance while iterating through slices
+//  * precalculate threshold distance statistics from randomly selected slices
+//
+//  build motifs from slices distance between which is less than threshold distance
+//
+//  Select Motifs -
+//   calculate threshold distance from in motifs found during Find Motifs stage
+//   add slices to motifs which is less than threshold distance * global_k
+//
+//   distance statistic so far is only Euclidean distance
+
 // Searches for matches between motifs from previous FindMotifsStage runs in the input resources,
 // then selects motifs according to their average Euclidean distance.
 // Average motif distances are loaded together with motifs in StackedMotifsLoader,

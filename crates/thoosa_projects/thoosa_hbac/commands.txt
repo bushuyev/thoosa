@@ -50,23 +50,3 @@ select run_id, label_id, sl.motif_id, count(*) from slices sl left join labeled_
 
 
 insert into selected_motifs (motif_id, run_id, rate) select motif_id, 0, 0.0 from (select motif_id, count(*) cnt from slices group by motif_id having cnt < 100 and cnt > 10);
----
-compare how mask_makers are constructed in FindMotifsStage (crates/thoosa_main/src/tasks/find_motifs.rs:198 and crates/thoosa_main/src/tasks/find_motifs.rs:227) and in SelectMotifsStage/ClcResourcesMotifsDist::do_dun (crates/thoosa_main/src/tasks/resources_motifs_clc_dist.rs:141 and crates/thoosa_main/src/tasks/resources_motifs_clc_dist.rs:144).
-your task is to refactor the latter to support same configurations as in FindMotifsStage (AccumulateStats
-
-
------------------
-
-add to SelectMotifsRunConfig
-
-slices_selector_metric:Metrics, //Metrics is from crates/thoosa_main/src/tasks/slices_stats.rs:25
-slices_selector_aggr:Aggr, //Aggis is from crates/thoosa_main/src/tasks/slices_stats.rs:37,
-global_k:f32,
-
-
-then put similar slices_selector_metric and slices_selector_aggr fields to StackedMotifsLoader::In  (StackedMotifsInput crates/thoosa_main/src/tasks/stacked_moitfs_loader.rs:43) and use to build clc_input at crates/thoosa_main/src/tasks/stacked_moitfs_loader.rs:241
-
-to use slices_selector_metric and slices_selector_aggr for loading stacked motifs the Self::load_stacked_motifs should be moved into run_configs cycle (crates/thoosa_main/src/tasks/select_motifs.rs:795) which is acceptable since motifs are to be cached (crates/thoosa_main/src/tasks/load_motif_and_clc_dist.rs:200), add comment about it
-
-
-then use global_k on line crates/thoosa_main/src/tasks/select_motifs.rs:1056 instead of 0.5
