@@ -345,11 +345,9 @@ where
         debug!("TrainNet::run: input.size={:?}", input.size());
 
         async move {
-            // let ctx_for_train = Arc::clone(&ctx);
             let self_for_train = Arc::clone(&self);
             let device_idx_for_train = device_idx;
 
-            // let mut c = ctx.branch(Some("z"), false, false);
 
             let (var_store, node_params, run_config, loss) = opt_train::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),

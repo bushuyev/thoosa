@@ -209,8 +209,6 @@ impl SelectMotifsRunConfig {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
 pub struct ByLabelVarianceConfig {
-    #[in_map]
-    pub _dummy: u32, //TODO fix ThoosaRunConfig to let empty configs
 }
 
 

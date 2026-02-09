@@ -19,6 +19,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         syn::Data::Struct(data_struct) => {
             match &data_struct.fields {
                 syn::Fields::Named(named_fields) => {
+                    let is_empty_struct = named_fields.named.is_empty();
                     let mut fields_in_to_properties = vec![];
                     let mut chains_in_to_properties = vec![];
                     let mut fields_in_from_properties = vec![];
@@ -106,30 +107,51 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         }
                     }
 
-                    let token_stream = quote! {
-                        impl thoosa_properties_map::ToHashmap for #target_ident {
-                            fn to_properties_iter(&self, parent: Option<String>,) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
-                                let prefix = parent.unwrap_or(#target_ident_prefix.to_string());
-                                Box::new(
-                                    [
-                                        #(#fields_in_to_properties)*
-                                    ]
-                                    .into_iter()
-                                    .filter_map(|v|v.1.map(|val|(v.0, val)))
-                                    #(#chains_in_to_properties)*
-                                )
+                    let token_stream = if is_empty_struct {
+                        quote! {
+                            impl thoosa_properties_map::ToHashmap for #target_ident {
+                                fn to_properties_iter(&self, parent: Option<String>,) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
+                                    let _prefix = parent.unwrap_or(#target_ident_prefix.to_string());
+                                    Box::new(std::iter::empty::<(String, thoosa_shared::val::Val)>())
+                                }
+                            }
+
+                            impl thoosa_properties_map::FromHashmap for #target_ident {
+                                fn from_properties_map(parent:Option<String>, properties: &std::collections::HashMap<String, thoosa_shared::val::Val>) -> Result<Self, thoosa_shared::ThoosaError> {
+                                    let _prefix = parent.unwrap_or(#target_ident_prefix.to_string());
+                                    let _ = properties;
+
+                                    Ok(#target_ident {})
+                                }
+
                             }
                         }
-
-                        impl thoosa_properties_map::FromHashmap for #target_ident {
-                            fn from_properties_map(parent:Option<String>, properties: &std::collections::HashMap<String, thoosa_shared::val::Val>) -> Result<Self, thoosa_shared::ThoosaError> {
-                                let prefix = parent.unwrap_or(#target_ident_prefix.to_string());
-
-                                Ok(#target_ident {
-                                    #(#fields_in_from_properties)*
-                                })
+                    } else {
+                        quote! {
+                            impl thoosa_properties_map::ToHashmap for #target_ident {
+                                fn to_properties_iter(&self, parent: Option<String>,) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
+                                    let prefix = parent.unwrap_or(#target_ident_prefix.to_string());
+                                    Box::new(
+                                        [
+                                            #(#fields_in_to_properties)*
+                                        ]
+                                        .into_iter()
+                                        .filter_map(|v|v.1.map(|val|(v.0, val)))
+                                        #(#chains_in_to_properties)*
+                                    )
+                                }
                             }
 
+                            impl thoosa_properties_map::FromHashmap for #target_ident {
+                                fn from_properties_map(parent:Option<String>, properties: &std::collections::HashMap<String, thoosa_shared::val::Val>) -> Result<Self, thoosa_shared::ThoosaError> {
+                                    let prefix = parent.unwrap_or(#target_ident_prefix.to_string());
+
+                                    Ok(#target_ident {
+                                        #(#fields_in_from_properties)*
+                                    })
+                                }
+
+                            }
                         }
                     };
 

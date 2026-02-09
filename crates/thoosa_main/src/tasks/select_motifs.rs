@@ -792,7 +792,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig {  }))],
             vec![find_motifs_run_id],
             1000,
             None,
@@ -870,7 +870,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig {  }))],
             vec![find_motifs_run_id],
             1000,
             None
@@ -951,7 +951,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig {  }))],
             vec![find_motifs_run_id],
             1000,
             None
@@ -1093,7 +1093,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig {  }))],
             vec![find_motifs_run_id],
             10000,//TODO fails with max_batch 1000
             Some(801)//TODO check if ran through OOMHandler
@@ -1422,7 +1422,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig { _dummy: 0 }))],
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByLabelVariance(ByLabelVarianceConfig {  }))],
             vec![find_motifs_run_id],
             30_000_000,//slices
             None

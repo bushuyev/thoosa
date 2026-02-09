@@ -597,7 +597,7 @@ where
                 Some(find_motif_run_ids.clone()),
                 SelectMotifsRunConfigRangeOrValue{
                     id: None,
-                    motif_selector: MotifSelectorRangeOrValue::ByLabelVariance(ByLabelVarianceConfigRangeOrValue{ _dummy: 0 })
+                    motif_selector: MotifSelectorRangeOrValue::ByLabelVariance(ByLabelVarianceConfigRangeOrValue{  })
                 },
                 select_motifs_input,
                 &ws,
