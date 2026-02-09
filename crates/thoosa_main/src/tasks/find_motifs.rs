@@ -57,7 +57,7 @@ use crate::tasks::random_slices_stats::{RandomStats, RandomStatsInput};
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
 
-
+//TODO remove - use cross_loader directly
 #[derive(Debug)]
 struct FindMotifsStages<RC, L, C>
 where
@@ -386,7 +386,7 @@ where
             .map(|stage|{
                 info!("running find motifs on run config {:?}", stage.run_config.id);
 
-                let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.run_config.id.unwrap_or(0))), true, false);
+                let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.run_config.id.expect("no run_config"))), true, false);
                 let input_arc = Arc::clone(&input);
                 let cross_loader_arc = Arc::clone(&stage.cross_loader);
 

@@ -66,7 +66,13 @@ use crate::tasks::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResourc
 pub use crate::tasks::resources_motifs_clc_dist::{fold_dists, fold_mask};
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 
-//Searches for matches between motifs from previous FindMotifsStage runs in specified resources, then selects motifs according to certain criteria.
+
+// Searches for matches between motifs from previous FindMotifsStage runs in the input resources,
+// then selects motifs according to their average Euclidean distance.
+// Average motif distances are loaded together with motifs in StackedMotifsLoader,
+// then a mask is built by comparing local minima with motifs_avg_dists in ClcResourcesMotifsDist matches.
+// Finally, the average distance of each motif is recalculated, and motifs whose average distance
+// is less than 0.5 times the global average distance across all motifs are selected.
 pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
@@ -784,7 +790,7 @@ where
         let mut total_processed_size = 0;
         let max_batch = self.max_batch;
 
-        let mut run_config_good_motif_ids: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)> = vec![];
+        let mut run_config_exteneded_motif_ids: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)> = vec![];
         debug!("SelectMotifsStage::run: self.run_configs.len={}", self.run_configs.len());
         for select_motifs_run_config in self.run_configs.iter() {
 
@@ -975,7 +981,7 @@ where
                 return Err(ThoError::new(format!("can't unwrap motif_added_slices for {:?}", select_motifs_run_config)))
             }
 
-            let extened_motif_ids = futures::stream::iter(
+            let exteneded_motif_ids = futures::stream::iter(
                 Arc::into_inner(channels_motifs_added_slices)
                     .expect("can't unwrap motif_added_slices")
                     .into_iter()
@@ -1041,28 +1047,28 @@ where
             .collect::<Vec<_>>()
             .await;
 
-            debug!("SelectMotifsStage::run: 0. good_motif_ids.len={}", extened_motif_ids.len());
+            debug!("SelectMotifsStage::run: 0. exteneded_motif_ids.len={}", exteneded_motif_ids.len());
 
-            let extened_motif_ids = extened_motif_ids.into_iter().filter(|v|v.1 < f64::MAX).collect::<Vec<_>>();
+            let extened_motif_ids = exteneded_motif_ids.into_iter().filter(|v|v.1 < f64::MAX).collect::<Vec<_>>();
 
-            debug!("SelectMotifsStage::run: 1. good_motif_ids.len={}", extened_motif_ids.len());
+            debug!("SelectMotifsStage::run: 1. exteneded_motif_ids.len={}", extened_motif_ids.len());
 
             let avg_dist_05 = extened_motif_ids.iter().map(|v|v.1).sum::<f64>()/ extened_motif_ids.len() as f64 * 0.5;//TODO config
 
-            debug!("SelectMotifsStage::run: avg_dist={avg_dist_05:?} good_motif_ids.len={}", extened_motif_ids.len());
+            debug!("SelectMotifsStage::run: avg_dist={avg_dist_05:?} exteneded_motif_ids.len={}", extened_motif_ids.len());
 
-            let good_motif_ids = extened_motif_ids.into_iter().filter(|v|v.1 <= avg_dist_05).collect::<Vec<_>>();
+            let exteneded_motif_ids = extened_motif_ids.into_iter().filter(|v|v.1 <= avg_dist_05).collect::<Vec<_>>();
 
-            debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered good_motif_ids.len={}", good_motif_ids.len());
+            debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered exteneded_motif_ids.len={}", exteneded_motif_ids.len());
 
-            run_config_good_motif_ids.push((select_motifs_run_config.clone(), good_motif_ids));
+            run_config_exteneded_motif_ids.push((select_motifs_run_config.clone(), exteneded_motif_ids));
 
         }
 
 
-        debug!("SelectMotifsStage::run: good_motif_ids={run_config_good_motif_ids:?}");
+        debug!("SelectMotifsStage::run: exteneded_motif_ids={run_config_exteneded_motif_ids:?}");
 
-        Ok(Arc::new(DevicesWrap::wrap(SelectMotifsSavableResult::new(run_config_good_motif_ids), CacheArea::default())))
+        Ok(Arc::new(DevicesWrap::wrap(SelectMotifsSavableResult::new(run_config_exteneded_motif_ids), CacheArea::default())))
     }
 }
 

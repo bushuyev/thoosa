@@ -139,7 +139,7 @@ where
         let resources_iter = SlicesIter::new_with_offsets(unfold_params.step() as usize, resource_ids_sizes);
 
         let mut mask_makers = vec![
-            LocalMin { dim: 1, radius: unfold_params.size() as u64  /2 },
+            // dim 1 are motifs - local minimums would be differences between motifs, we're interested in miniums within motifs
             LocalMin { dim: 2, radius: unfold_params.size() as u64  /2 },
             Le {
                 v: input
