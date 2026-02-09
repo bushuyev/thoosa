@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use dashmap::DashMap;
-use log::{error, info, trace, debug, warn};
+use log::{debug, warn};
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{Cause, ThoError};
 use tokio::sync::{Notify, Semaphore, TryAcquireError, mpsc, oneshot};
@@ -70,7 +70,7 @@ impl Arbiter {
 
     async fn send_acquire_rq(
         &self,
-        mut needed: NumPermits,
+        needed: NumPermits,
         requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoError> {
         assert!(needed <= self.capacity);
@@ -123,7 +123,7 @@ impl Arbiter {
         granted_counts: Arc<DashMap<Arc<dyn CachableIdTr>, usize>>,
         mut rx: mpsc::Receiver<Req>,
         device_idx: usize,
-        capacity: NumPermits,
+        _capacity: NumPermits,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
             debug!("Arbiter::spawn: device_idx={device_idx}");
@@ -143,13 +143,6 @@ impl Arbiter {
             #[inline]
             fn same_id(a: &Arc<dyn CachableIdTr>, b: &Arc<dyn CachableIdTr>) -> bool {
                 a.as_ref().eq(b.as_ref())
-            }
-
-            #[inline]
-            fn clamp_needed(needed: NumPermits, capacity: NumPermits) -> NumPermits {
-                let n = needed as usize;
-                let cap = capacity as usize;
-                (n.min(cap)) as NumPermits
             }
 
             fn fail_req(rq: Req, err: ThoError) {
@@ -370,7 +363,7 @@ impl Arbiter {
 
                     opt = rx.recv() => {
                         match opt {
-                            Some(mut req) => {
+                            Some(req) => {
                                 debug!("Arbiter::spawn, select, recv: req.requester_id={:?} needed={} super_id={super_id:?}", req.requester_id, req.needed);
 
                                 if let Some(sid) = super_id.as_ref() {
@@ -502,7 +495,7 @@ impl PermitSource for Arbiter {
 
             drop(from_ref);
 
-            let mut to_ref = self.granted_counts.entry((Arc::new(to.clone()) as Arc<dyn CachableIdTr>)).or_insert(0);
+            let mut to_ref = self.granted_counts.entry(Arc::new(to.clone()) as Arc<dyn CachableIdTr>).or_insert(0);
             *to_ref += from_val;
             drop(to_ref);
 
@@ -757,7 +750,7 @@ mod tests {
                             //mission accomplished - drop task, permits, etc
                             return Ok(())
                         }
-                        Err(e) => {
+                        Err(_e) => {
                             //try to grab more permits in the next cycle
                         }
                     }

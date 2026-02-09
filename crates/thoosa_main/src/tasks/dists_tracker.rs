@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossUnfoldClcOutput};
-use log::{debug, info};
+use log::{debug, info, trace};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -536,6 +536,8 @@ impl DistsMask {
                     assert!(dists.device().ne(&Cpu), "DistsMask::new: MaskIndexes expects non-CPU dists");
                 }
                 let indices = mask.f_nonzero()?;
+                debug!("DistsMask::new, MaskIndexes: indices={indices}");
+
                 let indices = indices.f_to_kind(Kind::Int64)?;
                 let weights = Tensor::from_slice(&[
                     mask_size[1].saturating_mul(mask_size[2]),
@@ -544,6 +546,7 @@ impl DistsMask {
                 ])
                 .f_to_device(mask.device())?
                 .f_to_kind(Kind::Int64)?;
+
                 let flat = (&indices * &weights).f_sum_dim_intlist(&[1i64][..], false, Kind::Int64)?;
                 // CopyCtx assumes contiguous tensors for raw pointer copies.
                 let flat = if flat.is_contiguous() {
@@ -653,6 +656,8 @@ impl DistsMask {
             mask_type,
             ..
         } = self;
+
+
 
         match mask_type {
             DistsMaskType::AsIs => {
@@ -1480,6 +1485,8 @@ where
         fixed_config: &FixedFindMotifsConfig,
         max_slices_counts: Option<u32>,
     ) -> Self {
+        debug!("DistsTracker:new: fixed_config={fixed_config:?} channels={}", ws.read().channels());
+
         let channel_trackers = (0..ws.read().channels())
             .map(|channel| {
                 debug!("DistsTracker:new: channel={channel}");
@@ -1519,11 +1526,16 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="DistsTracker::build_groups"))]
     pub async fn build_groups(&self) -> Result<(), ThoError>{
+
+
         let mut trackers_done = AtomicU32::new(0);
         let store = Arc::clone(&self.store);
         let channel_trackers = self.channel_trackers.clone();//TODO clone
 
         let channels_groups = Arc::new(RwLock::new(HashMap::new()));
+
+        debug!("DistsTracker::build_groups: channel_trackers={channel_trackers:?}");
+
         let channels_groups_for_rayon = Arc::clone(&channels_groups);
 
         tokio::task::spawn_blocking(move || {
@@ -1583,15 +1595,22 @@ where
         assert_eq!(mask_size[0] as usize, self.channel_trackers.len(), "DistsTracker::consume: channel mismatch mask_channels={} trackers={}", mask_size[0], self.channel_trackers.len());
 
         let channel_trackers = self.channel_trackers.clone();
+
+        debug!("DistsTracker::consume: channel_trackers.len={}", channel_trackers.len());
         tokio::task::spawn_blocking(move || {
             use rayon::prelude::*;
             rayon_pool().install(|| {
-
+                debug!("DistsTracker::consume: in rayon pool");
 
                 let mut match_indices = clc_result.into_indices_iter()?;
                 let mut matches_by_channel = vec![Vec::<SlicesMatch>::new(); self.channel_trackers.len()];
 
+                debug!("DistsTracker::consume: match_indices={match_indices:?}");
+
                 match_indices.par_bridge().for_each(|(channel, i_0, i_1, dist) | {
+
+
+
                     let channel = channel as usize;
                     let i_0 = i_0 as usize;
                     let i_1 = i_1 as usize;
@@ -1602,6 +1621,8 @@ where
 
                     let slice_0 = slices_0[i_0];
                     let slice_1 = slices_1[i_1];
+
+                    debug!("DistsTracker::consume: channel={channel:?} i_0={i_0} i_1={i_1} slice_0={slice_0:?}  slice_1={slice_1:?} dist={dist}");
 
                     if slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1 {
                         debug!("DistsTracker::consume, track: slice_0={slice_0:?} slice_1={slice_1:?}");
@@ -1630,13 +1651,17 @@ where
 
 #[cfg(test)]
 mod tests {
+    use futures_util::StreamExt;
     use log::debug;
     use crate::tasks::cross_batch_clc::CrossClcResultMerge;
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
     use tch::{Device, Kind, Tensor};
+    use tch::Device::Cuda;
     use tch::kind::FLOAT_CPU;
     use thoosa_common::utils::reset_print_options;
     use thoosa_shared::{Cause, ThoError};
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
+
     #[ctor::ctor]
     pub fn init() {
         thoosa_shared::test_utils::init_test_logging();
@@ -1931,6 +1956,55 @@ mod tests {
 
         assert_eq!(idx_values, vec![0, 0, 0, 0, 0, 2]);
         assert_eq!(dists_values, vec![1.0, 3.0]);
+
+        Ok(())
+    }
+
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_mask_indexes() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+
+        let dists = Tensor::from_slice(&[
+            0.1, 0.0, 0.0,
+            0.0, 0.0, 0.1,
+            0.1, 0.0, 0.0,
+
+            0.0, 0.0, 0.1,
+            0.1, 0.0, 0.0,
+            0.0, 0.1, 0.0,
+
+            0.0, 0.0, 0.0,
+            0.0, 0.1, 0.0,
+            0.0, 0.0, 0.0,
+        ]).to_device(Cuda(0)).view((3, 3, 3));
+
+        let mask = dists.gt(0.05);
+
+        debug!("dists=\n{dists}");
+        debug!("mask=\n{mask}");
+
+
+        let dists_masks = DistsMask::new(mask, Some(dists), DistsMaskType::MaskIndexes(vec![3, 3, 3]), None)?.to_cpu().await?;
+
+
+        let mut iter = dists_masks.into_indices_iter()?;
+    
+
+        assert_eq!(
+            vec![
+                (0, 0, 0, 0.1),
+                (0, 1, 2, 0.1),
+                (0, 2, 0, 0.1),
+
+                (1, 0, 2, 0.1),
+                (1, 1, 0, 0.1),
+                (1, 2, 1, 0.1),
+
+                (2, 1, 1, 0.1)
+            ],
+            iter.into_iter().collect::<Vec<_>>()
+        );
 
         Ok(())
     }

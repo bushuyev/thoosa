@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use futures_util::StreamExt;
 use futures_util::future::{BoxFuture, Shared};
 use futures_util::stream;
-use log::debug;
+use log::{debug, warn};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -13,6 +13,7 @@ use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::traits::{CachableIdTr, Data};
+use crate::runner::common::cachable::WithDataRef;
 
 pub const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
 
@@ -23,6 +24,14 @@ pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
         ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
         device_idx: usize,
     ) -> Result<(), ThoError>;
+
+    // #[cfg(debug_assertions)] TODO
+    async fn debug_gpu(
+        &self,
+        _device_idx: usize,
+    ) -> Result<(), ThoError> {
+        Ok(())
+    }
 
     async fn purge_cpu(&self, i: u64);
 }
@@ -92,12 +101,38 @@ where
 
         Ok(())
     }
+
+    async fn debug_gpu(&self, device_idx: usize) -> Result<(), ThoError> {
+        warn!("debug_gpu: device_idx={device_idx}");
+        let items: Vec<(K, Arc<DevicesWrap<O>>)> = self
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .value()
+                    .peek()
+                    .and_then(|value| value.as_ref().ok())
+                    .map(|wrapper| (entry.key().clone(), Arc::clone(wrapper)))
+            })
+            .collect();
+
+        let mut total_size = 0;
+        for (key, wrapper) in items {
+            if !wrapper.is_all_on_cpu().await {
+                let size = wrapper.mem_size();
+                warn!("key={key:?} size={size:?}");
+                total_size += size;
+            }
+        }
+
+        warn!("total_size: {total_size}");
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thoosa_shared::runner::global_ctx::MockGlobalCtx;
     use async_trait::async_trait;
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, FutureExt};
@@ -106,7 +141,6 @@ mod tests {
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::traits::{DummyCachableId, WithId};
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use crate::runner::global_ctx::mock_global_ctx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
     #[derive(Debug, Clone)]
@@ -164,7 +198,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tasks_are_throttled_and_complete() -> Result<(), ThoError> {
-        let ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
 
         let map: DashMap<

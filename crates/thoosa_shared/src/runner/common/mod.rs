@@ -2,12 +2,10 @@
 
 use ambassador::delegatable_trait;
 use futures_util::future::BoxFuture;
-use parking_lot::RwLock;
 use runnable::Stage;
 use std::fmt::Debug;
-use std::sync::Arc;
 use crate::ThoError;
-use crate::traits::{CachableIdTr, Named, WithId};
+use crate::traits::{Named, WithId};
 pub mod cachable;
 pub mod runnable;
 
@@ -55,15 +53,11 @@ pub mod mock_run_ctx {
     use super::{DropIf, PermitsCtx, RunCtx};
     use futures_util::future::BoxFuture;
     use mockall::mock;
-    use parking_lot::RwLock;
-    use std::sync::Arc;
     use mockall::predicate::always;
-    use tracing::debug;
     use thoosa_shared::traits::{Adjustable, Named};
     use thoosa_shared::{mono_key, ThoError};
-    use crate::comp_id::{MonoKey, SynKey};
+    use crate::comp_id::MonoKey;
     use crate::traits::WithId;
-    use crate::runner::oom_handler::MockRunCtxContext;
 
     mock! {
         #[derive(Debug)]
@@ -157,7 +151,7 @@ pub mod mock_run_ctx {
         pub fn with_branch(mut self, depth: u8) -> Self {
             self.mock.expect_branch()
                 // .with(always(), always())
-                .returning(move |_name:Option<&str>, _with_new_cache_area:bool, give_permits_back_to_parent:bool| {
+                .returning(move |_name:Option<&str>, _with_new_cache_area:bool, _give_permits_back_to_parent:bool| {
 
                     let builder = build()
                         .with_id(depth as u32)
@@ -208,7 +202,6 @@ pub mod mock_run_ctx {
 }
 
 pub use mock_run_ctx::MockRunCtx;
-use crate::comp_id::SynKey;
 use crate::runner::permits::{NumPermits, RunnerPerm};
 // pub trait Input: WithId + Debug {}
 // pub trait Output: WithId + Debug {}

@@ -48,7 +48,7 @@ where
     pub async fn new<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
-        select_motifs_run_ids: Vec<RunId>,
+        train_label_nets_run_ids: Vec<RunId>,
         stage_ctx: R,
     ) -> Result<Self, ThoError>
     where
@@ -58,13 +58,27 @@ where
             (stage_ctx.device_idx(), stage_ctx.cache_area())
         };
 
+        let train_motif_nets_run_ids = {
+            let mut store_guard = store.read();
+            let mut run_ids = HashSet::new();
+            for run_id in &train_label_nets_run_ids {
+                run_ids.extend(store_guard.get_input_run_ids(*run_id, None)?);
+            }
+            let mut run_ids = run_ids.into_iter().collect::<Vec<_>>();
+            run_ids.sort();
+            run_ids
+        };
+        if train_motif_nets_run_ids.is_empty() {
+            return Err(ThoError::new("ApplyLabelNets::new: no train motif nets found"));
+        }
+
         let apply_motif_nets = Arc::new({
             #[cfg(test)]
             {
                 ApplyMotifNets::new(
                     ws,
                     store,
-                    select_motifs_run_ids.clone(),
+                    train_motif_nets_run_ids.clone(),
                     stage_ctx,
                     None,
                 )
@@ -75,7 +89,7 @@ where
                 ApplyMotifNets::new(
                     ws,
                     store,
-                    select_motifs_run_ids.clone(),
+                    train_motif_nets_run_ids.clone(),
                     stage_ctx,
                 )
                 .await?
@@ -85,7 +99,7 @@ where
         let label_net_run_ids = {
             let mut store_guard = store.write();
             let mut run_ids = HashSet::new();
-            for run_id in &select_motifs_run_ids {
+            for run_id in &train_label_nets_run_ids {
                 run_ids.extend(store_guard.list_output_run_ids(*run_id)?);
             }
             run_ids
@@ -280,7 +294,7 @@ where
             with_data!(ctx, net_wrapper, input; |_ctx, net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, input:&ThoTensor<MotifProbability, SynKey>|{
                 let batch_input = input.t_ref().f_unsqueeze(0)?;
                 let batch_input: ThoTensor<MotifsNetsSelectionDims, thoosa_shared::traits::SimpleId> = batch_input.into();
-                let out = net.tho_forward(&batch_input, false)?;
+                let out = net.tho_forward(&batch_input, None/*TODO mask*/, false)?;
                 let out = out.t_ref().f_i(0)?;
                 let out = ThoTensor::new(out_id, out)?;
 
@@ -309,7 +323,8 @@ mod tests {
     use thoosa_common::dims::{Batch, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice};
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{FixedNumSlicesNetParams, LabelNetParams, LabelNetTypeParams, MotifNetParams, ThoModuleWithStore};
+    use thoosa_common::train_nets;
+    use thoosa_common::train_nets::{LinLenNetParams, ConvNetParams, LabelNetParams, LabelNetTypeParams, MotifNetParams, ThoModuleWithStore};
     use thoosa_common::utils::{assert_close, vec_f32_from};
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_shared::runner::common::cachable::DevicesWrap;
@@ -338,7 +353,7 @@ mod tests {
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor| {
+                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
                         let batch = t.size()[0];
                         let out = Tensor::f_ones(&[batch, 1], (Kind::Float, t.device()))?
                             .f_mul_scalar_(k)?;
@@ -370,17 +385,14 @@ mod tests {
         (
             Box::new(move || {
                 LabelNetParams::new(
-                    1,
                     motif_nets,
-                    1,
-                    slices_len,
-                    LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()),
+                    LabelNetTypeParams::LinNetParams(LinLenNetParams::new(slices_len, 1)),
                 )
             }),
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor| {
+                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _mask:Option<&Tensor>| {
                         let sum = t.f_sum_dim_intlist(&[1, 2][..], false, None)?;
                         let mut sum = sum.f_unsqueeze(1)?;
                         let out = sum.f_mul_scalar_(k)?;
@@ -404,7 +416,8 @@ mod tests {
     async fn test_apply_label_nets_orders_and_values() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
 
-        let select_motifs_run_id = 10;
+        let train_motif_nets_run_id = 10;
+        let train_label_nets_run_id = 20;
         let motif_width = 4;
         let step = 1;
         let device = Device::Cpu;
@@ -412,12 +425,17 @@ mod tests {
         let (label_a_1_params, label_a_1_net) = sum_label_net(2, 1, 0.2, device);
         let (label_b_0_params, label_b_0_net) = sum_label_net(2, 1, 0.5, device);
 
+        let (motif_0_params, motif_0_net) = const_motif_net(motif_width, step, 1.0, device);
+        let (motif_1_params, motif_1_net) = const_motif_net(motif_width, step, 2.0, device);
+        let net_id_0 = std::path::PathBuf::from("0/0_10");
+        let net_id_1 = std::path::PathBuf::from("0/1_10");
+
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 1, 100, motif_width)
-                .with_load_motif_nets(vec![vec![
-                    const_motif_net(motif_width, step, 1.0, device),
-                    const_motif_net(motif_width, step, 2.0, device),
-                ]])
+                .with_load_motif_net(vec![
+                    (net_id_0.clone(), motif_0_params, motif_0_net),
+                    (net_id_1.clone(), motif_1_params, motif_1_net),
+                ])
                 .with_label_nets(HashMap::from([
                     (
                         "A".to_string(),
@@ -438,14 +456,21 @@ mod tests {
 
         let store = Arc::new(RwLock::new(
             MockStoreBuilder::new()
-                .with_list_selected_motifs([
+                .with_get_input_run_ids([
+                    (train_label_nets_run_id, Ok(vec![train_motif_nets_run_id])),
+                ])
+                .with_list_selected_nets([
                     (
-                        select_motifs_run_id,
-                        Ok(vec![vec![(0, 1.0f64), (1, 1.0f64)]]),
+                        train_motif_nets_run_id,
+                        Some(0.3),
+                        Ok(vec![
+                            (net_id_0, 0.1f32),
+                            (net_id_1, 0.2f32),
+                        ]),
                     ),
                 ])
                 .with_list_output_run_ids([
-                    (select_motifs_run_id, Ok(vec![100, 101, 200])),
+                    (train_label_nets_run_id, Ok(vec![100, 101, 200])),
                 ])
                 .build(),
         ));
@@ -453,7 +478,7 @@ mod tests {
         let apply_label_nets = Arc::new(ApplyLabelNets::new(
             &ws,
             &store,
-            vec![select_motifs_run_id],
+            vec![train_label_nets_run_id],
             mock_run_ctx::default(0),
         ).await?);
 
