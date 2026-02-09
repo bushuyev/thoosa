@@ -44,18 +44,23 @@ pub struct StackedMotifsInput {
 
     id: SynKey,
     find_motifs_run_config: Arc<FindMotifsRunConfig>,
-    // select_motifs_run_config: Arc<SelectMotifsRunConfig>,
+    slices_selector_metric: Metrics,
+    slices_selector_aggr: Aggr,
 }
 
 impl StackedMotifsInput {
-    pub fn new( find_config: Arc<FindMotifsRunConfig>) -> Self {
-        debug!("StackedMotifsInput: find_config={find_config:?}");
+    pub fn new(find_config: Arc<FindMotifsRunConfig>, slices_selector_metric: Metrics, slices_selector_aggr: Aggr) -> Self {
+        debug!("StackedMotifsInput: find_config={find_config:?} slices_selector_metric={slices_selector_metric:?} slices_selector_aggr={slices_selector_aggr:?}");
         let find_motifs_run_id = find_config.id.unwrap();
         Self {
-            // id: format!("{}_{}", find_config.id.unwrap(), select_config.id.unwrap()).into(),//TODO in select motifs SelectMotifsRunConfig is saved in run_grid right before running stage so no sense to cache by select_motifs_run_config. No other cases yet.
-            id: SynKey::new([mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}"))]),
+            id: SynKey::new([
+                mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
+                mono_key!(format!("{slices_selector_metric:?}"), "slices_selector_metric"),
+                mono_key!(format!("{slices_selector_aggr:?}"), "slices_selector_aggr"),
+            ]),
             find_motifs_run_config: find_config,
-            // select_motifs_run_config: select_config
+            slices_selector_metric,
+            slices_selector_aggr,
         }
     }
 }
@@ -209,8 +214,8 @@ where
         let done_cnt = Arc::new(AtomicU32::new(0));
         let mut motif_avg_dists = Arc::new(parking_lot::RwLock::new(HashMap::new()));
 
-        let find_motifs_run_config = with_data!(ctx.branch(Some("stacked_motifs_input"), false, false), input; |_ctx, input: &StackedMotifsInput|{
-            Ok::<Arc<FindMotifsRunConfig>, ThoError>(Arc::clone(&input.find_motifs_run_config))
+        let (find_motifs_run_config, slices_selector_metric, slices_selector_aggr) = with_data!(ctx.branch(Some("stacked_motifs_input"), false, false), input; |_ctx, input: &StackedMotifsInput|{
+            Ok::<(Arc<FindMotifsRunConfig>, Metrics, Aggr), ThoError>((Arc::clone(&input.find_motifs_run_config), input.slices_selector_metric, input.slices_selector_aggr))
         })?;
 
         let find_motifs_run_config_id = find_motifs_run_config.id;
@@ -238,7 +243,7 @@ where
                 async move {
                     let motif_loader_input = MotifLoaderInput::find_motif_slices_only((motif_id as u32).into());
                     let motif_id_wrap = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), cache_area.into()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
-                    let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, Metrics::EucDist, Aggr::Mean(1.0)), cache_area.into()));
+                    let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, slices_selector_metric, slices_selector_aggr), cache_area.into()));
 
 
                     let avg_motif_dist = load_and_clc_avg_dist_clone
