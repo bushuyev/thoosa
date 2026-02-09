@@ -24,7 +24,7 @@ use thoosa_motifs::pearson_corr::pearson_corr_distance_matrix_0_2_single as pear
 #[derive(Debug, Copy, Clone, DummyData)]
 pub enum Metrics {
     EucDist,
-    PearsonCorr,
+    PearsonCorr,//not used yet
 }
 
 impl Default for Metrics {

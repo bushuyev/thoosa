@@ -1,6 +1,6 @@
 export LD_LIBRARY_PATH=$LIBTORCH/lib/ && ...
 
-cargo nextest run --release   --config 'build.rustflags=["--cfg","thoosa_debug_plots"]' 
+cargo nextest run --release   --config 'build.rustflags=["--cfg","thoosa_debug_plots"]'
 
 cargo run --bin thoosa_hbac --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path="/home/bu/tmp/ws_test_hbac" import-resources --source-path=/home/bu/dvl/data/kaggle/hbac
 
@@ -50,6 +50,3 @@ select run_id, label_id, sl.motif_id, count(*) from slices sl left join labeled_
 
 
 insert into selected_motifs (motif_id, run_id, rate) select motif_id, 0, 0.0 from (select motif_id, count(*) cnt from slices group by motif_id having cnt < 100 and cnt > 10);
----
-compare how mask_makers are constructed in FindMotifsStage (crates/thoosa_main/src/tasks/find_motifs.rs:198 and crates/thoosa_main/src/tasks/find_motifs.rs:227) and in SelectMotifsStage/ClcResourcesMotifsDist::do_dun (crates/thoosa_main/src/tasks/resources_motifs_clc_dist.rs:141 and crates/thoosa_main/src/tasks/resources_motifs_clc_dist.rs:144).
-your task is to refactor the latter to support same configurations as in FindMotifsStage (AccumulateStats
