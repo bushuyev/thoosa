@@ -32,7 +32,7 @@ use thoosa_shared::runner::tmp_cache::TmpCached;
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
-use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, FindMotifsRunConfig, Metrics as RunConfigMetrics, MotifSelector, SelectMotifsRunConfig};
+use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, FindMotifsRunConfig, ComparisonMethod as RunConfigMetrics, MotifSelector, SelectMotifsRunConfig};
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;

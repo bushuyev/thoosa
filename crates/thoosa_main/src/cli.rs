@@ -39,7 +39,7 @@ use tch::{Device, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::{ThoDevice};
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStatsRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MeanAggrRangeOrValue, MetricConfigRangeOrValue, MetricsRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, PrecalculateStatsRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, QuantileAggrRangeOrValue};
+use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStatsRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MeanAggrRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, PrecalculateStatsRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, QuantileAggrRangeOrValue, ComparisonMethodRangeOrValue, ComparisonMethodConfigRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -840,7 +840,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
     //////////////////////select
     let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
         id: None,
-        slices_selector_metric: MetricsRangeOrValue::EucDist(MetricConfigRangeOrValue { v: RangeOrValue::Value(0) }),
+        slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(ComparisonMethodConfigRangeOrValue {  }),
         slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
         global_k: RangeOrValue::Value(0.5),
     };
@@ -909,7 +909,7 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
     //////////////////////select
     let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
         id: None,
-        slices_selector_metric: MetricsRangeOrValue::EucDist(MetricConfigRangeOrValue { v: RangeOrValue::Value(0) }),
+        slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(ComparisonMethodConfigRangeOrValue {  }),
         // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
         slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.8..1.2, step: Some((0.1, 1))} }),
         // global_k: RangeOrValue::Value(0.5),
@@ -988,7 +988,7 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
     //////////////////////select
     let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
         id: None,
-        slices_selector_metric: MetricsRangeOrValue::EucDist(MetricConfigRangeOrValue { v: RangeOrValue::Value(0) }),
+        slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(ComparisonMethodConfigRangeOrValue {  }),
         slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
         global_k: RangeOrValue::Value(0.5),
     };
