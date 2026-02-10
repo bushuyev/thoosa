@@ -939,8 +939,8 @@ where
                     //same padding as in StackedMotifsLoader::run
                     Ok(pad_to(
                         &channel_stats_t, &[max_motif_slices as i64],
-                        //this is to avoid selecting resource slices by MaskMaker::Le in ClcResourcesMotifsDist::do_run when cross-calculated with zero-padded motif slices giving 0 distance which would below any motif statistic.
-                        f64::MIN
+                        //this is to avoid selecting resource slices by MaskMaker::Le in ClcResourcesMotifsDist::do_run when cross-calculated with zero-padded motif slices giving 0 distance which would below any motif statistic; use f32::MIN because motifs_stats tensors are Float.
+                        f32::MIN as f64
                     ).expect("pad to failed"))
                 } else {
                     Ok(channel_stats_t)
@@ -1258,9 +1258,9 @@ pub mod tests {
     use tch::Kind::Bool;
     use tokio::fs;
     use thoosa_shared::runner::adjusters::splits::OutputBuilder;
-    use thoosa_shared::runner::common::cachable::DevicesWrap;
+    use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef};
     use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx};
+    use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use thoosa_shared::runner::common::DropIf::IfNotMax;
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx;
@@ -1288,15 +1288,18 @@ pub mod tests {
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
+    use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
     use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
     use crate::tasks::motif_loader::mock_motif_loader::MockMotifLoader;
     use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
+    use crate::tasks::slices_stats::{Aggr, Metrics, SlicesStats};
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use crate::tasks::select_motifs::{fold_dists, fold_mask, SelectMotifsSavableResultBuilder, SelectMotifsStage};
     use crate::tasks::slices_iter::SlicesIter;
-    use crate::tasks::stacked_moitfs_loader::StackedMotifsOutputId;
+    use crate::tasks::stacked_moitfs_loader::{StackedMotifsOutput, StackedMotifsOutputId};
     use crate::tasks::tensor_loader::mock_tensor_loader;
+    use crate::tasks::tensor_loader::mock_tensor_loader::MockTensorLoader;
 
     #[ctor::ctor]
     fn init() {
@@ -1743,6 +1746,78 @@ pub mod tests {
         let first_channel_interval = &intervals[0][0][0];
         let second_channel_interval = &intervals[1][0][0];
         assert!(first_channel_interval.end <= second_channel_interval.start);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_clc_stacked_motifs_statistics_duplicates_and_pads_with_min() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(1);
+
+        let find_motifs_run_id = 7u32;
+        let find_motifs_run_config = Arc::new(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 3, None, None));
+
+        let channels_motif_ids = vec![
+            vec![DataId(11), DataId(11), DataId(12)],
+            vec![DataId(13)],
+        ];
+        let motifs_t = Tensor::zeros([2, 4, 3], FLOAT_CPU);
+        let motifs = ThoTensor::new(SynKey::new([mono_key!("motifs", "test_motifs")]), motifs_t)?;
+        let stacked_motifs_output = StackedMotifsOutput::new(
+            SynKey::new([mono_key!("StackedMotifsOutput", "test_stacked_motifs_output")]),
+            DataWithExtra::new(motifs, (channels_motif_ids, Arc::clone(&find_motifs_run_config), vec![])),
+        );
+        let motif_data = Arc::new(DevicesWrap::wrap(stacked_motifs_output, CacheArea::default()));
+
+        let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
+            (
+                MotifLoaderInput::find_motif_slices_only(DataId(11)),
+                (
+                    MotifMeta { channel: 0, find_motifs_run_id, window: 3 },
+                    Tensor::from_slice(&[0.0f32, 0.0, 0.0, 3.0, 0.0, 0.0]).view([2, 3]),
+                ),
+            ),
+            (
+                MotifLoaderInput::find_motif_slices_only(DataId(12)),
+                (
+                    MotifMeta { channel: 0, find_motifs_run_id, window: 3 },
+                    Tensor::from_slice(&[0.0f32, 0.0, 0.0, 4.0, 0.0, 0.0]).view([2, 3]),
+                ),
+            ),
+            (
+                MotifLoaderInput::find_motif_slices_only(DataId(13)),
+                (
+                    MotifMeta { channel: 1, find_motifs_run_id, window: 3 },
+                    Tensor::from_slice(&[0.0f32, 0.0, 0.0, 5.0, 0.0, 0.0]).view([2, 3]),
+                ),
+            ),
+        ]).finish());
+        let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(motif_loader, Arc::new(SlicesStats::<MockRunCtx>::new())));
+
+        let mut ctx = mock_run_ctx::default(0);
+        let motifs_stats = SelectMotifsStage::<MockTensorLoader, MockMotifLoader, MockRunCtx>::clc_stacked_motifs_statistics(
+            clc_dist,
+            motif_data,
+            Metrics::EucDist,
+            Aggr::Mean(1.0),
+            &mut ctx,
+        )
+        .await?;
+
+        let mut ctx_for_data = ctx.branch(Some("test_clc_stacked_motifs_statistics_data"), false, false);
+        let motifs_stats_t: Tensor = motifs_stats
+            .with_data_ref(0, &mut ctx_for_data, None, |motifs_stats: &ThoTensor<_, _>, _ctx| Ok(motifs_stats.t_ref().shallow_clone()))
+            .await?;
+        assert_eq!(motifs_stats_t.size(), vec![2, 4]);
+
+        let values = to_vec_f32(&motifs_stats_t);
+        assert!((values[0] - 3.0).abs() < 1e-6);
+        assert!((values[1] - 3.0).abs() < 1e-6);
+        assert!((values[2] - 4.0).abs() < 1e-6);
+        assert!((values[4] - 5.0).abs() < 1e-6);
+        for idx in [3usize, 5, 6, 7] {
+            assert!(values[idx].is_infinite() || values[idx] < -1.0e30, "expected padded value to be very negative at idx={idx}, got {}", values[idx]);
+        }
 
         Ok(())
     }
