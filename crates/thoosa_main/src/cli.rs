@@ -535,8 +535,6 @@ where
         Some(RunAll(run_all_args)) => {
             debug!("RunAll: run_all_params={:?}", run_all_args);
 
-
-
             let (find_motifs_run_config_range_or_value,
                 fixed_find_motifs_config,
                 select_motifs_run_config,
@@ -698,12 +696,13 @@ async fn run_all(
 
     info!("find motifs done, find_motif_run_ids={find_motifs_run_ids:?}");
 
-    for find_motifs_run_id in find_motifs_run_ids {
-        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
+    for find_motifs_run_id in &find_motifs_run_ids {
+        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
     }
-    return Ok(());
+
 
     debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
+    // return Ok(());
 
     let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
         Some(find_motifs_run_ids.clone()),
@@ -731,6 +730,11 @@ async fn run_all(
         },
         || root_ctx.branch(Some("select motifs"), true, false),
     ).await?;
+
+    for select_motifs_run_id in &select_motifs_run_ids {
+        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (*select_motifs_run_id)), &Cpu).await?;
+    }
+    return Ok(());
 
     info!("select motifs done: find_motifs_run_ids={find_motifs_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
 
@@ -912,8 +916,8 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.00000005..0.0000005, step: Some((0.00000005, 8))} }), slices: RangeOrValue::Value(1000) }),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.25) }), slices: RangeOrValue::Value(100) }),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.0005..0.005, step: Some((0.0005, 4))} }), slices: RangeOrValue::Value(100)}),
-        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
+        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
+        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select
@@ -937,7 +941,7 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
                 eps: RangeOrValue::Value(1e-8),
             }),
         },
-        threshold: RangeOrValue::Value(0.7),
+        threshold: RangeOrValue::Value(0.9),
         // threshold: RangeOrValue::Range{range: 0.4..1.1, step: Some((0.1, 1))},
     };
     /////////////////////train_motifs
@@ -1259,7 +1263,7 @@ async fn run_plot_motif_slices(
                     async move {
                         debug!("run_plot_motif_slices: motif_id={motif_id}");
 
-                        if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None).await {
+                        if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, None).await {
                             error!("motif {motif_id} failed: e={e:?}");
                         };
                         MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();
