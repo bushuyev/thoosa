@@ -877,7 +877,7 @@ fn add_node_output_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, mot
     );
 
     if motifs_p_t.size()[0] < motif_batch_size {
-        net_batch.push(pad_to(&motifs_p_t, &[motif_batch_size]).expect("pad_to failed"));
+        net_batch.push(pad_to(&motifs_p_t, &[motif_batch_size], 0.0).expect("pad_to failed"));
     } else {
         net_batch.push(motifs_p_t);
     }

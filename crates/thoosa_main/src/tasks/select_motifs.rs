@@ -937,8 +937,11 @@ where
                 let channel_stats_t = Tensor::from_slice(channel_stats.as_slice()).to_device(ThoDevice::from(device_idx).into());
                 if channel_stats_t.size()[0] < max_motif_slices as i64 {
                     //same padding as in StackedMotifsLoader::run
-                    //this pads with zeros, which works when motif x resources distances are filtered by Le (less or equal) in ClcResourcesMotifsDist::do_run
-                    Ok(pad_to(&channel_stats_t, &[max_motif_slices as i64]).expect("pad to failed"))
+                    Ok(pad_to(
+                        &channel_stats_t, &[max_motif_slices as i64],
+                        //this is to avoid selecting resource slices by MaskMaker::Le in ClcResourcesMotifsDist::do_run when cross-calculated with zero-padded motif slices giving 0 distance which would below any motif statistic.
+                        f64::MIN
+                    ).expect("pad to failed"))
                 } else {
                     Ok(channel_stats_t)
                 }
