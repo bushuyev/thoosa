@@ -33,7 +33,7 @@ use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, FindMotifsRunConfig, ComparisonMethod as RunConfigMetrics, MotifSelector, SelectMotifsRunConfig};
+use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ExtendMotifsConfig, FindMotifsRunConfig, ComparisonMethod as RunConfigMetrics, MotifSelector, SelectMotifsRunConfig};
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
@@ -77,7 +77,7 @@ use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 //
 //  Select Motifs -
 //   calculate threshold distance from in motifs found during Find Motifs stage
-//   add slices to motifs which is less than threshold distance * global_k
+//   optionally add slices to motifs which is less than threshold distance * global_k
 //
 //   distance statistic so far is only Euclidean distance
 
@@ -786,13 +786,14 @@ where
     async fn extend_motifs_for_run_config(
         &self,
         select_motifs_run_config: &SelectMotifsRunConfig,
+        extend_config: &ExtendMotifsConfig,
         resources: Arc<Vec<Resource>>,
         num_channels: usize,
         total_size: usize,
         ctx: &mut C,
     ) -> Result<Vec<HashMap<DataId, HashSet<IdSlice>>>, ThoError> {
-        let slices_selector_metric = Self::slices_selector_metric_to_stats(select_motifs_run_config.slices_selector_metric);
-        let slices_selector_aggr = Self::slices_selector_aggr_to_stats(select_motifs_run_config.slices_selector_aggr);
+        let slices_selector_metric = Self::slices_selector_metric_to_stats(extend_config.slices_selector_metric);
+        let slices_selector_aggr = Self::slices_selector_aggr_to_stats(extend_config.slices_selector_aggr);
         // This stays inside the run-config loop.
         // Stacked motifs are cached by find_motifs_run_id, while stats depend on metric/aggr (including floats in aggr).
         // Stats must be computed separately so motifs and statistics can be cached independently.
@@ -866,6 +867,26 @@ where
         }
 
         Ok(Arc::into_inner(channels_motifs_added_slices).expect("can't unwrap motif_added_slices").into_iter().map(|lock| lock.into_inner()).collect())
+    }
+
+    fn load_existing_motifs_for_find_runs(
+        &self,
+        num_channels: usize,
+    ) -> Result<Vec<HashMap<DataId, HashSet<IdSlice>>>, ThoError> {
+        let mut channels_motifs_slices = (0..num_channels).map(|_| HashMap::new()).collect::<Vec<_>>();
+
+        for find_motifs_run_id in self.find_motifs_run_ids.iter().copied() {
+            let resources_motifs = self.store.read().list_motifs_slices(find_motifs_run_id, None)?;
+            for motif_slice in resources_motifs.values().flat_map(|motif_slices| motif_slices.iter()) {
+                let channel = motif_slice.channel as usize;
+                if channel >= num_channels {
+                    return Err(ThoError::new(format!("motif channel out of bounds: channel={} num_channels={} motif_id={} find_motifs_run_id={}", channel, num_channels, motif_slice.motif_id, find_motifs_run_id)))
+                }
+                channels_motifs_slices[channel].entry(DataId(motif_slice.motif_id)).or_insert_with(HashSet::new);
+            }
+        }
+
+        Ok(channels_motifs_slices)
     }
 
     async fn clc_stacked_motifs_statistics(
@@ -1109,18 +1130,27 @@ where
         &self,
         channels_motifs_added_slices: Vec<HashMap<DataId, HashSet<IdSlice>>>,
         select_motifs_run_config: &SelectMotifsRunConfig,
+        save_slices_to_store: bool,
         ctx: &mut C,
     ) -> Vec<(u32, f64)> {
+        let select_motifs_run_config_id = if save_slices_to_store {
+            Some(select_motifs_run_config.id.expect("no select_motifs_run_config_id"))
+        } else {
+            None
+        };
+
         futures::stream::iter(channels_motifs_added_slices.into_iter().enumerate())
             .flat_map(|(channel, motif_slices)| {
                 let clc_dist = Arc::clone(&self.clc_dist);
                 let store = Arc::clone(&self.store);
-                let select_motifs_run_config_id = select_motifs_run_config.id.unwrap();
                 let mut ctx_for_channel = ctx.branch(Some("select_motifs_channel"), false, false);
+                let select_motifs_run_config_id = select_motifs_run_config_id;
 
                 stream::iter(motif_slices).map(move |(motif_id, slices)| {
                     debug!("SelectMotifsStage::run: motif_id={motif_id} slices.len={}", slices.len());
-                    store.write().add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices).unwrap();
+                    if let Some(select_motifs_run_config_id) = select_motifs_run_config_id {
+                        store.write().add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices).unwrap();
+                    }
 
                     let clc_dist = Arc::clone(&clc_dist);
                     let mut ctx_for_motif = ctx_for_channel.branch(Some("select_motifs_motif"), false, false);
@@ -1218,15 +1248,22 @@ where
         let mut run_config_extended_motif_ids: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)> = vec![];
         debug!("SelectMotifsStage::run: self.run_configs.len={}", self.run_configs.len());
         for select_motifs_run_config in self.run_configs.iter() {
-            let channels_motifs_added_slices = self.extend_motifs_for_run_config(
-                select_motifs_run_config,
-                Arc::clone(&resources),
-                num_channels,
-                total_size,
-                &mut ctx,
-            ).await?;
+            let extended_motif_ids = if let Some(extend_config) = select_motifs_run_config.extend_config.as_ref() {
+                let channels_motifs_added_slices = self.extend_motifs_for_run_config(
+                    select_motifs_run_config,
+                    extend_config,
+                    Arc::clone(&resources),
+                    num_channels,
+                    total_size,
+                    &mut ctx,
+                ).await?;
 
-            let extended_motif_ids = self.collect_extended_motif_distances(channels_motifs_added_slices, select_motifs_run_config, &mut ctx).await;
+                self.collect_extended_motif_distances(channels_motifs_added_slices, select_motifs_run_config, true, &mut ctx).await
+            } else {
+                let channels_existing_motif_slices = self.load_existing_motifs_for_find_runs(num_channels)?;
+                self.collect_extended_motif_distances(channels_existing_motif_slices, select_motifs_run_config, false, &mut ctx).await
+            };
+
             let extended_motif_ids_filtered = Self::filter_motifs_by_global_average(select_motifs_run_config, extended_motif_ids);
 
             run_config_extended_motif_ids.push((select_motifs_run_config.clone(), extended_motif_ids_filtered));
@@ -1275,6 +1312,7 @@ pub mod tests {
     use thoosa_common::tch_test_utils::Interval;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::data_with_extra::DataWithExtra;
+    use thoosa_shared::MotifSlice;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::{cdt_for_dir, TensorIdSliceIdx, ThoError};
     use thoosa_shared::ResourceType::NotInGroup;
@@ -1282,7 +1320,7 @@ pub mod tests {
     use thoosa_shared::traits::DataId;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_store::{IdSlice, MockStoreBuilder};
+    use thoosa_store::{IdSlice, MockStore, MockStoreBuilder, Store};
     use thoosa_common::tho_tensor::ThoTensor;
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
@@ -1817,6 +1855,102 @@ pub mod tests {
         for idx in [3usize, 5, 6, 7] {
             assert!(values[idx].is_infinite() || values[idx] < -1.0e30, "expected padded value to be very negative at idx={idx}, got {}", values[idx]);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_uses_existing_slices_when_extend_config_is_none() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(1);
+        reset_print_options();
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let resources_group = "group";
+        let resource_a = Resource::new(1, 1, "resource_a", 1000);
+
+        let find_motifs_run_id = 1;
+        let select_motifs_run_id = 2;
+
+        let mut store_mock = MockStore::new();
+        let resource_for_resources_query = resource_a.clone();
+        store_mock.expect_list_resources_not_in_group().times(1).returning(move |group, _limit| {
+            if group == resources_group {
+                Ok(vec![resource_for_resources_query.clone()])
+            } else {
+                Err(ThoError::new(format!("unexpected resources group: {group}")))
+            }
+        });
+        let resource_for_motifs_slices = resource_a.clone();
+        store_mock.expect_list_motifs_slices().times(1).returning(move |run_id, select_motifs_run_ids| {
+            if run_id != find_motifs_run_id {
+                return Err(ThoError::new(format!("unexpected find_motifs_run_id: {run_id}")));
+            }
+            if select_motifs_run_ids.is_some() {
+                return Err(ThoError::new(format!("expected None select_motifs_run_ids, got {select_motifs_run_ids:?}")));
+            }
+            Ok(HashMap::from([(
+                resource_for_motifs_slices.clone(),
+                vec![
+                    MotifSlice::new(11, 100, 0),
+                    MotifSlice::new(11, 200, 0),
+                    MotifSlice::new(12, 300, 0),
+                ],
+            )]))
+        });
+        // extend branch should not run when extend_config is None
+        store_mock.expect_list_motifs().times(0);
+        store_mock.expect_list_run_config_values().times(0);
+        store_mock.expect_add_slices_to_motif().times(0);
+
+        let store: Arc<RwLock<Box<dyn Store>>> = Arc::new(RwLock::new(Box::new(store_mock)));
+
+        let loader = Arc::new(mock_tensor_loader::build().with_out_id().finish());
+
+        let motif_11_t = Tensor::stack(
+            &[Tensor::zeros([100], FLOAT_CPU), Tensor::ones([100], FLOAT_CPU)],
+            0,
+        );
+        let motif_12_t = Tensor::stack(
+            &[Tensor::zeros([100], FLOAT_CPU), Tensor::ones([100], FLOAT_CPU).f_mul_scalar(2.0)?],
+            0,
+        );
+
+        let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
+            (MotifLoaderInput::all_slices(DataId(11)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_11_t)),
+            (MotifLoaderInput::all_slices(DataId(12)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_12_t)),
+        ]).finish());
+
+        let mut select_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
+        select_config.extend_config = None;
+        select_config.global_k = 10.0;
+
+        let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
+            &ws,
+            &store,
+            loader,
+            motif_loader,
+            vec![select_config],
+            vec![find_motifs_run_id],
+            1000,
+            None,
+        ));
+
+        let result = select_motifs_stage
+            .run(
+                Arc::new(DevicesWrap::wrap(
+                    ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))),
+                    CacheArea::default(),
+                )),
+                mock_run_ctx::default(0),
+            )
+            .await?;
+
+        let mut ctx_for_result = mock_run_ctx::default(0);
+        let result_debug = result
+            .with_data_ref(0, &mut ctx_for_result, None, |v, _ctx| Ok(format!("{v:?}")))
+            .await?;
+        assert!(result_debug.contains("(11,"));
+        assert!(result_debug.contains("(12,"));
 
         Ok(())
     }
