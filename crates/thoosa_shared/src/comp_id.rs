@@ -207,6 +207,7 @@ fn fmt_mono_key(mono: &MonoKey, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.write_str(")")
 }
 
+#[allow(dead_code)]
 fn fmt_elv_name_val(mono: &&MonoKey, f: &mut Formatter) -> fmt::Result {
     fmt_elv_val(&mono.val, f)?;
     #[cfg(debug_assertions)]

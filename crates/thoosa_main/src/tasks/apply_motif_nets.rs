@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::{format, Debug};
 use std::marker::PhantomData;
@@ -430,6 +432,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
                 let out = net.data().tho_forward(&slices_tensor, None, false)?;
 
 
+                #[allow(unexpected_cfgs)]
                 #[cfg(thoosa_debug_plots)]
                 {
                     static COUNT:AtomicU64 = AtomicU64::new(0);

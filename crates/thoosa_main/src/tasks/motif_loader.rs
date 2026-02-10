@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use std::collections::HashMap;
 use std::fmt::{format, Debug, Formatter};
 use std::marker::PhantomData;
@@ -196,6 +198,7 @@ where
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), &mut ctx, &self.ws, "motif_loader").await?;
 
 
+        #[allow(unexpected_cfgs)]
         #[cfg(thoosa_debug_plots)]
         {
             static COUNT: AtomicU64 = AtomicU64::new(0);
@@ -314,6 +317,7 @@ where
 
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), &mut ctx, &self.ws, "random loader").await?;
 
+        #[allow(unexpected_cfgs)]
         #[cfg(thoosa_debug_plots)]
         {
             static COUNT: AtomicU64 = AtomicU64::new(0);

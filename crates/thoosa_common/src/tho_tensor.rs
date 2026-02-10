@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use crate::tho_device::ThoDevice;
 use crate::copy_ctx::CopyCtx;
 use crate::dims::{AnyDims, Dimensional, Dims};
-use thoosa_shared::{backtrace_head_lines, panic_to_err, simple_id};
+use thoosa_shared::{panic_to_err, simple_id};
 use async_trait::async_trait;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
