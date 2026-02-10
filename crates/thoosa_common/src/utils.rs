@@ -416,7 +416,7 @@ pub fn to_vec_i64(t: &Tensor) -> Vec<i64> {
     from::<Vec<i64>>(&t.reshape(-1))
 }
 
-pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoError> {
+pub fn pad_to(input: &Tensor, to_size: &[i64], pad_with: f64) -> Result<Tensor, ThoError> {
     debug!("pad_to: input.size={:?}, to_size{:?}",input.size(),to_size);
 
     if input.size().len() != to_size.len() {
@@ -448,7 +448,7 @@ pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoError> {
         .collect::<Vec<i64>>();
 
     input
-        .f_pad(pad_idx.as_slice(), "constant", 0.)
+        .f_pad(pad_idx.as_slice(), "constant", pad_with)
         .map_err(ThoError::from)
 }
 
@@ -1403,7 +1403,7 @@ pub mod tests {
 
         assert_eq!(
             Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.]),]),
-            super::pad_to(&t, &[2, 2])?
+            super::pad_to(&t, &[2, 2], 0.)?
         );
 
         Ok(())
@@ -1418,7 +1418,7 @@ pub mod tests {
                 Tensor::from_slice(&[1., 1., 1.]),
                 Tensor::from_slice(&[0., 0., 0.]),
             ]),
-            super::pad_to(&t, &[2, 3])?
+            super::pad_to(&t, &[2, 3], 0.)?
         );
 
         Ok(())
