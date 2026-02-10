@@ -42,7 +42,6 @@ use rand::seq::{IndexedRandom, SliceRandom};
 use rand::rngs::StdRng;
 #[cfg(test)]
 use rand::SeedableRng;
-use time_series_generator::{generate_sine_wave, generate_triangle_wave};
 
 
 pub mod resource;
@@ -171,30 +170,56 @@ where
     Ok(builder.finish())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamBuffering {
+    Unordered,
+    Ordered,
+}
+
 pub async fn collect_futures_with_progress<T, F>(
     futures: Vec<F>,
     buffer_limit: usize,
+    buffering: StreamBuffering,
     error_label: &str,
 ) -> Vec<T>
 where
-    F: std::future::Future<Output = Result<T, ThoError>> + Send,
-    T: Send,
+    F: std::future::Future<Output = Result<T, ThoError>>,
 {
     let mut results = Vec::with_capacity(futures.len());
     let (mut ok, mut err) = (0usize, 0usize);
     let total = futures.len();
-    let mut stream = futures::stream::iter(futures).buffer_unordered(buffer_limit);
 
-    while let Some(r) = stream.next().await {
-        match r {
-            Ok(item) => {
-                ok += 1;
-                info!("done {} ({}/{}) out of {}", ok + err, ok, err, total);
-                results.push(item);
+    match buffering {
+        StreamBuffering::Unordered => {
+            let mut stream = futures::stream::iter(futures).buffer_unordered(buffer_limit);
+            while let Some(r) = stream.next().await {
+                match r {
+                    Ok(item) => {
+                        ok += 1;
+                        info!("done {} ({}/{}) out of {}", ok + err, ok, err, total);
+                        results.push(item);
+                    }
+                    Err(e) => {
+                        err += 1;
+                        warn!("{error_label}: {e:?}");
+                    }
+                }
             }
-            Err(e) => {
-                err += 1;
-                warn!("{error_label}: {e:?}");
+        }
+        StreamBuffering::Ordered => {
+            let mut stream = futures::stream::iter(futures).buffered(buffer_limit);
+            while let Some(r) = stream.next().await {
+                match r {
+                    Ok(item) => {
+                        ok += 1;
+                        info!("done {} ({}/{}) out of {}", ok + err, ok, err, total);
+                        results.push(item);
+                    }
+                    Err(e) => {
+                        err += 1;
+                        warn!("{error_label}: {e:?}");
+                    }
+                }
             }
         }
     }

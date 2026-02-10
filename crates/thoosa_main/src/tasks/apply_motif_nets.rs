@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::{format, Debug};
 use std::marker::PhantomData;
@@ -7,7 +9,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Instant;
 use async_trait::async_trait;
-use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, error, info};
 use parking_lot::RwLock;
 use tch::{nn, Device, IndexOp, Kind, Tensor};
@@ -35,7 +36,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{mono_key, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_store::Store;
@@ -86,14 +87,12 @@ where
     {
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));
 
-        let loaded_motif_nets = futures::stream::iter(train_motif_nets_run_ids
+        let futures = train_motif_nets_run_ids
             .iter()
             .flat_map(|train_motif_nets_run_id| {
-
                 store.read().list_selected_nets(*train_motif_nets_run_id, Some(0.3)).unwrap()
-
             })
-            .map(|(path, losss)|{
+            .map(|(path, _losss)|{
                 let ws = Arc::clone(&ws);
                 let load_motif_net = Arc::clone(&load_motif_net);
                 let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false, false);
@@ -102,24 +101,30 @@ where
                     // debug!("ApplyMotifNets::new: channel={channel} motif_id={motif_id} load_motif_net={load_motif_net:?}");
 
 
-                    load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path), CacheArea::default())), load_ctx).await
-                }
-            }))
-            .buffered(crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT)//order is important to keep output tensor same
-            .filter_map(|r|async {
-                match r {
-                    Ok(net) => {
-                        debug!("ApplyMotifNets::new: loaded net={net:?}");
-
-                        Some(net)
-                    },
-                    Err(e) => {
-                        error!("ApplyMotifNets::new: can't load net for motif; there must have been an error while training the net: e={e:?}");
-                        None
+                    match load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path), CacheArea::default())), load_ctx).await {
+                        Ok(net) => {
+                            debug!("ApplyMotifNets::new: loaded net={net:?}");
+                            Ok::<_, ThoError>(Some(net))
+                        }
+                        Err(e) => {
+                            error!("ApplyMotifNets::new: can't load net for motif; there must have been an error while training the net: e={e:?}");
+                            Ok::<_, ThoError>(None)
+                        }
                     }
                 }
             })
-            .collect::<Vec<_>>().await;
+            .collect::<Vec<_>>();
+
+        let loaded_motif_nets = collect_futures_with_progress(
+            futures,
+            crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT,
+            StreamBuffering::Ordered,
+            "ApplyMotifNets::new",
+        )
+        .await
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
 
         //TODO all motif nets should have same width/step, handle different ones?
         let mut motif_width = HashSet::new();
@@ -197,7 +202,8 @@ where
         let apply_motif_nets = self.apply_motif_nets.clone();
         let min_split_len = self.motif_width as i64;
         let overlap_len = (self.motif_width  - self.slice_step) as i64;
-        let matches = futures::stream::iter(apply_motif_nets.into_iter())
+        let futures = apply_motif_nets
+            .into_iter()
             .map(|apply_motif_net|{
                 let input = Arc::clone(&input);
                 let out_id = apply_motif_net.out_id(&input.id());
@@ -236,12 +242,21 @@ where
                          ),
                      ).await;
                     debug!("ApplyMotifNets::run: r={r:?}");
-                    r
+                    Ok::<_, ThoError>(r)
                  }
 
             })
-            .buffered(crate::buffer_limits::APPLY_MOTIF_NETS_RUN_BUFFERED_LIMIT)//TODO config, TODO - use buffer_unordered and then sort by motif_id?
-            .try_collect::<Vec<_>>().await?;
+            .collect::<Vec<_>>();
+
+        let matches = collect_futures_with_progress(
+            futures,
+            crate::buffer_limits::APPLY_MOTIF_NETS_RUN_BUFFERED_LIMIT,
+            StreamBuffering::Ordered,
+            "ApplyMotifNets::run",
+        )
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, ThoError>>()?;
 
         debug!("ApplyMotifNets::run: matches={matches:?}");
 
@@ -417,6 +432,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
                 let out = net.data().tho_forward(&slices_tensor, None, false)?;
 
 
+                #[allow(unexpected_cfgs)]
                 #[cfg(thoosa_debug_plots)]
                 {
                     static COUNT:AtomicU64 = AtomicU64::new(0);

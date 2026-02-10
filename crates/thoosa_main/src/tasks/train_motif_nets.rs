@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
@@ -36,7 +38,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, Data, DataId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
@@ -277,6 +279,7 @@ where
         let results = collect_futures_with_progress(
             futures,
             crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT,
+            StreamBuffering::Unordered,
             "train motif failed",
         ).await;
 
@@ -399,7 +402,8 @@ where
             let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;//TODO config
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
 
-             #[cfg(thoosa_debug_plots)]
+            #[allow(unexpected_cfgs)]
+            #[cfg(thoosa_debug_plots)]
             {
                 static COUNTER:AtomicU32 = AtomicU32::new(0);
 

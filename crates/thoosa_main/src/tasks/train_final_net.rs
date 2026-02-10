@@ -6,7 +6,7 @@ use crate::tasks::train_net::{TrainNet, TrainNetInput};
 use async_trait::async_trait;
 use futures::FutureExt;
 use futures_util::stream::BoxStream;
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::StreamExt;
 use log::{debug, trace};
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashSet;
@@ -36,7 +36,7 @@ use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{mono_key, shuffle_and_chunk_with_rng, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, StreamBuffering, ThoError};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
@@ -304,7 +304,8 @@ where
                 let loader = Arc::clone(&loader);
                 let resources = Arc::clone(&resources);
                 async move {
-                    let (outputs, labels) = futures_util::stream::iter(batch_keys)
+                    let futures = batch_keys
+                        .into_iter()
                         .map(|index| {
                             let loader = Arc::clone(&loader);
                             let (resource, labels) = resources[index].clone();
@@ -314,19 +315,31 @@ where
                             };
 
                             async move {
-                                let out = Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(resource, CacheArea::default())), ctx_for_loader).await?;
-                                Ok::<_, ThoError>((out, labels))
+                                let result = (async {
+                                    let out = Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(resource, CacheArea::default())), ctx_for_loader).await?;
+                                    Ok::<_, ThoError>((out, labels))
+                                })
+                                .await;
+                                Ok::<_, ThoError>(result)
                             }
                         })
-                        .buffered(crate::buffer_limits::LOGITS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT)
-                        .try_collect::<Vec<_>>()
-                        .await?
-                        .into_iter()
-                        .fold((vec![], vec![]), |mut a, v| {
-                            a.0.push(v.0);
-                            a.1.push(v.1);
-                            a
-                        });
+                        .collect::<Vec<_>>();
+
+                    let (outputs, labels) = collect_futures_with_progress(
+                        futures,
+                        crate::buffer_limits::LOGITS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
+                        StreamBuffering::Ordered,
+                        "LogitsResourcesBatch::build_batch_stream",
+                    )
+                    .await
+                    .into_iter()
+                    .collect::<Result<Vec<_>, ThoError>>()?
+                    .into_iter()
+                    .fold((vec![], vec![]), |mut a, v| {
+                        a.0.push(v.0);
+                        a.1.push(v.1);
+                        a
+                    });
 
                     let (device_idx, ctx_for_build) = {
                         let mut guard = ctx.lock();

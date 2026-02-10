@@ -4,7 +4,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
-use futures_util::{StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
@@ -20,7 +19,7 @@ use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{mono_key, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
@@ -199,22 +198,30 @@ where
 
         debug!("ApplyLabelNets::run: label_nets={label_nets:?}");
 
-        let label_outputs_r = futures::stream::iter(label_nets.into_iter())
+        let futures = label_nets
+            .into_iter()
             .map(|apply_label_net| {
                 let motif_probs = Arc::clone(&motif_probs);
                 let apply_label_net_ctx = ctx.branch(Some(&format!("apply_label_net_ctx_{}_{}", apply_label_net.label, apply_label_net.run_id)), false, false);
 
                 async move {
-                    apply_label_net.run(motif_probs, apply_label_net_ctx).await
+                    let result = apply_label_net.run(motif_probs, apply_label_net_ctx).await;
+                    Ok::<_, ThoError>(result)
                 }
             })
-            .buffered(crate::buffer_limits::APPLY_LABEL_NETS_RUN_BUFFERED_LIMIT)
-            .try_collect::<Vec<_>>()
-            .await;
+            .collect::<Vec<_>>();
 
-        debug!("ApplyLabelNets::run: label_outputs_r={label_outputs_r:?}");
+        let label_outputs = collect_futures_with_progress(
+            futures,
+            crate::buffer_limits::APPLY_LABEL_NETS_RUN_BUFFERED_LIMIT,
+            StreamBuffering::Ordered,
+            "ApplyLabelNets::run",
+        )
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, ThoError>>()?;
 
-        let label_outputs = label_outputs_r?;
+        debug!("ApplyLabelNets::run: label_outputs={label_outputs:?}");
 
         let out_id = self.out_id(&input_id);
         let tensor = with_data!(ctx, [label_outputs]; |_ctx, outs:&[&ThoTensor<LabelProbability, SynKey>]|{
