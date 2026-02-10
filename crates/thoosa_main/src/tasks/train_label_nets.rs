@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures::Stream;
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use futures::FutureExt;
 use futures_util::stream::BoxStream;
@@ -34,7 +34,7 @@ use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, Comm
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, CopyToDevice, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::copy_mode::CpuOnly;
@@ -436,6 +436,7 @@ where
             let results = collect_futures_with_progress(
                 futures,
                 crate::buffer_limits::TRAIN_LABEL_NETS_RUN_BUFFER_UNORDERED_LIMIT,
+                StreamBuffering::Unordered,
                 "train label failed",
             ).await;
 
@@ -670,7 +671,8 @@ where
                     debug!("ResourcesBatch::build_batch_stream: ctx={ctx:?}");
 
                     // load samples for this batch concurrently
-                    let (x_1_wrapped, x_0_wrapped) = futures_util::stream::iter(batch_keys)//(Vec<Arc<DevicesWrap<ThoTensor<LD, CompKey>>>>, Vec<Arc<DevicesWrap<ThoTensor<LD, CompKey>>>>)
+                    let futures = batch_keys
+                        .into_iter()
                         .map(|index| {
                             let loader = Arc::clone(&loader);
                             let x_1 = Arc::clone(&x_1);
@@ -683,24 +685,33 @@ where
                                 (guard.branch(Some("x_1_batch_loader"), false, false), guard.branch(Some("x_0_batch_loader"), false, false))
                             };
                             async move {
-
-                                try_join!(
-                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_1[index].clone(), CacheArea::default())), ctx_x1),
-                                    Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_0[index].clone(), CacheArea::default())), ctx_x0)
-                                )
-
+                                let result = (async {
+                                    try_join!(
+                                        Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_1[index].clone(), CacheArea::default())), ctx_x1),
+                                        Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_0[index].clone(), CacheArea::default())), ctx_x0)
+                                    )
+                                })
+                                .await;
+                                Ok::<_, ThoError>(result)
                             }
-
                         })
-                        .buffered(crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT)//TODO config
-                        .try_collect::<Vec<_>>()
-                        .await?
-                        .into_iter()
-                        .fold((vec![], vec![]), |mut a, v| {
-                            a.0.push(v.0); //1
-                            a.1.push(v.1); //0
-                            a
-                        });
+                        .collect::<Vec<_>>();
+
+                    let (x_1_wrapped, x_0_wrapped) = collect_futures_with_progress(
+                        futures,
+                        crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
+                        StreamBuffering::Ordered,
+                        "ResourcesBatch::build_batch_stream",
+                    )
+                    .await
+                    .into_iter()
+                    .collect::<Result<Vec<_>, ThoError>>()?
+                    .into_iter()
+                    .fold((vec![], vec![]), |mut a, v| {
+                        a.0.push(v.0); //1
+                        a.1.push(v.1); //0
+                        a
+                    });
 
                     build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).await
                 }

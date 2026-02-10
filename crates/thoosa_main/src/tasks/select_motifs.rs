@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use async_trait::async_trait;
-use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
 use polars_arrow::io::iterator::StreamingIterator;
@@ -42,7 +41,7 @@ use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{mono_key, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::comp_id::SynKey;
@@ -758,38 +757,40 @@ where
             .collect::<Result<Vec<_>, ThoError>>()?;
 
             //for each FindMotifsRunConfigs X SelectMotifsRunConfig
-            let run_configs__stacked_motifs = futures::stream::iter(
-                find_motifs_run_configs
-                    .into_iter()
+            let futures = find_motifs_run_configs
+                .into_iter()
+                .map(|find_motifs_run_config| {
+                    let stacked_motifs_loader = Arc::clone(&stacked_motifs_loader);
+                    let ctx_for_run = ctx_for_loader.branch(Some("select_motifs_stacked_motifs"), false, false);
+
+                    async move {
+                        let stacked_motifs_input = Arc::new(DevicesWrap::wrap(
+                            StackedMotifsInput::new(Arc::clone(&find_motifs_run_config)),
+                            CacheArea::default()
+                        ));
+
+                        match stacked_motifs_loader.run_cached(stacked_motifs_input, ctx_for_run).await {
+                            Ok(motif_data) => Ok::<_, ThoError>(Some((find_motifs_run_config, motif_data))),
+                            Err(e) => {
+                                //TODO switch to CPU if OOM ctx.to_cpu...
+                                error!("Can't load select_motifs_run_config: e={e:?} select_motifs_run_config={find_motifs_run_config:?}");
+                                Ok::<_, ThoError>(None)
+                            }
+                        }
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let run_configs__stacked_motifs = collect_futures_with_progress(
+                futures,
+                1,
+                StreamBuffering::Ordered,
+                "SelectMotifsStage::load_stacked_motifs",
             )
-            .then(|find_motifs_run_config| {
-                let stacked_motifs_loader = Arc::clone(&stacked_motifs_loader);
-                let ctx_for_run = ctx_for_loader.branch(Some("select_motifs_stacked_motifs"), false, false);
-
-                async move {
-                    let stacked_motifs_input = Arc::new(DevicesWrap::wrap(
-                        StackedMotifsInput::new(Arc::clone(&find_motifs_run_config)),
-                        CacheArea::default()
-                    ));
-
-                    match stacked_motifs_loader.run_cached(stacked_motifs_input, ctx_for_run).await {
-                        Ok(motif_data) => Ok((find_motifs_run_config, motif_data)),
-                        Err(e) => Err((e, find_motifs_run_config))
-                    }
-                }
-            })
-            .filter_map(|result| async move {
-                match result {
-                    Ok(tuple) => Some(tuple),
-                    Err((e, select_motifs_run_config)) => {
-                        //TODO switch to CPU if OOM ctx.to_cpu...
-                        error!("Can't load select_motifs_run_config: e={e:?} select_motifs_run_config={select_motifs_run_config:?}");
-                        None
-                    }
-                }
-            })
-            .collect::<Vec<_>>()
-            .await;
+            .await
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
         Ok(run_configs__stacked_motifs)
     }
 
@@ -828,7 +829,10 @@ where
         let channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<DataId, HashSet<IdSlice>>>>> =
             Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
 
-        futures::stream::iter(run_configs__stacked_motifs.clone())
+        let run_configs__stacked_motifs_dbg = &run_configs__stacked_motifs;
+        let futures = run_configs__stacked_motifs
+            .iter()
+            .cloned()
             .map(|(find_motifs_run_config, motif_data)| {
                 let resources = Arc::clone(&resources);
                 let find_motifs_run_config = Arc::clone(&find_motifs_run_config);
@@ -842,45 +846,52 @@ where
                 let max_batch = self.max_batch;
                 let slices_selector_metric = slices_selector_metric;
                 let slices_selector_aggr = slices_selector_aggr;
+                let run_configs__stacked_motifs_dbg = run_configs__stacked_motifs_dbg;
 
                 async move {
-                    let motifs_stats = Self::clc_stacked_motifs_statistics(
-                        clc_dist,
-                        Arc::clone(&motif_data),
-                        slices_selector_metric,
-                        slices_selector_aggr,
-                        &mut ctx_for_find_run,
-                    )
-                    .await?;
-                    Self::extend_with_one_find_run(
-                        loader,
-                        ws,
-                        clc_resources_motifs_dist,
-                        select_motifs_run_config,
-                        find_motifs_run_config,
-                        motif_data,
-                        motifs_stats,
-                        resources,
-                        channels_motifs_added_slices,
-                        max_batch,
-                        total_size,
-                        ctx_for_find_run,
-                    )
-                    .await
-                }
-            })
-            .buffer_unordered(crate::buffer_limits::SELECT_MOTIFS_STAGE_FIND_MOTIFS_BUFFER_UNORDERED_LIMIT)
-            .filter_map(|v| async {
-                match v {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        error!("SelectMotifsStage::run: failed to select slices for {run_configs__stacked_motifs:?}: e={e:?}");
-                        None
+                    match (async {
+                        let motifs_stats = Self::clc_stacked_motifs_statistics(
+                            clc_dist,
+                            Arc::clone(&motif_data),
+                            slices_selector_metric,
+                            slices_selector_aggr,
+                            &mut ctx_for_find_run,
+                        )
+                        .await?;
+                        Self::extend_with_one_find_run(
+                            loader,
+                            ws,
+                            clc_resources_motifs_dist,
+                            select_motifs_run_config,
+                            find_motifs_run_config,
+                            motif_data,
+                            motifs_stats,
+                            resources,
+                            channels_motifs_added_slices,
+                            max_batch,
+                            total_size,
+                            ctx_for_find_run,
+                        )
+                        .await
+                    })
+                    .await {
+                        Ok(v) => Ok::<_, ThoError>(Some(v)),
+                        Err(e) => {
+                            error!("SelectMotifsStage::run: failed to select slices for {run_configs__stacked_motifs_dbg:?}: e={e:?}");
+                            Ok::<_, ThoError>(None)
+                        }
                     }
                 }
             })
-            .collect::<Vec<_>>()
-            .await;
+            .collect::<Vec<_>>();
+
+        let _ = collect_futures_with_progress(
+            futures,
+            crate::buffer_limits::SELECT_MOTIFS_STAGE_FIND_MOTIFS_BUFFER_UNORDERED_LIMIT,
+            StreamBuffering::Unordered,
+            "SelectMotifsStage::extend_motifs_for_run_config",
+        )
+        .await;
 
         if Arc::strong_count(&channels_motifs_added_slices) != 1 {
             return Err(ThoError::new(format!("can't unwrap motif_added_slices for {:?}", select_motifs_run_config)))
@@ -914,30 +925,43 @@ where
             .into_iter()
             .collect::<Vec<_>>();
 
-        let motif_stats = futures::stream::iter(motif_ids.into_iter())
+        let futures = motif_ids
+            .into_iter()
             .map(|motif_id| {
                 let clc_dist = Arc::clone(&clc_dist);
                 let mut ctx_for_motif = ctx.branch(Some("select_motifs_clc_stacked_motifs_statistics_motif"), false, false);
                 let cache_area = cache_area.clone();
                 async move {
-                    let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.clone());
-                    let clc_input = Arc::new(DevicesWrap::wrap(
-                        LoadMotifAndClcDistanceInput::new(motif_loader_input, slices_selector_metric, slices_selector_aggr),
-                        cache_area,
-                    ));
-                    let motif_stat = clc_dist
-                        .run(clc_input, ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc"), false, false))
-                        .await?
-                        .with_data_ref(0, &mut ctx_for_motif, None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
-                        .await?;
-                    Ok::<_, ThoError>((motif_id, motif_stat))
+                    let result = (async {
+                        let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.clone());
+                        let clc_input = Arc::new(DevicesWrap::wrap(
+                            LoadMotifAndClcDistanceInput::new(motif_loader_input, slices_selector_metric, slices_selector_aggr),
+                            cache_area,
+                        ));
+                        let motif_stat = clc_dist
+                            .run(clc_input, ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc"), false, false))
+                            .await?
+                            .with_data_ref(0, &mut ctx_for_motif, None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
+                            .await?;
+                        Ok::<_, ThoError>((motif_id, motif_stat))
+                    })
+                    .await;
+                    Ok::<_, ThoError>(result)
                 }
             })
-            .buffer_unordered(crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN)
-            .try_collect::<Vec<_>>()
-            .await?
-            .into_iter()
-            .collect::<HashMap<_, _>>();
+            .collect::<Vec<_>>();
+
+        let motif_stats = collect_futures_with_progress(
+            futures,
+            crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN,
+            StreamBuffering::Unordered,
+            "SelectMotifsStage::clc_stacked_motifs_statistics",
+        )
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, ThoError>>()?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
 
         let channels_motifs_stats_tensors = channels_motif_ids
             .iter()

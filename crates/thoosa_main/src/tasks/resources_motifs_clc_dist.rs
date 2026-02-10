@@ -6,7 +6,6 @@ use std::marker::PhantomData;
 use std::ops::{DivAssign, Range};
 use std::sync::Arc;
 use async_trait::async_trait;
-use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
@@ -24,7 +23,7 @@ use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Named, Select, WithId};
-use thoosa_shared::{mono_key, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
 use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
@@ -471,23 +470,30 @@ impl ClcResourcesMotifsDistOutput {
     }
 
     pub async fn to_cpu(self) -> ClcResourcesMotifsDistOutput {
+        let futures = self
+            .channel_masks_dists_ids
+            .into_iter()
+            .map(|op| async move {
+                let result = match op {
+                    None => None,
+                    Some((dists_mask, data_ids)) => {
+                        Some((dists_mask.to_cpu().await.unwrap(), data_ids))//TODO unwrap
+                    }
+                };
+                Ok::<_, ThoError>(result)
+            })
+            .collect::<Vec<_>>();
+
         ClcResourcesMotifsDistOutput {
             id: self.id,
             find_motifs_run_id: self.find_motifs_run_id,
-            channel_masks_dists_ids: futures::stream::iter(self.channel_masks_dists_ids.into_iter())
-                .map( |op|{
-                    async {
-                        match op {
-                            None => None,
-                            Some((dists_mask, data_ids)) => {
-                                Some((dists_mask.to_cpu().await.unwrap(), data_ids))//TODO unwrap
-                            }
-                        }
-                    }
-                })
-                .buffered(crate::buffer_limits::CLC_RESOURCES_MOTIFS_DIST_OUTPUT_TO_CPU_BUFFERED_LIMIT)
-                .collect::<Vec<_>>()
-                .await,
+            channel_masks_dists_ids: collect_futures_with_progress(
+                futures,
+                crate::buffer_limits::CLC_RESOURCES_MOTIFS_DIST_OUTPUT_TO_CPU_BUFFERED_LIMIT,
+                StreamBuffering::Ordered,
+                "ClcResourcesMotifsDistOutput::to_cpu",
+            )
+            .await,
             resources_iter: self.resources_iter,
         }
     }
