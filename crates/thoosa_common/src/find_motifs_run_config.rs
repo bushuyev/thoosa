@@ -233,12 +233,13 @@ pub struct PrecalculateStats {
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue, MeanAggrRangeOrValue, SlicesFilterRangeOrValue};
+    use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use log::debug;
     use tch::Tensor;
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::GridRunConfigSource;
+    use thoosa_shared::RangeOrValue;
 
     #[ctor::ctor]
     fn test_init() {
@@ -278,6 +279,33 @@ mod tests {
             println!("{:?}", v);
         }
 
+    }
+
+    #[test]
+    fn test_select_motifs_run_config_grid_with_criteria() {
+        let rc = SelectMotifsRunConfigRangeOrValue {
+            id: Some(7),
+            extend_config: Some(ExtendMotifsConfigRangeOrValue {
+                slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue {}),
+                slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
+            }),
+            motif_criteria: MotifCriteriaRangeOrValue {
+                norm_thickness: Some(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
+                inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue { k: RangeOrValue::Value(3.0), eps: RangeOrValue::Value(1e-8) }),
+                coherenceRunConfig: None,
+            },
+            threshold: RangeOrValue::Range { range: 0.4..0.6, step: Some((0.1, 1)) },
+        };
+
+        let run_configs: Vec<SelectMotifsRunConfig> = rc.grid_run_configs().to_run_configs();
+        assert_eq!(run_configs.len(), 3);
+        assert_eq!(run_configs[0].id, Some(7));
+        assert!(run_configs[0].motif_criteria.norm_thickness.is_some());
+        assert!(run_configs[0].motif_criteria.inlier_ratioRunConfig.is_some());
+        assert!(run_configs[0].motif_criteria.coherenceRunConfig.is_none());
+        assert!((run_configs[0].threshold - 0.4).abs() < 1e-6, "unexpected threshold: {}", run_configs[0].threshold);
+        assert!((run_configs[1].threshold - 0.5).abs() < 1e-6, "unexpected threshold: {}", run_configs[1].threshold);
+        assert!((run_configs[2].threshold - 0.6).abs() < 1e-6, "unexpected threshold: {}", run_configs[2].threshold);
     }
 }
 
@@ -324,6 +352,153 @@ impl FromHashmap for ExtendMotifsConfig {
     }
 }
 
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+pub struct NormThicknessRunConfig {
+    #[in_map]
+    #[run_config]
+    pub eps: f64,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+pub struct InlierRatioRunConfig {
+    #[in_map]
+    #[run_config]
+    pub k: f64,
+
+    #[in_map]
+    #[run_config]
+    pub eps: f64,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+pub struct CoherenceRunConfig {
+    #[in_map]
+    #[run_config]
+    pub k: f64,
+
+    #[in_map]
+    #[run_config]
+    pub eps: f64,
+}
+
+#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize, Default)]
+pub struct MotifCriteria {
+    #[run_config]
+    pub norm_thickness: Option<NormThicknessRunConfig>,
+
+    #[run_config]
+    pub inlier_ratioRunConfig: Option<InlierRatioRunConfig>,
+
+    #[run_config]
+    pub coherenceRunConfig: Option<CoherenceRunConfig>,
+}
+
+impl MotifCriteria {
+    pub fn is_empty(&self) -> bool {
+        self.norm_thickness.is_none() && self.inlier_ratioRunConfig.is_none() && self.coherenceRunConfig.is_none()
+    }
+}
+
+impl ToHashmap for MotifCriteria {
+    fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
+        let prefix = parent.unwrap_or("MotifCriteria::".to_string());
+        Box::new(
+            self
+                .norm_thickness
+                .as_ref()
+                .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "norm_thickness."))))
+                .unwrap_or(Box::new(std::iter::empty()))
+                .chain(
+                    self
+                        .inlier_ratioRunConfig
+                        .as_ref()
+                        .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "inlier_ratioRunConfig."))))
+                        .unwrap_or(Box::new(std::iter::empty())),
+                )
+                .chain(
+                    self
+                        .coherenceRunConfig
+                        .as_ref()
+                        .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "coherenceRunConfig."))))
+                        .unwrap_or(Box::new(std::iter::empty())),
+                ),
+        )
+    }
+}
+
+impl FromHashmap for MotifCriteria {
+    fn from_properties_map(parent: Option<String>, properties: &HashMap<String, thoosa_shared::val::Val>) -> Result<Self, thoosa_shared::ThoError> {
+        let prefix = parent.unwrap_or("MotifCriteria::".to_string());
+        let norm_thickness_prefix = thoosa_shared::conc_str(&prefix, "norm_thickness.");
+        let inlier_ratio_prefix = thoosa_shared::conc_str(&prefix, "inlier_ratioRunConfig.");
+        let coherence_prefix = thoosa_shared::conc_str(&prefix, "coherenceRunConfig.");
+
+        Ok(Self {
+            norm_thickness: if properties.keys().any(|key| key.starts_with(norm_thickness_prefix.as_str())) {
+                Some(NormThicknessRunConfig::from_properties_map(Some(norm_thickness_prefix), properties)?)
+            } else {
+                None
+            },
+            inlier_ratioRunConfig: if properties.keys().any(|key| key.starts_with(inlier_ratio_prefix.as_str())) {
+                Some(InlierRatioRunConfig::from_properties_map(Some(inlier_ratio_prefix), properties)?)
+            } else {
+                None
+            },
+            coherenceRunConfig: if properties.keys().any(|key| key.starts_with(coherence_prefix.as_str())) {
+                Some(CoherenceRunConfig::from_properties_map(Some(coherence_prefix), properties)?)
+            } else {
+                None
+            },
+        })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct NormThickness {
+    pub eps: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct InlierRatio {
+    pub k: f64,
+    pub eps: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Coherence {
+    pub k: f64,
+    pub eps: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum MotifCriterion {
+    NormThickness(NormThickness),
+    InlierRatio(InlierRatio),
+    Coherence(Coherence),
+}
+
+impl From<&MotifCriteria> for Vec<MotifCriterion> {
+    fn from(value: &MotifCriteria) -> Self {
+        let mut criteria = Vec::new();
+        if let Some(v) = value.norm_thickness.as_ref() {
+            criteria.push(MotifCriterion::NormThickness(NormThickness { eps: v.eps }));
+        }
+        if let Some(v) = value.inlier_ratioRunConfig.as_ref() {
+            criteria.push(MotifCriterion::InlierRatio(InlierRatio { k: v.k, eps: v.eps }));
+        }
+        if let Some(v) = value.coherenceRunConfig.as_ref() {
+            criteria.push(MotifCriterion::Coherence(Coherence { k: v.k, eps: v.eps }));
+        }
+        criteria
+    }
+}
+
+impl From<MotifCriteria> for Vec<MotifCriterion> {
+    fn from(value: MotifCriteria) -> Self {
+        Vec::from(&value)
+    }
+}
+
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_grid]
 pub struct SelectMotifsRunConfig {
@@ -336,26 +511,30 @@ pub struct SelectMotifsRunConfig {
 
     #[in_map]
     #[run_config]
-    pub global_k: f32,
+    pub motif_criteria: MotifCriteria,
+
+    #[in_map]
+    #[run_config]
+    pub threshold: f32,
 }
 
 impl SelectMotifsRunConfig {
+    fn validate_threshold(threshold: f32) {
+        assert!((0.0..=1.0).contains(&threshold), "SelectMotifsRunConfig::threshold must be within 0..1, got {threshold}");
+    }
+
+    pub fn new_with_fields(id: Option<RunId>, extend_config: Option<ExtendMotifsConfig>, motif_criteria: MotifCriteria, threshold: f32) -> Self {
+        Self::validate_threshold(threshold);
+        Self { id, extend_config, motif_criteria, threshold }
+    }
 
     // #[cfg(test)]
-    pub fn new_(id: Option<RunId>, motif_selector: MotifSelector) -> Self {
-        Self {
-            id,
-            extend_config: Some(ExtendMotifsConfig::default()),
-            global_k: 0.5,
-        }
+    pub fn new_(id: Option<RunId>, _motif_selector: MotifSelector) -> Self {
+        Self::new_with_fields(id, Some(ExtendMotifsConfig::default()), MotifCriteria::default(), 0.5)
     }
 
     pub fn new() -> Self {
-        Self {
-            id: None,
-            extend_config: Some(ExtendMotifsConfig::default()),
-            global_k: 0.5,
-        }
+        Self::new_with_fields(None, Some(ExtendMotifsConfig::default()), MotifCriteria::default(), 0.5)
     }
 }
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]

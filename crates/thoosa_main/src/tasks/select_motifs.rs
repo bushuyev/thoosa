@@ -33,10 +33,11 @@ use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ExtendMotifsConfig, FindMotifsRunConfig, ComparisonMethod as RunConfigMetrics, MotifSelector, SelectMotifsRunConfig};
+use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ExtendMotifsConfig, FindMotifsRunConfig, ComparisonMethod as RunConfigMetrics, MotifCriterion, MotifSelector, SelectMotifsRunConfig};
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
+use thoosa_motifs::criteria::{coherence, inlier_ratio, norm_thickness};
 use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
@@ -77,16 +78,16 @@ use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 //
 //  Select Motifs -
 //   calculate threshold distance from in motifs found during Find Motifs stage
-//   optionally add slices to motifs which is less than threshold distance * global_k
+//   optionally add slices to motifs which is less than threshold distance
 //
 //   distance statistic so far is only Euclidean distance
 
 // Searches for matches between motifs from previous FindMotifsStage runs in the input resources,
-// then selects motifs according to their average Euclidean distance.
+// then selects motifs by motif-quality criteria.
 // Stacked motifs are loaded in StackedMotifsLoader, while motif statistics are calculated in SelectMotifsStage
 // for the requested metric/aggr and then used to build a threshold mask in ClcResourcesMotifsDist matches.
-// Finally, the average distance of each motif is recalculated, and motifs whose average distance
-// is less than global_k times the global average distance across all motifs are selected.
+// Finally, each motif is scored by configured criteria, cumulative average is tracked,
+// and a motif is dropped as soon as its average criterion score goes below threshold.
 pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
@@ -1193,19 +1194,74 @@ where
             .await
     }
 
-    fn filter_motifs_by_global_average(select_motifs_run_config: &SelectMotifsRunConfig, extended_motif_ids: Vec<(u32, f64)>) -> Vec<(u32, f64)> {
+    fn clc_criterion_score(motif_slices: &Tensor, criterion: &MotifCriterion) -> Result<f64, ThoError> {
+        let score_t = match criterion {
+            MotifCriterion::NormThickness(v) => norm_thickness(motif_slices, v.eps)?,
+            MotifCriterion::InlierRatio(v) => inlier_ratio(motif_slices, v.k, v.eps)?,
+            MotifCriterion::Coherence(v) => coherence(motif_slices, v.k.round().max(1.0) as i64, v.eps)?,
+        };
+        let raw_score = score_t.f_double_value(&[])?;
+        if raw_score.is_finite() {
+            Ok(raw_score.clamp(0.0, 1.0))
+        } else {
+            warn!("SelectMotifsStage::run: got non-finite criterion score={raw_score}, treating it as 0.0");
+            Ok(0.0)
+        }
+    }
+
+    async fn filter_motifs_by_criteria(
+        &self,
+        select_motifs_run_config: &SelectMotifsRunConfig,
+        extended_motif_ids: Vec<(u32, f64)>,
+        ctx: &mut C,
+    ) -> Result<Vec<(u32, f64)>, ThoError> {
+        assert!((0.0..=1.0).contains(&select_motifs_run_config.threshold), "SelectMotifsRunConfig::threshold must be within 0..1, got {}", select_motifs_run_config.threshold);
         debug!("SelectMotifsStage::run: 0. extended_motif_ids.len={}", extended_motif_ids.len());
 
         let extended_motif_ids = extended_motif_ids.into_iter().filter(|v| v.1 < f64::MAX).collect::<Vec<_>>();
         debug!("SelectMotifsStage::run: 1. extended_motif_ids.len={}", extended_motif_ids.len());
-
-        let avg_dist_global_k = extended_motif_ids.iter().map(|v| v.1).sum::<f64>() / extended_motif_ids.len() as f64 * select_motifs_run_config.global_k as f64;
-        debug!("SelectMotifsStage::run: avg_dist={avg_dist_global_k:?} extended_motif_ids.len={}", extended_motif_ids.len());
         debug!("SelectMotifsStage::run: extend_motif_ids.dists={:?}", extended_motif_ids.iter().map(|v| v.1).collect::<Vec<_>>());
 
-        let extended_motif_ids_filtered = extended_motif_ids.into_iter().filter(|v| v.1 <= avg_dist_global_k).collect::<Vec<_>>();
+        let motif_criteria: Vec<MotifCriterion> = Vec::from(&select_motifs_run_config.motif_criteria);
+        if motif_criteria.is_empty() {
+            debug!("SelectMotifsStage::run: no motif criteria configured, keeping all {} motifs", extended_motif_ids.len());
+            return Ok(extended_motif_ids);
+        }
+
+        let threshold = select_motifs_run_config.threshold as f64;
+        let mut extended_motif_ids_filtered = Vec::with_capacity(extended_motif_ids.len());
+
+        for (motif_id, dist) in extended_motif_ids {
+            let motif_data = Arc::clone(&self.clc_dist.motif_loader)
+                .run_cached(
+                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(DataId(motif_id)), CacheArea::default())),
+                    ctx.branch(Some("select_motifs_filter_motif_loader"), false, false),
+                )
+                .await?;
+
+            let keep = with_data!(ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
+                let motif_slices = motif_data.data().t_ref();
+                let mut score_sum = 0.0f64;
+                for (idx, criterion) in motif_criteria.iter().enumerate() {
+                    let criterion_score = Self::clc_criterion_score(motif_slices, criterion)?;
+                    score_sum += criterion_score;
+                    let avg_score = score_sum / (idx + 1) as f64;
+                    debug!("SelectMotifsStage::run: motif_id={motif_id} criterion={criterion:?} criterion_score={criterion_score:.6} avg_score={avg_score:.6} threshold={threshold:.6}");
+                    if avg_score < threshold {
+                        return Ok::<bool, ThoError>(false);
+                    }
+                }
+
+                Ok::<bool, ThoError>(true)
+            })?;
+
+            if keep {
+                extended_motif_ids_filtered.push((motif_id, dist));
+            }
+        }
+
         debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered extended_motif_ids.len={}", extended_motif_ids_filtered.len());
-        extended_motif_ids_filtered
+        Ok(extended_motif_ids_filtered)
     }
 
 }
@@ -1264,7 +1320,9 @@ where
                 self.collect_extended_motif_distances(channels_existing_motif_slices, select_motifs_run_config, false, &mut ctx).await
             };
 
-            let extended_motif_ids_filtered = Self::filter_motifs_by_global_average(select_motifs_run_config, extended_motif_ids);
+            let extended_motif_ids_filtered = self
+                .filter_motifs_by_criteria(select_motifs_run_config, extended_motif_ids, &mut ctx)
+                .await?;
 
             run_config_extended_motif_ids.push((select_motifs_run_config.clone(), extended_motif_ids_filtered));
 
@@ -1302,7 +1360,7 @@ pub mod tests {
     use thoosa_shared::runner::global_ctx;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::runner::permits::MAX_PERMITS;
-    use thoosa_common::find_motifs_run_config::{ByAvgEucDist, FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig};
+    use thoosa_common::find_motifs_run_config::{ByAvgEucDist, FindMotifsRunConfig, MotifSelector, NormThicknessRunConfig, SelectMotifsRunConfig};
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::tch_test_utils;
     use thoosa_common::utils::{draw_function_plot, reset_print_options, to_vec_f32, z_norm, z_norm_2};
@@ -1922,7 +1980,7 @@ pub mod tests {
 
         let mut select_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
         select_config.extend_config = None;
-        select_config.global_k = 10.0;
+        select_config.threshold = 0.0;
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
             &ws,
@@ -1951,6 +2009,105 @@ pub mod tests {
             .await?;
         assert!(result_debug.contains("(11,"));
         assert!(result_debug.contains("(12,"));
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_filters_motifs_by_criteria_threshold() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(1);
+        reset_print_options();
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let resources_group = "group";
+        let resource_a = Resource::new(1, 1, "resource_a", 1000);
+
+        let find_motifs_run_id = 1;
+        let select_motifs_run_id = 2;
+
+        let mut store_mock = MockStore::new();
+        let resource_for_resources_query = resource_a.clone();
+        store_mock.expect_list_resources_not_in_group().times(1).returning(move |group, _limit| {
+            if group == resources_group {
+                Ok(vec![resource_for_resources_query.clone()])
+            } else {
+                Err(ThoError::new(format!("unexpected resources group: {group}")))
+            }
+        });
+        let resource_for_motifs_slices = resource_a.clone();
+        store_mock.expect_list_motifs_slices().times(1).returning(move |run_id, select_motifs_run_ids| {
+            if run_id != find_motifs_run_id {
+                return Err(ThoError::new(format!("unexpected find_motifs_run_id: {run_id}")));
+            }
+            if select_motifs_run_ids.is_some() {
+                return Err(ThoError::new(format!("expected None select_motifs_run_ids, got {select_motifs_run_ids:?}")));
+            }
+            Ok(HashMap::from([(
+                resource_for_motifs_slices.clone(),
+                vec![
+                    MotifSlice::new(21, 100, 0),
+                    MotifSlice::new(21, 200, 0),
+                    MotifSlice::new(22, 300, 0),
+                    MotifSlice::new(22, 400, 0),
+                ],
+            )]))
+        });
+        store_mock.expect_list_motifs().times(0);
+        store_mock.expect_list_run_config_values().times(0);
+        store_mock.expect_add_slices_to_motif().times(0);
+
+        let store: Arc<RwLock<Box<dyn Store>>> = Arc::new(RwLock::new(Box::new(store_mock)));
+        let loader = Arc::new(mock_tensor_loader::build().with_out_id().finish());
+
+        let motif_21_t = Tensor::from_slice(&[
+            0.0f32, 1.0, 0.0,
+            0.0,    1.0, 0.0,
+        ])
+            .view([2, 3]);
+        let motif_22_t = Tensor::from_slice(&[
+            0.0f32, 0.0, 0.0,
+            10.0,  10.0, 10.0,
+        ])
+            .view([2, 3]);
+
+        let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
+            (MotifLoaderInput::all_slices(DataId(21)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_21_t)),
+            (MotifLoaderInput::all_slices(DataId(22)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_22_t)),
+        ]).finish());
+
+        let mut select_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
+        select_config.extend_config = None;
+        select_config.motif_criteria.norm_thickness = Some(NormThicknessRunConfig { eps: 1e-8 });
+        select_config.threshold = 0.5;
+
+        let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
+            &ws,
+            &store,
+            loader,
+            motif_loader,
+            vec![select_config],
+            vec![find_motifs_run_id],
+            1000,
+            None,
+        ));
+
+        let result = select_motifs_stage
+            .run(
+                Arc::new(DevicesWrap::wrap(
+                    ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))),
+                    CacheArea::default(),
+                )),
+                mock_run_ctx::default(0),
+            )
+            .await?;
+
+        let mut ctx_for_result = mock_run_ctx::default(0);
+        let result_debug = result
+            .with_data_ref(0, &mut ctx_for_result, None, |v, _ctx| Ok(format!("{v:?}")))
+            .await?;
+
+        assert!(result_debug.contains("(21,"));
+        assert!(!result_debug.contains("(22,"));
 
         Ok(())
     }
