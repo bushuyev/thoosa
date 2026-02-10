@@ -189,7 +189,8 @@ where
                 let fixed_config = fixed_config.clone();
                 let loader = Arc::clone(&loader);
                 let random_stats_arc = Arc::clone(&random_stats);
-                let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {:?}", run_config.id)), false, false);
+                let run_id = run_config.id.expect("should be pre saved");
+                let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {run_id}")), false, false);
 
                 async move {
                     let result = (async {
@@ -209,8 +210,8 @@ where
                             }
                             SlicesFilter::PrecalculateStats(v) => {
 
-                                //gpt TODO!! relies on run_config.id being set (presave); will panic if ids are missing.
-                                let dists = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_config.id.unwrap(), Metrics::EucDist, to_stats_aggr(v.aggr)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
+
+                                let dists = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_id, Metrics::EucDist, to_stats_aggr(v.aggr)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
                                 let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
                                     debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: dists=\n{}", t.t);
@@ -218,6 +219,11 @@ where
                                     ThoTensor::new(t.id().clone(), t.t.view((-1, 1, 1)))
                                 })?;
                                 MasksCtx::PrecalculatedDist { dists }
+                            }
+                            SlicesFilter::ExactStats(v) => {
+                                MasksCtx::PrecalculatedDist {//rename to PreSet
+                                    dists: ThoTensor::new("ExactStats".into(), Tensor::from_slice(&[v.euc_dist]).broadcast_to(&[channels as i64, 1]))?
+                                }
                             }
                         };
 
@@ -302,6 +308,7 @@ where
                         let configured_loader = config_to_stage(&loader, &run_config, ws)?;
                         let run_config_clone = run_config.clone();
                         let step = cross_unfold_clc.unfold_params.step();
+
                         //gpt TODO!! relies on run_config.id being set (presave); consider erroring instead of panicking.
                         let find_motifs_run_config_id = run_config_clone.id.expect("find motif run config without id");
                         Ok::<_, ThoError>(FindMotifsStages::new(
