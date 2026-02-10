@@ -182,6 +182,7 @@ where
         let random_stats = Arc::new(RandomStats::new(Arc::clone(&store), Arc::clone(&loader), &ws));
 
 
+        //gpt Build per-run-config loaders in parallel; each run_config becomes its own CrossLoader pipeline.
         let futures = run_configs
             .into_iter()
             .map( |run_config| {
@@ -208,6 +209,7 @@ where
                             }
                             SlicesFilter::PrecalculateStats(v) => {
 
+                                //gpt TODO!! relies on run_config.id being set (presave); will panic if ids are missing.
                                 let dists = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_config.id.unwrap(), Metrics::EucDist, to_stats_aggr(v.aggr)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
                                 let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
@@ -300,6 +302,7 @@ where
                         let configured_loader = config_to_stage(&loader, &run_config, ws)?;
                         let run_config_clone = run_config.clone();
                         let step = cross_unfold_clc.unfold_params.step();
+                        //gpt TODO!! relies on run_config.id being set (presave); consider erroring instead of panicking.
                         let find_motifs_run_config_id = run_config_clone.id.expect("find motif run config without id");
                         Ok::<_, ThoError>(FindMotifsStages::new(
                             run_config,
@@ -354,6 +357,7 @@ where
             "FindMotifsStage::new",
         )
         .await
+        //gpt TODO!! collect_futures_with_progress drops per-run errors; missing loaders are silently skipped.
         .into_iter()
         .collect::<Result<Vec<_>, ThoError>>()?;
 
@@ -399,6 +403,7 @@ where
 
         debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
         let failed = Arc::new(AtomicU8::new(0));
+        //gpt Run each per-config CrossLoader; failures are logged but do not abort the stage.
         let futures = self
             .run_config_stages
             .iter()
@@ -416,6 +421,7 @@ where
                         Err(e) => {
                             failed.fetch_add(1, Ordering::Relaxed);
                             warn!("Find motifs failed: {e:?}");
+                            //gpt TODO!! errors are swallowed; downstream stages still run using pre-saved run ids.
                             Ok::<_, ThoError>(None)
                         }
                     }
@@ -434,6 +440,7 @@ where
 
         info!("failed {} out of {}",failed.load(Ordering::Relaxed),self.run_config_stages.len());
 
+        //gpt FindMotifsStage output is a placeholder; the real artifacts are persisted by DistsTracker side effects.
         Ok(Arc::new(DevicesWrap::wrap(FindMotifsSavableResult::new(), CacheArea::default())))
     }
 }
