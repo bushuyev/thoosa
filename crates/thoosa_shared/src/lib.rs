@@ -42,7 +42,6 @@ use rand::seq::{IndexedRandom, SliceRandom};
 use rand::rngs::StdRng;
 #[cfg(test)]
 use rand::SeedableRng;
-use time_series_generator::{generate_sine_wave, generate_triangle_wave};
 
 
 pub mod resource;

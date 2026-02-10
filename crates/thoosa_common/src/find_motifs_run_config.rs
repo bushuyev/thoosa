@@ -1,4 +1,4 @@
-#![allow(non_snake_case, unused_variables, unused_assignments)]
+#![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
 
 use crate::transforms::filters::*;
 use log::debug;

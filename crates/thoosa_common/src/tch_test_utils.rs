@@ -106,7 +106,7 @@ pub fn generate_series_with_motif(
     repeats: usize,
     min_gap: usize,
     step_sigma: f32,
-    amp_range: (f32, f32),
+    _amp_range: (f32, f32),
     seed: Option<u64>,
     motif_kind: &MotifKind, // "triangle" or "sine"
 ) -> Result<(Vec<f32>, Vec<Interval>), ThoError> {
@@ -118,7 +118,7 @@ pub fn generate_series_with_motif(
         sig[i] = sig[i - 1] + normal_step(&mut rng, step_sigma);
     }
 
-    let mut motif_0 =  generate_motifs_with_avg_distance(
+    let motif_0 =  generate_motifs_with_avg_distance(
         gen_motif(motif_len, &motif_kind).as_slice(), repeats, 0.1, 0.2, None
     );
     // motif template (z-normalized)
@@ -156,7 +156,7 @@ pub fn generate_series_with_motif(
     let mut intervals = Vec::with_capacity(repeats);
     let mut start = leading_gap;
     for motif_idx in 0..repeats {
-        let base = sig[start];
+        let _base = sig[start];
         for (k, &mv) in motif_0.0[motif_idx].iter().enumerate() {
             sig[start + k] = /*base +*/ mv;
         }
@@ -234,7 +234,7 @@ pub fn z_norm(x: &mut [f32]) {
 
 pub fn smooth_noise(len: usize, rng: &mut impl Rng) -> Vec<f32> {
     // white noise
-    let mut n = (0..len).map(|_| rng.random::<f32>() * 2.0 - 1.0).collect::<Vec<_>>();
+    let n = (0..len).map(|_| rng.random::<f32>() * 2.0 - 1.0).collect::<Vec<_>>();
     // simple 5-tap smoothing kernel [1,2,3,2,1] / 9
     let k = [1.0, 2.0, 3.0, 2.0, 1.0];
     let ks = 9.0;

@@ -198,6 +198,8 @@ impl FsWorkspace {
                 .and_then(|s| s.to_str())
         }
         .ok_or_else(|| ThoError::new(format!("load_label_net: can't parse label from {base_path:?}")))?;
+        #[cfg(not(debug_assertions))]
+        let _ = &label;
 
         let run_id = FsWorkspace::net_path_to_run_id(&model_path);
         let label_node_params = LabelNetParams::from_file(&params_path)?;
