@@ -32,6 +32,7 @@ use thoosa_shared::runner::tmp_cache::TmpCached;
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, FindMotifsRunConfig, ComparisonMethod as RunConfigMetrics, MotifSelector, SelectMotifsRunConfig};
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
@@ -82,8 +83,8 @@ use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 
 // Searches for matches between motifs from previous FindMotifsStage runs in the input resources,
 // then selects motifs according to their average Euclidean distance.
-// Average motif distances are loaded together with motifs in StackedMotifsLoader,
-// then a mask is built by comparing local minima with motifs_avg_dists in ClcResourcesMotifsDist matches.
+// Stacked motifs are loaded in StackedMotifsLoader, while motif statistics are calculated in SelectMotifsStage
+// for the requested metric/aggr and then used to build a threshold mask in ClcResourcesMotifsDist matches.
 // Finally, the average distance of each motif is recalculated, and motifs whose average distance
 // is less than global_k times the global average distance across all motifs are selected.
 pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
@@ -279,6 +280,7 @@ struct SelectMotifsInputSelectorWrap {
     resource_ids: Vec<ResourceId>,
     resource_offsets: Vec<u32>,
     stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>,
+    motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>,
 }
 
 impl SelectMotifsInputSelectorWrap {
@@ -287,6 +289,7 @@ impl SelectMotifsInputSelectorWrap {
         batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
         resource_ids: Vec<ResourceId>,
         stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>,
+        motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>,
     ) -> Self {
         let resource_offsets = vec![0; resource_ids.len()];
         Self {
@@ -295,6 +298,7 @@ impl SelectMotifsInputSelectorWrap {
             resource_ids,
             resource_offsets,
             stacked_motifs,
+            motifs_stats,
         }
     }
 }
@@ -330,11 +334,13 @@ impl WithDataRef for SelectMotifsInputSelectorWrap {
     {
         let t_1_batch = self.batch.clone();
         let stacked_motifs = Arc::clone(&self.stacked_motifs);
-        with_data!(permits_ctx, [t_1_batch], stacked_motifs;
+        let motifs_stats = Arc::clone(&self.motifs_stats);
+        with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
             |
              ctx,
              batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
-             stacked_motifs:&StackedMotifsOutput
+             stacked_motifs:&StackedMotifsOutput,
+             motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
             |{
 
                 do_run(&ClcResourcesMotifsDistInput::new_with_offsets(
@@ -342,6 +348,7 @@ impl WithDataRef for SelectMotifsInputSelectorWrap {
                     self.resource_ids.clone(),
                     self.resource_offsets.clone(),
                     stacked_motifs,
+                    motifs_stats,
                 ), ctx)
 
         })
@@ -385,18 +392,21 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
         };
 
         let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
+        let motifs_stats = Arc::clone(&self.motifs_stats);
 
-        with_data!(ctx, [t_1_batch], stacked_motifs_output;
+        with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
             |
              ctx,
              batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
-             stacked_motifs_output:&StackedMotifsOutput
+             stacked_motifs_output:&StackedMotifsOutput,
+             motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
             |{
                 let inpt = ClcResourcesMotifsDistInput::new_with_offsets(
                     batch_v,
                     resource_ids,
                     resource_offsets,
                     stacked_motifs_output,
+                    motifs_stats,
                 );
 
                 do_run(&inpt, ctx)
@@ -684,10 +694,7 @@ where
             store: Arc::clone(store),
             ws: Arc::clone(ws),
             loader,
-            stacked_motifs_loader: Arc::new(StackedMotifsLoader::new(Arc::clone(ws), Arc::clone(&motif_loader), Arc::clone(&Arc::new(LoadMotifAndClcDistanceStage::new(
-                Arc::clone(&motif_loader),
-                Arc::new(SlicesStats::<C>::new()),
-            ))), Arc::clone(store))),
+            stacked_motifs_loader: Arc::new(StackedMotifsLoader::new(Arc::clone(ws), Arc::clone(&motif_loader), Arc::clone(store))),
             run_configs,
             find_motifs_run_ids,
             clc_resources_motifs_dist: Arc::new(ClcResourcesMotifsDist::<C>::new(
@@ -719,7 +726,7 @@ where
     }
 
     #[inline]
-    async fn load_stacked_motifs(store:&Arc<RwLock<Box<dyn Store>>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, ctx_for_loader: &mut C, find_motifs_run_ids: &Vec<RunId>, slices_selector_metric: Metrics, slices_selector_aggr: Aggr) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
+    async fn load_stacked_motifs(store:&Arc<RwLock<Box<dyn Store>>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, ctx_for_loader: &mut C, find_motifs_run_ids: &Vec<RunId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
         let find_motifs_run_configs = find_motifs_run_ids
             .iter()
             .map(|find_motifs_run_id| -> Result<_, ThoError> {
@@ -738,16 +745,10 @@ where
             .then(|find_motifs_run_config| {
                 let stacked_motifs_loader = Arc::clone(&stacked_motifs_loader);
                 let ctx_for_run = ctx_for_loader.branch(Some("select_motifs_stacked_motifs"), false, false);
-                let slices_selector_metric = slices_selector_metric;
-                let slices_selector_aggr = slices_selector_aggr;
 
                 async move {
                     let stacked_motifs_input = Arc::new(DevicesWrap::wrap(
-                        StackedMotifsInput::new(
-                            Arc::clone(&find_motifs_run_config),
-                            slices_selector_metric,
-                            slices_selector_aggr,
-                        ),
+                        StackedMotifsInput::new(Arc::clone(&find_motifs_run_config)),
                         CacheArea::default()
                     ));
 
@@ -790,15 +791,16 @@ where
         total_size: usize,
         ctx: &mut C,
     ) -> Result<Vec<HashMap<DataId, HashSet<IdSlice>>>, ThoError> {
-        // This stays inside the run-config loop because selector metric/aggr can vary per config.
-        // Repeated loads are acceptable because motifs are loaded through `run_cached` in LoadMotifAndClcDistanceStage.
+        let slices_selector_metric = Self::slices_selector_metric_to_stats(select_motifs_run_config.slices_selector_metric);
+        let slices_selector_aggr = Self::slices_selector_aggr_to_stats(select_motifs_run_config.slices_selector_aggr);
+        // This stays inside the run-config loop.
+        // Stacked motifs are cached by find_motifs_run_id, while stats depend on metric/aggr (including floats in aggr).
+        // Stats must be computed separately so motifs and statistics can be cached independently.
         let run_configs__stacked_motifs = Self::load_stacked_motifs(
             &self.store,
             &self.stacked_motifs_loader,
             ctx,
             &self.find_motifs_run_ids,
-            Self::slices_selector_metric_to_stats(select_motifs_run_config.slices_selector_metric),
-            Self::slices_selector_aggr_to_stats(select_motifs_run_config.slices_selector_aggr),
         )
         .await?;
 
@@ -814,10 +816,21 @@ where
                 let loader = Arc::clone(&self.loader);
                 let ws = Arc::clone(&self.ws);
                 let select_motifs_run_config = select_motifs_run_config.clone();
-                let ctx_for_find_run = ctx.branch(None, true, false);
+                let mut ctx_for_find_run = ctx.branch(None, true, false);
+                let clc_dist = Arc::clone(&self.clc_dist);
                 let max_batch = self.max_batch;
+                let slices_selector_metric = slices_selector_metric;
+                let slices_selector_aggr = slices_selector_aggr;
 
                 async move {
+                    let motifs_stats = Self::clc_stacked_motifs_statistics(
+                        clc_dist,
+                        Arc::clone(&motif_data),
+                        slices_selector_metric,
+                        slices_selector_aggr,
+                        &mut ctx_for_find_run,
+                    )
+                    .await?;
                     Self::extend_with_one_find_run(
                         loader,
                         ws,
@@ -825,6 +838,7 @@ where
                         select_motifs_run_config,
                         find_motifs_run_config,
                         motif_data,
+                        motifs_stats,
                         resources,
                         channels_motifs_added_slices,
                         max_batch,
@@ -854,6 +868,98 @@ where
         Ok(Arc::into_inner(channels_motifs_added_slices).expect("can't unwrap motif_added_slices").into_iter().map(|lock| lock.into_inner()).collect())
     }
 
+    async fn clc_stacked_motifs_statistics(
+        clc_dist: Arc<LoadMotifAndClcDistanceStage<ML, SlicesStats<C>, C>>,
+        motif_data: Arc<DevicesWrap<StackedMotifsOutput>>,
+        slices_selector_metric: Metrics,
+        slices_selector_aggr: Aggr,
+        ctx: &mut C,
+    ) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>, ThoError> {
+        // TODO: move this into a dedicated stage and cache the resulting motifs stats separately from stacked motifs.
+        let (channels_motif_ids, find_motifs_run_config, max_motif_slices) = with_data!(ctx.branch(Some("select_motifs_stacked_motifs_meta"), false, false), motif_data;
+            |_ctx, motif_data:&StackedMotifsOutput|{
+                let channels_motif_ids = motif_data.motifs.extra().0.clone();
+                let find_motifs_run_config = Arc::clone(&motif_data.motifs.extra().1);
+                let max_motif_slices = motif_data.motifs.data().t_ref().size()[1] as usize;
+                Ok::<_, ThoError>((channels_motif_ids, find_motifs_run_config, max_motif_slices))
+        })?;
+
+        let cache_area = motif_data.cache_areas().clone();
+        let device_idx = ctx.device_idx();
+        let motif_ids = channels_motif_ids
+            .iter()
+            .flat_map(|ids| ids.iter().cloned())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let motif_stats = futures::stream::iter(motif_ids.into_iter())
+            .map(|motif_id| {
+                let clc_dist = Arc::clone(&clc_dist);
+                let mut ctx_for_motif = ctx.branch(Some("select_motifs_clc_stacked_motifs_statistics_motif"), false, false);
+                let cache_area = cache_area.clone();
+                async move {
+                    let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.clone());
+                    let clc_input = Arc::new(DevicesWrap::wrap(
+                        LoadMotifAndClcDistanceInput::new(motif_loader_input, slices_selector_metric, slices_selector_aggr),
+                        cache_area,
+                    ));
+                    let motif_stat = clc_dist
+                        .run(clc_input, ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc"), false, false))
+                        .await?
+                        .with_data_ref(0, &mut ctx_for_motif, None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
+                        .await?;
+                    Ok::<_, ThoError>((motif_id, motif_stat))
+                }
+            })
+            .buffer_unordered(crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN)
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+
+        let channels_motifs_stats_tensors = channels_motif_ids
+            .iter()
+            .enumerate()
+            .map(|(channel, channel_motif_ids)| {
+                if channel_motif_ids.is_empty() {
+                    return Ok(Tensor::zeros(&[max_motif_slices as i64], (Float, ThoDevice::from(device_idx).into())));
+                }
+                let channel_stats = channel_motif_ids
+                    .iter()
+                    .map(|motif_id| {
+                        motif_stats
+                            .get(motif_id)
+                            .copied()
+                            .ok_or_else(|| ThoError::new(format!("no motif stat found for motif_id={motif_id} channel={channel}")))
+                    })
+                    .collect::<Result<Vec<_>, ThoError>>()?;
+                let channel_stats_t = Tensor::from_slice(channel_stats.as_slice()).to_device(ThoDevice::from(device_idx).into());
+                if channel_stats_t.size()[0] < max_motif_slices as i64 {
+                    //same padding as in StackedMotifsLoader::run
+                    //this pads with zeros, which works when motif x resources distances are filtered by Le (less or equal) in ClcResourcesMotifsDist::do_run
+                    Ok(pad_to(&channel_stats_t, &[max_motif_slices as i64]).expect("pad to failed"))
+                } else {
+                    Ok(channel_stats_t)
+                }
+            })
+            .collect::<Result<Vec<_>, ThoError>>()?;
+
+        let channels_motifs_stats_t = Tensor::stack(&channels_motifs_stats_tensors, 0);
+        let find_motifs_run_id = find_motifs_run_config.id.expect("no id in find_motifs_run_config");
+        let motifs_stats = ThoTensor::new(
+            SynKey::new([
+                mono_key!("motifs_stats", "motifs_stats"),
+                mono_key!(find_motifs_run_id, format!("find_motifs_run_id_{find_motifs_run_id}")),
+                mono_key!(format!("{slices_selector_metric:?}"), "slices_selector_metric"),
+                mono_key!(format!("{slices_selector_aggr:?}"), "slices_selector_aggr"),
+            ]),
+            channels_motifs_stats_t,
+        )?;
+
+        Ok(Arc::new(DevicesWrap::wrap(motifs_stats, cache_area)))
+    }
+
     async fn extend_with_one_find_run(
         loader: Arc<L>,
         ws: Arc<RwLock<Box<dyn Workspace>>>,
@@ -861,6 +967,7 @@ where
         select_motifs_run_config: SelectMotifsRunConfig,
         find_motifs_run_config: Arc<FindMotifsRunConfig>,
         motif_data: Arc<DevicesWrap<StackedMotifsOutput>>,
+        motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>,
         resources: Arc<Vec<Resource>>,
         channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<DataId, HashSet<IdSlice>>>>>,
         max_batch: i64,
@@ -907,6 +1014,7 @@ where
                 t_1_batch,
                 resource_ids,
                 Arc::clone(&motif_data),
+                Arc::clone(&motifs_stats),
             ));
 
             debug!("SelectMotifsStage::run: clc_resources_input={clc_resources_input:?}");
