@@ -195,6 +195,7 @@ impl Conv1Params {
 pub enum SlicesFilter {
     AccumulateStats(AccumulateStats),
     PrecalculateStats(PrecalculateStats),
+    ExactStats(ExactStats)//same for all motifs
 }
 
 #[derive(ThoosaRunConfig, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
@@ -229,6 +230,16 @@ pub struct PrecalculateStats {
     #[run_config]
     pub slices: u32, //number of random slices to load for statistics calculations
 }
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+pub struct ExactStats {
+
+
+    #[in_map]
+    #[run_config]
+    pub euc_dist: f32, //euclidian distance threshold, same for all motifs
+}
+
 
 #[cfg(test)]
 #[allow(unused_imports)]
