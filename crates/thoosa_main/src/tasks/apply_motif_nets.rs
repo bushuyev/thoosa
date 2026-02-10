@@ -403,7 +403,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
                     t
                 } else {
                     debug!("ApplyMotifNet::run, ok: motif_id={motif_id} padding t.size={:?} to motif_width={motif_width}", t.size());
-                    pad_to(&t, &[motif_width])?
+                    pad_to(&t, &[motif_width], 0.0)?
                 };
 
 

@@ -1230,7 +1230,7 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
 
                         let t = if start as u32 + num_features > dim_size  {
                             debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?} padding to {:?}", start as u32 + num_features, t.size(), [batch_size, motif_nets, num_features as i64]);
-                            pad_to(&t.f_narrow(2, start, dim_size as i64 - start)?, &[batch_size, motif_nets, num_features as i64])?
+                            pad_to(&t.f_narrow(2, start, dim_size as i64 - start)?, &[batch_size, motif_nets, num_features as i64], 0.0)?
                         } else {
                             debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?}", start as u32 + num_features, t.size());
                             t.f_narrow(2, start, num_features as i64)?

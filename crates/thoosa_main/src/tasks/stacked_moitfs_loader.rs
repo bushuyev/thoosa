@@ -299,7 +299,7 @@ where
 
                     if channel_t.size()[0] < max_motif_slices as i64 {
                         debug!("StackedMotifsLoader::run: c={c}, channel_t.size={:?} padding to {:?}", channel_t.size(), [max_motif_slices as i64, find_motifs_run_config.window  as i64]);
-                        pad_to(&channel_t, &[max_motif_slices as i64, find_motifs_run_config.window  as i64]).expect("pad to failed")
+                        pad_to(&channel_t, &[max_motif_slices as i64, find_motifs_run_config.window  as i64], 0.0).expect("pad to failed")
                     } else {
                         debug!("StackedMotifsLoader::run: c={c}, channel_t.size={:?}", channel_t.size());
                         channel_t
