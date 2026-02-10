@@ -539,7 +539,7 @@ mod tests {
                 vec![(size as usize, 100, MotifKind::Pulse)],
                 vec![(size as usize, 100, MotifKind::Sin)],
                 vec![(size as usize, 100, MotifKind::Triangle)]
-            ], 100)?;
+            ], 100, 10.0)?;
 
 
             // plot_t(&resource_t, &format!("resource_{i}"))?;
