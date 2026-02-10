@@ -941,7 +941,7 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
                 eps: RangeOrValue::Value(1e-8),
             }),
         },
-        threshold: RangeOrValue::Value(0.7),
+        threshold: RangeOrValue::Value(0.9),
         // threshold: RangeOrValue::Range{range: 0.4..1.1, step: Some((0.1, 1))},
     };
     /////////////////////train_motifs
@@ -1263,7 +1263,7 @@ async fn run_plot_motif_slices(
                     async move {
                         debug!("run_plot_motif_slices: motif_id={motif_id}");
 
-                        if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None).await {
+                        if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, None).await {
                             error!("motif {motif_id} failed: e={e:?}");
                         };
                         MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();

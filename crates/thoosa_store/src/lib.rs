@@ -160,7 +160,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     fn add_slices_to_motif(&mut self, run_id: RunId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> Result<(), ThoError>;
 
-    fn list_motifs(&self, run_id: RunId) -> Result<Vec<usize>, ThoError>;
+    fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
     fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError>;
     fn list_motifs_slices(
         &self,
@@ -316,7 +316,7 @@ mock! {
             groups: HashSet<IdSlice>,
         ) -> Result<(), ThoError>;
 
-        fn list_motifs(&self, run_id: RunId) -> Result<Vec<usize>, ThoError>;
+        fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
         fn list_motifs_slices(
             &self,
             run_id: RunId,
@@ -1689,7 +1689,7 @@ impl Store for SqlStore {
         Ok((channel as usize, run_id))
     }
 
-    fn list_motifs(&self, run_id: RunId) -> Result<Vec<usize>, ThoError> {
+    fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
         let motif_ids = {
@@ -1697,7 +1697,7 @@ impl Store for SqlStore {
 
             let vec = stmt
                 .query_map([run_id], |row| {
-                    Ok(row.get::<usize, usize>(0)?) // motif_id,
+                    Ok(row.get::<usize, u32>(0)?) // motif_id,
                 })?
                 .collect::<Result<Vec<_>, Error>>()?;
 
@@ -4310,7 +4310,7 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_list_motifs<R:Into<HashMap<RunId, Result<Vec<usize>, ThoError>>>>(mut self, results: R) -> Self {
+    pub fn with_list_motifs<R:Into<HashMap<RunId, Result<Vec<u32>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_motifs().returning(
             move |run_id|{
