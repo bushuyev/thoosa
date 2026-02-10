@@ -506,7 +506,7 @@ mod tests {
                 vec![(3, motif_width, MotifKind::Pulse)],
                 vec![(1, motif_width, MotifKind::Sin)],
                 vec![]
-            ], 100)?;
+            ], 100, 10.0)?;
 
             a.0.insert(r.clone(), t);
 
@@ -574,7 +574,7 @@ mod tests {
 
             let (t, intervals) = tch_test_utils::resource_tensor(1000usize, &[
                 vec![(2, 100, MotifKind::Pulse)],
-            ], 100)?;
+            ], 100, 10.0)?;
 
             debug!("intervals={intervals:?} t.size={:?}", t.size());
             plot_t(&t, "channel_0", true)?;

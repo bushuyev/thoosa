@@ -915,7 +915,7 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))}})}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.00000005..0.0000005, step: Some((0.00000005, 8))} }), slices: RangeOrValue::Value(1000) }),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.25) }), slices: RangeOrValue::Value(100) }),
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.0005..0.005, step: Some((0.0005, 4))} }), slices: RangeOrValue::Value(100)}),
+        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.005..0.05, step: Some((0.005, 4))} }), slices: RangeOrValue::Value(100)}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
         slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
     };
@@ -941,7 +941,7 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
                 eps: RangeOrValue::Value(1e-8),
             }),
         },
-        threshold: RangeOrValue::Value(0.9),
+        threshold: RangeOrValue::Value(0.95),
         // threshold: RangeOrValue::Range{range: 0.4..1.1, step: Some((0.1, 1))},
     };
     /////////////////////train_motifs
@@ -1917,8 +1917,8 @@ mod cli_tests {
         let mut import_hash = HashMap::new();
         for i in 0..30 {
             let (t, _intervals) = tch_test_utils::resource_tensor(1000usize, &[
-                vec![(2, 100, MotifKind::Pulse)],
-            ], 100)?;
+                vec![(3, 100, MotifKind::Pulse)],
+            ], 100, 10.0)?;
 
             let stem = format!("t_0_{i}");
             t.save(ws.read().tensors_path().join(&format!("{stem}.pt")))?;
@@ -1927,8 +1927,8 @@ mod cli_tests {
             import_hash.insert(stem, vec![("label_0".to_string(), 1.0)]);
 
             let (t, _intervals) = tch_test_utils::resource_tensor(1000usize, &[
-                vec![(2, 100, MotifKind::Sin)],
-            ], 100)?;
+                vec![(3, 100, MotifKind::Sin)],
+            ], 100, 10.)?;
 
             let stem = format!("t_1_{i}");
             t.save(ws.read().tensors_path().join(&format!("{stem}.pt")))?;
