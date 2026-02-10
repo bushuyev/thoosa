@@ -3,7 +3,6 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use async_trait::async_trait;
-use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use log::{debug, trace, warn};
 use parking_lot::RwLock;
 use tch::Kind::Float;
@@ -22,7 +21,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::{mono_key, sample_n_owned, CopyToDevice, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, sample_n_owned, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, WithId};
 use thoosa_store::Store;
@@ -207,9 +206,11 @@ where
             return Err(ThoError::new(format!("no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}")))
         }
 
-        let loaded_motifs = futures::stream::iter(motif_ids)
+        let futures = motif_ids
+            .into_iter()
             .map( |motif_id| {
                 let motif_loader_clone = Arc::clone(&self.motif_loader);
+                let cache_area = cache_area.clone();
 
                 let mut ctx = ctx.branch(Some("stacked_motifs_loader_task"), false, false);
 
@@ -217,30 +218,32 @@ where
                     let motif_loader_input = MotifLoaderInput::find_motif_slices_only((motif_id as u32).into());
                     let motif_id_wrap = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), cache_area.into()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
 
-                    let motif = motif_loader_clone.run_cached(
+                    match motif_loader_clone.run_cached(
                         Arc::clone(&motif_id_wrap), ctx.branch(Some("stacked_motifs_loader_motif"), false, false)
-                    ).await?;
-
-                    debug!("StackedMotifsLoader::run: find_motifs_run_id={:?} motif={motif:?}", find_motifs_run_config_id);
-
-
-                    Ok::<_, ThoError>(motif)
-                }
-            })
-            .buffered/*_unordered*/(STACKED_MOTIFS_LOADER_RUN)//TODO buffered- to keep motif ids order consistent, try buffer_unordered and then sort?
-            .filter_map(|r| async move {
-                match r {
-                    Ok(v) => {
-                        Some(v)
-                    }
-                    Err(e) => {
-                        warn!("Can't load motif: {e:?}");
-                        None
+                    ).await {
+                        Ok(motif) => {
+                            debug!("StackedMotifsLoader::run: find_motifs_run_id={:?} motif={motif:?}", find_motifs_run_config_id);
+                            Ok::<_, ThoError>(Some(motif))
+                        }
+                        Err(e) => {
+                            warn!("Can't load motif: {e:?}");
+                            Ok::<_, ThoError>(None)
+                        }
                     }
                 }
             })
-            .collect::<Vec<_>>()
-            .await;
+            .collect::<Vec<_>>();
+
+        let loaded_motifs = collect_futures_with_progress(
+            futures,
+            STACKED_MOTIFS_LOADER_RUN,
+            StreamBuffering::Ordered,
+            "StackedMotifsLoader::run",
+        )
+        .await
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
 
         with_data!(ctx.branch(Some("stacked_motifs_loaded"), false, false), [loaded_motifs];|_ctx, data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
 
