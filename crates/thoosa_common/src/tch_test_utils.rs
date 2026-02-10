@@ -119,7 +119,7 @@ pub fn generate_series_with_motif(
     }
 
     let mut motif_0 =  generate_motifs_with_avg_distance(
-        gen_motif(motif_len, &motif_kind).as_slice(), repeats, 0.1, 0.2, None
+        gen_motif(motif_len, &motif_kind).as_slice(), repeats, 0.1, 0.2, None, 10.0f32
     );
     // motif template (z-normalized)
     let mut motif: Vec<f32> = gen_motif(motif_len, motif_kind);
@@ -293,13 +293,14 @@ pub fn generate_motifs_with_avg_distance(
     d0: f32,
     d1: f32,
     seed: Option<u64>,
+    hight: f32,
 ) -> (Vec<Vec<f32>>, f32 /*avg_d*/, f32 /*amp_used*/) {
     assert!(n >= 2 && d0 > 0.0 && d1 >= d0);
 
     // Bisection over distortion amplitude.
     let target = 0.5 * (d0 + d1);
     let mut lo = 0.0f32;
-    let mut hi = 10.0f32; // generous upper bound; bump if needed
+    let mut hi = hight; // generous upper bound; bump if needed
 
     // Ensure hi is high enough.
     for _ in 0..12 {
@@ -328,7 +329,7 @@ pub fn generate_motifs_with_avg_distance(
 
 ///channels_motif_kinds -  channels x [(how many times motif should appear in the sequence, motif length , MotifKind)]
 ///returns Tensor [channels x resource_len] + channels[ motifs[ intervals[Interval] ] ]
-pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, usize, MotifKind)>], gap: usize) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, usize, MotifKind)>], gap: usize, motif_ampl: f32) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use log::debug;
     use thoosa_shared::test_utils::gen_motif;
@@ -390,11 +391,11 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
                 Vec::new()
             } else {
                 generate_motifs_with_avg_distance(
-                    gen_motif(*motif_len, kind).as_slice(),
+                    gen_motif(*motif_len, kind).as_slice(), //height 10
                     (*repeats).max(2),
                     0.1,
-                    0.2,//should be lower than in motif where it's 0.2-0.3, TODO move to params
-                    None,
+                    0.11, //should be lower than in motif where it's 0.2-0.3, TODO move to params
+                    None, motif_ampl,
                 ).0
             };
             let mut motif_intervals = Vec::with_capacity(*repeats);
@@ -424,7 +425,7 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
                         "missing motif for repeat {repeat_idx} in channel {channel_idx}"
                     )))?;
                     for (offset, value) in motif.iter().enumerate() {
-                        signal[start + offset] = *value;//signal[start] + 
+                        signal[start + offset] = *value;//signal[start] +
                     }
                     motif_intervals.push(Interval { start, end });
                 }

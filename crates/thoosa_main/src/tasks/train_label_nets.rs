@@ -764,7 +764,7 @@ mod tests {
     use crate::tasks::train_label_nets::{new_train_label_nets_with_ml, ResourcesBatch, TrainLabelNets, TrainLabelNetsInput, TrainLabelNetsOutput};
 
     #[ctor::ctor]
-    fn init() {
+    pub fn init() {
         thoosa_shared::test_utils::init_test_logging();
     }
 
@@ -827,7 +827,7 @@ mod tests {
                 vec![(3, motif_width, MotifKind::Pulse)],
                 vec![(1, motif_width, MotifKind::Sin)],
                 vec![]
-            ], 100)?;
+            ], 100, 10.0)?;
 
             a.0.insert(r_a.clone(), t);
 
@@ -838,7 +838,7 @@ mod tests {
                 vec![(3, motif_width, MotifKind::Triangle)],
                 vec![(1, motif_width, MotifKind::Sin)],
                 vec![]
-            ], 100)?;
+            ], 100, 10.0)?;
 
             a.0.insert(r_b.clone(), t);
 
@@ -849,7 +849,7 @@ mod tests {
                 vec![(3, motif_width, MotifKind::Sin)],
                 vec![(1, motif_width, MotifKind::Sin)],
                 vec![]
-            ], 100)?;
+            ], 100, 10.0)?;
 
             a.0.insert(r_b.clone(), t);
 
@@ -860,7 +860,7 @@ mod tests {
                 vec![],
                 vec![],
                 vec![]
-            ], 100)?;
+            ], 100, 10.0)?;
 
             a.0.insert(r_c.clone(), t);
 

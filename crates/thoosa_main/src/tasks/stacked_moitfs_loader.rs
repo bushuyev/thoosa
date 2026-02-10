@@ -214,7 +214,7 @@ where
                 let mut ctx = ctx.branch(Some("stacked_motifs_loader_task"), false, false);
 
                 async move {
-                    let motif_loader_input = MotifLoaderInput::find_motif_slices_only((motif_id as u32).into());
+                    let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.into());
                     let motif_id_wrap = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), cache_area.into()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
 
                     let motif = motif_loader_clone.run_cached(
