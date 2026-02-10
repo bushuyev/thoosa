@@ -53,8 +53,8 @@ impl WithId for RunCtxWithPermits {
 }
 
 impl RunCtxWithPermits {
-    pub fn new(device_idx: usize, id: &str,) -> Self {
-        Self::with_cache_area(device_idx, mono_key!(0, id).into(), GlobalCtx::global().next_cache_area().expect("no more cache areas"))
+    pub fn new(device_idx: usize, _id: &str,) -> Self {
+        Self::with_cache_area(device_idx, mono_key!(0, _id).into(), GlobalCtx::global().next_cache_area().expect("no more cache areas"))
     }
 
     #[cfg(test)]
@@ -139,8 +139,8 @@ impl RunCtx for RunCtxWithPermits {
             None => {
                 self.id.clone()
             }
-            Some(branch_name) => {
-                &self.id + mono_key!(self.branches, branch_name)
+            Some(_branch_name) => {
+                &self.id + mono_key!(self.branches, _branch_name)
             }
         };
         debug!("RunCtx2::branch: branch_full_id={branch_full_id:?}");

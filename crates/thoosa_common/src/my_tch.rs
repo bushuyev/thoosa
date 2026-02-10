@@ -392,8 +392,8 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 2]> {
 pub struct MyCosineConv1d {
     pub w: Tensor,       // [K, C, L] learnable filters
     ones: Tensor,        // [1, 1, L] buffer for sliding energy
-    k: i64,              // out_channels (num filters)
-    c: i64,              // in_channels
+    _k: i64,             // out_channels (num filters)
+    _c: i64,             // in_channels
     l: i64,
     config: ConvConfig
 }
@@ -409,7 +409,7 @@ impl MyCosineConv1d {
         let w = vs.var("W", &[k, c, l], nn::Init::Randn { mean: 0.0, stdev: 0.02 });
         // fixed boxcar (sum over L) to build window norms; kept as a (non-trainable) buffer
         let ones = Tensor::ones([1, 1, l], (Kind::Float, device));
-        Ok(Self { w, ones, k, c, l, config })
+        Ok(Self { w, ones, _k: k, _c: c, l, config })
     }
 
     /// Ensure input is 3D [B, C, T] (adds singleton channel if needed).

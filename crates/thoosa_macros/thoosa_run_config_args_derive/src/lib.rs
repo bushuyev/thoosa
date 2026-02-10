@@ -738,7 +738,6 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 #[cfg(test)]
 mod tests {
     use super::{thoosa_args_derive_impl};
-    use proc_macro::TokenStream;
     use quote::quote;
 
     #[test]

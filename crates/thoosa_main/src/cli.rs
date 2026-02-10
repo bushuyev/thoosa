@@ -58,7 +58,7 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Adjustable, Data, DataId, SimpleId, WithId};
-use thoosa_shared::{mono_key, parse_resources, simple_id, CopyToDevice, RangeOrValue};
+use thoosa_shared::{collect_futures_with_progress, mono_key, parse_resources, simple_id, CopyToDevice, RangeOrValue, StreamBuffering};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
@@ -629,6 +629,7 @@ where
     Ok(())
 }
 
+#[allow(unreachable_code)]
 async fn run_all(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
@@ -1254,7 +1255,8 @@ async fn run_plot_motif_slices(
             let motifs_len = motifs.len();
             let done_cnt = Arc::new(AtomicU32::new(0));
 
-            futures::stream::iter(motifs)
+            let futures = motifs
+                .into_iter()
                 .map(|motif_id| {
                     let done_cnt = Arc::clone(&done_cnt);
                     let clc_dist = Arc::clone(&clc_dist);
@@ -1272,10 +1274,19 @@ async fn run_plot_motif_slices(
                         if done % 32 == 0 {
                             info!("done {done} from  {motifs_len}");
                         }
-                    }})
-                .buffer_unordered(crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT) // <- bound parallelism
-                .collect::<Vec<()>>()
-                .await;
+
+                        Ok::<_, ThoError>(())
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let _ = collect_futures_with_progress(
+                futures,
+                crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
+                StreamBuffering::Unordered,
+                "run_plot_motif_slices",
+            )
+            .await;
 
         }
 
@@ -1300,7 +1311,8 @@ async fn run_plot_motif_slices(
             let motifs_len = motif_ids.len();
             let done_cnt = Arc::new(AtomicU32::new(0));
             let suffix = Some(vec![selection_run_id]);
-            futures::stream::iter(motif_ids)
+            let futures = motif_ids
+                .into_iter()
                 .map(|motif_id| {
                     let done_cnt = Arc::clone(&done_cnt);
                     let clc_dist = Arc::clone(&clc_dist);
@@ -1320,10 +1332,19 @@ async fn run_plot_motif_slices(
                         if done % 32 == 0 {
                             info!("done {done} from  {motifs_len}");
                         }
-                    }})
-                .buffer_unordered(crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT)
-                .collect::<Vec<()>>()
-                .await;
+
+                        Ok::<_, ThoError>(())
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let _ = collect_futures_with_progress(
+                futures,
+                crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
+                StreamBuffering::Unordered,
+                "run_plot_motif_slices",
+            )
+            .await;
         }
     }
 

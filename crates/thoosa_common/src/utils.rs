@@ -1,9 +1,10 @@
+#![allow(non_camel_case_types)]
+
 use std::fmt::Display;
 use std::iter::Map;
 
 use std::ops::Range;
 use std::{fs, ptr};
-use std::path::PathBuf;
 use log::{debug, error, trace};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;

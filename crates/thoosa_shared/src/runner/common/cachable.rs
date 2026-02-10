@@ -12,7 +12,6 @@ use log::{debug, trace, warn};
 use mockall_double::double;
 use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
-use std::future;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;

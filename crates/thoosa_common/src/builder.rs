@@ -1,4 +1,4 @@
-use std::fmt::{format, Debug, Formatter};
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use log::debug;
 use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
@@ -260,7 +260,7 @@ impl Node {
                 path,
                 kernel,
                 in_channels,
-                out_channels,
+                out_channels: _out_channels,
                 config,
             } => Box::new(MyCosineConv1d::new(
                 &(vs / path),
@@ -496,10 +496,10 @@ impl SeqBuilder {
 
     pub fn conv_2d(
         &mut self,
-        kernel: u32,
-        in_channels: u32,
-        out_channels: u32,
-        config: ConvConfig,
+        _kernel: u32,
+        _in_channels: u32,
+        _out_channels: u32,
+        _config: ConvConfig,
     ) -> Result<&mut Self, ThoError> {
         todo!()
     }
@@ -554,7 +554,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn linear<P:ToString>(&mut self, path: P, #[cfg(debug_assertions)] descr: String) -> Result<&mut Self, ThoError> {
+    pub fn linear<P:ToString>(&mut self, path: P, #[cfg(debug_assertions)] _descr: String) -> Result<&mut Self, ThoError> {
         if self.num_features == 0 {
             return Err(ThoError::new(format!("linear, self.num_features > 0: path={}", path.to_string())));
         }
@@ -573,7 +573,7 @@ impl SeqBuilder {
         path: P,
         num_features: u32,
         out_feats: u32,
-        #[cfg(debug_assertions)] descr: String,
+        #[cfg(debug_assertions)] _descr: String,
     ) -> Result<&mut Self, ThoError> {
         if num_features == 0 {
             return Err(ThoError::new(format!("linear_feats, num_features > 0: path={}", path.to_string())));
@@ -589,7 +589,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn linear_f<P:ToString>(&mut self, path: P, f: f32, #[cfg(debug_assertions)] descr: String) -> Result<&mut Self, ThoError> {
+    pub fn linear_f<P:ToString>(&mut self, path: P, f: f32, #[cfg(debug_assertions)] _descr: String) -> Result<&mut Self, ThoError> {
         if self.num_features == 0 {
             return Err(ThoError::new(format!("linear_f, self.num_features > 0: path={}", path.to_string())));
         }
@@ -609,7 +609,7 @@ impl SeqBuilder {
     pub fn linear_s<P:ToString>(
         &mut self,
         out_feats: u32,
-        #[cfg(debug_assertions)] descr: String,
+        #[cfg(debug_assertions)] _descr: String,
         path: P,
     ) -> Result<&mut Self, ThoError> {
         if self.num_features == 0 {
@@ -635,7 +635,7 @@ impl SeqBuilder {
         path: P,
         out_feats: u32,
         config: LinearConfig,
-        #[cfg(debug_assertions)] descr: &str,
+        #[cfg(debug_assertions)] _descr: &str,
     ) -> Result<&mut Self, ThoError> {
         if self.num_features == 0 {
             return Err(ThoError::new(format!("linear_s_with_conf, self.num_features > 0: path={}", path.to_string())));
