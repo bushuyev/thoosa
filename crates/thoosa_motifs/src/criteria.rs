@@ -1,4 +1,5 @@
 use tch::{Kind, Tensor, TchError};
+use tch::Kind::Float;
 
 fn scalar_like(x: &Tensor, v: f64) -> Tensor {
     Tensor::from(v).to_device(x.device()).to_kind(x.kind())
@@ -73,7 +74,7 @@ pub fn norm_thickness(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
     let c_q95 = f_quantile_1d(&consensus, 0.95)?;
     let amp = c_q95.f_sub(&c_q05)?; // scalar
 
-    thickness.f_div(&amp.f_add(&scalar_like(x, eps))?)
+    Tensor::ones(&[], (Float, thickness.device())).f_sub(&thickness.f_div(&amp.f_add(&scalar_like(x, eps))?)?)
 }
 
 /// Helper: per-occurrence RMS residual to a consensus (both aligned in time).
@@ -198,7 +199,7 @@ mod tests {
                 .view([3, 4]);
 
             let s = norm_thickness(&x, 1e-8)?;
-            assert_close(f64_of_scalar(&s), 0.0, 1e-12);
+            assert_close(f64_of_scalar(&s), 1.0, 1e-12);
             Ok(())
         }
 
@@ -222,7 +223,7 @@ mod tests {
                 .view([3, 4]);
 
             let s = norm_thickness(&x, 1e-8)?;
-            assert_close(f64_of_scalar(&s), 0.05, 1e-6);
+            assert_close(f64_of_scalar(&s), 0.95, 1e-6);
             Ok(())
         }
 
