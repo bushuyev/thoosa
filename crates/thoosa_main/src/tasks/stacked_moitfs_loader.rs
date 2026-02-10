@@ -36,7 +36,7 @@ use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
 use crate::tasks::cross_dims::{ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage};
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
-use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::comp_id::{MonoKey, SynKey};
 use crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN;
 
 #[derive(Debug, Clone, DummyData)]
@@ -55,8 +55,8 @@ impl StackedMotifsInput {
         Self {
             id: SynKey::new([
                 mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
-                mono_key!(format!("{slices_selector_metric:?}"), "slices_selector_metric"),
-                mono_key!(format!("{slices_selector_aggr:?}"), "slices_selector_aggr"),
+                // mono_key!(format!("{slices_selector_metric:?}"), "slices_selector_metric"),
+                // mono_key!(format!("{slices_selector_aggr:?}"), "slices_selector_aggr"),
             ]),
             find_motifs_run_config: find_config,
             slices_selector_metric,
@@ -89,13 +89,13 @@ impl StackedMotifsOutputId {
 
 #[derive(Debug)]
 pub struct StackedMotifsOutput {
-    id:StackedMotifsOutputId,
+    id:SynKey,
     pub motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SynKey>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>,
     pub motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SynKey>
 }
 
 impl StackedMotifsOutput {
-    pub fn new(id: StackedMotifsOutputId, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SynKey>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>, motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SynKey>) -> Self {
+    pub fn new(id: SynKey, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SynKey>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>, motifs_avg_dists: ThoTensor<ChannelsMotifsDists, SynKey>) -> Self {
         Self { id, motifs, motifs_avg_dists }
     }
 
@@ -128,7 +128,7 @@ impl Data for StackedMotifsOutput {
 }
 
 impl WithId for StackedMotifsOutput {
-    type ID = StackedMotifsOutputId;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -144,6 +144,7 @@ where
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
+    id:MonoKey,
     motif_loader:Arc<ML>,
     load_and_clc_avg_dist:Arc<LoadMotifAndClcDistanceStage<ML, SlicesStats<C>, C>>,
     ws:Arc<RwLock<Box<dyn Workspace>>>,
@@ -158,8 +159,8 @@ ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<Mot
 C: RunCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        // format!("BatchedMotifsLoader_{}",  input_id).into()
-        StackedMotifsOutputId::new(0, vec![])
+        // StackedMotifsOutputId::new(0, vec![])
+        self.id.clone() + input_id
     }
 }
 
@@ -175,6 +176,7 @@ where
         store: Arc<RwLock<Box<dyn Store>>>) -> Self
     {
         Self {
+            id: "StackedMotifsLoader".into(),
             ws,
             motif_loader,
             load_and_clc_avg_dist,
@@ -380,8 +382,6 @@ where
 
             };
 
-
-
             debug!("StackedMotifsLoader::run: channels_motif_avg_dists_tensors_vec={channels_motif_avg_dists_tensors_vec:?}");
             debug!("StackedMotifsLoader::run: channels_motifs_tensors_vec={channels_motifs_tensors_vec:?}");
 
@@ -393,25 +393,19 @@ where
             trace!("StackedMotifsLoader::run: channels_motifs_t=\n{channels_motifs_t}");
 
             let find_motifs_run_id = find_motifs_run_config.id.expect("no id in find_motifs_run_config");
-            // let select_motifs_run_id = input.select_motifs_run_config.id.expect("no id in select_motifs_run_config");
-            //select_motifs_run_id  -
-            let select_motifs_run_id = vec![];//can be used to return select_motifs_run_i ran earlier on find_motifs_run_id
-            let find_and_select_motifs_id = SynKey::new([
-                mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
-                mono_key!(format!("{select_motifs_run_id:?}"), "select_motifs_run_id"),
-            ]);
+
 
             let motifs = ThoTensor::new(
-                find_and_select_motifs_id.clone(),
+                mono_key!("motifs", "motifs") + &mono_key!(find_motifs_run_id, format!("find_motifs_run_id_{find_motifs_run_id}")),
                 channels_motifs_t,
             )?;
             let motif_avg_dists = ThoTensor::new(
-                find_and_select_motifs_id,
+                mono_key!("channels_motif_avg_dists_t","channels_motif_avg_dists_t") + &mono_key!(find_motifs_run_id, format!("find_motifs_run_id_{find_motifs_run_id}")),
                 channels_motif_avg_dists_t,
             )?;
 
             Ok(Arc::new(DevicesWrap::wrap(StackedMotifsOutput::new(
-                StackedMotifsOutputId::new(find_motifs_run_id, select_motifs_run_id),
+                mono_key!("StackedMotifsOutput", "StackedMotifsOutput") + &mono_key!(find_motifs_run_id, format!("find_motifs_run_id_{find_motifs_run_id}")),
                 DataWithExtra::new(
                     motifs,
                     (channels_motif_ids, Arc::clone(&find_motifs_run_config), vec![])
