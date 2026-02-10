@@ -90,6 +90,7 @@ where
     C: RunCtx + Adjustable + 'static,
     R:RunCtx + Adjustable + 'static
 {
+    //gpt Build a motif-net application stage to turn raw resources into motif probabilities.
     let apply_motif_nets = Arc::new(ApplyMotifNets::new(
         ws,
         store,
@@ -284,6 +285,7 @@ where
         debug!("TrainLabelNets::run: channels={channels} num_nets={}", self.num_nets);
 
         async move {
+            //gpt Split resources into train/valid sets per label for binary label-vs-rest training.
             let (train_labels_resource_keys, valid_label_resource_keys) = with_data!(ctx.branch(Some("train_label_nets_resources"), false, false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Labeled>>|{
                 Ok::<_, ThoError>(input.resources_config().to_resources(&self.store)?)
             })?;
@@ -439,6 +441,7 @@ where
                 StreamBuffering::Unordered,
                 "train label failed",
             ).await;
+            //gpt TODO!! collect_futures_with_progress drops per-label errors; results may be incomplete without signaling failure.
 
             Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(self.train_motif_nets_run_ids.clone(), results), cache_area.into())))
         }

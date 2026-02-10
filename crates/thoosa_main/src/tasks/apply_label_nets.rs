@@ -57,6 +57,7 @@ where
             (stage_ctx.device_idx(), stage_ctx.cache_area())
         };
 
+        //gpt Resolve motif-net inputs by looking up train_motif_nets_run_ids used to produce the label nets.
         let train_motif_nets_run_ids = {
             let mut store_guard = store.read();
             let mut run_ids = HashSet::new();
@@ -190,6 +191,7 @@ where
         #[cfg(debug_assertions)]
         let input_debug = input.clone();
 
+        //gpt First apply motif nets to the raw input to produce motif probabilities used by label nets.
         let motif_probs = Arc::clone(&self.apply_motif_nets)
             .run_cached(input, ctx.branch(Some("apply_label_nets_motif_probs"), false, false))
             .await?;
@@ -205,6 +207,7 @@ where
                 let apply_label_net_ctx = ctx.branch(Some(&format!("apply_label_net_ctx_{}_{}", apply_label_net.label, apply_label_net.run_id)), false, false);
 
                 async move {
+                    //gpt Each label net runs independently; ordering is preserved by buffer mode below.
                     let result = apply_label_net.run(motif_probs, apply_label_net_ctx).await;
                     Ok::<_, ThoError>(result)
                 }
