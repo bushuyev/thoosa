@@ -694,6 +694,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused_assignments)]
     use std::future::ready;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -713,6 +714,7 @@ mod tests {
     use thoosa_common::batches::BatchLengths;
     use thoosa_common::dims::{Batch, Dims, ThoBatch};
     use thoosa_common::my_tch::{my_linear, ThoModule};
+    #[allow(unused_imports)]
     use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, OptConfig};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
@@ -758,6 +760,7 @@ mod tests {
         stream::iter(vec![Ok((x, None, y))]).boxed()
     }
 
+    #[allow(unused_assignments)]
     #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
     #[run_config_opt]
     struct DummyRunConfig {

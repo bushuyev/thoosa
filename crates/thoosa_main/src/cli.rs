@@ -629,6 +629,7 @@ where
     Ok(())
 }
 
+#[allow(unreachable_code)]
 async fn run_all(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,

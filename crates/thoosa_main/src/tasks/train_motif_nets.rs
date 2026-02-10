@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
@@ -400,7 +402,8 @@ where
             let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;//TODO config
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
 
-             #[cfg(thoosa_debug_plots)]
+            #[allow(unexpected_cfgs)]
+            #[cfg(thoosa_debug_plots)]
             {
                 static COUNTER:AtomicU32 = AtomicU32::new(0);
 
