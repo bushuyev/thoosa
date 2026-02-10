@@ -693,6 +693,7 @@ where
             Arc::new(SlicesStats::<C>::new())
         ));
 
+        //gpt Snapshot motif ids for each find_motifs_run_id; used later for criteria filtering.
         let find_motif_run_ids_motif_ids = find_motifs_run_ids
             .iter()
             .map(|find_motifs_run_id| {
@@ -702,6 +703,7 @@ where
                     .map(|motif_ids| (*find_motifs_run_id, motif_ids))
             })
             .collect::<Result<HashMap<_, _>, ThoError>>()
+            //gpt TODO!! panics on missing motifs; consider propagating a typed error instead.
             .expect(&format!("can't load motifs for find_motifs_run_ids={find_motifs_run_ids:?}"));
 
         let channels = ws.read().channels() as usize;
@@ -788,6 +790,7 @@ where
                 "SelectMotifsStage::load_stacked_motifs",
             )
             .await
+            //gpt TODO!! collect_futures_with_progress drops errors and None results; missing find_motifs runs are silently skipped.
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
@@ -892,6 +895,7 @@ where
             "SelectMotifsStage::extend_motifs_for_run_config",
         )
         .await;
+        //gpt TODO!! per-run errors are swallowed; channels_motifs_added_slices may be incomplete with no signal to caller.
 
         if Arc::strong_count(&channels_motifs_added_slices) != 1 {
             return Err(ThoError::new(format!("can't unwrap motif_added_slices for {:?}", select_motifs_run_config)))
@@ -1189,6 +1193,7 @@ where
         let mut extended_motif_ids_filtered = Vec::with_capacity(extended_motif_ids.len());
 
         for motif_id in extended_motif_ids {
+            //gpt TODO!! MotifLoaderInput::all_slices ignores select_motifs_run_id; criteria see slices from all select runs, not just this run_config.
             let motif_data = Arc::clone(&self.clc_dist.motif_loader)
                 .run_cached(
                     Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(DataId(*motif_id)), CacheArea::default())),

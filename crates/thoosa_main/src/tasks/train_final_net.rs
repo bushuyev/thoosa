@@ -72,6 +72,7 @@ where
     C: RunCtx + Adjustable + 'static,
     R: RunCtx + Adjustable + 'static,
 {
+    //gpt Build a label-net application stage that wraps the raw loader with motif+label inference.
     let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, train_label_nets_run_ids.clone(), stage_ctx).await?);
 
     let label_loader = Arc::new(ABStage::new(
@@ -98,6 +99,7 @@ where
         store: &Arc<RwLock<Box<dyn Store>>>,
         opt_config: Arc<OptConfig>,
     ) -> Result<Self, ThoError> {
+        //gpt Collect all label-net output run ids produced by the input train_label_nets runs.
         let label_net_run_ids = {
             let mut store_guard = store.write();
             let mut run_ids = HashSet::new();
@@ -188,6 +190,7 @@ where
         let store = Arc::clone(&self.store);
 
         async move {
+            //gpt Load train/valid logits resources and validate label vector sizes.
             let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) = with_data!(ctx.branch(Some("train_final_resources"), false, false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Logits>>|{
                 Ok::<_, ThoError>(input.resources_config().to_resources(&store)?)
             })?;

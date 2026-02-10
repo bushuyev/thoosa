@@ -171,6 +171,7 @@ where
         let channels = self.ws.read().channels();
 
 
+        //gpt Expand selection run ids into individual motif ids for training.
         let select_motifs_run_ids_clone = select_motifs_run_ids.clone();
         let futures = select_motifs_run_ids_clone.iter().flat_map(|select_motifs_run_id| {
             let selected_motifs = self.store.read().list_selected_motifs(*select_motifs_run_id, channels).expect("list_selected_motifs failed");
@@ -191,6 +192,7 @@ where
             let store = Arc::clone(&self.store);
             async move {
 
+                //gpt TODO!! MotifLoaderInput::all_slices ignores select_motifs_run_id; training may mix slices from other selection runs.
                 let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>> = motif_loader.run(
                     Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(motif_id_rate.0.into()), CacheArea::default())),
                     ctx.branch(Some("train_motif_nets_motif_loader"), false, false),
@@ -282,6 +284,7 @@ where
             StreamBuffering::Unordered,
             "train motif failed",
         ).await;
+        //gpt TODO!! collect_futures_with_progress drops errors; results.len() may be smaller than the number of selected motifs.
 
 
         Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(select_motifs_run_ids, results), CacheArea::default())))

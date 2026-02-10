@@ -645,33 +645,39 @@ async fn run_all(
     train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue
 ) -> Result<(), ThoError> {
 
+    //gpt Build the input for FindMotifs: wrap resource config in DevicesWrap and allocate a fresh cache area.
     let find_motifs_input = Arc::new(DevicesWrap::wrap(
         ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store)?,
         CacheArea::default()
     ));
 
+    //gpt Build the input for SelectMotifs: separate resource config so selection can use its own dataset.
     let select_motifs_input = Arc::new(DevicesWrap::wrap(
         ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store)?,
         CacheArea::default()
     ));
 
+    //gpt Build the input for label training: this is typically a labeled resource set.
     let train_labels_input = Arc::new(DevicesWrap::wrap(
         ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
                                    run_all_args.train_resource_config()).check(&store)?,
         CacheArea::default()
     ));
 
+    //gpt Build the input for final net training: usually a higher-level resource config (e.g., logits inputs).
     let train_final_input = Arc::new(DevicesWrap::wrap(
         ResourcesConfigInput::new(
             run_all_args.train_final_resource_config()).check(&store)?,
         CacheArea::default()
     ));
 
+    //gpt Pre-create context and shared handles for FindMotifs stage construction (kept outside the run_grid closure).
     let init_ctx_find_motifs = root_ctx.branch(Some("init find motifs"), true, false);
     let store_in_find_motifs = Arc::clone(&store);
     let ws_in_find_motifs = Arc::clone(&ws);
     let loader_in_find_motifs = Arc::clone(&loader);
 
+    //gpt Run a grid over FindMotifs configs, constructing a stage per grid point and executing it.
     let find_motifs_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
         None,
         find_motifs_run_config_range_or_value,
@@ -688,8 +694,10 @@ async fn run_all(
                     run_configs,
                     fixed_find_motifs_config,
                     ThoDevice::from(1),
+                    //gpt TODO!! hard-coded device index assumes GPU 1 exists; consider selecting from args or ctx.
                     init_ctx_find_motifs
                 ).await.expect("FindMotifsStage::new failed"),
+                //gpt TODO!! `expect` will panic and bypass error propagation; consider returning the error instead.
             )
         },
         || root_ctx.branch(Some("find motifs"), true, false),
@@ -697,14 +705,17 @@ async fn run_all(
 
     info!("find motifs done, find_motif_run_ids={find_motifs_run_ids:?}");
 
+    //gpt Plot slices for each FindMotifs run (CPU plotting); useful for debugging but potentially expensive.
     for find_motifs_run_id in &find_motifs_run_ids {
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
     }
 
 
     debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
-    // return Ok(());
+    //gpt The select stage depends on the FindMotifs run ids; keep the ids to join results across runs.
+    //gpt TODO!! if find_motifs_run_ids is empty, downstream stages will still run; should we short-circuit?
 
+    //gpt Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
     let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
         Some(find_motifs_run_ids.clone()),
         select_motifs_run_config,
@@ -732,24 +743,27 @@ async fn run_all(
         || root_ctx.branch(Some("select motifs"), true, false),
     ).await?;
 
+    //gpt Plot "good motifs" from each selection run (CPU plotting; large runs can be slow).
     for select_motifs_run_id in &select_motifs_run_ids {
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (*select_motifs_run_id)), &Cpu).await?;
     }
-    return Ok(());
 
     info!("select motifs done: find_motifs_run_ids={find_motifs_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
 
+    //gpt Plot motifs with selection overlays per FindMotifs run.
     for find_motifs_run_id in &find_motifs_run_ids {
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: Some(select_motifs_run_ids.clone()) }), &Cpu).await?;
     }
 
     debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
+    //gpt Train motif nets needs a custom input wrapper (motif ids + opt config) rather than a resource config.
     let input_wrapper = Arc::new(DevicesWrap::wrap(
         TrainMotifNetInput::new(select_motifs_run_ids.clone(), Arc::clone(&opt_config)),
         CacheArea::default()
     ));
 
+    //gpt Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
     let train_motif_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
         None,
         train_motif_nets_run_config_range_or_value,
@@ -773,11 +787,13 @@ async fn run_all(
     ///////////////////
     debug!("starting train label nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
+    //gpt Pre-create context and shared handles for label-net stage construction.
     let init_ctx_train_labels = root_ctx.branch(Some("init label nets"), true, false);
     let store_in_train_labels = Arc::clone(&store);
     let ws_in_train_labels = Arc::clone(&ws);
     let loader_in_train_labels = Arc::clone(&loader);
     let opt_config_in_train_labels = Arc::clone(&opt_config);
+    //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
     let train_label_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
         None,
         train_label_nets_run_config_range_or_value,
@@ -805,11 +821,13 @@ async fn run_all(
     debug!("starting train final nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
 
+    //gpt Pre-create context and shared handles for final-net stage construction.
     let init_ctx_in_train_final = root_ctx.branch(Some("init final nets"), true, false);
     let store_in_train_final = Arc::clone(&store);
     let ws_in_train_final = Arc::clone(&ws);
     let loader_in_train_final = Arc::clone(&loader);
 
+    //gpt Run a grid over final-net training configs; consumes label-net run ids and produces final models.
     let _run_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
         None,
         train_final_net_run_config_range_or_value,
@@ -1266,6 +1284,7 @@ async fn run_plot_motif_slices(
                     async move {
                         debug!("run_plot_motif_slices: motif_id={motif_id}");
 
+                        //gpt TODO!! select_motifs_run_ids is not forwarded to plot_motif here; plots ignore selection filtering even when provided.
                         if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, None).await {
                             error!("motif {motif_id} failed: e={e:?}");
                         };
@@ -1579,11 +1598,14 @@ where
     } else {
         vec![]
     };
+    //gpt TODO!! run_ids only reflect pre-saved run_config ids; if presave is false this stays empty even though the stage output is saved below.
 
     let stage = f(run_configs).await;
 
+    //gpt TODO!! Arc::into_inner will panic if the output Arc has multiple owners; consider a fallible path or cloning the inner data.
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
 
+    //gpt TODO!! savable.save returns a run_id, but it's ignored here; downstream uses presaved ids only.
     savable.save(store, ws)?;
 
 
@@ -1624,10 +1646,10 @@ where
     debug!("run_all_grid_step: grid_run_configs={opt_run_configs:?}");
 
     // let mut run_configs: Vec<RC> = opt_run_configs.to_run_configs();
-
-
+    //gpt TODO!! presave flag is currently unused in run_opt; run_ids always come from the stage output.
     let stage = init_stage(opt_run_configs).await?;
 
+    //gpt TODO!! Arc::into_inner will panic if the output Arc has multiple owners; consider a fallible path or cloning the inner data.
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
 
     let run_id = savable.save(store, ws)?;

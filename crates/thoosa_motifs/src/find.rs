@@ -147,6 +147,7 @@ impl SavableResult for FindMotifsSavableResult {
         store: &Arc<RwLock<Box<dyn Store>>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
+        //gpt TODO!! placeholder save: no persistence and always returns 0; callers rely on presaved run ids.
         Ok(0)
     }
 }
@@ -303,6 +304,7 @@ impl SavableResult for SelectMotifsSavableResult {
                 .save_selected_motifs(run_config.id.expect("should be pre set in run_grid"), good_motif_ids_rates.clone())?; //TODO mem::replace?
 
         }
+        //gpt TODO!! save returns a dummy run_id; run_grid currently ignores it and uses presaved ids.
         Ok(0)//TODO not used
     }
 }
