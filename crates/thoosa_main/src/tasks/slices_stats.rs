@@ -280,20 +280,34 @@ fn aggregate_distances(distances: &Tensor, aggr: Aggr) -> Result<f32, ThoError> 
     }
 
     let scalar = match aggr {
-        Aggr::Mean(k) =>k * distances.f_mean(Kind::Float)?,
-        Aggr::Min(k) => k * distances.f_min()?,
-        Aggr::Max(k) => k * distances.f_max()?,
+        Aggr::Mean(k) =>{
+            let mean = distances.f_mean(Kind::Float)?;
+            debug!("aggregate_distances, Mean: k={k} distances=\n{distances} mean=\n{mean}");
+
+            k * mean
+        },
+        Aggr::Min(k) => {
+            let min = distances.f_min()?;
+            debug!("aggregate_distances, Min: k={k} distances=\n{distances} min=\n{min}");
+
+            k * min
+        },
+        Aggr::Max(k) => {
+            let max = distances.f_max()?;
+            debug!("aggregate_distances, Max: k={k} distances=\n{distances} max=\n{max}");
+            k * max
+        },
         Aggr::Quantile(q) => {
-            debug!("aggregate_distances: q={q} distances=\n{distances}");
+            debug!("aggregate_distances, Quantile: q={q} distances=\n{distances}");
             let q = q.clamp(0.0, 1.0) as f64;
             let quantile = distances.f_quantile_scalar(q, 0, true, "lower")?;
             let mask = distances.f_le_tensor(&quantile)?;
             let selected = distances.f_masked_select(&mask)?;
             if selected.numel() == 0 {
-                debug!("aggregate_distances: selected.numel==0, quantile=\n{quantile}");
+                debug!("aggregate_distances, Quantile: selected.numel==0, quantile=\n{quantile}");
                 quantile
             } else {
-                debug!("aggregate_distances: selected.numel!=0, quantile=\n{quantile} selected.f_max={}", selected.max());
+                debug!("aggregate_distances, Quantile: selected.numel!=0, quantile=\n{quantile} selected.f_max={}", selected.max());
                 selected.f_max()?
             }
         }

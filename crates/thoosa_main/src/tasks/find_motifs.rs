@@ -143,6 +143,8 @@ impl QuantileDistsCtx {
 fn to_stats_aggr(aggr: FilterAggr) -> StatsAggr {
     match aggr {
         FilterAggr::Mean(v) => StatsAggr::Mean(v.k),
+        FilterAggr::Min(v) => StatsAggr::Min(v.k),
+        FilterAggr::Max(v) => StatsAggr::Max(v.k),
         FilterAggr::Quantile(v) => StatsAggr::Quantile(v.q),
     }
 }
@@ -198,6 +200,8 @@ where
                         SlicesFilter::AccumulateStats(v) => {
                             match v.aggr {
                                 FilterAggr::Mean(aggr) => MasksCtx::AccumulatedMeanDist {k: aggr.k, ctx:MeanDistsCtx::new(channels, device.into())},
+                                FilterAggr::Min(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Min is not supported for SlicesFilter::AccumulateStats")),
+                                FilterAggr::Max(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Max is not supported for SlicesFilter::AccumulateStats")),
                                 FilterAggr::Quantile(aggr) => MasksCtx::AccumulatedQuantileDist {q: aggr.q, ctx:QuantileDistsCtx::new(channels, device.into())},
                             }
                         }

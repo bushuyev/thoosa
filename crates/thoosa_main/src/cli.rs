@@ -39,7 +39,7 @@ use tch::{Device, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::{ThoDevice};
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStatsRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MeanAggrRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, PrecalculateStatsRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, QuantileAggrRangeOrValue, ComparisonMethodRangeOrValue, PearsonCorrConfigRangeOrValue, EucDistConfigRangeOrValue};
+use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStatsRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MeanAggrRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, PrecalculateStatsRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, QuantileAggrRangeOrValue, ComparisonMethodRangeOrValue, PearsonCorrConfigRangeOrValue, EucDistConfigRangeOrValue, MinAggrRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -898,13 +898,15 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Value(100),
         filter: None,
-        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.1) }) }),
+        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.025) }) }),
+        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))} }) }),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.01) })}),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))}})}),
-        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.00000005..0.0000005, step: Some((0.00000005, 8))} }), slices: RangeOrValue::Value(1000) }),
+        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.00000005..0.0000005, step: Some((0.00000005, 8))} }), slices: RangeOrValue::Value(1000) }),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.25) }), slices: RangeOrValue::Value(100) }),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.0005..0.005, step: Some((0.0005, 4))} }), slices: RangeOrValue::Value(100)}),
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.0045) }), slices: RangeOrValue::Value(100)}),
+        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
+        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select

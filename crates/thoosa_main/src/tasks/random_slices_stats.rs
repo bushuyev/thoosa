@@ -148,6 +148,7 @@ where
         let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, motif_width)?;
 
         debug!("RandomStats::run: slices.len={} resources_map.len={}", slices.len(), resources_map.len());
+        debug!("RandomStats::run: resources={resources:?}");
 
         let channels = self.ws.read().channels();
         assert_ne!(channels, 0, "no channels");

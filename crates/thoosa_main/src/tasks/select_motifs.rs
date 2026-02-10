@@ -712,6 +712,8 @@ where
     fn slices_selector_aggr_to_stats(aggr: RunConfigAggr) -> Aggr {
         match aggr {
             RunConfigAggr::Mean(mean_aggr) => Aggr::Mean(mean_aggr.k),
+            RunConfigAggr::Min(min_aggr) => Aggr::Min(min_aggr.k),
+            RunConfigAggr::Max(max_aggr) => Aggr::Max(max_aggr.k),
             RunConfigAggr::Quantile(quantile_aggr) => Aggr::Quantile(quantile_aggr.q),
         }
     }
