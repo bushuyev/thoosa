@@ -1005,7 +1005,6 @@ where
             let batch_1_slice_lengths = t_1_batch.iter().map(|t| t.size().dim_1()).collect::<Vec<_>>();
 
             debug!("SelectMotifsStage::run: 0. find_motifs_run_config={find_motifs_run_config:?}");
-            let ctx_select_motifs_clc_resources = ctx.branch(Some("select_motifs_clc_resources"), false, false);
             debug!("SelectMotifsStage::run: t_0_batch={t_1_batch:?} \n motif_data={motif_data:?}");
 
             let resource_ids = t_1_batch_resources.iter().map(|resource| resource.id()).collect::<Vec<_>>();
@@ -1041,7 +1040,7 @@ where
             .run(
                 &clc_resources_motifs_dist,
                 Arc::clone(&clc_resources_input),
-                ctx_select_motifs_clc_resources,
+                ctx.branch(Some("select_motifs_clc_resources"), false, false),
                 Contexts::new(
                     SelectMotifsSplitterContext::new(
                         t_1_batch_len as i64,
