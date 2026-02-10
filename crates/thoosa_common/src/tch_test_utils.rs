@@ -1,6 +1,6 @@
 use tch::Tensor;
 use rand::{Rng, SeedableRng};
-use rand::prelude::StdRng;
+use rand::prelude::{SliceRandom, StdRng};
 use thoosa_shared::test_utils::{gen_motif, MotifKind};
 use thoosa_shared::ThoError;
 use crate::utils::to_vec_f32;
@@ -466,4 +466,200 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
     debug!("resource_tensor: t.size={:?} intervals={channels_intervals:?}", t.size());
 
     Ok((t, channels_intervals))
+}
+
+
+
+/// Generates a tensor [channels x resource_len] with 2 distinct motifs on i.i.d. Gaussian background.
+/// Motifs are normalized (zero-mean, unit L2) then scaled by `motif_amp`, and added onto background.
+/// Returns:
+///   - Tensor [channels, resource_len]
+///   - intervals[channel][motif_id(0|1)][repeat_idx] = Interval
+///   - (template0, template1) (already scaled by motif_amp)
+///
+/// Suggested Euclidean thresholds:
+///   * Template scan (template vs window): thr ≈ k * bg_sigma * sqrt(L)
+///   * Self-join (window vs window):       thr ≈ k * bg_sigma * sqrt(2L)
+/// with k=4 being a practical “very few false negatives” choice for test signals.
+pub fn resource_tensor_two_easy_motifs(
+    resource_len: usize,
+    channels: usize,
+    motif_len: usize,
+    repeats0: usize,
+    kind0: MotifKind,
+    repeats1: usize,
+    kind1: MotifKind,
+    gap: usize,
+    bg_sigma: f32,
+    motif_amp: f32,
+    seed: Option<u64>,
+) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>, (Vec<f32>, Vec<f32>)), ThoError> {
+    if motif_len == 0 {
+        return Err(ThoError::new("motif_len must be > 0"));
+    }
+    if bg_sigma <= 0.0 {
+        return Err(ThoError::new("bg_sigma must be > 0"));
+    }
+    if motif_amp <= 0.0 {
+        return Err(ThoError::new("motif_amp must be > 0"));
+    }
+
+    // --- RNG ---
+    let mut rng = match seed {
+        Some(s) => StdRng::seed_from_u64(s),
+        None => StdRng::from_os_rng(),
+    };
+
+    // --- helpers ---
+    fn normal01(rng: &mut StdRng) -> f32 {
+        // Box–Muller, standard normal
+        let u1: f32 = rng.random::<f32>().max(f32::MIN_POSITIVE);
+        let u2: f32 = rng.random::<f32>();
+        let r = (-2.0 * u1.ln()).sqrt();
+        let theta = std::f32::consts::TAU * u2;
+        r * theta.cos()
+    }
+
+    fn mean_std(xs: &[f32]) -> (f32, f32) {
+        let n = xs.len() as f32;
+        let mean = xs.iter().copied().sum::<f32>() / n;
+        let var = xs
+            .iter()
+            .map(|&x| {
+                let d = x - mean;
+                d * d
+            })
+            .sum::<f32>()
+            / n;
+        (mean, var.sqrt())
+    }
+
+    fn zero_mean_unit_l2(mut v: Vec<f32>) -> Vec<f32> {
+        let (m, _) = mean_std(&v);
+        for x in &mut v {
+            *x -= m;
+        }
+        let l2 = v.iter().map(|&x| x * x).sum::<f32>().sqrt().max(1e-8);
+        for x in &mut v {
+            *x /= l2;
+        }
+        v
+    }
+
+    // --- build two scaled templates (same length) ---
+    let t0 = {
+        let base = gen_motif(motif_len, &kind0);
+        let mut v = zero_mean_unit_l2(base);
+        for x in &mut v {
+            *x *= motif_amp;
+        }
+        v
+    };
+    let t1 = {
+        let base = gen_motif(motif_len, &kind1);
+        let mut v = zero_mean_unit_l2(base);
+        for x in &mut v {
+            *x *= motif_amp;
+        }
+        v
+    };
+
+    // --- placement feasibility ---
+    let total_repeats = repeats0.saturating_add(repeats1);
+    if total_repeats == 0 {
+        return Err(ThoError::new("need repeats0>0 or repeats1>0"));
+    }
+
+    let total_motif_space = motif_len
+        .checked_mul(total_repeats)
+        .ok_or_else(|| ThoError::new("motif placement overflows usize"))?;
+    let total_gap_space = gap
+        .checked_mul(total_repeats.saturating_sub(1))
+        .ok_or_else(|| ThoError::new("motif gap sizing overflows usize"))?;
+    let required_space = total_motif_space
+        .checked_add(total_gap_space)
+        .ok_or_else(|| ThoError::new("motif layout exceeds addressable range"))?;
+
+    if required_space > resource_len {
+        return Err(ThoError::new(format!(
+            "cannot place {total_repeats} motifs (L={motif_len}, gap={gap}) into len={resource_len}"
+        )));
+    }
+
+    // Slotting: ensures non-overlap and min gap, but adds randomness within each slot.
+    let available_motif_space = resource_len
+        .checked_sub(total_gap_space)
+        .ok_or_else(|| ThoError::new("motif layout exceeds addressable range"))?;
+    let slot_len_base = available_motif_space / total_repeats;
+    let slot_len_rem = available_motif_space % total_repeats;
+
+    if motif_len > slot_len_base + usize::from(0 < slot_len_rem) {
+        return Err(ThoError::new(format!(
+            "motif_len={motif_len} too large for computed slots (slot_len_base={slot_len_base}, remainder={slot_len_rem})"
+        )));
+    }
+
+    // Motif plan: 0..repeats0 => motif 0, then repeats1 => motif 1, shuffle => interleave.
+    let mut plan: Vec<u8> = Vec::with_capacity(total_repeats);
+    plan.extend(std::iter::repeat(0u8).take(repeats0));
+    plan.extend(std::iter::repeat(1u8).take(repeats1));
+    plan.shuffle(&mut rng);
+
+    let mut channels_signals: Vec<Vec<f32>> = Vec::with_capacity(channels);
+    let mut channels_intervals: Vec<Vec<Vec<Interval>>> = Vec::with_capacity(channels);
+
+    for _ch in 0..channels {
+        // background: i.i.d. Gaussian
+        let mut signal = vec![0f32; resource_len];
+        for x in &mut signal {
+            *x = bg_sigma * normal01(&mut rng);
+        }
+
+        let mut motif0_intervals: Vec<Interval> = Vec::with_capacity(repeats0);
+        let mut motif1_intervals: Vec<Interval> = Vec::with_capacity(repeats1);
+
+        let mut slot_cursor = 0usize;
+
+        for (slot_idx, &which) in plan.iter().enumerate() {
+            let slot_len = slot_len_base + usize::from(slot_idx < slot_len_rem);
+            let max_offset = slot_len - motif_len;
+            let slot_offset = if max_offset == 0 { 0 } else { rng.random_range(0..=max_offset) };
+
+            let start = slot_cursor + slot_offset;
+            let end = start + motif_len;
+
+            let tpl = if which == 0 { &t0 } else { &t1 };
+
+            // Add motif onto background (keeps “match distance ≈ noise norm”)
+            for (o, &v) in tpl.iter().enumerate() {
+                signal[start + o] += v;
+            }
+
+            let iv = Interval { start, end };
+            if which == 0 {
+                motif0_intervals.push(iv);
+            } else {
+                motif1_intervals.push(iv);
+            }
+
+            // advance with mandatory gap (except after last)
+            slot_cursor += slot_len;
+            if slot_idx + 1 < total_repeats {
+                slot_cursor += gap;
+            }
+        }
+
+        channels_signals.push(signal);
+        channels_intervals.push(vec![motif0_intervals, motif1_intervals]);
+    }
+
+    let t = Tensor::f_stack(
+        &channels_signals
+            .into_iter()
+            .map(|data| Tensor::f_from_slice(data.as_slice()))
+            .collect::<Result<Vec<_>, _>>()?,
+        0,
+    )?;
+
+    Ok((t, channels_intervals, (t0, t1)))
 }

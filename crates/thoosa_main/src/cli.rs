@@ -918,7 +918,8 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.25) }), slices: RangeOrValue::Value(100) }),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.005..0.05, step: Some((0.005, 4))} }), slices: RangeOrValue::Value(100)}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
-        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
+        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
+        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Value(1.6) }), slices: RangeOrValue::Value(1000)}),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select
@@ -1741,6 +1742,7 @@ mod cli_tests {
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Simple};
     use thoosa_common::tch_test_utils;
+    use thoosa_common::tch_test_utils::{resource_tensor_two_easy_motifs, Interval};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
@@ -1877,6 +1879,30 @@ mod cli_tests {
         Ok(())
     }
 
+    #[test]
+    fn test_resource_tensor_two_easy_motifs() -> Result<(), ThoError>{
+
+        let (t, intervals, _) = resource_tensor_two_easy_motifs(
+            1000,
+            1,
+            100,
+            2,
+            MotifKind::Pulse,
+            2,
+            MotifKind::Triangle,
+            100,
+            0.05,
+            3.0,
+            None
+        )?;
+
+        plot_t(&t, "asdf", true)?;
+
+
+        Ok(())
+    }
+
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn heavy_test_run_all() -> Result<(), ThoError> {
         unsafe {
@@ -1937,9 +1963,7 @@ mod cli_tests {
         // )?;
         let mut import_hash = HashMap::new();
         for i in 0..30 {
-            let (t, _intervals) = tch_test_utils::resource_tensor(1000usize, &[
-                vec![(3, 100, MotifKind::Pulse)],
-            ], 100, 10.0)?;
+            let (t, _intervals) = tensor_0()?;
 
             let stem = format!("t_0_{i}");
             t.save(ws.read().tensors_path().join(&format!("{stem}.pt")))?;
@@ -1947,9 +1971,7 @@ mod cli_tests {
 
             import_hash.insert(stem, vec![("label_0".to_string(), 1.0)]);
 
-            let (t, _intervals) = tch_test_utils::resource_tensor(1000usize, &[
-                vec![(3, 100, MotifKind::Sin)],
-            ], 100, 10.)?;
+            let (t, _intervals) = tensor_1()?;
 
             let stem = format!("t_1_{i}");
             t.save(ws.read().tensors_path().join(&format!("{stem}.pt")))?;
@@ -2042,52 +2064,94 @@ mod cli_tests {
         Ok(())
     }
 
+    fn tensor_1() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+        // tch_test_utils::resource_tensor(1000usize, &[
+        //     vec![(3, 100, MotifKind::Sin)],
+        // ], 100, 10.)
+        let r = resource_tensor_two_easy_motifs(
+            1000,
+            1,
+            100,
+            2,
+            MotifKind::Sin,
+            2,
+            MotifKind::Triangle,
+            100,
+            0.05,
+            3.0,
+            None
+        )?;
+        Ok((r.0, r.1))
+    }
 
+    fn tensor_0() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+        // tch_test_utils::resource_tensor(
+        //     1000usize,
+        //     &[
+        //         vec![(3, 100, MotifKind::Pulse)
+        //         ],
+        //     ], 100, 10.0)
+
+        let r = resource_tensor_two_easy_motifs(
+            1000,
+            1,
+            100,
+            2,
+            MotifKind::Pulse,
+            2,
+            MotifKind::Triangle,
+            100,
+            0.05,
+            3.0,
+            None
+        )?;
+        Ok((r.0, r.1))
+    }
     /*
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="test_tracing"))]
-    async fn test_tracing(){
-        tokio::time::sleep(Duration::from_millis(100)).await
-    }
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="test_tracing"))]
+        async fn test_tracing(){
+            tokio::time::sleep(Duration::from_millis(100)).await
+        }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_log_trace() {
-        log::set_max_level(Trace);
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn test_log_trace() {
+            log::set_max_level(Trace);
 
-        trace!("some trace");
-        debug!("some debug");
-        info!("some info");
+            trace!("some trace");
+            debug!("some debug");
+            info!("some info");
 
-        test_tracing().await;
-        info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
-        println!("test_log_trace");
-    }
+            test_tracing().await;
+            info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
+            println!("test_log_trace");
+        }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_log_debug() {
-        log::set_max_level(Debug);//should be default
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn test_log_debug() {
+            log::set_max_level(Debug);//should be default
 
-        trace!("some trace");
-        debug!("some debug");
-        info!("some info");
+            trace!("some trace");
+            debug!("some debug");
+            info!("some info");
 
-        test_tracing().await;
-        info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
-        println!("test_log_debug");
-    }
+            test_tracing().await;
+            info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
+            println!("test_log_debug");
+        }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_log_info() {
-        log::set_max_level(Info);
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn test_log_info() {
+            log::set_max_level(Info);
 
-        trace!("some trace");
-        debug!("some debug");
-        info!("some info");
+            trace!("some trace");
+            debug!("some debug");
+            info!("some info");
 
-        test_tracing().await;
-        info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
-        println!("test_log_info");
-    }
-     */
+            test_tracing().await;
+            info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
+            println!("test_log_info");
+        }
+         */
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_apply_moitf_net() -> Result<(), ThoError>{
