@@ -16,3 +16,4 @@ pub mod distance;
 pub mod find;
 pub mod fragments;
 pub mod pearson_corr;
+mod criteria;
