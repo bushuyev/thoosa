@@ -1,4 +1,4 @@
-#![allow(non_snake_case, unused_assignments, unused_variables)]
+#![allow(non_snake_case, unused_assignments, unused_variables, non_camel_case_types)]
 
 #[cfg(test)]
 pub use crate::find_motifs_run_config::{FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue};
@@ -6,7 +6,7 @@ pub use crate::find_motifs_run_config::{FindMotifsRunConfigRangeOrValue, InputFi
 pub use thoosa_shared::RangeOrValue;
 
 use crate::builder::{Node, SeqBuilder};
-use crate::my_tch::{BinaryHeadPool, MyLinear, ThoModule};
+use crate::my_tch::{BinaryHeadPool, ThoModule};
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
 use crate::utils::{mask_from_lengths, masked_max, masked_mean, tensor_mem_size};
@@ -15,7 +15,7 @@ use crate::ws::Workspace;
 use clap::clap_derive::Args;
 use thoosa_shared::{mono_key, panic_to_err_async, CopyToDevice};
 
-use log::{debug, info, trace, warn};
+use log::{debug, info, warn};
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
 use rand::seq::{IndexedRandom, SliceRandom};
@@ -28,7 +28,7 @@ use std::{fmt, fs};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
-use tch::nn::{init, BatchNormConfig, ConvConfig, LinearConfig, VarStore};
+use tch::nn::{init, ConvConfig, LinearConfig, VarStore};
 use tch::Device::Cpu;
 use tch::{nn, Device, Tensor};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
@@ -515,7 +515,7 @@ pub struct MotifCosineNetArgs {
     pub kernel: u32
 }
 
-#[allow(non_snake_case, unused_assignments, unused_variables)]
+#[allow(non_snake_case, unused_assignments, unused_variables, non_camel_case_types)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum MotifNetTypeArgs {
     ConvNet(MotifConvNetArgs),
@@ -1355,6 +1355,7 @@ net
 }
 
 pub struct PlotVecf32 {
+    #[allow(dead_code)]
     id: String,
     data: Vec<f32>,
 }
@@ -1367,6 +1368,7 @@ impl PlotVecf32 {
         }
     }
 
+    #[allow(dead_code)]
     fn plot(&self) {
         plot_series(
             vec![(
@@ -1953,7 +1955,7 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoError> {
         .is_some())
 }
 
-#[allow(non_snake_case, unused_assignments, unused_variables)]
+#[allow(non_snake_case, unused_assignments, unused_variables, non_camel_case_types)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum LabelNetTypeArgs {
     ConvNet(ConvNetArgs),
@@ -2000,6 +2002,7 @@ pub struct MinMaxArgs{
     #[in_map]
     pub _dummy: u32,
 }
+#[allow(non_camel_case_types)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum ConvNetJointArgs {
     AttnPool1d(AttnPool1dArgs),
@@ -2121,7 +2124,7 @@ mod train_tests {
     use std::sync::Arc;
     use std::{fs, mem};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-    use tch::nn::{init, AdamW, BatchNormConfig, LinearConfig, Module, OptimizerConfig, VarStore};
+    use tch::nn::{init, AdamW, LinearConfig, Module, OptimizerConfig, VarStore};
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Bool, Float, Half};
     use tch::{nn, Device, Tensor};

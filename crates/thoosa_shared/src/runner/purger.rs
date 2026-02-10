@@ -1,6 +1,3 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::atomic::Ordering::Relaxed;
 use futures_util::future::BoxFuture;
 use log::{debug, error, trace};
 use tokio::sync::mpsc;
