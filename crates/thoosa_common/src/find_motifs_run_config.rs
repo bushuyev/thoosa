@@ -281,6 +281,49 @@ mod tests {
     }
 }
 
+#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+pub struct ExtendMotifsConfig {
+    #[run_config]
+    pub slices_selector_metric: ComparisonMethod,
+
+    #[run_config]
+    pub slices_selector_aggr: Aggr,
+}
+
+impl Default for ExtendMotifsConfig {
+    fn default() -> Self {
+        Self {
+            slices_selector_metric: ComparisonMethod::EucDist(EucDistConfig::default()),
+            slices_selector_aggr: Aggr::Mean(MeanAggr { k: 1.0 }),
+        }
+    }
+}
+
+impl ToHashmap for ExtendMotifsConfig {
+    fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
+        let prefix = parent.unwrap_or("ExtendMotifsConfig::".to_string());
+        Box::new(
+            self
+                .slices_selector_metric
+                .to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "slices_selector_metric.")))
+                .chain(
+                    self.slices_selector_aggr
+                        .to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "slices_selector_aggr."))),
+                ),
+        )
+    }
+}
+
+impl FromHashmap for ExtendMotifsConfig {
+    fn from_properties_map(parent: Option<String>, properties: &HashMap<String, thoosa_shared::val::Val>) -> Result<Self, thoosa_shared::ThoError> {
+        let prefix = parent.unwrap_or("ExtendMotifsConfig::".to_string());
+        Ok(Self {
+            slices_selector_metric: ComparisonMethod::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "slices_selector_metric.")), properties)?,
+            slices_selector_aggr: Aggr::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "slices_selector_aggr.")), properties)?,
+        })
+    }
+}
+
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_grid]
 pub struct SelectMotifsRunConfig {
@@ -289,11 +332,7 @@ pub struct SelectMotifsRunConfig {
 
     #[in_map]
     #[run_config]
-    pub slices_selector_metric: ComparisonMethod,
-
-    #[in_map]
-    #[run_config]
-    pub slices_selector_aggr: Aggr,
+    pub extend_config: Option<ExtendMotifsConfig>,
 
     #[in_map]
     #[run_config]
@@ -306,8 +345,7 @@ impl SelectMotifsRunConfig {
     pub fn new_(id: Option<RunId>, motif_selector: MotifSelector) -> Self {
         Self {
             id,
-            slices_selector_metric: ComparisonMethod::EucDist(EucDistConfig::default()),
-            slices_selector_aggr: Aggr::Mean(MeanAggr { k: 1.0 }),
+            extend_config: Some(ExtendMotifsConfig::default()),
             global_k: 0.5,
         }
     }
@@ -315,8 +353,7 @@ impl SelectMotifsRunConfig {
     pub fn new() -> Self {
         Self {
             id: None,
-            slices_selector_metric: ComparisonMethod::EucDist(EucDistConfig::default()),
-            slices_selector_aggr: Aggr::Mean(MeanAggr { k: 1.0 }),
+            extend_config: Some(ExtendMotifsConfig::default()),
             global_k: 0.5,
         }
     }
