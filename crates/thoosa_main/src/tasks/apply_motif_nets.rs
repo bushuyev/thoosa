@@ -87,6 +87,7 @@ where
     {
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));
 
+        //gpt Load all selected motif nets for the provided train_motif_nets_run_ids.
         let futures = train_motif_nets_run_ids
             .iter()
             .flat_map(|train_motif_nets_run_id| {
@@ -122,6 +123,7 @@ where
             "ApplyMotifNets::new",
         )
         .await
+        //gpt TODO!! collect_futures_with_progress drops errors; failed net loads are silently skipped.
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
@@ -145,6 +147,7 @@ where
         //     return Err(ThoError::new(format!("ApplyMotifNets failed, slice_step={slice_step:?} should haven len=1 in train_motif_nets_run_ids={train_motif_nets_run_ids:?}, slice_step.len={}", slice_step.len())));
         // }
 
+        //gpt TODO!! if no motif nets load, these expects will panic; consider returning a structured error.
         let motif_width = motif_width.into_iter().next().expect("no motif_width");
         let slice_step = slice_step.into_iter().next().expect("no motif_width");
         debug!("ApplyMotifNets::new: motif_width={motif_width:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets.len());
@@ -211,6 +214,7 @@ where
 
                 let slice_step = self.slice_step;
 
+                //gpt TODO!! if input length < motif_width, the subtraction underflows (u32) and slices becomes huge.
                 let slices = ((input.size().dim::<1>() as u32 - self.motif_width)/slice_step) as i64 + 1;
 
                 debug!("ApplyMotifNets::run: input.size={:?} self.motif_width={:?} slice_step={slice_step} slices={slices} min_split_len={min_split_len} overlap_len={overlap_len}", input.size(), self.motif_width);
