@@ -279,7 +279,9 @@ impl OutputBuilder for DistOutputBuilder {
         } else {
             match self.aggr {
                 Aggr::Mean(k) => k * self.values.iter().sum::<f32>() / self.values.len() as f32,
-                Aggr::Quantile(_) =>  self.values.into_iter().reduce(f32::max).unwrap_or(0.0),
+                Aggr::Min(k) => k * self.values.iter().copied().reduce(f32::min).unwrap_or(0.0),
+                Aggr::Max(k) => k * self.values.iter().copied().reduce(f32::max).unwrap_or(0.0),
+                Aggr::Quantile(_) => self.values.iter().copied().reduce(f32::max).unwrap_or(0.0),
             }
         };
 
