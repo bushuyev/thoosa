@@ -29,7 +29,7 @@ use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
 use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
 use crate::tasks::cross_batch_clc::{unfold_and_cat, UnfoldParams};
-use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use thoosa_common::tho_tensor::ThoTensor;
@@ -120,7 +120,7 @@ where
 
         let (batch_1_t, batch_1_sizes) = unfold_and_cat(input.batch, &unfold_params)?;
 
-        debug!("ClcResourcesMotifsDist::do_run: self.num_channels={} batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} avg_dists.size={:?} input.resource_ids={:?}",self.num_channels, batch_1_t.size(), batch_1_t.device(), input.stacked_motifs_output.motifs.data().t_ref().size(), input.stacked_motifs_output.motifs_avg_dists.t_ref().size(), input.resource_ids);
+        debug!("ClcResourcesMotifsDist::do_run: self.num_channels={} batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} motifs_stats.size={:?} input.resource_ids={:?}",self.num_channels, batch_1_t.size(), batch_1_t.device(), input.stacked_motifs_output.motifs.data().t_ref().size(), input.motifs_stats.t_ref().size(), input.resource_ids);
 
         #[cfg(test)]
         if self.fail_if_size_bigger_than.map(|v| v < batch_1_t.size()[1] as usize).unwrap_or(false) {
@@ -143,8 +143,7 @@ where
             LocalMin { dim: 2, radius: unfold_params.size() as u64  /2 },
             Le {
                 v: input
-                    .stacked_motifs_output
-                    .motifs_avg_dists
+                    .motifs_stats
                     .t_ref()
                     .unsqueeze(-1)
                     .expand(
@@ -234,6 +233,7 @@ pub struct ClcResourcesMotifsDistInputDeviceWrapper {
     batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
     resource_ids: Vec<ResourceId>,
     stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>,
+    motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>,
 }
 
 impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapper {
@@ -258,8 +258,14 @@ impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 impl ClcResourcesMotifsDistInputDeviceWrapper {
-    pub fn new(id: SynKey, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, resource_ids: Vec<ResourceId>, stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>) -> Self {
-        Self { id, batch, resource_ids, stacked_motifs }
+    pub fn new(
+        id: SynKey,
+        batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+        resource_ids: Vec<ResourceId>,
+        stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>,
+        motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>,
+    ) -> Self {
+        Self { id, batch, resource_ids, stacked_motifs, motifs_stats }
     }
 }
 
@@ -281,18 +287,21 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     {
         let t_1_batch= self.batch.clone();
         let stacked_motifs = Arc::clone(&self.stacked_motifs);
+        let motifs_stats = Arc::clone(&self.motifs_stats);
         // let ctx = DeviceCtx::new(to_device_idx);
-        with_data!(permits_ctx, [t_1_batch], stacked_motifs;
+        with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
             |
              ctx,
              batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
-             stacked_motifs:&StackedMotifsOutput
+             stacked_motifs:&StackedMotifsOutput,
+             motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
             |{
 
                 do_run(&ClcResourcesMotifsDistInput::new(
                     batch_v,
                     self.resource_ids.clone(),
                     stacked_motifs,
+                    motifs_stats,
                 ), ctx)
 
         })
@@ -337,17 +346,20 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
         let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
         let t_1_batch= self.batch[range.clone()].to_vec();
         let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
+        let motifs_stats = Arc::clone(&self.motifs_stats);
 
-        with_data!(ctx, [t_1_batch], stacked_motifs_output;
+        with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
             |
              ctx,
              batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
-             stacked_motifs_output:&StackedMotifsOutput
+             stacked_motifs_output:&StackedMotifsOutput,
+             motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
             |{
                 let inpt = ClcResourcesMotifsDistInput::new(
                     &batch_v,
                     self.resource_ids[range].to_vec(),
                     stacked_motifs_output,
+                    motifs_stats,
                 );
 
                 do_run(&inpt, ctx)
@@ -363,6 +375,7 @@ pub struct ClcResourcesMotifsDistInput<'a> {
     resource_ids: Vec<ResourceId>,
     resource_offsets: Vec<u32>,
     stacked_motifs_output: &'a StackedMotifsOutput,
+    motifs_stats: &'a ThoTensor<ChannelsMotifsDists, SynKey>,
 }
 
 
@@ -371,9 +384,10 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
         batch: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
         resource_ids: Vec<ResourceId>,
         batched_motifs_output: &'a StackedMotifsOutput,
+        motifs_stats: &'a ThoTensor<ChannelsMotifsDists, SynKey>,
     ) -> ClcResourcesMotifsDistInput<'a> {
         let resource_offsets = vec![0; resource_ids.len()];
-        Self::new_with_offsets(batch, resource_ids, resource_offsets, batched_motifs_output)
+        Self::new_with_offsets(batch, resource_ids, resource_offsets, batched_motifs_output, motifs_stats)
     }
 
     pub fn new_with_offsets(
@@ -381,6 +395,7 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
         resource_ids: Vec<ResourceId>,
         resource_offsets: Vec<u32>,
         batched_motifs_output: &'a StackedMotifsOutput,
+        motifs_stats: &'a ThoTensor<ChannelsMotifsDists, SynKey>,
     ) -> ClcResourcesMotifsDistInput<'a> {
         assert_eq!(resource_ids.len(), resource_offsets.len());
         Self {
@@ -389,6 +404,7 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
             resource_ids,
             resource_offsets,
             stacked_motifs_output: batched_motifs_output,
+            motifs_stats,
         }
     }
 
@@ -411,11 +427,11 @@ impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
 
         let batch_mem_size = self.batch.iter().map(|t|t.mem_size()).sum::<u64>();
         let motifs_output_mem_size =  self.stacked_motifs_output.motifs.mem_size();
-        let motifs_avg_dists_mem_size = self.stacked_motifs_output.motifs_avg_dists.mem_size();
+        let motifs_stats_mem_size = self.motifs_stats.mem_size();
 
-        debug!("ClcResourcesMotifsDistInput::mem_size: batch_mem_size={} motifs_output_mem_size={} motifs_avg_dists_mem_size={}", batch_mem_size, motifs_output_mem_size, motifs_avg_dists_mem_size);
+        debug!("ClcResourcesMotifsDistInput::mem_size: batch_mem_size={} motifs_output_mem_size={} motifs_stats_mem_size={}", batch_mem_size, motifs_output_mem_size, motifs_stats_mem_size);
 
-        batch_mem_size + motifs_output_mem_size + motifs_avg_dists_mem_size
+        batch_mem_size + motifs_output_mem_size + motifs_stats_mem_size
     }
 }
 
