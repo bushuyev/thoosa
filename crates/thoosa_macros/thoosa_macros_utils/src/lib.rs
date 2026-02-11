@@ -51,6 +51,21 @@ pub fn get_option_inner_ty(ty: &Type) -> Option<Type> {
     None
 }
 
+pub fn get_vec_inner_ty(ty: &Type) -> Option<Type> {
+    if let Type::Path(TypePath { path, .. }) = ty {
+        if let Some(first_segment) = path.segments.first() {
+            if first_segment.ident == "Vec" {
+                if let PathArguments::AngleBracketed(ref args) = first_segment.arguments {
+                    if let Some(GenericArgument::Type(inner_type)) = args.args.first() {
+                        return Some(inner_type.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn comment(field: &&Field, field_name: &String) -> String {
     let mut descr = field_name.clone();
     for attr in &field.attrs {

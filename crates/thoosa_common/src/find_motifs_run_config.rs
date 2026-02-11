@@ -27,7 +27,7 @@ pub struct FindMotifsRunConfig {
 
     #[run_config]
     #[in_map]
-    pub filter: Option<InputFilter>,
+    pub freq_filter: Vec<InputFilter>,
 
     #[run_config]
     #[in_map]
@@ -57,14 +57,14 @@ impl FindMotifsRunConfig {
         id: Option<u32>,
         step: u32,
         window: u32,
-        filter: Option<InputFilter>,
+        freq_filter: Option<Vec<InputFilter>>,
         mean_k: Option<f32>,
     ) -> Self {
         Self {
             id,
             step,
             window,
-            filter,
+            freq_filter: freq_filter.unwrap_or_default(),
             slices_filter: SlicesFilter::AccumulateStats(AccumulateStats {
                 aggr: Aggr::Mean(MeanAggr { k: mean_k.unwrap_or(0.5) }),
             }),
@@ -76,7 +76,7 @@ impl FindMotifsRunConfig {
         id: Option<u32>,
         step: u32,
         window: u32,
-        filter: Option<InputFilter>,
+        freq_filter: Option<Vec<InputFilter>>,
         k: f32,
         slices: u32,
     ) -> Self {
@@ -84,7 +84,7 @@ impl FindMotifsRunConfig {
             id,
             step,
             window,
-            filter,
+            freq_filter: freq_filter.unwrap_or_default(),
             slices_filter: SlicesFilter::PrecalculateStats(PrecalculateStats { aggr: Aggr::Mean(MeanAggr { k }), slices}),
         }
     }
@@ -101,7 +101,7 @@ impl FindMotifsRunConfig {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub enum InputFilter {
-    Conv1(Conv1Params),
+    NotchBandFilter(NotchBandFilterParams),
     BandPassFilter(BandPassFilterParams),
 }
 
@@ -164,31 +164,6 @@ pub struct QuantileAggr {
     #[in_map]
     #[run_config]
     pub q: f32,
-}
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
-pub struct Conv1Params {
-    #[in_map]
-    #[run_config]
-    kernel: i64,
-
-    #[in_map]
-    #[run_config]
-    stride: i64,
-
-    #[in_map]
-    #[run_config]
-    padding: i64,
-}
-
-impl Conv1Params {
-    pub fn new(kernel: i64, stride: i64, padding: i64) -> Self {
-        Self {
-            kernel,
-            stride,
-            padding,
-        }
-    }
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
@@ -269,7 +244,7 @@ mod tests {
             id: None,
             step: 100.into(),
             window: 200.into(),
-            filter: Some(InputFilterRangeOrValue::BandPassFilter(
+            freq_filter: vec![InputFilterRangeOrValue::BandPassFilter(
                 BandPassFilterParamsRangeOrValue {
                     low_hz: 10f64.into(),
                     band_hz: 300f64.into(),
@@ -277,7 +252,7 @@ mod tests {
                     stride: 1i64.into(),
                     padding: 1i64.into(),
                 },
-            )),
+            )],
             slices_filter: SlicesFilterRangeOrValue::AccumulateStats(
                 AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: 0.5.into() }) },
             ),
