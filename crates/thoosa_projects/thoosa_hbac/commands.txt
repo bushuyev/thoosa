@@ -8,7 +8,7 @@ cargo run --bin thoosa_hbac --release  -- --term-logger-level=INFO --write-logge
 
 cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'100',window:'1000','slices_filter':{'DistanceRunningMean':{'k':'0.02'}}}" --max-chunk-size=100000
 cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'50..110:50,0',window:'1000','slices_filter':{'DistanceRunningMean':{'k':'0.02'}}}"
-cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'100',window:'1000','filter': {'BandPassFilter': {'low_hz':'20.', 'band_hz':'10.', kernel_size:'100', stride:'1', 'padding':'0'}}, 'slices_filter':{'DistanceRunningMean':{'k':'0.02'}}}"
+cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'100',window:'1000','freq_filter': {'BandPassFilter': {'low_hz':'20.', 'band_hz':'10.', kernel_size:'100', stride:'1', 'padding':'0'}}, 'slices_filter':{'DistanceRunningMean':{'k':'0.02'}}}"
 
 
 select count(*) cnt, motif_id from slice_matches group by motif_id order by cnt desc limit 100;
