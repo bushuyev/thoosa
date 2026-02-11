@@ -742,6 +742,7 @@ async fn run_all(
         },
         || root_ctx.branch(Some("select motifs"), true, false),
     ).await?;
+    
 
     //gpt Plot "good motifs" from each selection run (CPU plotting; large runs can be slow).
     for select_motifs_run_id in &select_motifs_run_ids {
@@ -754,7 +755,7 @@ async fn run_all(
     for find_motifs_run_id in &find_motifs_run_ids {
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: Some(select_motifs_run_ids.clone()) }), &Cpu).await?;
     }
-    return Ok(());
+    // return Ok(());
 
     debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
@@ -945,9 +946,9 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // freq_filter: None,
         freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
             // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-            low_hz:  RangeOrValue::Value(0.0) ,
+            low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
             // band_hz: RangeOrValue::Value(10.),
-            band_hz:  RangeOrValue::Range { range: Range { start: 10., end: 100. }, step: Some((10., 1)) },
+            band_hz:  RangeOrValue::Value(10.0),
             kernel_size: RangeOrValue::Value(10),
             stride: RangeOrValue::Value(1),
             padding: RangeOrValue::Value(0),
