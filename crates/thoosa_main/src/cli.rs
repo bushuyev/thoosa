@@ -83,6 +83,7 @@ use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Asy
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
 use crate::tasks::cross_dims::ChannelsMotifsDists;
+use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
@@ -671,6 +672,10 @@ async fn run_all(
         CacheArea::default()
     ));
 
+    let find_motifs_run_config_range_or_value_for_opt = find_motifs_run_config_range_or_value.clone();
+    let select_motifs_run_config_for_opt = select_motifs_run_config.clone();
+    let fixed_find_motifs_config_for_opt = fixed_find_motifs_config.clone();
+
     //gpt Pre-create context and shared handles for FindMotifs stage construction (kept outside the run_grid closure).
     let init_ctx_find_motifs = root_ctx.branch(Some("init find motifs"), true, false);
     let store_in_find_motifs = Arc::clone(&store);
@@ -743,6 +748,43 @@ async fn run_all(
         || root_ctx.branch(Some("select motifs"), true, false),
     ).await?;
     
+
+    if false {
+        let find_and_select_input = Arc::new(DevicesWrap::wrap(
+            FindAndSelectMotifsInput::new(
+                run_all_args.find_resources.clone(),
+                run_all_args.select_resources.clone(),
+            ),
+            CacheArea::default(),
+        ));
+
+        let find_and_select_run_config = FindAndSelectMotifsRunConfigRangeOrValue {
+            id: None,
+            find_motifs_run_config: find_motifs_run_config_range_or_value_for_opt,
+            select_motifs_run_config: select_motifs_run_config_for_opt,
+        };
+
+        let _find_and_select_run_ids = run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
+            None,
+            find_and_select_run_config,
+            find_and_select_input,
+            &ws,
+            &store,
+            false,
+            async move |run_configs| {
+                Ok(Arc::new(FindAndSelectMotifsStage::new(
+                    Arc::clone(&loader),
+                    &ws,
+                    &store,
+                    run_configs,
+                    fixed_find_motifs_config_for_opt,
+                    Arc::clone(opt_config),
+                    run_all_args.max_chunk_size as i64,
+                )))
+            },
+            || root_ctx.branch(Some("find and select motifs"), true, false),
+        ).await?;
+    }
 
     //gpt Plot "good motifs" from each selection run (CPU plotting; large runs can be slow).
     for select_motifs_run_id in &select_motifs_run_ids {
