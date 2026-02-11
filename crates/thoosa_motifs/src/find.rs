@@ -336,7 +336,8 @@ mod motif_find_tests {
     use tch::Kind::{Bool, Float, Int};
     use tch::kind::DOUBLE_CPU;
     use tch::{Device, IndexOp, Kind, Tensor};
-    use thoosa_common::find_motifs_run_config::{Conv1Params, FindMotifsRunConfig, InputFilter};
+    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
+    use thoosa_common::transforms::filters::BandPassFilterParams;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::*;
     use thoosa_shared::*;
@@ -694,7 +695,13 @@ mod motif_find_tests {
             Some(0),
             10,
             10,
-            Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))),
+            Some(vec![InputFilter::BandPassFilter(BandPassFilterParams {
+                low_hz: 0.0,
+                band_hz: 100.0,
+                kernel_size: 10,
+                stride: 1,
+                padding: 1,
+            })]),
             Some(0.01),
         );
 

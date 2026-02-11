@@ -464,18 +464,18 @@ where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>
 {
-    let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.freq_filter.as_ref() {
-        None => {
+    let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.freq_filter.as_slice() {
+        [] => {
             debug!("MotifLoader::run: find_motifs_run_id={:?} no filter", find_motifs_run_config.id);
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Single(Arc::clone(loader)))
         },
-        Some(filter_config) => {
-            debug!("MotifLoader::run: find_motifs_run_id={:?} filter_config={filter_config:?}", find_motifs_run_config.id);
+        freq_filter => {
+            debug!("MotifLoader::run: find_motifs_run_id={:?} freq_filter={freq_filter:?}", find_motifs_run_config.id);
 
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
                 SynKey::new([mono_key!("ab", "stage")]),
                 Arc::clone(loader),
-                Arc::new(FreqFilter::<C>::new(filter_config, ws)?),
+                Arc::new(FreqFilter::<C>::new(freq_filter, ws)?),
             ))))
         },
     };
