@@ -42,7 +42,7 @@ where
     num_channels:i64,
     sample_rate:f64
 }
-
+//repalce with two config - band pass and band notch
 impl<C> FreqFilter<C>
 where
     C: RunCtx + 'static,

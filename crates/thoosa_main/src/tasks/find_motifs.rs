@@ -24,7 +24,7 @@ use tch::kind::FLOAT_CPU;
 use tokio::runtime::Handle;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::copy_ctx::CopyCtx;
-use thoosa_common::find_motifs_run_config::{Aggr as FilterAggr, FindMotifsRunConfig, SlicesFilter};
+use thoosa_common::find_motifs_run_config::{Aggr as FilterAggr, FindMotifsRunConfig, MaxSlices, SlicesFilter};
 use thoosa_common::loader::LoadRunner;
 use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
@@ -221,8 +221,10 @@ where
                                 MasksCtx::PrecalculatedDist { dists }
                             }
                             SlicesFilter::ExactStats(v) => {
+                                let exact_stats_t = Tensor::from_slice(&[v.euc_dist]).to_device(ThoDevice::from(ctx.device_idx()).into()).broadcast_to(&[channels as i64, 1]);
+                                debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: exact_stats_t=\n{}", exact_stats_t);
                                 MasksCtx::PrecalculatedDist {//rename to PreSet
-                                    dists: ThoTensor::new("ExactStats".into(), Tensor::from_slice(&[v.euc_dist]).to_device(ThoDevice::from(ctx.device_idx()).into()).broadcast_to(&[channels as i64, 1]))?
+                                    dists: ThoTensor::new("ExactStats".into(), exact_stats_t)?
                                 }
                             }
                         };
@@ -325,13 +327,17 @@ where
                                     let fixed_config = fixed_config.clone();
                                     move |resources: &[Arc<Resource>]| {
                                         debug!("FindMotifsStages::new: new DistsTracker, resources.len={}", resources.len());
-                                        // let total_seq_len = resources.iter().map(|r|r.length() as u64).sum::<u64>();
                                         Arc::new(DistsTracker::<C>::new(
                                             &ws,
                                             &store,
                                             &run_config,
                                             &fixed_config,
-                                            None, //Some(resources.len() as u32 * 10), //TODO. max_slices_count - if motif has more than ten slices in each resource it's probably noise
+                                            run_config.max_slices.as_ref().map(|max_slices|{
+                                                match max_slices {
+                                                    MaxSlices::ByResourcesCount(max_by_resources) => {resources.len() as u32 * max_by_resources.k}
+                                                    MaxSlices::Abs(max_slices_ab) => max_slices_ab.count
+                                                }
+                                            }),
                                         ))
                                     }
                                 },
@@ -458,7 +464,7 @@ where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>
 {
-    let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.filter.as_ref() {
+    let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.freq_filter.as_ref() {
         None => {
             debug!("MotifLoader::run: find_motifs_run_id={:?} no filter", find_motifs_run_config.id);
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Single(Arc::clone(loader)))
