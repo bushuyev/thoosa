@@ -313,7 +313,7 @@ where
                     motif_id_value,
                     find_motifs_run_config.window,
                     None,
-                    find_motifs_run_config.window//it's assumed that filter's kernel is of same size as window
+                    find_motifs_run_config.window//it's assumed that max filter's kernel is of same size as window
                 )?;
 
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), &mut ctx, &self.ws, "random loader").await?;
