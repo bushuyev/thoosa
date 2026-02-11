@@ -192,32 +192,38 @@ impl Conv1Params {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+struct MaxSlicesByResources {
+    #[in_map]
+    #[run_config]
+    k:u32
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+struct MaxSlicesAbs {
+    #[in_map]
+    #[run_config]
+    count:u32
+}
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+pub enum MaxSlices{//discard motifs which slices counts bigger than
+    ByResourcesCount(MaxSlicesByResources),// K * resources count - if motif has more than k slices in each resource it's probably noise
+    Abs(MaxSlicesAbs) // by exact value - if motif has more than count slices it's garbage
+}
+
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub enum SlicesFilter {
     AccumulateStats(AccumulateStats),
     PrecalculateStats(PrecalculateStats),
     ExactStats(ExactStats)//same for all motifs
 }
 
-#[derive(ThoosaRunConfig, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct AccumulateStats {
+    #[in_map]
     #[run_config]
     pub aggr: Aggr,
-}
 
-impl ToHashmap for AccumulateStats {
-    fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
-        let prefix = parent.unwrap_or("AccumulateStats::".to_string());
-        self.aggr.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "aggr.")))
-    }
-}
-
-impl FromHashmap for AccumulateStats {
-    fn from_properties_map(parent: Option<String>, properties: &HashMap<String, thoosa_shared::val::Val>) -> Result<Self, thoosa_shared::ThoError> {
-        let prefix = parent.unwrap_or("AccumulateStats::".to_string());
-        Ok(Self {
-            aggr: Aggr::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "aggr.")), properties)?,
-        })
-    }
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
@@ -526,7 +532,7 @@ pub struct SelectMotifsRunConfig {
 
     #[in_map]
     #[run_config]
-    pub threshold: f32,
+    pub threshold: f32,//TODO remove
 }
 
 impl SelectMotifsRunConfig {

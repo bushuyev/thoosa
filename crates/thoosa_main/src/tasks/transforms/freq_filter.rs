@@ -17,7 +17,7 @@ use thoosa_common::find_motifs_run_config::InputFilter;
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{CachableIdTr, WithId};
-use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
 use crate::tasks::cross_dims::ChannelsData2;
@@ -35,6 +35,7 @@ pub struct FreqFilter<C>
 where
     C: RunCtx + 'static,
 {
+    id:MonoKey,
     // filters:Vec<> TODO
     band_pass_tensor: Option<ThoTensor<BandPassDims, SynKey>>,
     _ctx: PhantomData<C>,
@@ -63,7 +64,7 @@ where
                     band_pass_config.low_hz,
                     high_hz,
                     band_pass_config.kernel_size,
-                    sample_rate, //TODO take from ws
+                    sample_rate,
                     1e-6
                 ).repeat([num_channels, 1, 1]).to_device(Cuda(0));
 
@@ -78,6 +79,7 @@ where
             }
         };
         Ok(Self {
+            id: mono_key!("FreqFilter", "FreqFilter"),
             band_pass_tensor,
             _ctx: PhantomData,
             num_channels,
@@ -91,8 +93,7 @@ where
     C: RunCtx + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        let stage_key = SynKey::new([mono_key!("filtered_inp", "stage")]);
-        &stage_key + input_id
+        &self.id + input_id
     }
 }
 

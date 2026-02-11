@@ -222,7 +222,7 @@ where
                             }
                             SlicesFilter::ExactStats(v) => {
                                 MasksCtx::PrecalculatedDist {//rename to PreSet
-                                    dists: ThoTensor::new("ExactStats".into(), Tensor::from_slice(&[v.euc_dist]).broadcast_to(&[channels as i64, 1]))?
+                                    dists: ThoTensor::new("ExactStats".into(), Tensor::from_slice(&[v.euc_dist]).to_device(ThoDevice::from(ctx.device_idx()).into()).broadcast_to(&[channels as i64, 1]))?
                                 }
                             }
                         };
@@ -331,7 +331,7 @@ where
                                             &store,
                                             &run_config,
                                             &fixed_config,
-                                            Some(resources.len() as u32 * 10), //TODO. max_slices_count - if motif has more than ten slices in each resource it's probably noise
+                                            None, //Some(resources.len() as u32 * 10), //TODO. max_slices_count - if motif has more than ten slices in each resource it's probably noise
                                         ))
                                     }
                                 },
@@ -466,8 +466,7 @@ where
         Some(filter_config) => {
             debug!("MotifLoader::run: find_motifs_run_id={:?} filter_config={filter_config:?}", find_motifs_run_config.id);
 
-            Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::
-            new(
+            Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
                 SynKey::new([mono_key!("ab", "stage")]),
                 Arc::clone(loader),
                 Arc::new(FreqFilter::<C>::new(filter_config, ws)?),

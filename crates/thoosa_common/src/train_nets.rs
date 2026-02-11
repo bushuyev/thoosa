@@ -1100,7 +1100,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                     Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
                         debug!("cnn_label_node: MinMax leaner input={t:?} lengths={lengths:?}");
                         let lengths = lengths.unwrap_or(&[]);//TODO
-                        let mask = mask_from_lengths(lengths, *lengths.iter().max().unwrap(), t.device())?;
+                        let mask = mask_from_lengths(lengths, *lengths.iter().max().unwrap_or(&0), t.device())?;
 
                         let mean = t.f_mean_dim(2, false, None)?;
                         let max = t.f_max_dim(2, false)?;
