@@ -19,6 +19,7 @@ use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{CachableIdTr, WithId};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::utils::plot_t;
 use thoosa_common::ws::Workspace;
 use crate::tasks::cross_dims::ChannelsData2;
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
@@ -80,7 +81,7 @@ where
                         band_pass_config.kernel_size,
                         sample_rate,
                         1e-6
-                    ).repeat([num_channels, 1, 1]).to_device(Cuda(0));
+                    )?.repeat([num_channels, 1, 1]).to_device(Cuda(0));
 
                     filters.push(PreparedFilter::BandPass {
                         kernel: ThoTensor::new(
@@ -157,6 +158,12 @@ where
                    match filter {
                        PreparedFilter::NotchBand { low_hz, high_hz } => {
                            filtered_t = notch_band_rfft(&filtered_t, self.sample_rate, *low_hz, *high_hz)?;
+
+                           #[allow(unexpected_cfgs)]
+                           #[cfg(thoosa_debug_plots)]
+                           {
+                               plot_t(&filtered_t, &format!("{}_NotchBand", input.id()), true);
+                           }
                        }
                        PreparedFilter::BandPass { kernel, stride, padding } => {
                            filtered_t = kernel.run_inner(|band_filter_inner| {
@@ -165,6 +172,12 @@ where
                                debug!("FreqFilter::run: band_filter.size={:?} input.size={:?} output.size={:?}", band_filter_inner.size(), input.size(), output.size());
                                Ok(output)
                            })?;
+
+                           #[allow(unexpected_cfgs)]
+                           #[cfg(thoosa_debug_plots)]
+                           {
+                               plot_t(&filtered_t, &format!("{}_BandPass", input.id()), true);
+                           }
                        }
                    }
                }
