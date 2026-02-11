@@ -28,6 +28,17 @@ pub struct BandPassFilterParams {
     pub padding: i64,
 }
 
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+pub struct NotchBandFilterParams {
+    #[in_map]
+    #[run_config]
+    pub low_hz: f64,
+
+    #[in_map]
+    #[run_config]
+    pub high_hz: f64,
+}
+
 
 
 /// Create a sinc-based band-pass filter

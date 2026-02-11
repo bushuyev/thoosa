@@ -30,6 +30,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
     let fields_enum_ident = format_ident!("{}Fields", target_struct_ident);
     let builder_ident = format_ident!("{}Builder", target_struct_ident);
     let builder_enum_ident = format_ident!("{}BuilderEnum", target_struct_ident);
+    let vec_index_ty_ident = format_ident!("{}VecIndex", fields_enum_ident);
 
     struct TokenStreams {
         range_or_value_fields: Vec<proc_macro2::TokenStream>,
@@ -41,6 +42,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
         builder_add_val_match_cases: Vec<proc_macro2::TokenStream>,
         builder_assignments: Vec<proc_macro2::TokenStream>,
         builder_enum_variants: Vec<proc_macro2::TokenStream>,
+        has_vec_indexes: bool,
     }
 
     impl TokenStreams {
@@ -55,6 +57,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                 builder_add_val_match_cases: vec![],
                 builder_assignments: vec![],
                 builder_enum_variants: vec![],
+                has_vec_indexes: false,
             }
         }
     }
@@ -70,6 +73,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
         builder_add_val_match_cases,
         builder_assignments,
         builder_enum_variants,
+        vec_index_alias,
     ) = match &ast.data {
         syn::Data::Struct(data_struct) => {
             match &data_struct.fields {
@@ -82,11 +86,104 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                         //eprintln!("field_type={}", field_type.to_token_stream());
 
                         if has_attr(field, RUN_CONFIG_ATTR) {
-
-
                             if let Some(inner_ty) = get_option_inner_ty(&field_type) {//is Option
+                                if let Some(vec_inner_ty) = get_vec_inner_ty(&inner_ty) {
+                                    a.has_vec_indexes = true;
+                                    let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
 
-                                if is_primitive(&inner_ty) {
+                                    if is_primitive(&vec_inner_ty) {
+                                        a.range_or_value_fields.push(quote! {
+                                            pub #field_ident: Option<Vec<thoosa_shared::RangeOrValue<#vec_inner_ty>>>,
+                                        });
+
+                                        a.enum_fields.push(quote! {
+                                            #camel_field_ident(#vec_index_ty_ident)
+                                        });
+                                        a.field_names.push(field_ident.to_string());
+
+                                        a.range_or_value_add_calls.push(quote! {
+                                            if let Some(vs) = self.#field_ident.as_ref() {
+                                                for (i, v) in vs.iter().enumerate() {
+                                                    thoosa_shared::add_range_or_value::<#vec_inner_ty, T>(append(#fields_enum_ident::#camel_field_ident(i)), v, const_params, grid_params, opt_params);
+                                                }
+                                            }
+                                        });
+
+                                        a.builder_fields.push(quote! {
+                                            #field_ident:std::collections::BTreeMap<usize, #vec_inner_ty>,
+                                        });
+
+                                        let field_ident_str = field_ident.to_string();
+                                        a.builder_add_val_match_cases.push(quote! {
+                                            #fields_enum_ident::#camel_field_ident(i) => {
+                                                let v:#vec_inner_ty = val.try_into().expect(&format!("can't convert val {:?}:{}[{}] to {}", val, #field_ident_str, i, #vec_inner_ty_str));
+                                                self.#field_ident.insert(*i, v);
+                                            }
+                                        });
+
+                                        a.builder_assignments.push(quote!{
+                                            #field_ident: {
+                                                if self.#field_ident.is_empty() {
+                                                    None
+                                                } else {
+                                                    let mut v = Vec::with_capacity(self.#field_ident.len());
+                                                    for (expected_idx, (idx, item)) in self.#field_ident.iter().enumerate() {
+                                                        assert_eq!(*idx, expected_idx, "sparse vec for {}: expected index {} got {}", #field_ident_str, expected_idx, idx);
+                                                        v.push(item.clone());
+                                                    }
+                                                    Some(v)
+                                                }
+                                            },
+                                        });
+                                    } else {
+                                        let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", vec_inner_ty.to_token_stream().to_string()), camel_field_ident.span());
+                                        let field_type_fields = Ident::new(&format!("{}Fields", vec_inner_ty.to_token_stream().to_string()), camel_field_ident.span());
+                                        let field_type_builder = Ident::new(&format!("{}Builder", vec_inner_ty.to_token_stream().to_string()), camel_field_ident.span());
+
+                                        a.range_or_value_fields.push(quote! {
+                                            pub #field_ident: Option<Vec<#field_type_range_or_value>>,
+                                        });
+
+                                        a.enum_fields.push(quote! {
+                                            #camel_field_ident(#vec_index_ty_ident, #field_type_fields)
+                                        });
+                                        a.field_names.push(field_ident.to_string());
+
+                                        a.range_or_value_add_calls.push(quote! {
+                                            if let Some(vs) = self.#field_ident.as_ref() {
+                                                for (i, v) in vs.iter().enumerate() {
+                                                    v.fill_run_configs(|sub| append(#fields_enum_ident::#camel_field_ident(i, sub)), const_params, grid_params, opt_params);
+                                                }
+                                            }
+                                        });
+
+                                        a.builder_fields.push(quote! {
+                                            #field_ident:std::collections::BTreeMap<usize, #field_type_builder>,
+                                        });
+
+                                        a.builder_add_val_match_cases.push(quote! {
+                                            #fields_enum_ident::#camel_field_ident(i, sub_path) => {
+                                                self.#field_ident.entry(*i).or_default().add_val(sub_path, val);
+                                            }
+                                        });
+
+                                        let field_ident_str = field_ident.to_string();
+                                        a.builder_assignments.push(quote!{
+                                            #field_ident: {
+                                                if self.#field_ident.is_empty() {
+                                                    None
+                                                } else {
+                                                    let mut v = Vec::with_capacity(self.#field_ident.len());
+                                                    for (expected_idx, (idx, item)) in self.#field_ident.iter().enumerate() {
+                                                        assert_eq!(*idx, expected_idx, "sparse vec for {}: expected index {} got {}", #field_ident_str, expected_idx, idx);
+                                                        v.push(item.build());
+                                                    }
+                                                    Some(v)
+                                                }
+                                            },
+                                        });
+                                    }
+                                } else if is_primitive(&inner_ty) {
                                     a.range_or_value_fields.push(quote! {
                                         pub #field_ident: Option<thoosa_shared::RangeOrValue<#inner_ty>>,
                                     });
@@ -161,7 +258,94 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     });
                                 }
                             } else {
-                                if is_primitive(&field_type) {
+                                if let Some(vec_inner_ty) = get_vec_inner_ty(&field_type) {
+                                    a.has_vec_indexes = true;
+                                    let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
+
+                                    if is_primitive(&vec_inner_ty) {
+                                        a.range_or_value_fields.push(quote! {
+                                            pub #field_ident: Vec<thoosa_shared::RangeOrValue<#vec_inner_ty>>,
+                                        });
+                                        a.enum_fields.push(quote! {
+                                            #camel_field_ident(#vec_index_ty_ident)
+                                        });
+                                        a.field_names.push(field_ident.to_string());
+
+                                        a.range_or_value_add_calls.push(quote! {
+                                            for (i, v) in self.#field_ident.iter().enumerate() {
+                                                thoosa_shared::add_range_or_value::<#vec_inner_ty, T>(append(#fields_enum_ident::#camel_field_ident(i)), v, const_params, grid_params, opt_params);
+                                            }
+                                        });
+
+                                        a.builder_fields.push(quote! {
+                                            #field_ident:std::collections::BTreeMap<usize, #vec_inner_ty>,
+                                        });
+
+                                        let field_ident_str = field_ident.to_string();
+                                        a.builder_add_val_match_cases.push(quote! {
+                                            #fields_enum_ident::#camel_field_ident(i) => {
+                                                let v:#vec_inner_ty = val.try_into().expect(&format!("can't convert val {:?}:{}[{}] to {}", val, #field_ident_str, i, #vec_inner_ty_str));
+                                                self.#field_ident.insert(*i, v);
+                                            }
+                                        });
+
+                                        let expect_msg = format!("no {}", field_ident);
+                                        a.builder_assignments.push(quote!{
+                                            #field_ident: {
+                                                assert!(!self.#field_ident.is_empty(), #expect_msg);
+                                                let mut v = Vec::with_capacity(self.#field_ident.len());
+                                                for (expected_idx, (idx, item)) in self.#field_ident.iter().enumerate() {
+                                                    assert_eq!(*idx, expected_idx, "sparse vec for {}: expected index {} got {}", #field_ident_str, expected_idx, idx);
+                                                    v.push(item.clone());
+                                                }
+                                                v
+                                            },
+                                        });
+                                    } else {
+                                        let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", vec_inner_ty.to_token_stream().to_string()), camel_field_ident.span());
+                                        let field_type_fields = Ident::new(&format!("{}Fields", vec_inner_ty.to_token_stream().to_string()), camel_field_ident.span());
+                                        let field_type_builder = Ident::new(&format!("{}Builder", vec_inner_ty.to_token_stream().to_string()), camel_field_ident.span());
+
+                                        a.range_or_value_fields.push(quote! {
+                                            pub #field_ident: Vec<#field_type_range_or_value>,
+                                        });
+
+                                        a.enum_fields.push(quote! {
+                                            #camel_field_ident(#vec_index_ty_ident, #field_type_fields)
+                                        });
+                                        a.field_names.push(field_ident.to_string());
+
+                                        a.range_or_value_add_calls.push(quote! {
+                                            for (i, v) in self.#field_ident.iter().enumerate() {
+                                                v.fill_run_configs(|sub| append(#fields_enum_ident::#camel_field_ident(i, sub)), const_params, grid_params, opt_params);
+                                            }
+                                        });
+
+                                        a.builder_fields.push(quote! {
+                                            #field_ident:std::collections::BTreeMap<usize, #field_type_builder>,
+                                        });
+
+                                        a.builder_add_val_match_cases.push(quote! {
+                                            #fields_enum_ident::#camel_field_ident(i, sub_path) => {
+                                                self.#field_ident.entry(*i).or_default().add_val(sub_path, val);
+                                            }
+                                        });
+
+                                        let expect_msg = format!("no {}", field_ident);
+                                        let field_ident_str = field_ident.to_string();
+                                        a.builder_assignments.push(quote!{
+                                            #field_ident: {
+                                                assert!(!self.#field_ident.is_empty(), #expect_msg);
+                                                let mut v = Vec::with_capacity(self.#field_ident.len());
+                                                for (expected_idx, (idx, item)) in self.#field_ident.iter().enumerate() {
+                                                    assert_eq!(*idx, expected_idx, "sparse vec for {}: expected index {} got {}", #field_ident_str, expected_idx, idx);
+                                                    v.push(item.build());
+                                                }
+                                                v
+                                            },
+                                        });
+                                    }
+                                } else if is_primitive(&field_type) {
                                     a.range_or_value_fields.push(quote! {
                                         pub #field_ident: thoosa_shared::RangeOrValue<#field_type>,
                                     });
@@ -299,6 +483,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                     let add_val_match_cases = token_streams.builder_add_val_match_cases;
                     let builder_assignments = token_streams.builder_assignments;
                     let is_empty_struct = field_names.is_empty();
+                    let has_vec_indexes = token_streams.has_vec_indexes;
                     let empty_marker_ident = format_ident!("__Empty");
                     let enum_fields_tokens = if is_empty_struct {
                         quote! { #empty_marker_ident, }
@@ -341,11 +526,17 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                             }
                         },
                         quote! {},
+                        if has_vec_indexes {
+                            quote! { type #vec_index_ty_ident = usize; }
+                        } else {
+                            quote! {}
+                        },
                     )
                 }
                 _ => {
                     println!("unnamed fields");
                     (
+                        quote! {},
                         quote! {},
                         quote! {},
                         quote! {},
@@ -544,9 +735,11 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                     }
                 },
                 quote! { #(#builder_enum_variants)*},
+                quote! {},
             )
         }
         _ => (
+            quote! {},
             quote! {},
             quote! {},
             quote! {},
@@ -682,6 +875,8 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                 #target_struct_name
             }
         }
+
+        #vec_index_alias
 
         #[derive(Debug, PartialEq, Clone)]
         pub enum #fields_enum_ident {
