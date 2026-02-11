@@ -1,9 +1,10 @@
 use crate::utils::from;
 use serde::Deserialize;
 use tch::kind::FLOAT_CPU;
-use tch::{Device, IndexOp, Kind, TchError, Tensor};
+use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
+use thoosa_shared::ThoError;
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct BandPassFilterParams {
@@ -48,63 +49,76 @@ pub fn band_pass_filter(
     kernel_size: i64,
     sample_rate: f64,
     eps: f64,
-) -> Tensor {
-    let n =
-        Tensor::arange(kernel_size, (Kind::Float, Device::Cpu)) - (kernel_size - 1) as f64 / 2.0;
+) -> Result<Tensor, ThoError> {
+    let n = Tensor::f_arange(kernel_size, (Kind::Float, Device::Cpu))?.f_sub_scalar((kernel_size - 1) as f64 / 2.0)?;
 
     let low = std::f64::consts::TAU * low_hz / sample_rate;
     let high = std::f64::consts::TAU * high_hz / sample_rate;
 
-    let sinc = |x: &Tensor| {
-        let x_eps = x + eps;
-        x.sin() / x_eps
+    let sinc = |x: &Tensor| -> Result<Tensor, ThoError> {
+        let x_eps = x.f_add_scalar(eps)?;
+        Ok(x.f_sin()?.f_div(&x_eps)?)
     };
 
-    let low_pass = sinc(&(n.copy() * high)) - sinc(&(n.copy() * low));
+    let high_sinc = sinc(&n.f_mul_scalar(high)?)?;
+    let low_sinc = sinc(&n.f_mul_scalar(low)?)?;
+    let low_pass = high_sinc.f_sub(&low_sinc)?;
 
-    let window = hann_window(kernel_size);
+    let window = hann_window(kernel_size)?;
 
-    let band_pass: Tensor = low_pass * window;
+    let band_pass = low_pass.f_mul(&window)?;
 
-    let sum = band_pass.sum(Kind::Float);
-    band_pass / sum
+    let sum = band_pass.f_sum(Kind::Float)?;
+    Ok(band_pass.f_div(&sum)?)
 }
 
-pub fn hann_window(length: i64) -> Tensor {
+pub fn hann_window(length: i64) -> Result<Tensor, ThoError> {
+    if length <= 1 {
+        return Err(ThoError::new(format!("hann_window length must be > 1, got {length}")));
+    }
+
     // w[n] = 0.5 * (1 - cos(2πn / (N-1)))
-    let n = Tensor::arange(length, (Kind::Float, Device::Cpu));
+    let n = Tensor::f_arange(length, (Kind::Float, Device::Cpu))?;
     let factor = 2.0 * std::f64::consts::PI / (length as f64 - 1.0);
-    0.5 * (1.0 - (n * factor).cos())
+    let phase = n.f_mul_scalar(factor)?;
+    let cos = phase.f_cos()?;
+    Ok(cos.f_neg()?.f_add_scalar(1.0)?.f_mul_scalar(0.5)?)
 }
 
-pub fn clc_frequencies(input_signal_0: &Tensor, n: i64, rate: f64, take: usize) -> Vec<(f64, f64)> {
-    let input_signal_rfft = input_signal_0.fft_rfft(n, 0, "forward");
+pub fn clc_frequencies(input_signal_0: &Tensor, n: i64, rate: f64, take: usize) -> Result<Vec<(f64, f64)>, ThoError> {
+    let input_signal_rfft = input_signal_0.f_fft_rfft(Some(n), 0, "forward")?;
 
-    let absolutes = input_signal_rfft.abs();
-    let freq = Tensor::fft_rfftfreq(n, 1. / rate, FLOAT_CPU);
+    let absolutes = input_signal_rfft.f_abs()?;
+    let freq = Tensor::f_fft_rfftfreq(n, 1. / rate, FLOAT_CPU)?;
 
-    let ranked = absolutes.argsort(0, true);
+    let ranked = absolutes.f_argsort(0, true)?;
 
     let mut i: Box<dyn Iterator<Item = f32>> = Box::new(from::<Vec<f32>>(&ranked).into_iter());
     if take > 0 {
         i = Box::new(i.take(take));
     }
 
-    i.map(|i| {
+    Ok(i.map(|i| {
         (
             freq.double_value(&[i as i64]),
             absolutes.double_value(&[i as i64]),
         )
     })
-    .collect()
+    .collect())
 }
 
-pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor, TchError> {
+pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor, ThoError> {
     // Sanity
-    assert!(x.dim() == 2, "expected [C, T]");
+    if x.dim() != 2 {
+        return Err(ThoError::new(format!("expected [C, T], got shape {:?}", x.size())));
+    }
     let t = x.size()[1];
-    assert!(t > 1, "sequence length must be > 1");
-    assert!(fs > 0.0, "fs must be positive");
+    if t <= 1 {
+        return Err(ThoError::new(format!("sequence length must be > 1, got {t}")));
+    }
+    if fs <= 0.0 {
+        return Err(ThoError::new(format!("fs must be positive, got {fs}")));
+    }
 
     // Map Hz -> rfft bin indices.
     // rfft output length along time dim is n_fft//2 + 1
@@ -123,14 +137,15 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor
 
     // FFT along dim=1 (time axis), one-sided complex spectrum
     // (Uses PyTorch’s torch.fft.rfft/irfft through tch’s generated ops.)
-    let spec = x.fft_rfft( n, 1, "forward");
+    let spec = x.f_fft_rfft(Some(n), 1, "forward")?;
 
     // Zero the bins in-place for all channels: spec[:, k0..=k1] = 0
     let spec_z = spec.shallow_clone();
-    let _ = spec_z.i((.., k0..(k1 + 1))).fill_(0);
+    let mut notch_slice = spec_z.f_i((.., k0..(k1 + 1)))?;
+    let _ = notch_slice.f_fill_(0)?;
 
     // Inverse FFT back to time domain, preserve original length n along dim=1
-    let y = spec_z.fft_irfft(n, 1, "forward");
+    let y = spec_z.f_fft_irfft(Some(n), 1, "forward")?;
     Ok(y)
 }
 
@@ -170,17 +185,17 @@ mod tests {
         let input_signal_1 = sin_t(&t, 300.);
 
         let input_signal = input_signal_0 + input_signal_1;
-        let input_freqs = clc_frequencies(&input_signal, samples, sample_rate, 2);
+        let input_freqs = clc_frequencies(&input_signal, samples, sample_rate, 2)?;
         let input = input_signal.view((1, 1, -1)).expand(&[1, 2, -1], true); // batch x channel for conv1d
 
-        let kernel = band_pass_filter(low_hz, high_hz, kernel_size, sample_rate, 1e-6);
+        let kernel = band_pass_filter(low_hz, high_hz, kernel_size, sample_rate, 1e-6)?;
         // let kernel = kernel.unsqueeze(0).unsqueeze(0).expand(&[1, 2, -1], true); // [out_channels, in_channels/groups, kernel_size]
         let kernel = kernel.repeat([2, 1, 1]); // [out_channels, in_channels/groups, kernel_size]
 
         //apply filter
         let output = input.conv1d(&kernel, None::<Tensor>, 1, 0, 1, 2);
 
-        let output_freqs = clc_frequencies(&output.i((0, 0, ..)), samples, sample_rate, 5);
+        let output_freqs = clc_frequencies(&output.i((0, 0, ..)), samples, sample_rate, 5)?;
 
 
         assert_eq!([(300.0, 0.5), (10.0, 0.5)], input_freqs.as_slice());
@@ -224,18 +239,18 @@ mod tests {
         let input_signal_1 = sin_t(&t, 300.);
 
         let input_signal = input_signal_0 + input_signal_1;
-        let input_freqs = clc_frequencies(&input_signal, samples, sample_rate, 2);
+        let input_freqs = clc_frequencies(&input_signal, samples, sample_rate, 2)?;
         let input = input_signal.view((1, 1, -1)); // batch x channel for conv1d
         let input = input.repeat([10, 3, 1]); // [out_channels, in_channels/groups, kernel_size]
 
-        let kernel = band_pass_filter(low_hz, high_hz, kernel_size, sample_rate, 1e-6);
+        let kernel = band_pass_filter(low_hz, high_hz, kernel_size, sample_rate, 1e-6)?;
 
         let kernel = kernel.view([1, 1, -1]).expand([3, 1, -1], true);
 
         //apply filter
         let output = input.conv1d(&kernel, None::<Tensor>, 1, 0, 1, 3);
 
-        let output_freqs = clc_frequencies(&output.i((0, 0, ..)), samples, sample_rate, 5);
+        let output_freqs = clc_frequencies(&output.i((0, 0, ..)), samples, sample_rate, 5)?;
 
 
         assert_eq!([(300.0, 0.5), (10.0, 0.5)], input_freqs.as_slice());

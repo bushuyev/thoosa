@@ -725,23 +725,26 @@ pub fn plot_resource(
     let channel = 0; //TODO
 
     let resources = resource_config.to_resources(store)?;
-    let all_tensors = resources.iter().map(|r| {
-        let t = Tensor::load(
-            // tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())),
-            FsWorkspace::resource_tensor_path(&tensors_path, r),
-        )
-        .unwrap()
-        .i((channel, ..));
+    let all_tensors: Vec<Tensor> = resources
+        .iter()
+        .map(|r| -> Result<Tensor, ThoError> {
+            let t = Tensor::load(
+                // tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())),
+                FsWorkspace::resource_tensor_path(&tensors_path, r),
+            )
+            .unwrap()
+            .i((channel, ..));
 
-        let freqs = clc_frequencies(&t, t.size()[0], 32000f64, 100);
-        debug!("plot_resource: r={r:?} freqs={freqs:?}");
+            let freqs = clc_frequencies(&t, t.size()[0], 32000f64, 100)?;
+            debug!("plot_resource: r={r:?} freqs={freqs:?}");
 
-        let freqs_bins = avg_hist(&freqs.iter().map(|v| v.0).collect::<Vec<f64>>(), 10);
+            let freqs_bins = avg_hist(&freqs.iter().map(|v| v.0).collect::<Vec<f64>>(), 10);
 
-        debug!("plot_resource: freqs_bins={freqs_bins:?}");
+            debug!("plot_resource: freqs_bins={freqs_bins:?}");
 
-        t
-    });
+            Ok(t)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let mut color_iter = DistinctColorIter::new();
     plot_series(
         all_tensors
