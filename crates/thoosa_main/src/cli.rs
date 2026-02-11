@@ -39,7 +39,7 @@ use tch::{Device, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::{ThoDevice};
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStatsRangeOrValue, CoherenceRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, QuantileAggrRangeOrValue, ComparisonMethodRangeOrValue, PearsonCorrConfigRangeOrValue, EucDistConfigRangeOrValue, MinAggrRangeOrValue, ExactStatsRangeOrValue};
+use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStatsRangeOrValue, CoherenceRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, QuantileAggrRangeOrValue, ComparisonMethodRangeOrValue, PearsonCorrConfigRangeOrValue, EucDistConfigRangeOrValue, MinAggrRangeOrValue, ExactStatsRangeOrValue, MaxSlicesRangeOrValue, MaxSlicesAbsRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -946,7 +946,8 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
             // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
             low_hz:  RangeOrValue::Value(0.0) ,
-            band_hz: RangeOrValue::Value(10.),
+            // band_hz: RangeOrValue::Value(10.),
+            band_hz:  RangeOrValue::Range { range: Range { start: 10., end: 100. }, step: Some((10., 1)) },
             kernel_size: RangeOrValue::Value(10),
             stride: RangeOrValue::Value(1),
             padding: RangeOrValue::Value(0),
@@ -962,7 +963,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
         slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.01..0.1, step: Some((0.01, 2))}  }),
         // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Value(0.4)  }),
-        max_slices: None,
+        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select
