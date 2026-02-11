@@ -1,5 +1,5 @@
 use futures_util::future::BoxFuture;
-use log::{debug, error, trace};
+use log::{debug, error, trace, warn};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use thoosa_shared::runner::global_ctx::GlobalCtx;
@@ -27,6 +27,11 @@ impl Purger {
             loop {
                 if GlobalCtx::global().is_shutting_down() {
                     return
+                }
+
+                if rx.is_closed() {
+                    warn!("Purger::new, loop: channel is closed");
+                    return ;
                 }
 
                 match rx.recv().await {
