@@ -39,7 +39,7 @@ use tch::{Device, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::{ThoDevice};
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStatsRangeOrValue, CoherenceRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, QuantileAggrRangeOrValue, ComparisonMethodRangeOrValue, PearsonCorrConfigRangeOrValue, EucDistConfigRangeOrValue, MinAggrRangeOrValue, ExactStatsRangeOrValue};
+use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStatsRangeOrValue, CoherenceRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, QuantileAggrRangeOrValue, ComparisonMethodRangeOrValue, PearsonCorrConfigRangeOrValue, EucDistConfigRangeOrValue, MinAggrRangeOrValue, ExactStatsRangeOrValue, MaxSlicesRangeOrValue, MaxSlicesAbsRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -742,6 +742,7 @@ async fn run_all(
         },
         || root_ctx.branch(Some("select motifs"), true, false),
     ).await?;
+    
 
     //gpt Plot "good motifs" from each selection run (CPU plotting; large runs can be slow).
     for select_motifs_run_id in &select_motifs_run_ids {
@@ -754,7 +755,7 @@ async fn run_all(
     for find_motifs_run_id in &find_motifs_run_ids {
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: Some(select_motifs_run_ids.clone()) }), &Cpu).await?;
     }
-    return Ok(());
+    // return Ok(());
 
     debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
@@ -945,8 +946,9 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // freq_filter: None,
         freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
             // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-            low_hz:  RangeOrValue::Value(0.0) ,
-            band_hz: RangeOrValue::Value(10.),
+            low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
+            // band_hz: RangeOrValue::Value(10.),
+            band_hz:  RangeOrValue::Value(10.0),
             kernel_size: RangeOrValue::Value(10),
             stride: RangeOrValue::Value(1),
             padding: RangeOrValue::Value(0),
@@ -962,7 +964,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
         slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.01..0.1, step: Some((0.01, 2))}  }),
         // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Value(0.4)  }),
-        max_slices: None,
+        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select
