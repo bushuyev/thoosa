@@ -27,11 +27,15 @@ pub struct FindMotifsRunConfig {
 
     #[run_config]
     #[in_map]
-    pub filter: Option<InputFilter>,
+    pub freq_filter: Option<InputFilter>,
 
     #[run_config]
     #[in_map]
     pub slices_filter: SlicesFilter,
+
+    #[run_config]
+    #[in_map]
+    pub max_slices: Option<MaxSlices>
 }
 
 impl FindMotifsRunConfig {
@@ -64,10 +68,11 @@ impl FindMotifsRunConfig {
             id,
             step,
             window,
-            filter,
+            freq_filter: filter,
             slices_filter: SlicesFilter::AccumulateStats(AccumulateStats {
                 aggr: Aggr::Mean(MeanAggr { k: mean_k.unwrap_or(0.5) }),
             }),
+            max_slices: None,
         }
     }
 
@@ -84,8 +89,9 @@ impl FindMotifsRunConfig {
             id,
             step,
             window,
-            filter,
+            freq_filter: filter,
             slices_filter: SlicesFilter::PrecalculateStats(PrecalculateStats { aggr: Aggr::Mean(MeanAggr { k }), slices}),
+            max_slices: None,
         }
     }
 
@@ -192,17 +198,17 @@ impl Conv1Params {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
-struct MaxSlicesByResources {
+pub struct MaxSlicesByResources {
     #[in_map]
     #[run_config]
-    k:u32
+    pub k:u32
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
-struct MaxSlicesAbs {
+pub struct MaxSlicesAbs {
     #[in_map]
     #[run_config]
-    count:u32
+    pub count:u32
 }
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub enum MaxSlices{//discard motifs which slices counts bigger than
@@ -269,7 +275,7 @@ mod tests {
             id: None,
             step: 100.into(),
             window: 200.into(),
-            filter: Some(InputFilterRangeOrValue::BandPassFilter(
+            freq_filter: Some(InputFilterRangeOrValue::BandPassFilter(
                 BandPassFilterParamsRangeOrValue {
                     low_hz: 10f64.into(),
                     band_hz: 300f64.into(),
@@ -281,6 +287,7 @@ mod tests {
             slices_filter: SlicesFilterRangeOrValue::AccumulateStats(
                 AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: 0.5.into() }) },
             ),
+            max_slices: None,
         };
         // debug!("{:#}", serde_json5::to_string(&rc).unwrap());
         let grid = rc.grid_run_configs();
