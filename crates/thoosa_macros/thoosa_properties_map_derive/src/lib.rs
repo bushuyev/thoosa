@@ -107,6 +107,19 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         }
                     }
 
+                    let fields_in_to_properties_iter = if fields_in_to_properties.is_empty() {
+                        quote! {
+                            std::iter::empty::<(String, Option<thoosa_shared::val::Val>)>()
+                        }
+                    } else {
+                        quote! {
+                            [
+                                #(#fields_in_to_properties)*
+                            ]
+                            .into_iter()
+                        }
+                    };
+
                     let token_stream = if is_empty_struct {
                         quote! {
                             impl thoosa_properties_map::ToHashmap for #target_ident {
@@ -132,10 +145,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                 fn to_properties_iter(&self, parent: Option<String>,) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
                                     let prefix = parent.unwrap_or(#target_ident_prefix.to_string());
                                     Box::new(
-                                        [
-                                            #(#fields_in_to_properties)*
-                                        ]
-                                        .into_iter()
+                                        #fields_in_to_properties_iter
                                         .filter_map(|v|v.1.map(|val|(v.0, val)))
                                         #(#chains_in_to_properties)*
                                     )
