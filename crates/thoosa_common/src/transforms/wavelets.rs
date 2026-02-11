@@ -57,12 +57,12 @@ mod tests {
         let input_signal_1 = sin_t(&t, 3. * target_freq);
 
         let input = input_signal_0 + input_signal_1;
-        let input_freqs = clc_frequencies(&input, samples, sample_rate, 2);
+        let input_freqs = clc_frequencies(&input, samples, sample_rate, 2)?;
         let input = input.view((1, 1, -1));
 
         let envelope = complex_conv(&input, &wavelet_real, &wavelet_imag);
 
-        let output_freqs = clc_frequencies(&envelope, samples, sample_rate, 5);
+        let output_freqs = clc_frequencies(&envelope, samples, sample_rate, 5)?;
 
         /*
         plot_series(
