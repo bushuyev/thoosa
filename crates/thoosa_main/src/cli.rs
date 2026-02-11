@@ -68,8 +68,8 @@ use tokio::runtime::Runtime;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CopyCtx;
-use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::BandPassFilter;
-use thoosa_common::transforms::filters::BandPassFilterParamsRangeOrValue;
+use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, NotchBandFilter};
+use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::{OutId, RunCtx};
@@ -857,7 +857,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         id: None,
         step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Value(1000),
-        freq_filter: None,
+        freq_filter: vec![],
         slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.05..0.5, step: Some((0.05, 2))}  }) }),
         max_slices: None,
     };
@@ -942,15 +942,15 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         id: None,
         step: RangeOrValue::Value(1), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Value(100),
-        freq_filter: None,
-        // filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue {
+        freq_filter: vec![],
+        // freq_filter: vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
         //     // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
         //     low_hz:  RangeOrValue::Value(0.0) ,
         //     band_hz: RangeOrValue::Value(100.),
         //     kernel_size: RangeOrValue::Value(1000),
         //     stride: RangeOrValue::Value(1),
         //     padding: RangeOrValue::Value(0),
-        // })),
+        // })],
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.025) }) }),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))} }) }),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.01) })}),
@@ -1048,14 +1048,20 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
         step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         // window: RangeOrValue::Value(1000),
         window: RangeOrValue::Range { range: Range { start: 1000, end: 5001 }, step: Some((1000, 1)) },
-        freq_filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue {
-            low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-            band_hz: RangeOrValue::Value(100.),
-            kernel_size: RangeOrValue::Value(1000),
-            stride: RangeOrValue::Value(1),
-            padding: RangeOrValue::Value(0),
-        })),
-        // filter: None,
+        freq_filter: vec![
+            NotchBandFilter(NotchBandFilterParamsRangeOrValue {
+                low_hz: RangeOrValue::Value(58.0),
+                high_hz: RangeOrValue::Value(62.0),
+            }),
+            BandPassFilter(BandPassFilterParamsRangeOrValue {
+                low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
+                band_hz: RangeOrValue::Value(100.),
+                kernel_size: RangeOrValue::Value(1000),
+                stride: RangeOrValue::Value(1),
+                padding: RangeOrValue::Value(0),
+            }),
+        ],
+        // freq_filter: vec![],
         slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.02) }) }),
         max_slices: None,
     };

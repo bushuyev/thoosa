@@ -2,7 +2,7 @@ use log::warn;
 use proc_macro::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{Data, DeriveInput, parse_macro_input};
-use thoosa_macros_utils::{get_option_inner_ty, has_attr, is_primitive};
+use thoosa_macros_utils::{get_option_inner_ty, get_vec_inner_ty, has_attr, is_primitive};
 
 const IN_MAP_ATTR: &'static str = "in_map";
 
@@ -36,7 +36,83 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         if let Some(inner_ty) = get_option_inner_ty(&field.ty) {
                             //is Option
 
-                            if is_primitive(&inner_ty) {
+                            if let Some(vec_inner_ty) = get_vec_inner_ty(&inner_ty) {
+                                let field_idx_fmt = format!("{}{{}}", field_name_path);
+                                let field_prefix_fmt = format!("{}{{}}.", field_name_path);
+                                let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
+
+                                if is_primitive(&vec_inner_ty) {
+                                    chains_in_to_properties.push(quote! {
+                                        .chain(
+                                            {
+                                                let entries: Vec<(String, thoosa_shared::val::Val)> = self.#field_ident
+                                                    .as_ref()
+                                                    .map(|values| {
+                                                        values
+                                                            .iter()
+                                                            .enumerate()
+                                                            .map(|(i, v)| (thoosa_shared::conc_str(&prefix, &format!(#field_idx_fmt, i)), v.clone().into()))
+                                                            .collect()
+                                                    })
+                                                    .unwrap_or_default();
+                                                entries.into_iter()
+                                            }
+                                        )
+                                    });
+
+                                    fields_in_from_properties.push(quote! {
+                                        #field_ident: {
+                                            let mut values = Vec::new();
+                                            let mut idx: usize = 0;
+                                            loop {
+                                                let key = thoosa_shared::conc_str(&prefix, &format!(#field_idx_fmt, idx));
+                                                if let Some(v) = properties.get(&key) {
+                                                    values.push(v.try_into().expect(&format!("can't convert {}[{}]: value={v:?} to {}", #field_name, idx, #vec_inner_ty_str)));
+                                                    idx += 1;
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                            if values.is_empty() { None } else { Some(values) }
+                                        },
+                                    });
+                                } else {
+                                    chains_in_to_properties.push(quote! {
+                                        .chain(
+                                            {
+                                                let entries: Vec<(String, thoosa_shared::val::Val)> = self.#field_ident
+                                                    .as_ref()
+                                                    .map(|values| {
+                                                        values
+                                                            .iter()
+                                                            .enumerate()
+                                                            .flat_map(|(i, v)| v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, &format!(#field_prefix_fmt, i)))))
+                                                            .collect()
+                                                    })
+                                                    .unwrap_or_default();
+                                                entries.into_iter()
+                                            }
+                                        )
+                                    });
+
+                                    fields_in_from_properties.push(quote! {
+                                        #field_ident: {
+                                            let mut values = Vec::new();
+                                            let mut idx: usize = 0;
+                                            loop {
+                                                let child_prefix = thoosa_shared::conc_str(&prefix, &format!(#field_prefix_fmt, idx));
+                                                if properties.keys().any(|key| key.starts_with(child_prefix.as_str())) {
+                                                    values.push(#vec_inner_ty::from_properties_map(Some(child_prefix), properties)?);
+                                                    idx += 1;
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                            if values.is_empty() { None } else { Some(values) }
+                                        },
+                                    });
+                                }
+                            } else if is_primitive(&inner_ty) {
                                 fields_in_to_properties.push(quote! {
                                     (thoosa_shared::conc_str(&prefix, #field_name), self.#field_ident.map(|v| v.into())),
 
@@ -77,7 +153,69 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                 });
                             }
                         } else {
-                            if is_primitive(&field.ty) {
+                            if let Some(vec_inner_ty) = get_vec_inner_ty(&field.ty) {
+                                let field_idx_fmt = format!("{}{{}}", field_name_path);
+                                let field_prefix_fmt = format!("{}{{}}.", field_name_path);
+                                let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
+
+                                if is_primitive(&vec_inner_ty) {
+                                    chains_in_to_properties.push(quote! {
+                                        .chain({
+                                            let entries: Vec<(String, thoosa_shared::val::Val)> = self.#field_ident
+                                                .iter()
+                                                .enumerate()
+                                                .map(|(i, v)| (thoosa_shared::conc_str(&prefix, &format!(#field_idx_fmt, i)), v.clone().into()))
+                                                .collect();
+                                            entries.into_iter()
+                                        })
+                                    });
+
+                                    fields_in_from_properties.push(quote! {
+                                        #field_ident: {
+                                            let mut values = Vec::new();
+                                            let mut idx: usize = 0;
+                                            loop {
+                                                let key = thoosa_shared::conc_str(&prefix, &format!(#field_idx_fmt, idx));
+                                                if let Some(v) = properties.get(&key) {
+                                                    values.push(v.try_into().expect(&format!("can't convert {}[{}]: value={v:?} to {}", #field_name, idx, #vec_inner_ty_str)));
+                                                    idx += 1;
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                            values
+                                        },
+                                    });
+                                } else {
+                                    chains_in_to_properties.push(quote! {
+                                        .chain({
+                                            let entries: Vec<(String, thoosa_shared::val::Val)> = self.#field_ident
+                                                .iter()
+                                                .enumerate()
+                                                .flat_map(|(i, v)| v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, &format!(#field_prefix_fmt, i)))))
+                                                .collect();
+                                            entries.into_iter()
+                                        })
+                                    });
+
+                                    fields_in_from_properties.push(quote! {
+                                        #field_ident: {
+                                            let mut values = Vec::new();
+                                            let mut idx: usize = 0;
+                                            loop {
+                                                let child_prefix = thoosa_shared::conc_str(&prefix, &format!(#field_prefix_fmt, idx));
+                                                if properties.keys().any(|key| key.starts_with(child_prefix.as_str())) {
+                                                    values.push(#vec_inner_ty::from_properties_map(Some(child_prefix), properties)?);
+                                                    idx += 1;
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                            values
+                                        },
+                                    });
+                                }
+                            } else if is_primitive(&field.ty) {
                                 fields_in_to_properties.push(quote! {
                                     (thoosa_shared::conc_str(&prefix, #field_name), Some(self.#field_ident.into())),
 
