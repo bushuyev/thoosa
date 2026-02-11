@@ -1203,6 +1203,9 @@ where
 
             let kee_score = with_data!(ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
                 let motif_slices = motif_data.data().t_ref();
+                if motif_slices.size()[0] < 3 {
+                    return Ok::<(bool, f64), ThoError>((false, 0.0));
+                }
                 let mut score_sum = 0.0f64;
                 let mut avg_score = 1.0;
                 for (idx, criterion) in motif_criteria.iter().enumerate() {

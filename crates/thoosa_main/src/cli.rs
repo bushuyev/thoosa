@@ -682,74 +682,83 @@ async fn run_all(
     let ws_in_find_motifs = Arc::clone(&ws);
     let loader_in_find_motifs = Arc::clone(&loader);
 
-    //gpt Run a grid over FindMotifs configs, constructing a stage per grid point and executing it.
-    let find_motifs_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
-        None,
-        find_motifs_run_config_range_or_value,
-        find_motifs_input,
-        &ws,
-        &store,
-        true,
-        async move |run_configs| {
-            Arc::new(
-                crate::tasks::find_motifs::FindMotifsStage::new(
-                    &ws_in_find_motifs,
-                    &store_in_find_motifs,
-                    loader_in_find_motifs,
-                    run_configs,
-                    fixed_find_motifs_config,
-                    ThoDevice::from(1),
-                    //gpt TODO!! hard-coded device index assumes GPU 1 exists; consider selecting from args or ctx.
-                    init_ctx_find_motifs
-                ).await.expect("FindMotifsStage::new failed"),
-                //gpt TODO!! `expect` will panic and bypass error propagation; consider returning the error instead.
-            )
-        },
-        || root_ctx.branch(Some("find motifs"), true, false),
-    ).await?;
+    let find_motifs_opt = false;
+    let select_motifs_run_ids = if !find_motifs_opt {
+        //gpt Run a grid over FindMotifs configs, constructing a stage per grid point and executing it.
+        let find_motifs_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
+            None,
+            find_motifs_run_config_range_or_value,
+            find_motifs_input,
+            &ws,
+            &store,
+            true,
+            async move |run_configs| {
+                Arc::new(
+                    crate::tasks::find_motifs::FindMotifsStage::new(
+                        &ws_in_find_motifs,
+                        &store_in_find_motifs,
+                        loader_in_find_motifs,
+                        run_configs,
+                        fixed_find_motifs_config,
+                        ThoDevice::from(1),
+                        //gpt TODO!! hard-coded device index assumes GPU 1 exists; consider selecting from args or ctx.
+                        init_ctx_find_motifs
+                    ).await.expect("FindMotifsStage::new failed"),
+                    //gpt TODO!! `expect` will panic and bypass error propagation; consider returning the error instead.
+                )
+            },
+            || root_ctx.branch(Some("find motifs"), true, false),
+        ).await?;
 
-    info!("find motifs done, find_motif_run_ids={find_motifs_run_ids:?}");
+        info!("find motifs done, find_motif_run_ids={find_motifs_run_ids:?}");
 
-    //gpt Plot slices for each FindMotifs run (CPU plotting); useful for debugging but potentially expensive.
-    for find_motifs_run_id in &find_motifs_run_ids {
-        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
-    }
+        //gpt Plot slices for each FindMotifs run (CPU plotting); useful for debugging but potentially expensive.
+        for find_motifs_run_id in &find_motifs_run_ids {
+            run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
+        }
 
 
-    debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
-    //gpt The select stage depends on the FindMotifs run ids; keep the ids to join results across runs.
-    //gpt TODO!! if find_motifs_run_ids is empty, downstream stages will still run; should we short-circuit?
+        debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
+        //gpt The select stage depends on the FindMotifs run ids; keep the ids to join results across runs.
+        //gpt TODO!! if find_motifs_run_ids is empty, downstream stages will still run; should we short-circuit?
 
-    //gpt Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
-    let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
-        Some(find_motifs_run_ids.clone()),
-        select_motifs_run_config,
-        select_motifs_input,
-        &ws,
-        &store,
-        true,
-        async |run_configs| {
-            Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
-                &ws,
-                &store,
-                Arc::clone(&loader),
-                Arc::new(MotifLoader::new(
-                    Arc::clone(&store),
+        //gpt Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
+        let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
+            Some(find_motifs_run_ids.clone()),
+            select_motifs_run_config,
+            select_motifs_input,
+            &ws,
+            &store,
+            true,
+            async |run_configs| {
+                Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
+                    &ws,
+                    &store,
                     Arc::clone(&loader),
-                    &ws
-                )),
-                run_configs,
-                find_motifs_run_ids.clone(),
-                run_all_args.max_chunk_size as i64,
-                #[cfg(test)]
-                None
-            ))
-        },
-        || root_ctx.branch(Some("select motifs"), true, false),
-    ).await?;
-    
+                    Arc::new(MotifLoader::new(
+                        Arc::clone(&store),
+                        Arc::clone(&loader),
+                        &ws
+                    )),
+                    run_configs,
+                    find_motifs_run_ids.clone(),
+                    run_all_args.max_chunk_size as i64,
+                    #[cfg(test)]
+                    None
+                ))
+            },
+            || root_ctx.branch(Some("select motifs"), true, false),
+        ).await?;
 
-    if false {
+        //gpt Plot "good motifs" from each selection run (CPU plotting; large runs can be slow).
+        for select_motifs_run_id in &select_motifs_run_ids {
+            run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (*select_motifs_run_id)), &Cpu).await?;
+        }
+        info!("select motifs done: find_motifs_run_ids={find_motifs_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
+
+        select_motifs_run_ids
+
+    } else {
         let find_and_select_input = Arc::new(DevicesWrap::wrap(
             FindAndSelectMotifsInput::new(
                 run_all_args.find_resources.clone(),
@@ -764,7 +773,7 @@ async fn run_all(
             select_motifs_run_config: select_motifs_run_config_for_opt,
         };
 
-        let _find_and_select_run_ids = run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
+        let find_and_select_run_ids = run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
             None,
             find_and_select_run_config,
             find_and_select_input,
@@ -784,23 +793,19 @@ async fn run_all(
             },
             || root_ctx.branch(Some("find and select motifs"), true, false),
         ).await?;
-    }
 
-    //gpt Plot "good motifs" from each selection run (CPU plotting; large runs can be slow).
-    for select_motifs_run_id in &select_motifs_run_ids {
-        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (*select_motifs_run_id)), &Cpu).await?;
-    }
+        info!("select motifs done: find_and_select_run_ids={find_and_select_run_ids:?}");
 
-    info!("select motifs done: find_motifs_run_ids={find_motifs_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
+        // for find_motifs_run_id in &find_motifs_run_ids {
+        //     run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
+        // }
 
-    //gpt Plot motifs with selection overlays per FindMotifs run.
-    for find_motifs_run_id in &find_motifs_run_ids {
-        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: Some(select_motifs_run_ids.clone()) }), &Cpu).await?;
-    }
-    // return Ok(());
+        find_and_select_run_ids
+    };
 
     debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
+    return Ok(());
     //gpt Train motif nets needs a custom input wrapper (motif ids + opt config) rather than a resource config.
     let input_wrapper = Arc::new(DevicesWrap::wrap(
         TrainMotifNetInput::new(select_motifs_run_ids.clone(), Arc::clone(&opt_config)),
@@ -900,7 +905,16 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         id: None,
         step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Value(1000),
-        freq_filter: None,
+        // freq_filter: None,
+        freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
+            // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
+            low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },//
+            // band_hz: RangeOrValue::Value(10.),
+            band_hz:  RangeOrValue::Value(10.0),
+            kernel_size: RangeOrValue::Value(100),
+            stride: RangeOrValue::Value(10),
+            padding: RangeOrValue::Value(0),
+        })]),
         slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.05..0.5, step: Some((0.05, 2))}  }) }),
         max_slices: None,
     };
@@ -988,7 +1002,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // freq_filter: None,
         freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
             // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-            low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
+            low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },//
             // band_hz: RangeOrValue::Value(10.),
             band_hz:  RangeOrValue::Value(10.0),
             kernel_size: RangeOrValue::Value(10),
@@ -1004,7 +1018,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.005..0.05, step: Some((0.005, 4))} }), slices: RangeOrValue::Value(100)}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
-        slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.01..0.1, step: Some((0.01, 2))}  }),
+        slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.01..0.1, step: None}  }),//Some((0.01, 2))
         // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Value(0.4)  }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
     };
@@ -1042,7 +1056,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
     };
-    let opt_config = Arc::new(OptConfig::new(100, 10));
+    let opt_config = Arc::new(OptConfig::new(50, 10));
 
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
@@ -1316,7 +1330,7 @@ where
     Ok(resource_ids) //for tests
 }
 
-async fn run_plot_motif_slices(
+pub async fn run_plot_motif_slices(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
     loader: &Arc<RawTensorLoader<RunCtxWithPermits>>,
