@@ -857,7 +857,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         id: None,
         step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Value(1000),
-        freq_filter: vec![],
+        freq_filter: None,
         slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.05..0.5, step: Some((0.05, 2))}  }) }),
         max_slices: None,
     };
@@ -942,15 +942,15 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         id: None,
         step: RangeOrValue::Value(1), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Value(100),
-        // freq_filter: vec![],
-        freq_filter: vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
+        // freq_filter: None,
+        freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
             // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
             low_hz:  RangeOrValue::Value(0.0) ,
             band_hz: RangeOrValue::Value(10.),
             kernel_size: RangeOrValue::Value(10),
             stride: RangeOrValue::Value(1),
             padding: RangeOrValue::Value(0),
-        })],
+        })]),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.025) }) }),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))} }) }),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.01) })}),
@@ -1048,7 +1048,7 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
         step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         // window: RangeOrValue::Value(1000),
         window: RangeOrValue::Range { range: Range { start: 1000, end: 5001 }, step: Some((1000, 1)) },
-        freq_filter: vec![
+        freq_filter: Some(vec![
             NotchBandFilter(NotchBandFilterParamsRangeOrValue {
                 low_hz: RangeOrValue::Value(58.0),
                 high_hz: RangeOrValue::Value(62.0),
@@ -1060,8 +1060,8 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
                 stride: RangeOrValue::Value(1),
                 padding: RangeOrValue::Value(0),
             }),
-        ],
-        // freq_filter: vec![],
+        ]),
+        // freq_filter: None,
         slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.02) }) }),
         max_slices: None,
     };
