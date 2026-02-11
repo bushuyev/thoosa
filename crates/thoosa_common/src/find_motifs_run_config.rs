@@ -27,7 +27,7 @@ pub struct FindMotifsRunConfig {
 
     #[run_config]
     #[in_map]
-    pub freq_filter: Vec<InputFilter>,
+    pub freq_filter: Option<Vec<InputFilter>>,
 
     #[run_config]
     #[in_map]
@@ -64,7 +64,7 @@ impl FindMotifsRunConfig {
             id,
             step,
             window,
-            freq_filter: freq_filter.unwrap_or_default(),
+            freq_filter,
             slices_filter: SlicesFilter::AccumulateStats(AccumulateStats {
                 aggr: Aggr::Mean(MeanAggr { k: mean_k.unwrap_or(0.5) }),
             }),
@@ -84,7 +84,7 @@ impl FindMotifsRunConfig {
             id,
             step,
             window,
-            freq_filter: freq_filter.unwrap_or_default(),
+            freq_filter,
             slices_filter: SlicesFilter::PrecalculateStats(PrecalculateStats { aggr: Aggr::Mean(MeanAggr { k }), slices}),
         }
     }
@@ -244,7 +244,7 @@ mod tests {
             id: None,
             step: 100.into(),
             window: 200.into(),
-            freq_filter: vec![InputFilterRangeOrValue::BandPassFilter(
+            freq_filter: Some(vec![InputFilterRangeOrValue::BandPassFilter(
                 BandPassFilterParamsRangeOrValue {
                     low_hz: 10f64.into(),
                     band_hz: 300f64.into(),
@@ -252,7 +252,7 @@ mod tests {
                     stride: 1i64.into(),
                     padding: 1i64.into(),
                 },
-            )],
+            )]),
             slices_filter: SlicesFilterRangeOrValue::AccumulateStats(
                 AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: 0.5.into() }) },
             ),
