@@ -937,10 +937,10 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
     (find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value)
 }
 
-fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrValue, FixedFindMotifsConfig, SelectMotifsRunConfigRangeOrValue, Arc<OptConfig>, TrainMotifsNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue) {
+fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrValue, FixedFindMotifsConfig, SelectMotifsRunConfigRangeOrValue, Arc<OptConfig>, TrainMotifsNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue) {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(2), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+        step: RangeOrValue::Value(1), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Value(100),
         freq_filter: None,
         // filter: Some(BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -960,7 +960,8 @@ fn test_run_all_config_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.005..0.05, step: Some((0.005, 4))} }), slices: RangeOrValue::Value(100)}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
-        slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.095..1.5, step: Some((0.005, 3))}  }),
+        // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.01..0.1, step: Some((0.01, 2))}  }),
+        slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Value(0.4)  }),
         max_slices: None,
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
@@ -1757,7 +1758,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, import_resources_with_pure_sets, run_all, run_all_config_0, test_run_all_config_1, run_all_grid_step, run_grid, run_opt_step, run_plot_motif_slices, Cli, RunAllArgs};
+    use crate::cli::{import_resources, import_resources_with_pure_sets, run_all, run_all_config_0, run_all_config_test_1, run_all_grid_step, run_grid, run_opt_step, run_plot_motif_slices, Cli, RunAllArgs};
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Info, Trace, Warn};
@@ -1938,8 +1939,8 @@ mod cli_tests {
             2,
             MotifKind::Triangle,
             100,
-            0.05,
-            3.0,
+            0.01,
+            0.2,
             None
         )?;
 
@@ -1948,6 +1949,50 @@ mod cli_tests {
         Ok(())
     }
 
+
+    fn tensor_1() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+        // tch_test_utils::resource_tensor(1000usize, &[
+        //     vec![(3, 100, MotifKind::Sin)],
+        // ], 100, 10.)
+        let r = resource_tensor_two_easy_motifs(
+            1000,
+            1,
+            100,
+            2,
+            MotifKind::Sin,
+            2,
+            MotifKind::Triangle,
+            100,
+            0.01,
+            0.2,
+            None
+        )?;
+        Ok((r.0, r.1))
+    }
+
+    fn tensor_0() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+        // tch_test_utils::resource_tensor(
+        //     1000usize,
+        //     &[
+        //         vec![(3, 100, MotifKind::Pulse)
+        //         ],
+        //     ], 100, 10.0)
+
+        let r = resource_tensor_two_easy_motifs(
+            1000,
+            1,
+            100,
+            2,
+            MotifKind::Pulse,
+            2,
+            MotifKind::Triangle,
+            100,
+            0.01,
+            0.2,
+            None
+        )?;
+        Ok((r.0, r.1))
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn heavy_test_run_all() -> Result<(), ThoError> {
@@ -2085,7 +2130,7 @@ mod cli_tests {
             train_motif_nets_run_config_range_or_value,
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value)
-            = test_run_all_config_1(&run_all_args);
+            = run_all_config_test_1(&run_all_args);
 
         match panic_to_err_async!({run_all(
             &ws,
@@ -2115,49 +2160,6 @@ mod cli_tests {
         Ok(())
     }
 
-    fn tensor_1() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
-        // tch_test_utils::resource_tensor(1000usize, &[
-        //     vec![(3, 100, MotifKind::Sin)],
-        // ], 100, 10.)
-        let r = resource_tensor_two_easy_motifs(
-            1000,
-            1,
-            100,
-            2,
-            MotifKind::Sin,
-            2,
-            MotifKind::Triangle,
-            100,
-            0.05,
-            3.0,
-            None
-        )?;
-        Ok((r.0, r.1))
-    }
-
-    fn tensor_0() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
-        // tch_test_utils::resource_tensor(
-        //     1000usize,
-        //     &[
-        //         vec![(3, 100, MotifKind::Pulse)
-        //         ],
-        //     ], 100, 10.0)
-
-        let r = resource_tensor_two_easy_motifs(
-            1000,
-            1,
-            100,
-            2,
-            MotifKind::Pulse,
-            2,
-            MotifKind::Triangle,
-            100,
-            0.05,
-            3.0,
-            None
-        )?;
-        Ok((r.0, r.1))
-    }
     /*
         #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="test_tracing"))]
         async fn test_tracing(){

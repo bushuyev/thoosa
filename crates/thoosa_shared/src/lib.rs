@@ -734,7 +734,7 @@ where
 pub enum RangeOrValue<V> {
     Range {
         range: Range<V>,
-        step: Option<(V, u32)>,
+        step: Option<(V, u32)>,//(value, number of digits to round to)
     }, //TODO replace step in params with number of steps? how choose number of decimals in step=to-from/steps?
     Value(V),
 }
