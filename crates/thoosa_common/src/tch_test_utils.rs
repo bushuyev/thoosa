@@ -632,7 +632,7 @@ pub fn resource_tensor_two_easy_motifs(
 
             // Add motif onto background (keeps “match distance ≈ noise norm”)
             for (o, &v) in tpl.iter().enumerate() {
-                signal[start + o] += v;
+                signal[start + o] = signal[start + o] * 0.1 + v;
             }
 
             let iv = Interval { start, end };
