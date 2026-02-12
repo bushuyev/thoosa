@@ -79,6 +79,7 @@ where
         store: &Arc<parking_lot::RwLock<Box<dyn Store>>>,
         train_motif_nets_run_ids: Vec<RunId>,
         mut stage_ctx:R,
+        min_loss: Option<f32>,
         #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>
     ) -> Result<Self, ThoError>
@@ -91,7 +92,7 @@ where
         let futures = train_motif_nets_run_ids
             .iter()
             .flat_map(|train_motif_nets_run_id| {
-                store.read().list_selected_nets(*train_motif_nets_run_id, Some(0.3)).unwrap()
+                store.read().list_selected_nets(*train_motif_nets_run_id, min_loss).unwrap()
             })
             .map(|(path, _losss)|{
                 let ws = Arc::clone(&ws);
@@ -712,7 +713,7 @@ pub(crate) mod tests {
             &ws,
             &store,
             vec![select_motifs_run_id],
-            mock_run_ctx::default(1),
+            mock_run_ctx::default(1), Some(0.3),
             trigger_oom_len
         ).await?);
 
@@ -833,8 +834,9 @@ pub(crate) mod tests {
             &ws,
             &store,
             vec![select_motifs_run_id],
-            mock_run_ctx::default(1),
-            trigger_oom_len //Some(1000)
+            mock_run_ctx::default(1), Some(0.3) //Some(1000)
+            ,
+            trigger_oom_len
         ).await?);
 
         plot_t(motif_0_0.t_ref(), "motif_test", false)?;

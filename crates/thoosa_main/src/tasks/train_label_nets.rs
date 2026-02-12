@@ -83,7 +83,8 @@ pub async fn new_train_label_nets_with_ml<L, C, R>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
     stage_ctx:R,
-    opt_config:Arc<OptConfig>
+    opt_config:Arc<OptConfig>,
+    min_loss: Option<f32>
 ) -> Result<TrainLabelNets<L, ABStage<L, ApplyMotifNets<C>, C>, C>, ThoError>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
@@ -96,6 +97,7 @@ where
         store,
         train_motif_nets_run_ids.clone(),
         stage_ctx,
+        min_loss,
         #[cfg(test)]
         None
     ).await?);
@@ -960,7 +962,8 @@ mod tests {
             &ws,
             &store,
             mock_run_ctx::default(1),
-            Arc::new(OptConfig::new(30, 10))
+            Arc::new(OptConfig::new(30, 10)),
+            Some(0.3)
         ).await?);
 
 

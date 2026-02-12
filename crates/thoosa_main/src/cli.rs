@@ -141,6 +141,9 @@ pub struct RunAllArgs {
 
     #[arg(long)]
     pub run_config_cnt: String, //TrainLabelNetsRunConfig
+
+    #[arg(long, default_value = "0.3")]
+    pub min_motif_net_loss: f32, //FixedFindMotifsConfig::max_chunk_size
 }
 
 impl RunAllArgs {
@@ -492,7 +495,8 @@ where
                         &ws,
                         &store,
                         init_ctx,
-                        opt_config
+                        opt_config,
+                        Some(0.3)
                     ).await.map(|v|Arc::new(v))
                 },
                 ||root_ctx.branch( Some("train label nets"), true, false),
@@ -876,7 +880,8 @@ async fn run_all(
                 &ws_in_train_labels,
                 &store_in_train_labels,
                 init_ctx_train_labels,
-                opt_config_in_train_labels
+                opt_config_in_train_labels,
+                Some(run_all_args.min_motif_net_loss) //to RunAll args
             ).await.map(|v| Arc::new(v))
         },
         || root_ctx.branch(Some("train label nets"), true, false),
@@ -1031,7 +1036,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
             low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },//
             // low_hz:  RangeOrValue::Value(0.0),//
             // band_hz: RangeOrValue::Value(10.),
-            band_hz:  RangeOrValue::Value(1.0),
+            band_hz:  RangeOrValue::Range { range: Range { start: 5., end: 20. }, step: Some((5., 1)) },
             kernel_size: RangeOrValue::Value(100),
             stride: RangeOrValue::Value(1),
             padding: RangeOrValue::Value(50),
@@ -1046,7 +1051,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
         // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.1, step: Some((0.001, 3))}  }),//Some((0.01, 2))
-        slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.1, step: None}  }),//Some((0.01, 2))
+        slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.2, step: None}  }),//Some((0.01, 2))
         // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Value(0.01)  }),
         max_slices: None, //Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
     };
@@ -1084,7 +1089,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
     };
-    let opt_config = Arc::new(OptConfig::new(10, 3));
+    let opt_config = Arc::new(OptConfig::new(30, 5));
 
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
@@ -1092,7 +1097,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
         net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
             step: RangeOrValue::Value(1),
-            channels: RangeOrValue::Value(8),
+            channels: RangeOrValue::Range { range: Range { start: 2, end: 16 }, step: None },
             kernel: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
         }),
         // num_layers: RangeOrValue::Range { range: Range { start: 2, end: 8 }, step: None },
@@ -2276,10 +2281,11 @@ mod cli_tests {
         let run_all_args = RunAllArgs{
             find_resources: "group:pure group 10".to_string(),
             select_resources: "group:pure group 20".to_string(),
-            max_chunk_size: 10,
+            max_chunk_size: 1000,
             train_resource_group: "pure group 20".to_string(),
             valid_resource_group: "pure group 10".to_string(),
             run_config_cnt: "".to_string(),
+            min_motif_net_loss: 0.4,
         };
 
         let (find_motifs_run_config_range_or_value,
