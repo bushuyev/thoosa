@@ -670,7 +670,8 @@ async fn run_all(
     //gpt Build the input for label training: this is typically a labeled resource set.
     let train_labels_input = Arc::new(DevicesWrap::wrap(
         ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
-                                   run_all_args.train_resource_config()).check(&store)?,
+               run_all_args.train_resource_config()
+        ).check(&store)?,
         CacheArea::default()
     ));
 
@@ -851,6 +852,7 @@ async fn run_all(
     let ws_in_train_labels = Arc::clone(&ws);
     let loader_in_train_labels = Arc::clone(&loader);
     let opt_config_in_train_labels = Arc::clone(&opt_config);
+
     //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
     let train_label_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
         None,
@@ -1019,7 +1021,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // freq_filter: None,
         freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
             // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-            low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },//
+            low_hz:  RangeOrValue::Range { range: Range { start: 100., end: 200. }, step: Some((10., 1)) },//
             // band_hz: RangeOrValue::Value(10.),
             band_hz:  RangeOrValue::Value(10.0),
             kernel_size: RangeOrValue::Value(10),
@@ -1031,11 +1033,11 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.01) })}),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))}})}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.05..1.0, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(1000) }),
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.25) }), slices: RangeOrValue::Value(100) }),
+        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(1.0) }), slices: RangeOrValue::Value(1000) }),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.005..0.05, step: Some((0.005, 4))} }), slices: RangeOrValue::Value(100)}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
-        slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.01..0.1, step: None}  }),//Some((0.01, 2))
+        // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.01..0.1, step: None}  }),//Some((0.01, 2))
         // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Value(0.4)  }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
     };
@@ -1695,6 +1697,8 @@ where
     debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
 
     let mut run_configs: Vec<RC> = grid_run_configs.to_run_configs();
+    debug!("run_all_grid_step: run_configs.len={} run_configs={run_configs:?}", run_configs.len());
+
     let mut run_ids = if presave {
         save_run_configs(
             input_run_ids.as_ref().map(|v| v.as_slice()),
@@ -2037,7 +2041,22 @@ mod cli_tests {
             None
         )?;
 
-        plot_t(&t, "two_easy_motifs", true)?;
+        plot_t(&t, "pulse_triangle", true)?;
+
+        let (t, intervals, _) = resource_tensor_two_easy_motifs(
+            1000,
+            1,
+            100,
+            2,
+            MotifKind::Pulse,
+            2,
+            MotifKind::Sin,
+            100,
+            0.01,
+            0.2,
+            None
+        )?;
+        plot_t(&t, "pulse_sin", true)?;
 
         Ok(())
     }
@@ -2096,10 +2115,15 @@ mod cli_tests {
         // log::set_max_level(log::LevelFilter::Trace);
         let global_ctx = GlobalCtx::init_devices(2);
 
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        debug!("test_motifs: test_dir={test_dir:?}");
+        // let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let test_dir = Path::new("/tmp/heavy_test_run_all");
+        if test_dir.is_dir() {
+            fs::remove_dir_all(test_dir)?;
+        }
 
+        debug!("test_motifs: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
+
         let base_path = test_dir.to_string_lossy().to_string();
 
 
