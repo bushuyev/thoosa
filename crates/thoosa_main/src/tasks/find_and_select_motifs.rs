@@ -403,7 +403,9 @@ impl AsyncStage for FindAndSelectMotifsStage {
             "FindAndSelectMotifsStage::run failed",
         )
         .await;
-        indexed_best_configs.sort_by_key(|(grid_idx, _)| *grid_idx);
+
+        // indexed_best_configs.sort_by_key(|(grid_idx, _)| *grid_idx);
+        
         let best_configs = indexed_best_configs.into_iter().filter_map(|(_, config)| config).collect::<Vec<_>>();
 
 
