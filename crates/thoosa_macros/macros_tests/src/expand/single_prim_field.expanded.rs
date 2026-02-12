@@ -98,11 +98,14 @@ impl thoosa_run_config_args::OptRunConfigSource for SingleFieldRangeOrValue {
     type P = SingleFieldFields;
     fn opt_run_configs(
         &self,
-    ) -> thoosa_shared::run_configs::OptRunConfigs<
-        Vec<thoosa_shared::val::NamedVal<SingleFieldFields>>,
-        Vec<thoosa_shared::val::NamedRange<SingleFieldFields>>,
-        Vec<thoosa_shared::hyperparameter::Hyperparameter<SingleFieldFields>>,
-        SingleFieldFields,
+    ) -> Result<
+        thoosa_shared::run_configs::OptRunConfigs<
+            Vec<thoosa_shared::val::NamedVal<SingleFieldFields>>,
+            Vec<thoosa_shared::val::NamedRange<SingleFieldFields>>,
+            Vec<thoosa_shared::hyperparameter::Hyperparameter<SingleFieldFields>>,
+            SingleFieldFields,
+        >,
+        thoosa_shared::ThoError,
     > {
         let mut const_params = Vec::new();
         let mut grid_params = Vec::new();
@@ -113,12 +116,17 @@ impl thoosa_run_config_args::OptRunConfigSource for SingleFieldRangeOrValue {
             &mut grid_params,
             &mut opt_params,
         );
-        thoosa_shared::run_configs::OptRunConfigs::new(
-            thoosa_shared::run_configs::GridRunConfigs::new(
-                thoosa_shared::run_configs::ConstConfigs::new(const_params),
-                grid_params,
+        if opt_params.is_empty() {
+            return Err(thoosa_shared::ThoError::new("no opt params in run config"));
+        }
+        Ok(
+            thoosa_shared::run_configs::OptRunConfigs::new(
+                thoosa_shared::run_configs::GridRunConfigs::new(
+                    thoosa_shared::run_configs::ConstConfigs::new(const_params),
+                    grid_params,
+                ),
+                opt_params,
             ),
-            opt_params,
         )
     }
 }

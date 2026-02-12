@@ -821,7 +821,7 @@ mod tests {
                     min_delta: RangeOrValue::Value(0.0001),
                 },
             }
-            .opt_run_configs(),
+            .opt_run_configs().expect("DummyRunConfigRangeOrValue::opt_run_configs should not fail"),
         );
         let optimizer = |_rc: &DummyRunConfig, vs: &VarStore| {
             AdamW::default()

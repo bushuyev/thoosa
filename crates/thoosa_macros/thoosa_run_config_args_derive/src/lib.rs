@@ -10,6 +10,19 @@ const RUN_CONFIG_ATTR: &'static str = "run_config";
 const RUN_CONFIG_DEFAULT_ATTR: &'static str = "run_config_default";
 
 
+/// Derives run-config helper types for Thoosa.
+///
+/// This macro generates `{TargetStruct}RangeOrValue`, where every field marked
+/// with `#[run_config]` is represented as `RangeOrValue`.
+///
+/// Semantics:
+/// - `RangeOrValue::Value` and `RangeOrValue::Range { step: Some(...) }` produce
+///   concrete values (constant/grid dimensions).
+/// - `RangeOrValue::Range { step: None }` marks optimization fields; their values
+///   are selected during optimization runs (`run_opt`, then `AsyncTPEOptimizer`).
+///
+/// `run_config_opt`/`run_config_grid` sources are generated accordingly and expose
+/// `opt_run_configs()` / `grid_run_configs()` helpers.
 #[proc_macro_derive(
     ThoosaRunConfig,
     attributes(run_config, run_config_opt, run_config_grid, run_config_default)
@@ -767,20 +780,23 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
             impl thoosa_run_config_args::OptRunConfigSource for #range_or_value_struct_ident {
                 type P =  #fields_enum_ident;
 
-                fn opt_run_configs(&self) -> thoosa_shared::run_configs::OptRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>, Vec<thoosa_shared::hyperparameter::Hyperparameter<#fields_enum_ident>>, #fields_enum_ident> {
+                fn opt_run_configs(&self) -> Result<thoosa_shared::run_configs::OptRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>, Vec<thoosa_shared::hyperparameter::Hyperparameter<#fields_enum_ident>>, #fields_enum_ident>, thoosa_shared::ThoError> {
                     let mut const_params = Vec::new();
                     let mut grid_params = Vec::new();
                     let mut opt_params = Vec::new();
 
                     self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
+                    if opt_params.is_empty() {
+                        return Err(thoosa_shared::ThoError::new("no opt params in run config"));
+                    }
 
-                    thoosa_shared::run_configs::OptRunConfigs::new(
+                    Ok(thoosa_shared::run_configs::OptRunConfigs::new(
                         thoosa_shared::run_configs::GridRunConfigs::new(
                             thoosa_shared::run_configs::ConstConfigs::new(const_params),
                             grid_params,
                         ),
                         opt_params,
-                    )
+                    ))
                 }
             }
         }
@@ -789,20 +805,20 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
             impl thoosa_run_config_args::GridRunConfigSource for #range_or_value_struct_ident {
                 type P =  #fields_enum_ident;
 
-                fn grid_run_configs(&self) -> thoosa_shared::run_configs::GridRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>> {
+                fn grid_run_configs(&self) -> Result<thoosa_shared::run_configs::GridRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>>, thoosa_shared::ThoError> {
                     let mut const_params = Vec::new();
                     let mut grid_params = Vec::new();
                     let mut opt_params = Vec::new();
 
                     self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
                     if !opt_params.is_empty() {
-                        panic!("opt_params in grid");
+                        return Err(thoosa_shared::ThoError::new("opt params in grid run config"));
                     }
 
-                    thoosa_shared::run_configs::GridRunConfigs::new(
+                    Ok(thoosa_shared::run_configs::GridRunConfigs::new(
                         thoosa_shared::run_configs::ConstConfigs::new(const_params),
                         grid_params,
-                    )
+                    ))
                 }
             }
         }

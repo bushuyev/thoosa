@@ -1239,7 +1239,7 @@ pub mod tests {
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
 
-    use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
+    use thoosa_shared::hyperparameter::Hyperparameter;
 
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedVal, Val};
@@ -1649,7 +1649,7 @@ pub mod tests {
                     num_bbb_range_or_value
                 );
 
-                v.opt_run_configs()
+                v.opt_run_configs().expect("TrainLabelsRunConfigRangeOrValue::opt_run_configs should not fail")
             }
 
             _ => {
@@ -1813,33 +1813,16 @@ pub mod tests {
             build_test_run_config(run_config_range_or_value)
         );
 
-        fn build_test_run_config<P, S, R>(run_config_range_or_value: S) -> R
-        where
-            P: FieldName,
-            S: OptRunConfigSource<P = P>,
-            R: From<std::vec::IntoIter<NamedVal<P>>>,
-        {
-            let run_config_source = run_config_range_or_value.opt_run_configs();
+        fn build_test_run_config(run_config_range_or_value: TestRunConfigRangeOrValue) -> TestRunConfig {
+            let mut const_vals = Vec::new();
+            let mut grid_vals = Vec::new();
+            let mut opt_params = Vec::new();
+            run_config_range_or_value.fill_run_configs(|v| v, &mut const_vals, &mut grid_vals, &mut opt_params);
 
-            let const_vals: Vec<NamedVal<P>> = run_config_source
-                .grid_run_config_source()
-                .const_params()
-                .clone();
-            let grid_vals: Vec<NamedVal<P>> = run_config_source.grid_to_vals()[0].clone();
-            let opt_vals: Vec<NamedVal<P>> = run_config_source
-                .opt_params()
-                .into_iter()
-                .map(|opt_param| opt_param.try_into().unwrap())
-                .collect();
+            let grid_vals: Vec<NamedVal<TestRunConfigFields>> = grid_vals.into_iter().flat_map(|range| range.into_iter()).collect();
+            let opt_vals: Vec<NamedVal<TestRunConfigFields>> = opt_params.iter().map(|opt_param| opt_param.try_into().unwrap()).collect();
 
-            [
-                const_vals.as_slice(),
-                grid_vals.as_slice(),
-                opt_vals.as_slice(),
-            ]
-            .concat()
-            .into_iter()
-            .into()
+            [const_vals.as_slice(), grid_vals.as_slice(), opt_vals.as_slice()].concat().into_iter().into()
         }
     }
 
