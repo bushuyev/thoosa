@@ -143,7 +143,7 @@ pub struct RunAllArgs {
     pub run_config_cnt: String, //TrainLabelNetsRunConfig
 
     #[arg(long, default_value = "0.3")]
-    pub min_motif_net_loss: f32, //FixedFindMotifsConfig::max_chunk_size
+    pub max_motif_net_loss: f32, //FixedFindMotifsConfig::max_chunk_size
 }
 
 impl RunAllArgs {
@@ -881,7 +881,7 @@ async fn run_all(
                 &store_in_train_labels,
                 init_ctx_train_labels,
                 opt_config_in_train_labels,
-                Some(run_all_args.min_motif_net_loss) //to RunAll args
+                Some(run_all_args.max_motif_net_loss) //to RunAll args
             ).await.map(|v| Arc::new(v))
         },
         || root_ctx.branch(Some("train label nets"), true, false),
@@ -932,12 +932,12 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         freq_filter: Some(vec![
             BandPassFilter(BandPassFilterParamsRangeOrValue {
                 // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-                low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 200. }, step: Some((10., 1)) },//
+                low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 200. }, step: Some((2., 1)) },//
                 // band_hz: RangeOrValue::Value(10.),
-                band_hz:  RangeOrValue::Value(10.0),
-                kernel_size: RangeOrValue::Value(100),
+                band_hz:  RangeOrValue::Value(2.0),
+                kernel_size: RangeOrValue::Value(1000),
                 stride: RangeOrValue::Value(10),
-                padding: RangeOrValue::Value(0),
+                padding: RangeOrValue::Value(500),
             }),
             NotchBandFilter(NotchBandFilterParamsRangeOrValue {
                 low_hz: RangeOrValue::Value(59.0),
@@ -947,7 +947,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.005..0.03, step: Some((0.005, 3))}  }), slices: RangeOrValue::Value(1000) }),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.05..0.5, step: Some((0.05, 2))}  }) }),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.02)  }) }),
-        max_slices: None,
+        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select
@@ -957,7 +957,13 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         //     slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue {  }),
         //     slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
         // }),
-        extend_config: None,
+        extend_config: Some(ExtendMotifsConfigRangeOrValue {
+            slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue {  }),
+            // slices_selector_metric: ComparisonMethodRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue {  }),
+            slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.5) }),
+            // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.8..1.2, step: Some((0.1, 1))} }),
+        }),
+        // extend_config: None,
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
             inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {
@@ -973,14 +979,14 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
     };
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(100),
+        cycles: RangeOrValue::Value(300),
         batch_size: RangeOrValue::Value(20),
         lr: RangeOrValue::Value(0.0001),
         patience: RangeOrValue::Value(100),
         min_delta: RangeOrValue::Value(1e-4_f32),
 
     };
-    let opt_config = Arc::new(OptConfig::new(200, 10));
+    let opt_config = Arc::new(OptConfig::new(100, 10));
 
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
@@ -994,7 +1000,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
             step:  RangeOrValue::Value(10),
             channels: RangeOrValue::Range { range: Range { start: 2, end: 32 }, step: None },
-            kernel: RangeOrValue::Value(10),
+            kernel: RangeOrValue::Value(100),
         }),
 
     };
@@ -1004,11 +1010,14 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         common_training_args: common_training_args.clone(),
 
         net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
-            num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
-            hidden_conv_channels: RangeOrValue::Value(64),
-            num_head_layers: RangeOrValue::Value(10),
-            num_head_features: RangeOrValue::Value(256),
-            kernel: RangeOrValue::Value(10),
+            num_conv_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
+            hidden_conv_channels: RangeOrValue::Range { range: Range { start: 8, end: 32 }, step: None },
+            // hidden_conv_channels: RangeOrValue::Value(64),
+            // num_head_layers: RangeOrValue::Value(10),
+            num_head_layers: RangeOrValue::Range { range: Range { start: 8, end: 32 }, step: None },
+            num_head_features: RangeOrValue::Range { range: Range { start: 8, end: 256 }, step: None },
+            // num_head_features: RangeOrValue::Value(256),
+            kernel: RangeOrValue::Value(100),
             // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
             joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
         }),
@@ -1019,7 +1028,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         id: None,
         common_training_args,
         net: FinalNetArgsRangeOrValue {
-            num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
+            num_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
         },
     };
     (find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value)
@@ -1053,7 +1062,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.1, step: Some((0.001, 3))}  }),//Some((0.01, 2))
         slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.2, step: None}  }),//Some((0.01, 2))
         // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Value(0.01)  }),
-        max_slices: None, //Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
+        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select
@@ -2285,7 +2294,7 @@ mod cli_tests {
             train_resource_group: "pure group 20".to_string(),
             valid_resource_group: "pure group 10".to_string(),
             run_config_cnt: "".to_string(),
-            min_motif_net_loss: 0.4,
+            max_motif_net_loss: 0.4,
         };
 
         let (find_motifs_run_config_range_or_value,
