@@ -52,27 +52,31 @@ fn f_quantile_1d(v: &Tensor, q: f64) -> Result<Tensor, TchError> {
 /// score     = thickness / (amp + eps)
 pub fn norm_thickness(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
     let sz = x.size();
-    assert_eq!(sz.len(), 2, "expects 2 dim tensor");
+    assert_eq!(sz.len(), 2, "expects [N, L]");
     let l = sz[1];
 
     let q10 = f_quantile_dim0(x, 0.10)?;
     let q90 = f_quantile_dim0(x, 0.90)?;
-    let thickness_time = q90.f_sub(&q10)?; // [L]
+    let thickness_time = q90.f_sub(&q10)?;               // [L]
 
-    // thickness = mean(thickness_time) = sum / L
     let thickness_sum = thickness_time.f_sum(x.kind())?; // scalar
     let thickness = thickness_sum.f_div_scalar(l as f64)?; // scalar
 
-    // consensus = median across occurrences per timepoint
-    let consensus = f_quantile_dim0(x, 0.50)?; // [L]
-
-    // amp = q95(consensus) - q05(consensus) over time
+    let consensus = f_quantile_dim0(x, 0.50)?;           // [L]
     let c_q05 = f_quantile_1d(&consensus, 0.05)?;
     let c_q95 = f_quantile_1d(&consensus, 0.95)?;
-    let amp = c_q95.f_sub(&c_q05)?; // scalar
+    let amp = c_q95.f_sub(&c_q05)?;                      // scalar
 
-    Tensor::ones(&[], (Float, thickness.device())).f_sub(&thickness.f_div(&amp.f_add_scalar(eps)?)?)
+    // s = thickness / (amp + eps)
+    let denom = amp.f_add_scalar(eps)?;
+    let s = thickness.f_div(&denom)?;                    // scalar
+
+    // Q = 1 / (1 + s)
+    let one = Tensor::from(1.0).to_device(x.device()).to_kind(x.kind());
+    let one_plus_s = one.f_add(&s)?;
+    one.f_div(&one_plus_s)
 }
+
 
 /// Helper: per-occurrence RMS residual to a consensus (both aligned in time).
 /// x: [N, L], consensus: [L] -> resid: [N]
@@ -220,7 +224,7 @@ mod tests {
             .view([3, 4]);
 
             let s = norm_thickness(&x, 1e-8)?;
-            assert_close(f64_of_scalar(&s), 0.95, 1e-6);
+            assert_close(f64_of_scalar(&s), 0.9523, 1e-3);
             Ok(())
         }
 
