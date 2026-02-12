@@ -805,7 +805,7 @@ async fn run_all(
 
     debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
-    return Ok(());
+    // return Ok(());
     //gpt Train motif nets needs a custom input wrapper (motif ids + opt config) rather than a resource config.
     let input_wrapper = Arc::new(DevicesWrap::wrap(
         TrainMotifNetInput::new(select_motifs_run_ids.clone(), Arc::clone(&opt_config)),
@@ -906,16 +906,24 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Value(1000),
         // freq_filter: None,
-        freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
-            // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-            low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },//
-            // band_hz: RangeOrValue::Value(10.),
-            band_hz:  RangeOrValue::Value(10.0),
-            kernel_size: RangeOrValue::Value(100),
-            stride: RangeOrValue::Value(10),
-            padding: RangeOrValue::Value(0),
-        })]),
-        slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.05..0.5, step: Some((0.05, 2))}  }) }),
+        freq_filter: Some(vec![
+            BandPassFilter(BandPassFilterParamsRangeOrValue {
+                // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
+                low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 200. }, step: Some((10., 1)) },//
+                // band_hz: RangeOrValue::Value(10.),
+                band_hz:  RangeOrValue::Value(10.0),
+                kernel_size: RangeOrValue::Value(100),
+                stride: RangeOrValue::Value(10),
+                padding: RangeOrValue::Value(0),
+            }),
+            NotchBandFilter(NotchBandFilterParamsRangeOrValue {
+                low_hz: RangeOrValue::Value(59.0),
+                high_hz: RangeOrValue::Value(62.0),
+            })
+        ]),
+        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.005..0.03, step: Some((0.005, 3))}  }), slices: RangeOrValue::Value(1000) }),
+        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.05..0.5, step: Some((0.05, 2))}  }) }),
+        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.02)  }) }),
         max_slices: None,
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
