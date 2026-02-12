@@ -208,6 +208,24 @@ pub struct TracingGuards {
     _perf_guard: tracing_appender::non_blocking::WorkerGuard,
 }
 
+fn init_perf_writer(
+    perf_file: Option<PathBuf>,
+) -> Result<
+    (
+        tracing_appender::non_blocking::NonBlocking,
+        tracing_appender::non_blocking::WorkerGuard,
+    ),
+    ThoError,
+> {
+    match perf_file {
+        Some(perf_file) => {
+            let perf_f = File::create(perf_file)?;
+            Ok(tracing_appender::non_blocking(perf_f))
+        }
+        None => Ok(tracing_appender::non_blocking(std::io::sink())),
+    }
+}
+
 /// Initialize tracing logging for stdout, log file, and perf output.
 pub fn maybe_init_perf_tracing_stdout_simplelog_like(
     term_level: LevelFilter,
@@ -216,7 +234,7 @@ pub fn maybe_init_perf_tracing_stdout_simplelog_like(
     file_extra_fields: bool,
     log_file: File,
     perf_filter: &str,
-    perf_file: PathBuf,
+    perf_file: Option<PathBuf>,
 ) -> Result<TracingGuards, ThoError> {
     let max_level = max(term_level, file_level);
 
@@ -239,8 +257,7 @@ pub fn maybe_init_perf_tracing_stdout_simplelog_like(
         .event_format(SimplelogLikeEvent::new(timer.clone(), false, file_extra_fields))
         .with_filter(EnvFilter::new(level_filter_string(file_level)));
 
-    let perf_f = File::create(perf_file)?;
-    let (perf_writer, perf_guard) = tracing_appender::non_blocking(perf_f);
+    let (perf_writer, perf_guard) = init_perf_writer(perf_file)?;
     let perf_layer = fmt::layer()
         .with_ansi(false)
         .with_writer(perf_writer)
@@ -553,4 +570,25 @@ pub fn format_perf_map(map: &DashMap<String, PerfAgg>) -> String {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use crate::cdt_for_dir;
+    use crate::perf_logging::init_perf_writer;
+
+    #[test]
+    fn test_init_perf_writer_none_uses_sink() {
+        let _ = init_perf_writer(None).expect("init_perf_writer(None) should succeed");
+    }
+
+    #[test]
+    fn test_init_perf_writer_some_creates_file() {
+        let perf_file = Path::new("/tmp").join(format!("thoosa_perf_writer_{}.log", cdt_for_dir()));
+        let _ = std::fs::remove_file(&perf_file);
+        let _ = init_perf_writer(Some(perf_file.clone())).expect("init_perf_writer(Some(path)) should succeed");
+        assert!(perf_file.exists());
+        let _ = std::fs::remove_file(perf_file);
+    }
 }
