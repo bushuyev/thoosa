@@ -248,6 +248,8 @@ impl FindAndSelectMotifsStage {
             .run(find_input, RunCtxWithPermits::new(device_idx, "find_and_select_run_find"))
             .await?;
 
+        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId{ find_motifs_run_id: run_config.find_motifs_run_config.id.unwrap(), select_motifs_run_ids: None }), &Cpu).await?;
+
         let select_stage = Arc::new(
             SelectMotifsStage::<
                 RawTensorLoader<RunCtxWithPermits>,

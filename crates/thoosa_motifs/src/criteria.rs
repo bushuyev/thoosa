@@ -1,9 +1,6 @@
 use tch::{Kind, Tensor, TchError};
 use tch::Kind::Float;
 
-fn scalar_like(x: &Tensor, v: f64) -> Tensor {
-    Tensor::from(v).to_device(x.device()).to_kind(x.kind())
-}
 
 /// Quantile for x over dim=0 (x is [N, L]).
 /// Implemented via sort + select (no torch::quantile dependency).
@@ -64,7 +61,7 @@ pub fn norm_thickness(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
 
     // thickness = mean(thickness_time) = sum / L
     let thickness_sum = thickness_time.f_sum(x.kind())?; // scalar
-    let thickness = thickness_sum.f_div(&scalar_like(x, l as f64))?; // scalar
+    let thickness = thickness_sum.f_div_scalar(l as f64)?; // scalar
 
     // consensus = median across occurrences per timepoint
     let consensus = f_quantile_dim0(x, 0.50)?; // [L]
@@ -74,7 +71,7 @@ pub fn norm_thickness(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
     let c_q95 = f_quantile_1d(&consensus, 0.95)?;
     let amp = c_q95.f_sub(&c_q05)?; // scalar
 
-    Tensor::ones(&[], (Float, thickness.device())).f_sub(&thickness.f_div(&amp.f_add(&scalar_like(x, eps))?)?)
+    Tensor::ones(&[], (Float, thickness.device())).f_sub(&thickness.f_div(&amp.f_add_scalar(eps)?)?)
 }
 
 /// Helper: per-occurrence RMS residual to a consensus (both aligned in time).
@@ -86,7 +83,7 @@ fn f_rms_residuals(x: &Tensor, consensus: &Tensor) -> Result<Tensor, TchError> {
     let diff = x.f_sub(consensus)?;       // [N,L] (broadcast)
     let diff2 = diff.f_mul(&diff)?;       // [N,L]
     let sum = diff2.f_sum_dim_intlist(1, false, x.kind())?; // [N]
-    let mse = sum.f_div(&scalar_like(x, l as f64))?;    // [N]
+    let mse = sum.f_div_scalar(l as f64)?;    // [N]
     mse.f_sqrt()
 }
 
@@ -109,8 +106,8 @@ pub fn inlier_ratio(x: &Tensor, k: f64, eps: f64) -> Result<Tensor, TchError> {
     let abs_dev = resid.f_sub(&med)?.f_abs()?; // [N]
     let mad = f_quantile_1d(&abs_dev, 0.50)?; // scalar
 
-    let thr = med.f_add(&mad.f_mul(&scalar_like(x, k))?)?
-        .f_add(&scalar_like(x, eps))?; // scalar
+    let thr = med.f_add(&mad.f_mul_scalar(k)?)?
+        .f_add_scalar(eps)?; // scalar
 
     let inlier_mask = resid.f_le_tensor(&thr)?;          // [N] bool
     let inlier_f = inlier_mask.f_to_kind(Kind::Float)?;  // [N]
@@ -148,7 +145,7 @@ pub fn coherence(x: &Tensor, iters: i64, eps: f64) -> Result<Tensor, TchError> {
         let gv = g.f_matmul(&v)?;                 // [N,1]
         let gv2 = gv.f_mul(&gv)?;          // [N,1]
         let norm2 = gv2.f_sum(x.kind())?;         // scalar
-        let norm = norm2.f_add(&scalar_like(x, eps))?.f_sqrt()?; // scalar
+        let norm = norm2.f_add_scalar(eps)?.f_sqrt()?; // scalar
         v = gv.f_div(&norm)?;              // [N,1]
     }
 
@@ -159,7 +156,7 @@ pub fn coherence(x: &Tensor, iters: i64, eps: f64) -> Result<Tensor, TchError> {
     let lambda = lambda.f_squeeze()?; // scalar
 
     // coherence = lambda / (trace + eps)
-    lambda.f_div(&trace.f_add(&scalar_like(x, eps))?)
+    lambda.f_div(&trace.f_add_scalar(eps)?)
 }
 
 #[cfg(test)]
@@ -220,7 +217,7 @@ mod tests {
                 0.0,    1.1, 1.9, 1.0,
                 0.0,    0.9, 2.1, 1.0,
             ])
-                .view([3, 4]);
+            .view([3, 4]);
 
             let s = norm_thickness(&x, 1e-8)?;
             assert_close(f64_of_scalar(&s), 0.95, 1e-6);

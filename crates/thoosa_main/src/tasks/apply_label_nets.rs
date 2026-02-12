@@ -79,7 +79,7 @@ where
                     ws,
                     store,
                     train_motif_nets_run_ids.clone(),
-                    stage_ctx,
+                    stage_ctx, Some(0.3),
                     None,
                 )
                 .await?
@@ -90,7 +90,7 @@ where
                     ws,
                     store,
                     train_motif_nets_run_ids.clone(),
-                    stage_ctx,
+                    stage_ctx, Some(0.3),
                 )
                 .await?
             }
