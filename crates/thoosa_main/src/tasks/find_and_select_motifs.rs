@@ -225,6 +225,7 @@ impl FindAndSelectMotifsStage {
             &mut run_config.find_motifs_run_config,
             "FindAndSelectMotifs/find",
         )?;
+        #[allow(unused_variables)]
         let select_run_id = Self::save_run_config_with_input(
             store,
             Some(&[find_run_id]),
@@ -278,19 +279,13 @@ impl FindAndSelectMotifsStage {
             .expect("FindAndSelectMotifsStage::run_find_and_select: select output still shared")
             .take_data(device_idx)
             .await?;
+        let selected_count = select_savable.total_selected_motifs();
         select_savable.save(store, ws)?;
 
 
         #[allow(unexpected_cfgs)]
         #[cfg(thoosa_debug_plots)]
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (select_run_id)), &Cpu).await?;
-
-        let selected_count = store
-            .read()
-            .list_selected_motifs(select_run_id, ws.read().channels())?
-            .into_iter()
-            .map(|channel_selected_motifs| channel_selected_motifs.len())
-            .sum();
 
         Ok(selected_count)
     }
@@ -328,7 +323,8 @@ impl AsyncStage for FindAndSelectMotifsStage {
         let device_idx = ctx.device_idx();
         let futures = grid_vals_sets
             .into_iter()
-            .map(|grid_vals| {
+            .enumerate()
+            .map(|(grid_idx, grid_vals)| {
                 let min_loss = Arc::new(RwLock::new((f32::MAX, None::<FindAndSelectMotifsRunConfig>)));
                 let const_vals = const_vals.clone();
                 let opt_params = opt_params.clone();
@@ -392,24 +388,23 @@ impl AsyncStage for FindAndSelectMotifsStage {
                     let (best_loss, best_config) = (guard.0, guard.1.as_ref().map(|v|v.clone()));
                     if let Some(best_config) = best_config {
                         info!("FindAndSelectMotifsStage::run: best_loss={best_loss:?} best_config={best_config:?}");
-                        Ok::<_, ThoError>(Some(best_config))
+                        Ok::<_, ThoError>((grid_idx, Some(best_config)))
                     } else {
                         warn!("FindAndSelectMotifsStage::run: no best config for grid_vals={grid_vals:?}");
-                        Ok::<_, ThoError>(None)
+                        Ok::<_, ThoError>((grid_idx, None))
                     }
                 }
             })
             .collect::<Vec<_>>();
-        let best_configs = collect_futures_with_progress(
+        let mut indexed_best_configs = collect_futures_with_progress(
             futures,
             crate::buffer_limits::FIND_AND_SELECT_MOTIFS_RUN_BUFFER_ORDERED_LIMIT,
-            StreamBuffering::Ordered,
+            StreamBuffering::Unordered,
             "FindAndSelectMotifsStage::run failed",
         )
-        .await
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+        .await;
+        indexed_best_configs.sort_by_key(|(grid_idx, _)| *grid_idx);
+        let best_configs = indexed_best_configs.into_iter().filter_map(|(_, config)| config).collect::<Vec<_>>();
 
 
 
