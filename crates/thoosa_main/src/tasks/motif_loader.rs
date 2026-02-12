@@ -306,6 +306,7 @@ where
         debug!("RandomSlicesLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
 
         let motif_id_value = motif_id.clone().0;
+        let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
         let (channel, find_motifs_run_id, slices, resources_map) =
             self.store
                 .read()
@@ -313,7 +314,7 @@ where
                     motif_id_value,
                     find_motifs_run_config.window,
                     None,
-                    find_motifs_run_config.window//it's assumed that max filter's kernel is of same size as window
+                    input_len_adjuster,
                 )?;
 
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), &mut ctx, &self.ws, "random loader").await?;
