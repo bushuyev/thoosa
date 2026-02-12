@@ -286,6 +286,10 @@ impl SelectMotifsSavableResult {
             run_config: run_config_good_motif_ids,
         }
     }
+
+    pub fn total_selected_motifs(&self) -> usize {
+        self.run_config.iter().map(|(_, good_motif_ids_rates)| good_motif_ids_rates.len()).sum()
+    }
 }
 
 impl SavableResult for SelectMotifsSavableResult {
