@@ -691,125 +691,121 @@ async fn run_all(
     let ws_in_find_motifs = Arc::clone(&ws);
     let loader_in_find_motifs = Arc::clone(&loader);
 
-    let find_motifs_opt = false;
-    let select_motifs_run_ids = if !find_motifs_opt {
-        //gpt Run a grid over FindMotifs configs, constructing a stage per grid point and executing it.
-        let find_motifs_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
-            None,
-            find_motifs_run_config_range_or_value,
-            find_motifs_input,
-            &ws,
-            &store,
-            true,
-            async move |run_configs| {
-                Arc::new(
-                    crate::tasks::find_motifs::FindMotifsStage::new(
-                        &ws_in_find_motifs,
-                        &store_in_find_motifs,
-                        loader_in_find_motifs,
-                        run_configs,
-                        fixed_find_motifs_config,
-                        ThoDevice::from(1),
-                        //gpt TODO!! hard-coded device index assumes GPU 1 exists; consider selecting from args or ctx.
-                        init_ctx_find_motifs
-                    ).await.expect("FindMotifsStage::new failed"),
-                    //gpt TODO!! `expect` will panic and bypass error propagation; consider returning the error instead.
-                )
-            },
-            || root_ctx.branch(Some("find motifs"), true, false),
-        ).await?;
+    let find_and_select_input = Arc::new(DevicesWrap::wrap(
+        FindAndSelectMotifsInput::new(
+            run_all_args.find_resources.clone(),
+            run_all_args.select_resources.clone(),
+        ),
+        CacheArea::default(),
+    ));
 
-        info!("find motifs done, find_motif_run_ids={find_motifs_run_ids:?}");
+    let find_and_select_run_config = FindAndSelectMotifsRunConfigRangeOrValue {
+        id: None,
+        find_motifs_run_config: find_motifs_run_config_range_or_value_for_opt,
+        select_motifs_run_config: select_motifs_run_config_for_opt,
+    };
 
-        //gpt Plot slices for each FindMotifs run (CPU plotting); useful for debugging but potentially expensive.
-        for find_motifs_run_id in &find_motifs_run_ids {
-            run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
+    let select_motifs_run_ids = match run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
+        None,
+        find_and_select_run_config,
+        find_and_select_input,
+        &ws,
+        &store,
+        false,
+        async move |run_configs| {
+            Ok(Arc::new(FindAndSelectMotifsStage::new(
+                Arc::clone(&loader),
+                &ws,
+                &store,
+                run_configs,
+                fixed_find_motifs_config_for_opt,
+                Arc::clone(opt_config),
+                run_all_args.max_chunk_size as i64,
+            )))
+        },
+        || root_ctx.branch(Some("find and select motifs"), true, false),
+    ).await {
+        Ok(find_and_select_run_ids) => {
+            info!("select motifs done: find_and_select_run_ids={find_and_select_run_ids:?}");
+            find_and_select_run_ids
         }
+        Err(e) if matches!(e.what(), thoosa_shared::Cause::SomethingElse(msg) if msg == "no opt params in run config") => {
+            info!("find and select motifs opt skipped: no opt params in run config, falling back to grid search");
 
+            //gpt Run a grid over FindMotifs configs, constructing a stage per grid point and executing it.
+            let find_motifs_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
+                None,
+                find_motifs_run_config_range_or_value,
+                find_motifs_input,
+                &ws,
+                &store,
+                true,
+                async move |run_configs| {
+                    Arc::new(
+                        crate::tasks::find_motifs::FindMotifsStage::new(
+                            &ws_in_find_motifs,
+                            &store_in_find_motifs,
+                            loader_in_find_motifs,
+                            run_configs,
+                            fixed_find_motifs_config,
+                            ThoDevice::from(1),
+                            //gpt TODO!! hard-coded device index assumes GPU 1 exists; consider selecting from args or ctx.
+                            init_ctx_find_motifs
+                        ).await.expect("FindMotifsStage::new failed"),
+                        //gpt TODO!! `expect` will panic and bypass error propagation; consider returning the error instead.
+                    )
+                },
+                || root_ctx.branch(Some("find motifs"), true, false),
+            ).await?;
 
-        debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
-        //gpt The select stage depends on the FindMotifs run ids; keep the ids to join results across runs.
-        //gpt TODO!! if find_motifs_run_ids is empty, downstream stages will still run; should we short-circuit?
+            info!("find motifs done, find_motif_run_ids={find_motifs_run_ids:?}");
 
-        //gpt Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
-        let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
-            Some(find_motifs_run_ids.clone()),
-            select_motifs_run_config,
-            select_motifs_input,
-            &ws,
-            &store,
-            true,
-            async |run_configs| {
-                Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
-                    &ws,
-                    &store,
-                    Arc::clone(&loader),
-                    Arc::new(MotifLoader::new(
-                        Arc::clone(&store),
+            //gpt Plot slices for each FindMotifs run (CPU plotting); useful for debugging but potentially expensive.
+            for find_motifs_run_id in &find_motifs_run_ids {
+                run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
+            }
+
+            debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
+            //gpt The select stage depends on the FindMotifs run ids; keep the ids to join results across runs.
+            //gpt TODO!! if find_motifs_run_ids is empty, downstream stages will still run; should we short-circuit?
+
+            //gpt Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
+            let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
+                Some(find_motifs_run_ids.clone()),
+                select_motifs_run_config,
+                select_motifs_input,
+                &ws,
+                &store,
+                true,
+                async |run_configs| {
+                    Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
+                        &ws,
+                        &store,
                         Arc::clone(&loader),
-                        &ws
-                    )),
-                    run_configs,
-                    find_motifs_run_ids.clone(),
-                    run_all_args.max_chunk_size as i64,
-                    #[cfg(test)]
-                    None
-                ))
-            },
-            || root_ctx.branch(Some("select motifs"), true, false),
-        ).await?;
+                        Arc::new(MotifLoader::new(
+                            Arc::clone(&store),
+                            Arc::clone(&loader),
+                            &ws
+                        )),
+                        run_configs,
+                        find_motifs_run_ids.clone(),
+                        run_all_args.max_chunk_size as i64,
+                        #[cfg(test)]
+                        None
+                    ))
+                },
+                || root_ctx.branch(Some("select motifs"), true, false),
+            ).await?;
 
-        //gpt Plot "good motifs" from each selection run (CPU plotting; large runs can be slow).
-        for select_motifs_run_id in &select_motifs_run_ids {
-            run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (*select_motifs_run_id)), &Cpu).await?;
+            //gpt Plot "good motifs" from each selection run (CPU plotting; large runs can be slow).
+            for select_motifs_run_id in &select_motifs_run_ids {
+                run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (*select_motifs_run_id)), &Cpu).await?;
+            }
+            info!("select motifs done: find_motifs_run_ids={find_motifs_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
+
+            select_motifs_run_ids
         }
-        info!("select motifs done: find_motifs_run_ids={find_motifs_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
-
-        select_motifs_run_ids
-
-    } else {
-        let find_and_select_input = Arc::new(DevicesWrap::wrap(
-            FindAndSelectMotifsInput::new(
-                run_all_args.find_resources.clone(),
-                run_all_args.select_resources.clone(),
-            ),
-            CacheArea::default(),
-        ));
-
-        let find_and_select_run_config = FindAndSelectMotifsRunConfigRangeOrValue {
-            id: None,
-            find_motifs_run_config: find_motifs_run_config_range_or_value_for_opt,
-            select_motifs_run_config: select_motifs_run_config_for_opt,
-        };
-
-        let find_and_select_run_ids = run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
-            None,
-            find_and_select_run_config,
-            find_and_select_input,
-            &ws,
-            &store,
-            false,
-            async move |run_configs| {
-                Ok(Arc::new(FindAndSelectMotifsStage::new(
-                    Arc::clone(&loader),
-                    &ws,
-                    &store,
-                    run_configs,
-                    fixed_find_motifs_config_for_opt,
-                    Arc::clone(opt_config),
-                    run_all_args.max_chunk_size as i64,
-                )))
-            },
-            || root_ctx.branch(Some("find and select motifs"), true, false),
-        ).await?;
-
-        info!("select motifs done: find_and_select_run_ids={find_and_select_run_ids:?}");
-
-        // for find_motifs_run_id in &find_motifs_run_ids {
-        //     run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
-        // }
-
-        find_and_select_run_ids
+        Err(e) => return Err(e),
     };
 
     debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
@@ -1562,7 +1558,7 @@ where
 {
     let opt_run_configs_opt = opt_step(
         input_run_ids.as_ref(),
-        rcrv.opt_run_configs(),
+        rcrv.opt_run_configs()?,
         common_config,
         resource_config,
         ws,
@@ -1621,7 +1617,7 @@ where
     RCRV: GridRunConfigSource,
     R: ResourcesConfig,
 {
-    let grid_run_configs = rcrv.grid_run_configs();
+    let grid_run_configs = rcrv.grid_run_configs()?;
     debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
 
     let mut run_configs: Vec<RC> = grid_run_configs.to_run_configs();
@@ -1691,7 +1687,7 @@ where
     <<ST as Stage>::Out as Data>::M: DevicesWrapCopyMode<<ST as Stage>::Out>,
     CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {
-    let grid_run_configs = rcrv.grid_run_configs();
+    let grid_run_configs = rcrv.grid_run_configs()?;
     debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
 
     let mut run_configs: Vec<RC> = grid_run_configs.to_run_configs();
@@ -1749,7 +1745,7 @@ where
     <<ST as Stage>::Out as Data>::M: DevicesWrapCopyMode<<ST as Stage>::Out>,
     CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {
-    let opt_run_configs = rcrv.opt_run_configs();
+    let opt_run_configs = rcrv.opt_run_configs()?;
     debug!("run_all_grid_step: grid_run_configs={opt_run_configs:?}");
 
     // let mut run_configs: Vec<RC> = opt_run_configs.to_run_configs();
