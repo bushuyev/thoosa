@@ -291,7 +291,7 @@ mod tests {
             max_slices: None,
         };
         // debug!("{:#}", serde_json5::to_string(&rc).unwrap());
-        let grid = rc.grid_run_configs();
+        let grid = rc.grid_run_configs().expect("FindMotifsRunConfigRangeOrValue::grid_run_configs should not fail");
         // debug!("grid: {grid:?}");
 
         let run_configs:Vec<FindMotifsRunConfig> = grid.to_run_configs();
@@ -352,7 +352,7 @@ mod tests {
             threshold: RangeOrValue::Range { range: 0.4..0.6, step: Some((0.1, 1)) },
         };
 
-        let run_configs: Vec<SelectMotifsRunConfig> = rc.grid_run_configs().to_run_configs();
+        let run_configs: Vec<SelectMotifsRunConfig> = rc.grid_run_configs().expect("SelectMotifsRunConfigRangeOrValue::grid_run_configs should not fail").to_run_configs();
         assert_eq!(run_configs.len(), 3);
         assert_eq!(run_configs[0].id, Some(7));
         assert!(run_configs[0].motif_criteria.norm_thickness.is_some());
