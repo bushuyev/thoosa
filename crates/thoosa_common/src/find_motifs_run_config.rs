@@ -4,6 +4,7 @@ use crate::transforms::filters::*;
 use log::debug;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -103,12 +104,36 @@ impl FindMotifsRunConfig {
     pub fn step(&self) -> u32 {
         self.step
     }
+
+    pub fn input_len_adjuster(&self) -> Arc<dyn Fn(u32) -> u32 + Send + Sync> {
+        let adjusters = self
+            .freq_filter
+            .as_ref()
+            .map(|filters| {
+                filters
+                    .iter()
+                    .map(|filter| filter.adjust_length())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Arc::new(move |len: u32| adjusters.iter().fold(len, |acc, adjust| adjust(acc)))
+    }
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub enum InputFilter {
     NotchBandFilter(NotchBandFilterParams),
     BandPassFilter(BandPassFilterParams),
+}
+
+impl InputFilterLengthAdjuster for InputFilter {
+    fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
+        match self {
+            InputFilter::NotchBandFilter(filter) => filter.adjust_length(),
+            InputFilter::BandPassFilter(filter) => filter.adjust_length(),
+        }
+    }
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy, Default)]
@@ -232,7 +257,8 @@ pub struct ExactStats {
 #[allow(unused_imports)]
 mod tests {
     use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
-    use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
+    use crate::find_motifs_run_config::InputFilter::{BandPassFilter, NotchBandFilter};
+    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParams};
     use log::debug;
     use tch::Tensor;
     use thoosa_properties_map::ToHashmap;
@@ -278,6 +304,36 @@ mod tests {
             println!("{:?}", v);
         }
 
+    }
+
+    #[test]
+    fn test_input_len_adjuster_applies_filters_in_sequence() {
+        let config = FindMotifsRunConfig::new_with_running_mean(
+            None,
+            100,
+            100,
+            Some(vec![
+                NotchBandFilter(NotchBandFilterParams { low_hz: 58.0, high_hz: 62.0 }),
+                BandPassFilter(BandPassFilterParams {
+                    low_hz: 10.0,
+                    band_hz: 300.0,
+                    kernel_size: 100,
+                    stride: 5,
+                    padding: 0,
+                }),
+            ]),
+            None,
+        );
+
+        let adjust = config.input_len_adjuster();
+        assert_eq!(180, adjust(1000));
+    }
+
+    #[test]
+    fn test_input_len_adjuster_without_filters_is_identity() {
+        let config = FindMotifsRunConfig::new_with_running_mean(None, 100, 100, None, None);
+        let adjust = config.input_len_adjuster();
+        assert_eq!(1000, adjust(1000));
     }
 
     #[test]

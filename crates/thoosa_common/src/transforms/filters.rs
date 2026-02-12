@@ -6,6 +6,10 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::ThoError;
 
+pub trait InputFilterLengthAdjuster {
+    fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync>;
+}
+
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct BandPassFilterParams {
     #[in_map]
@@ -29,14 +33,17 @@ pub struct BandPassFilterParams {
     pub padding: i64,
 }
 
-impl BandPassFilterParams {
-    fn adjust_length(&self) -> impl FnOnce(u64) -> u64 {
-        |l:u64| {
-            assert!(l > self.kernel_size as u64, "l({l}) self.kernel_size({})", self.kernel_size);
-            (l - self.kernel_size as u64) / self.stride as u64
-        }
+impl InputFilterLengthAdjuster for BandPassFilterParams {
+    fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
+        let kernel_size = self.kernel_size;
+        let stride = self.stride;
+        Box::new(move |l: u32| {
+            assert!(kernel_size > 0, "kernel_size({kernel_size}) must be > 0");
+            assert!(stride > 0, "stride({stride}) must be > 0");
+            assert!(l > kernel_size as u32, "l({l}) kernel_size({kernel_size})");
+            (l - kernel_size as u32) / stride as u32
+        })
     }
-
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
@@ -50,11 +57,9 @@ pub struct NotchBandFilterParams {
     pub high_hz: f64,
 }
 
-impl NotchBandFilterParams {
-    fn adjust_length(&self) -> impl FnOnce(u64) -> u64 {
-        |l:u64| {
-            l
-        }
+impl InputFilterLengthAdjuster for NotchBandFilterParams {
+    fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
+        Box::new(|l: u32| l)
     }
 }
 
