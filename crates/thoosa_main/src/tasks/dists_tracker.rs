@@ -1496,7 +1496,7 @@ where
                         SqlMotifTrackerStore::new(
                             ws.read().tmp_run_store_path(
                                 run_config.id.expect("id") as u32,
-                                channel as u32,
+                                channel,
                             ),
                             run_config.id.expect("id"),
                             channel,
