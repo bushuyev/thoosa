@@ -123,7 +123,6 @@ where
             "ApplyMotifNets::new",
         )
         .await
-        //gpt TODO!! collect_futures_with_progress drops errors; failed net loads are silently skipped.
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();

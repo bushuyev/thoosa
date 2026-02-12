@@ -301,6 +301,8 @@ fn aggregate_distances(distances: &Tensor, aggr: Aggr) -> Result<f32, ThoError> 
             debug!("aggregate_distances, Quantile: q={q} distances=\n{distances}");
             let q = q.clamp(0.0, 1.0) as f64;
             let quantile = distances.f_quantile_scalar(q, 0, true, "lower")?;
+            debug!("aggregate_distances, Quantile: distances=\n{distances}, quantile=\n{quantile}");
+
             let mask = distances.f_le_tensor(&quantile)?;
             let selected = distances.f_masked_select(&mask)?;
             if selected.numel() == 0 {
@@ -325,7 +327,7 @@ mod tests {
     use thoosa_shared::mono_key;
 
     #[test]
-    fn test_aggregate_distances_with_human_readable_values() {
+    fn test_aggregate_distances() {
         let distances = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0]);
 
         let mean_k_half = aggregate_distances(&distances, Aggr::Mean(0.5)).unwrap();
@@ -340,6 +342,24 @@ mod tests {
         let median_lower = aggregate_distances(&distances, Aggr::Quantile(0.5)).unwrap();
         assert!((median_lower - 2.0).abs() < 1e-6, "expected quantile(0.5, lower) for [1,2,3,4] to be 2.0, got {median_lower}");
     }
+
+    #[test]
+    fn test_aggregate_distances_with_zeros() {
+        let distances = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0]);
+        //
+        // let mean_k_half = aggregate_distances(&distances, Aggr::Mean(0.0)).unwrap();
+        // assert!((mean_k_half ).abs() < 1e-6, "expected mean([1,2,3,4]) * 0.5 = 1.25, got {mean_k_half}");
+        //
+        // let min_k_2 = aggregate_distances(&distances, Aggr::Min(0.0)).unwrap();
+        // assert!((min_k_2 ).abs() < 1e-6, "expected min([1,2,3,4]) * 2.0 = 2.0, got {min_k_2}");
+        //
+        // let max_k_2 = aggregate_distances(&distances, Aggr::Max(0.0)).unwrap();
+        // assert!((max_k_2).abs() < 1e-6, "expected max([1,2,3,4]) * 2.0 = 8.0, got {max_k_2}");
+
+        let median_lower = aggregate_distances(&distances, Aggr::Quantile(0.0)).unwrap();
+        assert!((median_lower).abs() < 1e-6, "expected quantile(0.0, lower) for [1,2,3,4] to be 2.0, got {median_lower}");
+    }
+
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_debug() {

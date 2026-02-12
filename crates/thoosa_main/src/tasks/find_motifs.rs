@@ -365,7 +365,7 @@ where
 
         let cross_loaders = collect_futures_with_progress(
             futures,
-            10,
+            10,//TODO config
             StreamBuffering::Unordered,
             "FindMotifsStage::new",
         )
