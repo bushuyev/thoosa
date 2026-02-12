@@ -381,7 +381,7 @@ where
             attrs.record(&mut v);
 
             if v.agg_perf.is_some() {
-                log::debug!("PerfLayer::on_new_span: span.metadata={:?}", span.metadata());
+                log::trace!("PerfLayer::on_new_span: span.metadata={:?}", span.metadata());
 
                 span.extensions_mut().insert(v);
                 span.extensions_mut().insert(SpanTiming::new());
@@ -399,7 +399,7 @@ where
         let Some(t) = exts.get_mut::<SpanTiming>() else { return };
         t.entered_at = Some(Instant::now());
 
-        log::debug!("PerfLayer::on_enter: t.entered_at={:?}", t.entered_at);
+        log::trace!("PerfLayer::on_enter: t.entered_at={:?}", t.entered_at);
     }
 
     fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
@@ -410,7 +410,7 @@ where
         let Some(t) = exts.get_mut::<SpanTiming>() else { return };
 
         if let Some(entered) = t.entered_at.take() {
-            log::debug!("PerfLayer::on_exit: entered={:?}", entered);
+            log::trace!("PerfLayer::on_exit: entered={:?}", entered);
             t.busy_ns = t.busy_ns.saturating_add(entered.elapsed().as_nanos() as u64);
         }
     }
@@ -425,7 +425,7 @@ where
             .get::<AggPerfFields>()
             .and_then(|f| f.agg_perf.as_deref()) {
 
-            log::debug!("PerfLayer::on_close: agg_perf={agg_perf:?}");
+            log::trace!("PerfLayer::on_close: agg_perf={agg_perf:?}");
 
             if let Some(t)  = extensions.get::<SpanTiming>() {
                 let perf = PERF.entry(agg_perf.to_string()).or_insert(PerfAgg::new());
