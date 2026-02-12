@@ -1060,9 +1060,9 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
     let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
         id: None,
         extend_config: Some(ExtendMotifsConfigRangeOrValue {
-            // slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(ComparisonMethodConfigRangeOrValue {  }),
-            slices_selector_metric: ComparisonMethodRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue {  }),
-            slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
+            slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue {  }),
+            // slices_selector_metric: ComparisonMethodRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue {  }),
+            slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.5) }),
             // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.8..1.2, step: Some((0.1, 1))} }),
         }),
         // extend_config:None,
@@ -2275,13 +2275,13 @@ mod cli_tests {
         ));
 
         let mut ctx = RunCtxWithPermits::new(1, "test_run_all");
-        ctx.add_permit(global_ctx.acquire_many(0, 1, Arc::new(SynKey::new([mono_key!("test", "test")]))).await?);
+        // ctx.add_permit(global_ctx.acquire_many(0, 1, Arc::new(SynKey::new([mono_key!("test", "test")]))).await?);
 
 
         let run_all_args = RunAllArgs{
             find_resources: "group:pure group 10".to_string(),
             select_resources: "group:pure group 20".to_string(),
-            max_chunk_size: 1000,
+            max_chunk_size: 10000,
             train_resource_group: "pure group 20".to_string(),
             valid_resource_group: "pure group 10".to_string(),
             run_config_cnt: "".to_string(),
@@ -2316,6 +2316,7 @@ mod cli_tests {
             }
             Err(e) => {
                 debug!("e={e:?}");
+                panic!("test failed")
             }
         };
 
