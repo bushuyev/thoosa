@@ -189,7 +189,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         motif_id: u32,
         motif_width: u32,
         min_distance: Option<u32>,
-        crop_len: u32,
+        input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>,
     ) -> Result<
         (
             i64,
@@ -345,7 +345,7 @@ mock! {
             motif_id: u32,
             motif_width: u32,
             min_distance: Option<u32>,
-            crop_len:u32
+            input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>
         ) -> Result<
             (
                 i64,
@@ -2007,7 +2007,7 @@ impl Store for SqlStore {
         motif_id: u32,
         motif_width: u32,
         min_distance: Option<u32>,
-        crop_len: u32,//when input is processed by a conv filter which outputs shorter sequence (- kernel width)
+        input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>,
     ) -> Result<
         (
             i64, RunId,
@@ -2130,7 +2130,7 @@ impl Store for SqlStore {
                     resource: Resource::new(resource_id, import_id, key, length),
                     target_positions: positions,
                     generated_positions: Vec::new(),
-                    length: (length - crop_len)as i64,
+                    length: input_len_adjuster(length) as i64,
                 })
             })
             .collect::<Result<Vec<_>, ThoError>>()?
@@ -2146,7 +2146,7 @@ impl Store for SqlStore {
                         ))
                     })?;
                 contexts.push(RandomResourceCtx {
-                    length: (resource.length() - crop_len) as i64,
+                    length: input_len_adjuster(resource.length()) as i64,
                     resource,
                     target_positions: positions,
                     generated_positions: Vec::new(),
@@ -4114,7 +4114,7 @@ mod store_tests {
 
         const WIDTH: u32 = 40;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_motif_slices(motif_id, WIDTH, None, WIDTH)?;
+            store.list_random_motif_slices(motif_id, WIDTH, None, Arc::new(|length: u32| length))?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4170,7 +4170,7 @@ mod store_tests {
         const WIDTH: u32 = 50;
         const MIN_DISTANCE: u32 = 300;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_motif_slices(motif_id, WIDTH, Some(MIN_DISTANCE), WIDTH)?;
+            store.list_random_motif_slices(motif_id, WIDTH, Some(MIN_DISTANCE), Arc::new(|length: u32| length))?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4189,6 +4189,42 @@ mod store_tests {
         for pos in positions {
             assert!(pos > 0);
             assert!(pos + WIDTH < resource.length());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_random_slices_uses_input_len_adjuster() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem()?;
+
+        create_resources(&store, &[("res_main", 2000)])?;
+
+        let run_id = store.save_run_config(None, &"find_motifs", "length adjust", "", HashMap::new())?;
+        let channel_id = 6i64;
+        let res_main = fetch_resource_id(&store, "res_main")?;
+
+        let motif_id = insert_motif_with_slices(
+            &store,
+            run_id,
+            channel_id,
+            0,
+            &[(res_main, 100), (res_main, 250)],
+        )?;
+
+        const WIDTH: u32 = 40;
+        let input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync> = Arc::new(|length: u32| (length - 100) / 5);
+        let (channel, _, random_slices, resources_map) =
+            store.list_random_motif_slices(motif_id, WIDTH, None, Arc::clone(&input_len_adjuster))?;
+
+        assert_eq!(channel_id, channel);
+        assert_eq!(random_slices.len(), 2);
+
+        let resource = resources_map.get(&res_main).expect("resource missing");
+        let adjusted_len = input_len_adjuster(resource.length());
+        for slice in random_slices {
+            assert!(slice.1 > 0);
+            assert!(slice.1 + WIDTH < adjusted_len);
         }
 
         Ok(())
@@ -4354,7 +4390,7 @@ impl MockStoreBuilder {
         r: Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>
     ) -> Self {
         self.store.expect_list_random_motif_slices().returning(
-            move |p_motif_id, p_width, p_min_distance, crop_len| {
+            move |p_motif_id, p_width, p_min_distance, _input_len_adjuster| {
                 if p_motif_id == motif_id && p_width == motif_width && p_min_distance == min_distance {
                     r.clone()
                 } else {
