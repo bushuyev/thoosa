@@ -109,6 +109,9 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub write_logger_extra_fields: bool,
 
+    #[arg(long, default_value_t = false)]
+    pub write_perf_log_file: bool,
+
     #[arg(long)]
     pub loader_threads: Option<usize>,
 
@@ -261,9 +264,15 @@ where
         }
     };
 
-    let perf_path =  ws.read()
-        .log_path()
-        .join(format!("thoosa_perf_{}.log", cdt_for_dir).to_owned());
+    let perf_path = if cli.write_perf_log_file {
+        Some(
+            ws.read()
+                .log_path()
+                .join(format!("thoosa_perf_{}.log", cdt_for_dir).to_owned()),
+        )
+    } else {
+        None
+    };
 
 
     let _logging_guards = maybe_init_perf_tracing_stdout_simplelog_like(
@@ -1902,6 +1911,18 @@ mod cli_tests {
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
+    }
+
+    #[test]
+    fn test_write_perf_log_file_default_is_false() {
+        let cli = Cli::parse_from(["thoosa_main"]);
+        assert!(!cli.write_perf_log_file);
+    }
+
+    #[test]
+    fn test_write_perf_log_file_flag_enables_perf_file_logging() {
+        let cli = Cli::parse_from(["thoosa_main", "--write-perf-log-file"]);
+        assert!(cli.write_perf_log_file);
     }
 
     fn init_test_store(
