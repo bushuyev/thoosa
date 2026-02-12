@@ -29,6 +29,16 @@ pub struct BandPassFilterParams {
     pub padding: i64,
 }
 
+impl BandPassFilterParams {
+    fn adjust_length(&self) -> impl FnOnce(u64) -> u64 {
+        |l:u64| {
+            assert!(l > self.kernel_size as u64, "l({l}) self.kernel_size({})", self.kernel_size);
+            (l - self.kernel_size as u64) / self.stride as u64
+        }
+    }
+
+}
+
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct NotchBandFilterParams {
     #[in_map]
@@ -40,6 +50,13 @@ pub struct NotchBandFilterParams {
     pub high_hz: f64,
 }
 
+impl NotchBandFilterParams {
+    fn adjust_length(&self) -> impl FnOnce(u64) -> u64 {
+        |l:u64| {
+            l
+        }
+    }
+}
 
 
 /// Create a sinc-based band-pass filter
