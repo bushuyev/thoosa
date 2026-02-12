@@ -248,6 +248,8 @@ impl FindAndSelectMotifsStage {
             .run(find_input, RunCtxWithPermits::new(device_idx, "find_and_select_run_find"))
             .await?;
 
+        #[allow(unexpected_cfgs)]
+        #[cfg(thoosa_debug_plots)]
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId{ find_motifs_run_id: run_config.find_motifs_run_config.id.unwrap(), select_motifs_run_ids: None }), &Cpu).await?;
 
         let select_stage = Arc::new(
@@ -279,6 +281,8 @@ impl FindAndSelectMotifsStage {
         select_savable.save(store, ws)?;
 
 
+        #[allow(unexpected_cfgs)]
+        #[cfg(thoosa_debug_plots)]
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (select_run_id)), &Cpu).await?;
 
         let selected_count = store
