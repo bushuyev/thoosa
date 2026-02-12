@@ -1467,6 +1467,7 @@ impl SavableResult for TrainMotifsNetsResult {
     }
 
     fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
+
         self.id = store.write().save_run_config(
             Some(&self.select_motifs_run_ids),
             &TrainMotifsNetsRunConfig::type_name(),
