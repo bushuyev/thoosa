@@ -724,11 +724,22 @@ async fn run_all(
                 run_all_args.max_chunk_size as i64,
             )))
         },
-        || root_ctx.branch(Some("find and select motifs"), true, false),
+        || root_ctx.branch(Some("opt find and select motifs"), true, false),
     ).await {
-        Ok(find_and_select_run_ids) => {
-            info!("select motifs done: find_and_select_run_ids={find_and_select_run_ids:?}");
-            find_and_select_run_ids
+        Ok(best_find_and_select_result_ids) => {
+            info!("opt FindAndSelectMotifsRunConfig done: find_and_select_run_ids={best_find_and_select_result_ids:?}");
+            assert_eq!(best_find_and_select_result_ids.len(), 1); //should be one from run_opt
+
+            let read_guard = store.read();
+            let select_motifs_run_ids = read_guard
+                .list_input_run_ids(&best_find_and_select_result_ids)?
+                .into_iter().map(
+                    |opt_select_result_ids| opt_select_result_ids.1
+                ).collect::<Vec<_>>();
+
+            info!("opt FindAndSelectMotifsRunConfig done: select_motifs_run_ids={select_motifs_run_ids:?}");
+
+            select_motifs_run_ids
         }
         Err(e) if matches!(e.what(), thoosa_shared::Cause::SomethingElse(msg) if msg == "no opt params in run config") => {
             info!("find and select motifs opt skipped: no opt params in run config, falling back to grid search");
@@ -1017,37 +1028,39 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         // freq_filter: None,
         freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
             // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-            low_hz:  RangeOrValue::Range { range: Range { start: 100., end: 200. }, step: Some((10., 1)) },//
+            low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },//
+            // low_hz:  RangeOrValue::Value(0.0),//
             // band_hz: RangeOrValue::Value(10.),
-            band_hz:  RangeOrValue::Value(10.0),
-            kernel_size: RangeOrValue::Value(10),
+            band_hz:  RangeOrValue::Value(1.0),
+            kernel_size: RangeOrValue::Value(100),
             stride: RangeOrValue::Value(1),
-            padding: RangeOrValue::Value(0),
+            padding: RangeOrValue::Value(50),
         })]),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.025) }) }),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))} }) }),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.01) })}),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))}})}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.05..1.0, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(1000) }),
-        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(1.0) }), slices: RangeOrValue::Value(1000) }),
+        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.5) }), slices: RangeOrValue::Value(1000) }),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.005..0.05, step: Some((0.005, 4))} }), slices: RangeOrValue::Value(100)}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
-        // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.01..0.1, step: None}  }),//Some((0.01, 2))
-        // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Value(0.4)  }),
-        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
+        // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.1, step: Some((0.001, 3))}  }),//Some((0.01, 2))
+        slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.1, step: None}  }),//Some((0.01, 2))
+        // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Value(0.01)  }),
+        max_slices: None, //Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
     //////////////////////select
     let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
         id: None,
-        // extend_config: Some(ExtendMotifsConfigRangeOrValue {
-        //     // slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(ComparisonMethodConfigRangeOrValue {  }),
-        //     slices_selector_metric: ComparisonMethodRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue {  }),
-        //     slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
-        //     // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.8..1.2, step: Some((0.1, 1))} }),
-        // }),
-        extend_config:None,
+        extend_config: Some(ExtendMotifsConfigRangeOrValue {
+            // slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(ComparisonMethodConfigRangeOrValue {  }),
+            slices_selector_metric: ComparisonMethodRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue {  }),
+            slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
+            // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.8..1.2, step: Some((0.1, 1))} }),
+        }),
+        // extend_config:None,
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
             inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {
@@ -1059,7 +1072,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
                 eps: RangeOrValue::Value(1e-8),
             }),
         },
-        threshold: RangeOrValue::Value(0.91),
+        threshold: RangeOrValue::Value(0.7),
         // threshold: RangeOrValue::Range{range: 0.4..1.1, step: Some((0.1, 1))},
     };
     /////////////////////train_motifs
@@ -1071,14 +1084,14 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRan
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
     };
-    let opt_config = Arc::new(OptConfig::new(50, 10));
+    let opt_config = Arc::new(OptConfig::new(10, 3));
 
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
         common_training_args: common_training_args.clone(),
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
         net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
-            step: RangeOrValue::Value(10),
+            step: RangeOrValue::Value(1),
             channels: RangeOrValue::Value(8),
             kernel: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
         }),
@@ -1762,7 +1775,7 @@ where
     let run_id = savable.save(store, ws)?;
 
 
-    Ok(vec![run_id])
+    Ok(vec![run_id])//TODO
 
 }
 
@@ -1863,9 +1876,7 @@ mod cli_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Kind::Float;
-    use thoosa_common::find_motifs_run_config::{
-        FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue,
-    };
+    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilter, SelectMotifsRunConfigRangeOrValue};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::my_tch::ThoModule;
@@ -1875,8 +1886,9 @@ mod cli_tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
+    use thoosa_common::transforms::filters::BandPassFilterParams;
     use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, plot_t, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
-    use thoosa_common::ws::{FsWorkspace, Workspace};
+    use thoosa_common::ws::{mock_ws_simp, FsWorkspace, Workspace};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::find::{
@@ -1893,20 +1905,23 @@ mod cli_tests {
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::{PermitsCtx, RunCtx};
+    use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx, PermitsCtx, RunCtx};
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use thoosa_shared::runner::common::mock_run_ctx::MockRunCtxBuilder;
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::traits::{Data, DataId};
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
+    use thoosa_with_data::with_data;
     use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
-    use crate::tasks::cross_dims::MotifSlices;
+    use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_motifs::FindMotifsStage;
     use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage};
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::tensor_loader::RawTensorLoader;
+    use crate::tasks::transforms::freq_filter::FreqFilter;
 
     #[ctor::ctor]
     fn init() {
@@ -2020,10 +2035,13 @@ mod cli_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_resource_tensor_two_easy_motifs() -> Result<(), ThoError>{
 
-        let (t, intervals, _) = resource_tensor_two_easy_motifs(
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_resource_tensor_two_easy_motifs() -> Result<(), ThoError>{
+
+        GlobalCtx::init_devices(2);
+
+        let (pulse_triangle_t, intervals, _) = resource_tensor_two_easy_motifs(
             1000,
             1,
             100,
@@ -2037,9 +2055,9 @@ mod cli_tests {
             None
         )?;
 
-        plot_t(&t, "pulse_triangle", true)?;
+        plot_t(&pulse_triangle_t, "pulse_triangle", true)?;
 
-        let (t, intervals, _) = resource_tensor_two_easy_motifs(
+        let (pulse_sin_t, intervals, _) = resource_tensor_two_easy_motifs(
             1000,
             1,
             100,
@@ -2052,7 +2070,35 @@ mod cli_tests {
             0.2,
             None
         )?;
-        plot_t(&t, "pulse_sin", true)?;
+        plot_t(&pulse_sin_t, "pulse_sin", true)?;
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
+
+        for freq in 0..100 {
+            let freq_filter = Arc::new(FreqFilter::<MockRunCtx>::new(&[
+                InputFilter::BandPassFilter(BandPassFilterParams {
+                    low_hz: freq as f64,
+                    band_hz: 1.0,
+                    kernel_size: 100,
+                    stride: 1,
+                    padding: 50,
+                })
+            ], &ws)?);
+
+            let mut ctx = mock_run_ctx::default(1);
+
+            let pulse_triangle_filtered_t = Arc::clone(&freq_filter).run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_triangle_t.shallow_clone())?, CacheArea::default())), ctx.branch(Some("filter"), false, false)).await?;
+            let pulse_sin_filtered_t = freq_filter.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_sin_t.shallow_clone())?, CacheArea::default())), ctx.branch(Some("filter"), false, false)).await?;
+
+            with_data!(ctx.branch(Some("filter"), false, false), pulse_triangle_filtered_t, pulse_sin_filtered_t; |ctx, pulse_triangle_t:&ThoTensor<ChannelsData2, SynKey>, pulse_sin_t:&ThoTensor<ChannelsData2, SynKey> |{
+
+                plot_t(pulse_triangle_t.as_ref(), &format!("pulse_triangle_{freq}_filtered_t"), true)?;
+                plot_t(pulse_sin_t.as_ref(), &format!("pulse_sin_{freq}_filtered_t"), true)?;
+
+                Ok::<_, ThoError>(())
+            })?;
+        }
+
 
         Ok(())
     }

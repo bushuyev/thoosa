@@ -111,14 +111,26 @@ impl SavableResult for FindAndSelectMotifsResult {
         store: &Arc<RwLock<Box<dyn Store>>>,
         _ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
-        store.write().save_run_config(
-            Some(self.best_configs.iter().map(|v|v.id.unwrap()).collect::<Vec<_>>().as_ref()),
+
+        // let best_configs_ids = self.best_configs.iter().map(|config|{
+        //     store.write().save_run_config(
+        //         Some(self.best_configs.iter().map(|v|v.id.unwrap()).collect::<Vec<_>>().as_ref()),
+        //         &FindAndSelectMotifsRunConfig::type_name(),
+        //         "FindAndSelectMotifs",
+        //         "FindAndSelectMotifs",
+        //         HashMap::from([]),
+        //     )
+        // }).collect::<Result<Vec<_>, ThoError>>();
+
+        //TODO it's not run_id, it's only to track best  find & select ids
+        let id = store.write().save_run_config(
+            Some(self.best_configs.iter().map(|v|v.select_motifs_run_config.id.expect("no select_motifs_run_config")).collect::<Vec<_>>().as_ref()),
             &FindAndSelectMotifsRunConfig::type_name(),
-            "FindAndSelectMotifsResult",
+            "OptSelectMotifsRunConfig",
             "best_run_ids",
             HashMap::from([]),
         )?;
-        Ok(0)
+        Ok(id)
     }
 }
 

@@ -1622,10 +1622,10 @@ where
                     let slice_0 = slices_0[i_0];
                     let slice_1 = slices_1[i_1];
 
-                    debug!("DistsTracker::consume: channel={channel:?} i_0={i_0} i_1={i_1} slice_0={slice_0:?}  slice_1={slice_1:?} dist={dist}");
+                    trace!("DistsTracker::consume: channel={channel:?} i_0={i_0} i_1={i_1} slice_0={slice_0:?}  slice_1={slice_1:?} dist={dist}");
 
                     if slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1 {
-                        debug!("DistsTracker::consume, track: slice_0={slice_0:?} slice_1={slice_1:?}");
+                        trace!("DistsTracker::consume, track: slice_0={slice_0:?} slice_1={slice_1:?}");
 
                         channel_trackers[channel].write().track(slice_0, slice_1, dist as f32);
                     }
