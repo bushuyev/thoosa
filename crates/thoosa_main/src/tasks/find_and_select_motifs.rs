@@ -25,7 +25,7 @@ use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::WithId;
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::{mono_key, panic_to_err_async, parse_resources, ResourceType, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources, ResourceType, StreamBuffering, ThoError};
 use thoosa_store::Store;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::find_motifs::FindMotifsStage;
@@ -317,80 +317,95 @@ impl AsyncStage for FindAndSelectMotifsStage {
 
         let const_vals = self.run_configs.grid_run_config_source().const_params().clone();
         let grid_vals_sets = self.run_configs.grid_to_vals();
+        let opt_params = self.run_configs.opt_params().clone();
+        let opt_max_evals = self.opt_config.opt_max_evals;
+        let opt_num_init = self.opt_config.opt_num_init;
 
         let device_idx = ctx.device_idx();
-        let mut best_configs = vec![];
-        for grid_vals in grid_vals_sets {
-            let min_loss = Arc::new(RwLock::new((f32::MAX, None::<FindAndSelectMotifsRunConfig>)));
+        let futures = grid_vals_sets
+            .into_iter()
+            .map(|grid_vals| {
+                let min_loss = Arc::new(RwLock::new((f32::MAX, None::<FindAndSelectMotifsRunConfig>)));
+                let const_vals = const_vals.clone();
+                let opt_params = opt_params.clone();
+                let ws = Arc::clone(&self.ws);
+                let store = Arc::clone(&self.store);
+                let loader = Arc::clone(&self.loader);
+                let find_resources = find_resources.clone();
+                let select_resources = select_resources.clone();
+                let min_loss_ref = Arc::clone(&min_loss);
+                let fixed_find_motifs_config = self.fixed_find_motifs_config.clone();
+                let max_chunk_size = self.max_chunk_size;
 
-            let const_vals = const_vals.clone();
-            let grid_vals = grid_vals.clone();
-            let ws = Arc::clone(&self.ws);
-            let store = Arc::clone(&self.store);
-            let loader = Arc::clone(&self.loader);
-            let find_resources = find_resources.clone();
-            let select_resources = select_resources.clone();
-            let min_loss_ref = Arc::clone(&min_loss);
-            let fixed_find_motifs_config = self.fixed_find_motifs_config.clone();
-            let max_chunk_size = self.max_chunk_size;
+                async move {
+                    let mut opt = AsyncTPEOptimizer::new(
+                        async |opt_vals| {
+                            let mut run_config: FindAndSelectMotifsRunConfig = [const_vals.as_slice(), grid_vals.as_slice(), opt_vals].concat().into_iter().into();
 
+                            let ws = Arc::clone(&ws);
+                            let store = Arc::clone(&store);
+                            let loader = Arc::clone(&loader);
+                            let find_resources = find_resources.clone();
+                            let select_resources = select_resources.clone();
+                            let fixed_find_motifs_config = fixed_find_motifs_config.clone();
+                            let min_loss_ref = Arc::clone(&min_loss_ref);
 
-            let mut opt = AsyncTPEOptimizer::new(
-                async |opt_vals| {
-                    let mut run_config: FindAndSelectMotifsRunConfig = [const_vals.as_slice(), grid_vals.as_slice(), opt_vals].concat().into_iter().into();
+                            let selected_count = panic_to_err_async!({
+                                Self::run_find_and_select(
+                                    &ws,
+                                    &store,
+                                    Arc::clone(&loader),
+                                    &mut run_config,
+                                    &find_resources,
+                                    &select_resources,
+                                    fixed_find_motifs_config,
+                                    max_chunk_size,
+                                    device_idx,
+                                ).await
+                            })
+                                .unwrap_or_else(|e| {
+                                    warn!("FindAndSelectMotifsStage::run: failed run_config={run_config:?}: {e:?}");
+                                    0usize
+                                });
 
-                    let ws = Arc::clone(&ws);
-                    let store = Arc::clone(&store);
-                    let loader = Arc::clone(&loader);
-                    let find_resources = find_resources.clone();
-                    let select_resources = select_resources.clone();
-                    let fixed_find_motifs_config = fixed_find_motifs_config.clone();
-                    let min_loss_ref = Arc::clone(&min_loss_ref);
+                            let loss = if selected_count == 0 { f32::MAX } else { 1.0 / selected_count as f32 };
+                            debug!("FindAndSelectMotifsStage::run: run_config={run_config:?} selected_count={selected_count} loss={loss}");
 
-                    let selected_count = panic_to_err_async!({
-                        Self::run_find_and_select(
-                            &ws,
-                            &store,
-                            Arc::clone(&loader),
-                            &mut run_config,
-                            &find_resources,
-                            &select_resources,
-                            fixed_find_motifs_config,
-                            max_chunk_size,
-                            device_idx,
-                        ).await
-                    })
-                    .unwrap_or_else(|e| {
-                        warn!("FindAndSelectMotifsStage::run: failed run_config={run_config:?}: {e:?}");
-                        0usize
-                    });
+                            if loss < min_loss_ref.read().0 {
+                                *min_loss_ref.write() = (loss, Some(run_config.clone()));
+                            }
 
-                    let loss = if selected_count == 0 { f32::MAX } else { 1.0 / selected_count as f32 };
-                    debug!("FindAndSelectMotifsStage::run: run_config={run_config:?} selected_count={selected_count} loss={loss}");
+                            loss
+                        },
+                        ConfigurationSpace::new(opt_params),
+                        opt_max_evals,
+                        opt_num_init,
+                    );
 
-                    if loss < min_loss_ref.read().0 {
-                        *min_loss_ref.write() = (loss, Some(run_config.clone()));
+                    opt.optimize().await;
+
+                    let guard = min_loss.read();
+                    let (best_loss, best_config) = (guard.0, guard.1.as_ref().map(|v|v.clone()));
+                    if let Some(best_config) = best_config {
+                        info!("FindAndSelectMotifsStage::run: best_loss={best_loss:?} best_config={best_config:?}");
+                        Ok::<_, ThoError>(Some(best_config))
+                    } else {
+                        warn!("FindAndSelectMotifsStage::run: no best config for grid_vals={grid_vals:?}");
+                        Ok::<_, ThoError>(None)
                     }
-
-                    loss
-                },
-                ConfigurationSpace::new(self.run_configs.opt_params().clone()),
-                self.opt_config.opt_max_evals,
-                self.opt_config.opt_num_init,
-            );
-
-            opt.optimize().await;
-
-            let guard = min_loss.read();
-            let (best_loss, best_config) = (guard.0, guard.1.as_ref().map(|v|v.clone()));
-
-            if let Some(best_config) = best_config {
-                info!("FindAndSelectMotifsStage::run: best_loss={best_loss:?} best_config={best_config:?}");
-                best_configs.push(best_config);
-            } else {
-                warn!("FindAndSelectMotifsStage::run: no best config for grid_vals={grid_vals:?}");
-            }
-        }
+                }
+            })
+            .collect::<Vec<_>>();
+        let best_configs = collect_futures_with_progress(
+            futures,
+            crate::buffer_limits::FIND_AND_SELECT_MOTIFS_RUN_BUFFER_ORDERED_LIMIT,
+            StreamBuffering::Ordered,
+            "FindAndSelectMotifsStage::run failed",
+        )
+        .await
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
 
 
 
