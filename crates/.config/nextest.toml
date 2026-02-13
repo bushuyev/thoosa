@@ -9,6 +9,12 @@ test-threads = 3
 default-filter = 'not test(/::heavy[^:]*$/)'
 retries = 3
 
+
+[profile.stress]
+test-threads = 32
+default-filter = 'test(/::heavy[^:]*$/)'
+retries = 0
+
 [[profile.default.scripts]]
 filter = 'all()'
 run-wrapper = 'systemd'

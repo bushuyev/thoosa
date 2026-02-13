@@ -163,7 +163,7 @@ where
     where
         Self:Sized,
         F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
-        P:PermitsCtx + 'a;
+        P:RunCtx + 'a;
 
     async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: &mut P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
@@ -171,7 +171,7 @@ where
         O: Select<S, Output=O>,
         for <'f> F: FnOnce(&O, &P) -> Result<R, ThoError>,
         S:Debug + Clone + 'static,
-        P:PermitsCtx;
+        P:RunCtx;
 
     async fn with_selected_data<S, R, P>(
         wrap:&DevicesWrap<O>,
@@ -184,7 +184,7 @@ where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
         S:Clone,
-        P:PermitsCtx,
+        P:RunCtx,
         Self:Sized;
 
     fn dump_to_cpu(wrap:&DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + std::marker::Send
@@ -245,7 +245,7 @@ where
     fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: &'a mut P, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
             for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
-            P: PermitsCtx + 'a
+            P: RunCtx + 'a
     {
         Box::pin(async move {
             match wrap.load_from_any_device_(to_device_idx).await {
@@ -263,7 +263,7 @@ where
         O: Select<S, Output=O>,
         for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError>,
         S:Debug + Clone + 'static,
-        P: PermitsCtx
+        P: RunCtx
     {
         match wrap.load_from_any_device_(to_device_idx).await {
             Ok(v) => {
@@ -280,7 +280,7 @@ where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
         S:Clone,
-        P:PermitsCtx,
+        P:RunCtx,
         Self: Sized
     {
         match wrap.load_from_any_device_(to_device_idx).await {
@@ -422,11 +422,11 @@ where
     fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: &'a mut P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
-        P: PermitsCtx + 'a
+        P: RunCtx + 'a
     {
         Box::pin(async move {
             if permits_ctx.acquired_permits() == 0 {
-                let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?;
+                let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
                 permits_ctx.add_permit(permit);
             }
 
@@ -446,10 +446,10 @@ where
         O: Select<S, Output=O>,
         for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError>,
         S:Debug + Clone + 'static,
-        P: PermitsCtx
+        P: RunCtx
     {
         if permits_ctx.acquired_permits() == 0 {
-            let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?;
+            let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
             permits_ctx.add_permit(permit);
         }
 
@@ -494,11 +494,11 @@ where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
         S:Clone,
-        P:PermitsCtx,
+        P:RunCtx,
         Self: Sized
     {
         if permits_ctx.acquired_permits() == 0 {
-            let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(wrap.id().clone())).await?;
+            let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
             permits_ctx.add_permit(permit);
         }
         let read_guard: RwLockReadGuard<'_, Option<O>> = wrap.cached_data[to_device_idx].read().await;
@@ -763,7 +763,7 @@ where
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
-        P:PermitsCtx,
+        P:RunCtx,
         S: Clone,
     {
         O::M::with_selected_data(self, to_device_idx, permits_ctx, selector, do_run).await

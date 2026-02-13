@@ -437,7 +437,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
 
 
                 #[allow(unexpected_cfgs)]
-                #[cfg(thoosa_debug_plots)]
+                #[cfg(tho_debug_plots)]
                 {
                     static COUNT:AtomicU64 = AtomicU64::new(0);
 

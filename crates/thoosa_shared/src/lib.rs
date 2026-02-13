@@ -180,7 +180,7 @@ pub async fn collect_futures_with_progress<T, F>(
     futures: Vec<F>,
     buffer_limit: usize,
     buffering: StreamBuffering,
-    error_label: &str,
+    descr: &str,
 ) -> Vec<T>
 where
     F: std::future::Future<Output = Result<T, ThoError>>,
@@ -196,12 +196,12 @@ where
                 match r {
                     Ok(item) => {
                         ok += 1;
-                        info!("done {} ({}/{}) out of {}", ok + err, ok, err, total);
+                        info!("done {} ({}/{}) out of {} in {descr}", ok + err, ok, err, total);
                         results.push(item);
                     }
                     Err(e) => {
                         err += 1;
-                        warn!("{error_label}: {e:?}");
+                        warn!("{descr}: {e:?}");
                     }
                 }
             }
@@ -212,12 +212,12 @@ where
                 match r {
                     Ok(item) => {
                         ok += 1;
-                        info!("done {} ({}/{}) out of {}", ok + err, ok, err, total);
+                        info!("done {} ({}/{}) out of {} in {descr}", ok + err, ok, err, total);
                         results.push(item);
                     }
                     Err(e) => {
                         err += 1;
-                        warn!("{error_label}: {e:?}");
+                        warn!("{descr}: {e:?}");
                     }
                 }
             }

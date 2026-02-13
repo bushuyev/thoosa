@@ -160,7 +160,7 @@ where
                            filtered_t = notch_band_rfft(&filtered_t, self.sample_rate, *low_hz, *high_hz)?;
 
                            #[allow(unexpected_cfgs)]
-                           #[cfg(thoosa_debug_plots)]
+                           #[cfg(tho_debug_plots)]
                            {
                                plot_t(&filtered_t, &format!("{}_NotchBand", input.id()), true);
                            }
@@ -174,7 +174,7 @@ where
                            })?;
 
                            #[allow(unexpected_cfgs)]
-                           #[cfg(thoosa_debug_plots)]
+                           #[cfg(tho_debug_plots)]
                            {
                                plot_t(&filtered_t, &format!("{}_BandPass", input.id()), true);
                            }

@@ -1,4 +1,4 @@
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, tho_debug))]
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
@@ -60,16 +60,16 @@ impl From<&str> for ElvVal {
 pub struct MonoKey {
     val: ElvVal,
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, tho_debug))]
     name: Cow<'static, str>,
 }
 
 impl Display for MonoKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, tho_debug))]
         write!(f, "{}_{}", self.val, self.name)?;
 
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, tho_debug)))]
         write!(f, "{}", self.val)?;
 
         Ok(())
@@ -80,7 +80,7 @@ impl From<&str> for MonoKey {
     fn from(value: &str) -> Self {
         MonoKey {
             val: value.into(),
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, tho_debug))]
             name: Cow::Owned(value.to_owned()),
         }
     }
@@ -95,16 +95,16 @@ impl PartialOrd for MonoKey {
 impl MonoKey {
     pub fn new(
         val: ElvVal,
-        #[cfg(debug_assertions)] name: Cow<'static, str>,
+        #[cfg(any(debug_assertions, tho_debug))] name: Cow<'static, str>,
     ) -> Self {
         Self {
             val,
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, tho_debug))]
             name,
         }
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, tho_debug))]
     pub fn name(&self) -> &str {
         self.name.as_ref()
     }
@@ -113,28 +113,28 @@ impl MonoKey {
 #[macro_export]
 macro_rules! mono_key {
     ($val:expr, $name:literal $(,)?) => {{
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, tho_debug))]
         {
             thoosa_shared::comp_id::MonoKey::new(
                 ($val).into(),
                 ::std::borrow::Cow::Borrowed($name),
             )
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, tho_debug)))]
         {
             thoosa_shared::comp_id::MonoKey::new(($val).into())
         }
     }};
 
     ($val:expr, $name:expr $(,)?) => {{
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, tho_debug))]
         {
             thoosa_shared::comp_id::MonoKey::new(
                 ($val).into(),
                 ::std::borrow::Cow::Owned(::std::string::String::from($name)),
             )
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, tho_debug)))]
         {
             thoosa_shared::comp_id::MonoKey::new(($val).into())
         }
@@ -191,7 +191,7 @@ fn fmt_elv_val(val: &ElvVal, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     }
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, tho_debug))]
 fn fmt_mono_key(mono: &MonoKey, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.write_str("(")?;
     if let ElvVal::Str(v) = &mono.val {
@@ -210,16 +210,16 @@ fn fmt_mono_key(mono: &MonoKey, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 #[allow(dead_code)]
 fn fmt_elv_name_val(mono: &&MonoKey, f: &mut Formatter) -> fmt::Result {
     fmt_elv_val(&mono.val, f)?;
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, tho_debug))]
     f.write_str(",")?;
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, tho_debug))]
     write!(f, "{:?}", mono.name.as_ref())?;
 
     Ok(())
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(not(any(debug_assertions, tho_debug)))]
 fn fmt_mono_key(mono: &MonoKey, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.write_str("(")?;
     fmt_elv_val(&mono.val, f)?;

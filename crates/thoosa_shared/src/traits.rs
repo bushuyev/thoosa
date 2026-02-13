@@ -1,7 +1,7 @@
 use ambassador::delegatable_trait;
 use mockall::automock;
 use std::any::Any;
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, tho_debug))]
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
@@ -134,7 +134,7 @@ pub trait Named {// like Type name
 ///this should be used when id is only needed for debug. In release build is empty struct. TODO - make it static counter in release?
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Named)]
 pub struct SimpleId(
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, tho_debug))]
     pub Cow<'static, str>,
 
 );
@@ -142,23 +142,23 @@ pub struct SimpleId(
 #[macro_export]
 macro_rules! simple_id {
     ($name:literal $(,)?) => {{
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, tho_debug))]
         {
             thoosa_shared::traits::SimpleId(
                 std::borrow::Cow::Borrowed($name)
             )
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, tho_debug)))]
         thoosa_shared::traits::SimpleId{}
     }};
     ($name:expr $(,)?) => {{
-         #[cfg(debug_assertions)]
+         #[cfg(any(debug_assertions, tho_debug))]
         {
             thoosa_shared::traits::SimpleId(
                 ::std::borrow::Cow::Owned(::std::string::String::from($name))
             )
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, tho_debug)))]
         thoosa_shared::traits::SimpleId{}
     }}
 }
@@ -166,20 +166,20 @@ macro_rules! simple_id {
 unsafe impl Send for SimpleId {}
 unsafe impl Sync for SimpleId {}
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, tho_debug))]
 impl From<&'static str> for SimpleId {
     fn from(value: &'static str) -> Self {
         SimpleId(value.into())
     }
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, tho_debug))]
 impl From<String> for SimpleId {
     fn from(value: String) -> Self {
         simple_id!(&value)
     }
 }
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, tho_debug))]
 impl Display for SimpleId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
 
@@ -187,7 +187,7 @@ impl Display for SimpleId {
 
     }
 }
-#[cfg(not(debug_assertions))]
+#[cfg(not(any(debug_assertions, tho_debug)))]
 impl Display for SimpleId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "n/a")

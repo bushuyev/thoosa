@@ -406,7 +406,7 @@ where
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
 
             #[allow(unexpected_cfgs)]
-            #[cfg(thoosa_debug_plots)]
+            #[cfg(tho_debug_plots)]
             {
                 static COUNTER:AtomicU32 = AtomicU32::new(0);
 
@@ -574,7 +574,7 @@ mod tests {
 
         let mut run_ctx = mock_run_ctx::default(1);
         let run_ctx_branch = run_ctx.branch(Some("train_motif_nets_run"), false, false);
-        let r = train_motif_net.run(input, run_ctx_branch).await?;
+        let r:Arc<DevicesWrap<TrainMotifsNetsResult>> = train_motif_net.run(input, run_ctx_branch).await?;
 
         fn run_test_net(params:&MotifNetParams, vs:&VarStore)->Result<(), ThoError>{
             let net = params.motif_net()?.build_tch_module::<MotifSlices, MotifProbability>(&vs.root())?;
