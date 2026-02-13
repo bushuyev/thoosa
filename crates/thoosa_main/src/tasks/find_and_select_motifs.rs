@@ -10,7 +10,7 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets::OptConfig;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_motifs::find::FixedFindMotifsConfig;
+use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesArgs};
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -23,7 +23,7 @@ use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::RunCtx;
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
-use thoosa_shared::traits::WithId;
+use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources, ResourceType, StreamBuffering, ThoError};
 use thoosa_store::Store;
@@ -198,16 +198,17 @@ impl FindAndSelectMotifsStage {
         Ok(run_id)
     }
 
-    async fn run_find_and_select(
+    async fn run_find_and_select<C:RunCtx + Adjustable>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
-        loader: Arc<RawTensorLoader<RunCtxWithPermits>>,
+        loader: Arc<RawTensorLoader<C>>,
         run_config: &mut FindAndSelectMotifsRunConfig,
         find_resources: &ResourceType,
         select_resources: &ResourceType,
         fixed_find_motifs_config: FixedFindMotifsConfig,
         max_chunk_size: i64,
         device_idx: usize,
+        mut ctx: C
     ) -> Result<usize, ThoError> {
         let find_input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store)?,
@@ -233,8 +234,7 @@ impl FindAndSelectMotifsStage {
             "FindAndSelectMotifs/select",
         )?;
 
-        let mut init_find_ctx = RunCtxWithPermits::new(device_idx, "find_and_select_init");
-        let find_stage: Arc<FindMotifsStage<Simple, RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>> = Arc::new(
+        let find_stage: Arc<FindMotifsStage<Simple, RawTensorLoader<C>, C>> = Arc::new(
             FindMotifsStage::new(
                 ws,
                 store,
@@ -242,22 +242,22 @@ impl FindAndSelectMotifsStage {
                 vec![run_config.find_motifs_run_config.clone()],
                 fixed_find_motifs_config,
                 ThoDevice::from(device_idx),
-                init_find_ctx.branch(Some("find_and_select_init_find"), true, false),
+                ctx.branch(Some("find_and_select_init_find"), true, false),
             ).await?,
         );
         find_stage
-            .run(find_input, RunCtxWithPermits::new(device_idx, "find_and_select_run_find"))
+            .run(find_input, ctx.branch(Some("find_and_select_run_find"), true, false))
             .await?;
 
         #[allow(unexpected_cfgs)]
-        #[cfg(thoosa_debug_plots)]
+        #[cfg(tho_debug_plots)]
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId{ find_motifs_run_id: run_config.find_motifs_run_config.id.unwrap(), select_motifs_run_ids: None }), &Cpu).await?;
 
         let select_stage = Arc::new(
             SelectMotifsStage::<
-                RawTensorLoader<RunCtxWithPermits>,
-                MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>,
-                RunCtxWithPermits,
+                RawTensorLoader<C>,
+                MotifLoader<RawTensorLoader<C>, C>,
+                C,
             >::new(
                 ws,
                 store,
@@ -271,11 +271,11 @@ impl FindAndSelectMotifsStage {
             ),
         );
 
-        let select_stage_output = select_stage
-            .run(select_input, RunCtxWithPermits::new(device_idx, "find_and_select_run_select"))
+        let select_stage_output:Arc<DevicesWrap<SelectMotifsSavableResult>> = select_stage
+            .run(select_input, ctx.branch(Some("select_stage_output"), true, false))
             .await?;
 
-        let mut select_savable = Arc::into_inner(select_stage_output)
+        let mut select_savable:SelectMotifsSavableResult = Arc::into_inner(select_stage_output)
             .expect("FindAndSelectMotifsStage::run_find_and_select: select output still shared")
             .take_data(device_idx)
             .await?;
@@ -284,7 +284,7 @@ impl FindAndSelectMotifsStage {
 
 
         #[allow(unexpected_cfgs)]
-        #[cfg(thoosa_debug_plots)]
+        #[cfg(tho_debug_plots)]
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (select_run_id)), &Cpu).await?;
 
         Ok(selected_count)
@@ -302,7 +302,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
-        ctx: Self::Ctx,
+        mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let input = Arc::into_inner(input)
             .expect("FindAndSelectMotifsStage::run: input still shared")
@@ -319,7 +319,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
         let opt_params = self.run_configs.opt_params().clone();
         let opt_max_evals = self.opt_config.opt_max_evals;
         let opt_num_init = self.opt_config.opt_num_init;
-
+        let mut find_and_select_run_find_ctx = ctx.branch("find_and_select_run_find".into(), true, false);
         let device_idx = ctx.device_idx();
         let futures = grid_vals_sets
             .into_iter()
@@ -336,10 +336,11 @@ impl AsyncStage for FindAndSelectMotifsStage {
                 let min_loss_ref = Arc::clone(&min_loss);
                 let fixed_find_motifs_config = self.fixed_find_motifs_config.clone();
                 let max_chunk_size = self.max_chunk_size;
-
+                let mut find_and_select_run_find_ctx = find_and_select_run_find_ctx.branch(Some(format!("grid_idx_{grid_idx}").as_str()), false, false);
                 async move {
+
                     let mut opt = AsyncTPEOptimizer::new(
-                        async |opt_vals| {
+                        async  |opt_vals| {
                             let mut run_config: FindAndSelectMotifsRunConfig = [const_vals.as_slice(), grid_vals.as_slice(), opt_vals].concat().into_iter().into();
 
                             let ws = Arc::clone(&ws);
@@ -361,6 +362,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                                     fixed_find_motifs_config,
                                     max_chunk_size,
                                     device_idx,
+                                    find_and_select_run_find_ctx.branch(Some(format!("{grid_idx}_in_opt").as_str()), false, false)
                                 ).await
                             })
                                 .unwrap_or_else(|e| {
@@ -405,7 +407,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
         .await;
 
         // indexed_best_configs.sort_by_key(|(grid_idx, _)| *grid_idx);
-        
+
         let best_configs = indexed_best_configs.into_iter().filter_map(|(_, config)| config).collect::<Vec<_>>();
 
 

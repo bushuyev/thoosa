@@ -156,7 +156,6 @@ where
 
         let mut stats_values = Vec::with_capacity(channels as usize);
         for channel in 0..channels {
-            let mut channel_ctx = ctx.branch(Some(&format!("random_stats_channel_{channel}")), false, false);
             let (window, motif) = load_motif_slices(
                 DataId(channel),
                 find_motifs_run_id,
@@ -165,7 +164,7 @@ where
                 slices.clone(),
                 Arc::clone(&self.store),
                 Arc::clone(&self.loader),
-                &mut channel_ctx,
+                ctx.branch(Some(&format!("random_stats_channel_{channel}")), false, false),
                 &self.ws,
                 "random_stats",
             )
@@ -188,7 +187,7 @@ where
                 .run(
                     &self.clc_stats,
                     Arc::clone(&stats_input),
-                    channel_ctx.branch(Some("random_stats_dist"), false, false),
+                    ctx.branch(Some(&format!("random_stats_channel_{channel}")), false, false).branch(Some("random_stats_dist"), false, false),
                     Contexts::new(
                         SplitsAdjusterContextImpl::new(stats_input_size, DistOutputBuilder::new(stats_out_id, aggr)),
                         NoopRunnableContext {},

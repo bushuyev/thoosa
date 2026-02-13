@@ -5,6 +5,7 @@ use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
 use std::mem;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use mockall_double::double;
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
@@ -20,6 +21,8 @@ use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::mono_key;
 use crate::runner::permits::MAX_PERMITS;
 
+
+///was supposed to be execution-long context, now used mostly to keep permits so to avoid parallel async calls 'sharing' same permit, which may lead to deadlock, should never be passed as &mut to an async function - use RunCtx::branch instead.
 #[derive(Named)]
 pub struct RunCtxWithPermits {
     id: SynKey,
@@ -30,7 +33,7 @@ pub struct RunCtxWithPermits {
     return_to: Option<(SynKey, Arc<Mutex<Vec<RunnerPerm>>>)>,
 
     purge_gpu_closures:Option<Arc<Mutex<Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>>>>,
-    branches:u32//for unique branch ids, never decreased
+    branches:AtomicU32//for unique branch ids, never decreased
 }
 
 impl Debug for RunCtxWithPermits {
@@ -75,7 +78,7 @@ impl RunCtxWithPermits {
             purge_gpu_closures: Some(Arc::new(Mutex::new(vec![]))),
             permits: Arc::new(Mutex::new(Vec::new())),
             return_to: None,
-            branches: 0
+            branches: AtomicU32::new(0)
         }
     }
 
@@ -133,14 +136,14 @@ impl RunCtx for RunCtxWithPermits {
         give_permits_back_to_parent: bool//for OOM handler to pass permits between DumpToCpu(needs MAX_PERMITS) and further cycles
     ) -> Self {
 
-        self.branches+=1;
+        let branches = self.branches.fetch_add(1, Ordering::SeqCst);
 
         let branch_full_id = match new_name {
             None => {
                 self.id.clone()
             }
-            Some(_branch_name) => {
-                &self.id + mono_key!(self.branches, _branch_name)
+            Some(branch_name) => {
+                &self.id + mono_key!(branches, branch_name)
             }
         };
         debug!("RunCtx2::branch: branch_full_id={branch_full_id:?}");

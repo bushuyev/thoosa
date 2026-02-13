@@ -196,11 +196,11 @@ where
 
         debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
 
-        let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), &mut ctx, &self.ws, "motif_loader").await?;
+        let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "motif_loader").await?;
 
 
         #[allow(unexpected_cfgs)]
-        #[cfg(thoosa_debug_plots)]
+        #[cfg(tho_debug_plots)]
         {
             static COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -316,11 +316,11 @@ where
                     None,
                     input_len_adjuster,
                 )?;
-
-        let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), &mut ctx, &self.ws, "random loader").await?;
+        let cache_area = ctx.cache_area().into();
+        let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "random loader").await?;
 
         #[allow(unexpected_cfgs)]
-        #[cfg(thoosa_debug_plots)]
+        #[cfg(tho_debug_plots)]
         {
             static COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -329,9 +329,10 @@ where
             COUNT.fetch_add(1, Relaxed);
         }
 
+
         Ok(Arc::new(DevicesWrap::wrap(
             motif,
-            ctx.cache_area().into(),
+            cache_area,
         )))
     }
 }
@@ -344,7 +345,7 @@ pub(crate) async fn load_motif_slices<L, C>(
     slices: Vec<TensorIdSliceIdx>,
     store: Arc<RwLock<Box<dyn Store>>>,
     loader: Arc<L>,
-    ctx: &mut C,
+    mut ctx: C,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     descr: &str
 ) -> Result<(u32, ThoTensor<MotifSlices, DataId>), ThoError>
@@ -399,7 +400,7 @@ where
             ranges: slices
                 .into_iter()
                 .filter(|slice| {
-                    let r = MonoMetrics::from([channel + 1, (slice + window) as i64]) <= *size;
+                    let r = MonoMetrics::<1,2>::from([channel + 1, (slice + window) as i64]) <= *size;
                     if !r {
                         warn!("load_motif_slices: motif_id={motif_id} slice={slice:?} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id}  in {descr}");
                     }
@@ -739,7 +740,7 @@ mod tests {
         let cache_area = ctx.read().cache_area();
         let input = Arc::new(DevicesWrap::wrap(SlicesLoaderInput{ motif_id: DataId::from(&motif_id), limit: 10 }, CacheArea::default()));
 
-        let slices = random_slices_loader
+        let slices:Arc<DevicesWrap<ThoTensor<MotifSlices, DataId>>> = random_slices_loader
             .run(Arc::clone(&input), ctx.write().branch(Some("random_slices_loader"), false, false))
             .await?;
 

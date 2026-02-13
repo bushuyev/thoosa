@@ -1894,7 +1894,7 @@ impl Store for SqlStore {
             let mut params: Vec<u32> = match all_but_in_run_id {
                 Some((_run_id, _channel_id)) => {
                     query.push_str(
-                        "s.motif_id!=? AND m.channel_id=(SELECT channel_id FROM motifs WHERE id=?) ORDER BY RANDOM()",
+                        "s.motif_id!=? AND m.channel_id=(SELECT channel_id FROM motifs WHERE id=?) ORDER BY RANDOM()",//TODO why AND m.channel_id=(SELECT channel_id FROM motifs WHERE id=?
                     );
                     vec![motif_id, motif_id]
                 }
