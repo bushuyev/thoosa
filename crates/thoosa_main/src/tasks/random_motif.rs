@@ -27,7 +27,7 @@ use crate::tasks::random_slices_stats::{random_non_overlapping_slices, RANDOM_ST
 pub struct RandomMotifInput {
     id: SynKey,
     max_slices: u32,
-    motif_width: u32,
+    motif_width: u32,//TODO use find_motifs_run_config.window?
 }
 
 impl RandomMotifInput {
@@ -135,7 +135,7 @@ where
         Self {
             id: SynKey::new([
                 mono_key!("RandomMotif", "stage"),
-                mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
+                mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),//TODO this only needed if there is freq_filter which changes input width
             ]),
             store,
             find_motifs_run_id,
@@ -166,6 +166,8 @@ impl<C> AsyncStage for RandomMotif<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RandomMotif::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<RandomMotifInput>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     where
         for<'a> Self::In<'a>: Send + Sync,

@@ -1,4 +1,5 @@
 pub(crate) const FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT: usize = 4;
+pub(crate) const CROSS_LOADERS_LIMIT: usize = 10;
 pub(crate) const CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT: usize = 16;
 pub(crate) const APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT: usize = 16;
 pub(crate) const APPLY_MOTIF_NETS_RUN_BUFFERED_LIMIT: usize = 16;

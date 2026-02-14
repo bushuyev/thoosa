@@ -234,7 +234,7 @@ pub(crate) fn random_non_overlapping_slices(
     input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>,
 ) -> Result<(Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError> {
     if resources.is_empty() {
-        return Err(ThoError::new("RandomStats: no resources available for random slices"));
+        return Err(ThoError::new("random_non_overlapping_slices: no resources available for random slices"));
     }
 
     let mut candidates = resources
@@ -246,7 +246,7 @@ pub(crate) fn random_non_overlapping_slices(
         .collect::<Vec<_>>();
 
     if candidates.is_empty() {
-        return Err(ThoError::new("RandomStats: no resources long enough for motif width"));
+        return Err(ThoError::new("random_non_overlapping_slices: no resources long enough for motif width"));
     }
 
     let mut rng = rand::rng();
@@ -285,11 +285,11 @@ pub(crate) fn random_non_overlapping_slices(
     }
 
     if slices.len() < 2 {
-        return Err(ThoError::new(format!("RandomStats: expected at least 2 slices, got {}", slices.len())));
+        return Err(ThoError::new(format!("random_non_overlapping_slices: expected at least 2 slices, got {}", slices.len())));
     }
 
     if slices.len() < max_slices as usize {
-        warn!("RandomStats: requested max_slices={max_slices}, generated {}", slices.len());
+        warn!("random_non_overlapping_slices: requested max_slices={max_slices}, generated {}", slices.len());
     }
 
     Ok((slices, resources_map))
