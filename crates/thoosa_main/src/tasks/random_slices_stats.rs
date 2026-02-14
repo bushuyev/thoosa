@@ -93,6 +93,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
+        
         Self {
             store,
             loader,
