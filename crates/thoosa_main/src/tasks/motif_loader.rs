@@ -337,6 +337,7 @@ where
     }
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_slices"))]
 pub(crate) async fn load_motif_slices<L, C>(
     motif_id: DataId,
     find_motifs_run_id: u32,
@@ -423,7 +424,7 @@ where
                 //TODO async OOM: move into OOMHandler as util fn
                 match raw_tensor.with_selected_data(
                     device_idx,
-                    &mut ctx_for_data,
+                    &mut ctx_for_data.branch(Some("motif_loader_selected_data_with_selected_data"), false, false),
                     selector.clone(),
                     |tt, _ctx| {
                         debug!("load_motif_slices:  motif_id={motif_id} resource_id={resource_id} try_count={try_count} resource_id={resource_id}  tt.size={:?}", tt.size());

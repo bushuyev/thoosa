@@ -187,7 +187,7 @@ where
                 .run(
                     &self.clc_stats,
                     Arc::clone(&stats_input),
-                    ctx.branch(Some(&format!("random_stats_channel_{channel}")), false, false).branch(Some("random_stats_dist"), false, false),
+                    ctx.branch(Some(&format!("random_stats_channel_{channel}")), false, false),
                     Contexts::new(
                         SplitsAdjusterContextImpl::new(stats_input_size, DistOutputBuilder::new(stats_out_id, aggr)),
                         NoopRunnableContext {},
@@ -203,7 +203,7 @@ where
         Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(&input_id + &SynKey::new(["random_stats".into()]), stats_t)?, cache_area.into())))
     }
 }
-
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="random_non_overlapping_slices"))]
 fn random_non_overlapping_slices(
     resources: &[Resource],
     max_slices: u32,
