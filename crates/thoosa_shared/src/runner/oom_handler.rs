@@ -419,6 +419,11 @@ where
     }
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="pref_oom_count"))]
+fn pref_oom_count(){
+
+}
+
 async fn run_with_runner<'a, 'z, R, IC, RC, RCC, S, W, Run, Fut>(
     adjusters: &[Adjusters<'a, R, IC, RC, RCC, S>],
     task: Arc<R>,
@@ -464,6 +469,7 @@ where
             runner(Arc::clone(&task), Arc::clone(&input), None, device_idx, run_context.branch(Some("oom_handler_run_initial"), false, false)).await
         }) {
             Err(te) => {
+                pref_oom_count();
                 debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  te={te:?}", os_thread_id());
 
                 match te.what() {

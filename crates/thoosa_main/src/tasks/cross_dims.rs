@@ -26,6 +26,7 @@ pub struct ChannelsDataVec {
 impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey> {
     type Output = ThoTensor<ChannelsData2, SynKey>;
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey>::subview"))]
     fn subview(&self, selector: ChannelsDataVec) -> Result<Self::Output, ThoError> {
         let ChannelsDataVec { ranges } = selector;
         let size: MonoMetrics<1, 2> = self

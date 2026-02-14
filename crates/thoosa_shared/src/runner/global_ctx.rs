@@ -134,7 +134,7 @@ impl GlobalCtx {
         num_permits: NumPermits,
         requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoError> {
-        debug!("GlobalCtx::acquire_many: requester_id={requester_id:?} asking for many permits, self.semaphores[{device_idx}]={:?} \nbacktrace={}", self.semaphores[device_idx], Backtrace::capture());
+        info!("GlobalCtx::acquire_many: requester_id={requester_id:?} asking for many permits, self.semaphores[{device_idx}]={:?} \nbacktrace={}", self.semaphores[device_idx], Backtrace::capture());
         assert!(!requester_id.as_any().is::<()>(), "Got () requester_id backtrace={}", Backtrace::capture());
 
         self.semaphores[device_idx].acquire(num_permits, requester_id).await
@@ -154,7 +154,7 @@ impl GlobalCtx {
 
         let mut num_tries = 0;
 
-        info!("GlobalCtx::acquire_one: requester_id={requester_id:?} asking for one permit, self.semaphores[{device_idx}]={:?} \nbacktrace={}", self.semaphores[device_idx], backtrace_head_lines(8));
+        debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} asking for one permit, self.semaphores[{device_idx}]={:?} \nbacktrace={}", self.semaphores[device_idx], backtrace_head_lines(8));
 
         //can't handle OutOfPermits in with_data! and similar calls - acquire_one is needed to ensure no other thread acquired 100 permits and can drop all to cpu.
         loop {

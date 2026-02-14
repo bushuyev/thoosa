@@ -103,6 +103,9 @@ where
     ).await?);
 
     let num_nets = apply_motif_nets.num_nets() as u32;
+    if num_nets == 0 {
+        return Err(ThoError::new("No motifs nets to train on"));
+    }
 
     let motif_loader = Arc::new(ABStage::new(
         SynKey::new([
