@@ -211,7 +211,7 @@ where
                             SlicesFilter::PrecalculateStats(v) => {
 
 
-                                let dists = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_id, Metrics::EucDist, to_stats_aggr(v.aggr)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), false, false)).await?;
+                                let dists = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_id, Metrics::EucDist, to_stats_aggr(v.aggr)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), true, false)).await?;
                                 let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
                                     debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: dists=\n{}", t.t);

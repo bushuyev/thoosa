@@ -1231,7 +1231,7 @@ where
         mut ctx: C,
     ) -> Result<Vec<(u32, f64)>, ThoError> {
         assert!((0.0..=1.0).contains(&select_motifs_run_config.threshold), "SelectMotifsRunConfig::threshold must be within 0..1, got {}", select_motifs_run_config.threshold);
-        info!("SelectMotifsStage::run: 0. self.find_motif_run_ids_motif_ids={:?}", self.find_motif_run_ids_motif_ids);
+        debug!("SelectMotifsStage::run: 0. self.find_motif_run_ids_motif_ids={:?}", self.find_motif_run_ids_motif_ids);
 
         let motif_criteria: Vec<MotifCriterion> = Vec::from(&select_motifs_run_config.motif_criteria);
         if motif_criteria.is_empty() {
