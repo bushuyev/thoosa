@@ -6,28 +6,32 @@ use async_trait::async_trait;
 use cached_derive::Cached;
 use parking_lot::RwLock;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOnly;
+use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
-use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, WithId};
+use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::{mono_key, CopyToDevice, TensorIdSliceIdx, ThoError};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
+use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
+use crate::tasks::motif_loader::load_motif_slices;
 use crate::tasks::random_slices_stats::{random_non_overlapping_slices, RANDOM_STATS_GROUP};
 
 #[derive(Debug, Clone, DummyData)]
 pub struct RandomMotifInput {
     id: SynKey,
     max_slices: u32,
-    motif_width: u32,//TODO use find_motifs_run_config.window?
+    motif_width: u32,
 }
 
 impl RandomMotifInput {
@@ -61,41 +65,32 @@ impl WithId for RandomMotifInput {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RandomMotifOutput {
     id: SynKey,
-    slices: Vec<TensorIdSliceIdx>,
-    resources_map: HashMap<ResourceId, Resource>,
+    motifs: Vec<ThoTensor<MotifSlices, DataId>>,
 }
 
 impl RandomMotifOutput {
-    pub fn new(id: SynKey, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>) -> Self {
-        Self {
-            id,
-            slices,
-            resources_map,
-        }
+    pub fn new(id: SynKey, motifs: Vec<ThoTensor<MotifSlices, DataId>>) -> Self {
+        Self { id, motifs }
     }
 
-    pub fn slices(&self) -> &Vec<TensorIdSliceIdx> {
-        &self.slices
-    }
-
-    pub fn resources_map(&self) -> &HashMap<ResourceId, Resource> {
-        &self.resources_map
+    pub fn motifs(&self) -> &Vec<ThoTensor<MotifSlices, DataId>> {
+        &self.motifs
     }
 }
 
 impl Data for RandomMotifOutput {
     type Metrics = MonoMetrics<0, 1>;
-    type M = CpuOnly<Self>;
+    type M = CpuOrGpu<Self>;
 
     fn size(&self) -> Self::Metrics {
-        self.slices.len().into()
+        self.motifs.len().into()
     }
 
     fn device(&self) -> usize {
-        0
+        self.motifs.first().map_or(0, |motif| motif.device())
     }
 }
 
@@ -111,41 +106,52 @@ impl Output for RandomMotifOutput {}
 
 #[async_trait]
 impl CopyToDevice for RandomMotifOutput {
-    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
-        Ok(self.clone())
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
+        let mut motifs = Vec::with_capacity(self.motifs.len());
+        for motif in &self.motifs {
+            motifs.push(motif.copy_to_device(dst_device).await?);
+        }
+        Ok(Self { id: self.id.clone(), motifs })
     }
 }
 
 #[derive(Debug, Cached, Named)]
-pub struct RandomMotif<C>
+pub struct RandomMotif<L, C>
 where
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
     store: Arc<RwLock<Box<dyn Store>>>,
+    loader: Arc<L>,
+    ws: Arc<RwLock<Box<dyn Workspace>>>,
     find_motifs_run_id: RunId,
     pd: PhantomData<C>,
 }
 
-impl<C> RandomMotif<C>
+impl<L, C> RandomMotif<L, C>
 where
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(store: Arc<RwLock<Box<dyn Store>>>, find_motifs_run_id: RunId) -> Self {
+    pub fn new(store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, ws: Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_id: RunId) -> Self {
         Self {
             id: SynKey::new([
                 mono_key!("RandomMotif", "stage"),
-                mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),//TODO this only needed if there is freq_filter which changes input width
+                mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
             ]),
             store,
+            loader,
+            ws,
             find_motifs_run_id,
             pd: PhantomData,
         }
     }
 }
 
-impl<C> OutId for RandomMotif<C>
+impl<L, C> OutId for RandomMotif<L, C>
 where
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -153,8 +159,9 @@ where
     }
 }
 
-impl<C> Stage for RandomMotif<C>
+impl<L, C> Stage for RandomMotif<L, C>
 where
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type In<'a> = RandomMotifInput;
@@ -162,11 +169,11 @@ where
     type Ctx = C;
 }
 
-impl<C> AsyncStage for RandomMotif<C>
+impl<L, C> AsyncStage for RandomMotif<L, C>
 where
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RandomMotif::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<RandomMotifInput>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     where
@@ -197,6 +204,33 @@ where
         let resources = self.store.read().list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices)?;
         let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, motif_width, input_len_adjuster)?;
 
-        Ok(Arc::new(DevicesWrap::wrap(RandomMotifOutput::new(self.out_id(input.id()), slices, resources_map), cache_area.into())))
+        let channels = self.ws.read().channels();
+        assert_ne!(channels, 0, "no channels");
+
+        let mut motifs = Vec::with_capacity(channels as usize);
+        for channel in 0..channels {
+            let (_window, motif) = load_motif_slices(
+                DataId(channel),
+                self.find_motifs_run_id,
+                channel as i64,
+                resources_map.clone(),
+                slices.clone(),
+                Arc::clone(&self.store),
+                Arc::clone(&self.loader),
+                ctx.branch(Some(&format!("random_motif_channel_{channel}")), false, false),
+                &self.ws,
+                "random_stats",
+            )
+            .await?;
+
+            let slice_count = motif.t_ref().size()[0];
+            if slice_count < 2 {
+                return Err(ThoError::new(format!("RandomMotif: not enough slices for channel {channel}, got {slice_count}")));
+            }
+
+            motifs.push(motif);
+        }
+
+        Ok(Arc::new(DevicesWrap::wrap(RandomMotifOutput::new(self.out_id(input.id()), motifs), cache_area.into())))
     }
 }
