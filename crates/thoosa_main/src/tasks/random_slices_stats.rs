@@ -32,6 +32,7 @@ use thoosa_with_data::with_data;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, MotifSlicesSelector};
 use crate::tasks::motif_loader::{load_motif_slices, MotifMeta};
+use crate::tasks::random_motif::{RandomMotif, RandomMotifInput, RandomMotifOutput};
 use crate::tasks::slices_stats::{Aggr, Metrics, SlicesStats, SlicesStatsInput};
 
 pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load random resources, TODO - add proper method to SqlStore
@@ -84,6 +85,7 @@ where
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     clc_stats: Arc<SlicesStats<C>>,
+    random_motifs: RwLock<HashMap<RunId, Arc<RandomMotif<C>>>>,
     pd: PhantomData<C>,
 }
 
@@ -99,8 +101,18 @@ where
             loader,
             ws: Arc::clone(ws),
             clc_stats: Arc::new(SlicesStats::<C>::new()),
+            random_motifs: RwLock::new(HashMap::new()),
             pd: PhantomData,
         }
+    }
+
+    fn random_motif_stage(&self, find_motifs_run_id: RunId) -> Arc<RandomMotif<C>> {
+        if let Some(stage) = self.random_motifs.read().get(&find_motifs_run_id) {
+            return Arc::clone(stage);
+        }
+
+        let mut random_motifs = self.random_motifs.write();
+        Arc::clone(random_motifs.entry(find_motifs_run_id).or_insert_with(|| Arc::new(RandomMotif::new(Arc::clone(&self.store), find_motifs_run_id))))
     }
 }
 
@@ -143,14 +155,24 @@ where
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(find_motifs_run_id, &self.store.read().list_run_config_values(find_motifs_run_id)?)?;
         let motif_width = find_motifs_run_config.window;
-        let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
         assert_ne!(motif_width, 0, "RandomStats: motif_width must be > 0");
 
-        let resources = self.store.read().list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices)?;
-        let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, motif_width, input_len_adjuster)?;
+        let random_motif = self
+            .random_motif_stage(find_motifs_run_id)
+            .run_cached(
+                Arc::new(DevicesWrap::wrap(RandomMotifInput::new(max_slices, motif_width), cache_area.into())),
+                ctx.branch(Some("random_stats_random_motif"), false, false),
+            )
+            .await?;
+        let (slices, resources_map) = with_data!(
+            ctx.branch(Some("random_stats_random_motif_with_data"), false, false),
+            random_motif;
+            |_ctx, random_motif: &RandomMotifOutput| {
+                Ok::<_, ThoError>((random_motif.slices().clone(), random_motif.resources_map().clone()))
+            }
+        )?;
 
         debug!("RandomStats::run: slices.len={} resources_map.len={}", slices.len(), resources_map.len());
-        debug!("RandomStats::run: resources={resources:?}");
 
         let channels = self.ws.read().channels();
         assert_ne!(channels, 0, "no channels");
@@ -205,7 +227,7 @@ where
     }
 }
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="random_non_overlapping_slices"))]
-fn random_non_overlapping_slices(
+pub(crate) fn random_non_overlapping_slices(
     resources: &[Resource],
     max_slices: u32,
     motif_width: u32,
