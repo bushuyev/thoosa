@@ -1120,60 +1120,82 @@ where
 
             debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?} find_motifs_run_id={find_motifs_run_id}");
             let resources_slices = Arc::new(resources_iter.clone().collect::<Vec<_>>());
-            for channel_mask_dists_ids in channel_masks_dists_ids.into_iter().enumerate() {
-                if let (channel, Some(mask_dists_ids)) = channel_mask_dists_ids {
-                    debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
-                    let mask_dists = mask_dists_ids.0.to_cpu().await?;
-                    let mask_size = mask_dists.mask_size_hint()?;
-                    assert_eq!(mask_size.len(), 3, "SelectMotifsStage::run: expected 3D mask, got {mask_size:?}");
-                    assert_eq!(mask_size[0], 1, "SelectMotifsStage::run: expected single-channel mask, got {mask_size:?}");
-                    assert_eq!(mask_size[1] as usize, mask_dists_ids.1.len(), "SelectMotifsStage::run: motif/mask size mismatch mask={mask_size:?} motifs={}", mask_dists_ids.1.len());
-                    assert_eq!(mask_size[2] as usize, resources_slices.len(), "SelectMotifsStage::run: resources/mask size mismatch mask={mask_size:?} resources={}", resources_slices.len());
+            let futures = channel_masks_dists_ids
+                .into_iter()
+                .enumerate()
+                .map(|(channel, channel_mask_dists_ids)| {
+                    let resources_slices = Arc::clone(&resources_slices);
+                    let channels_motifs_added_slices = Arc::clone(&channels_motifs_added_slices);
+                    async move {
+                        let result = (async {
+                            if let Some(mask_dists_ids) = channel_mask_dists_ids {
+                                debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
+                                let mask_dists = mask_dists_ids.0.to_cpu().await?;
+                                let mask_size = mask_dists.mask_size_hint()?;
+                                assert_eq!(mask_size.len(), 3, "SelectMotifsStage::run: expected 3D mask, got {mask_size:?}");
+                                assert_eq!(mask_size[0], 1, "SelectMotifsStage::run: expected single-channel mask, got {mask_size:?}");
+                                assert_eq!(mask_size[1] as usize, mask_dists_ids.1.len(), "SelectMotifsStage::run: motif/mask size mismatch mask={mask_size:?} motifs={}", mask_dists_ids.1.len());
+                                assert_eq!(mask_size[2] as usize, resources_slices.len(), "SelectMotifsStage::run: resources/mask size mismatch mask={mask_size:?} resources={}", resources_slices.len());
 
-                    let motif_count = mask_dists_ids.1.len();
-                    let resources_slices_cloned = Arc::clone(&resources_slices);
-                    let matches_by_motif = tokio::task::spawn_blocking(move || {
-                        use rayon::prelude::*;
-                        rayon_pool().install(|| {
-                            let mut match_indices = mask_dists.into_indices_iter()?;
-                            let mut matches = match_indices.par_bridge().map(|(mask_channel, motif_idx, slice_idx, _)| {
-                                (mask_channel as usize, motif_idx as usize, slice_idx as usize)
-                            }).collect::<Vec<_>>();
-                            matches.par_sort_unstable_by(|l, r| l.1.cmp(&r.1).then(l.2.cmp(&r.2)));
+                                let motif_count = mask_dists_ids.1.len();
+                                let resources_slices_cloned = Arc::clone(&resources_slices);
+                                let matches_by_motif = tokio::task::spawn_blocking(move || {
+                                    use rayon::prelude::*;
+                                    rayon_pool().install(|| {
+                                        let mut match_indices = mask_dists.into_indices_iter()?;
+                                        let mut matches = match_indices.par_bridge().map(|(mask_channel, motif_idx, slice_idx, _)| {
+                                            (mask_channel as usize, motif_idx as usize, slice_idx as usize)
+                                        }).collect::<Vec<_>>();
+                                        matches.par_sort_unstable_by(|l, r| l.1.cmp(&r.1).then(l.2.cmp(&r.2)));
 
-                            let mut grouped_matches = vec![Vec::<IdSlice>::new(); motif_count];
-                            for (mask_channel, motif_idx, slice_idx) in matches {
-                                assert_eq!(mask_channel, 0, "SelectMotifsStage::run: expected single-channel mask index, got {mask_channel}");
-                                assert!(motif_idx < motif_count, "SelectMotifsStage::run: motif index out of bounds motif_idx={motif_idx} motif_count={motif_count}");
-                                assert!(slice_idx < resources_slices_cloned.len(), "SelectMotifsStage::run: resource slice index out of bounds slice_idx={slice_idx} resources_len={}", resources_slices_cloned.len());
-                                let slice = resources_slices_cloned[slice_idx];
-                                grouped_matches[motif_idx].push(IdSlice(0, slice.0, slice.1));
+                                        let mut grouped_matches = vec![Vec::<IdSlice>::new(); motif_count];
+                                        for (mask_channel, motif_idx, slice_idx) in matches {
+                                            assert_eq!(mask_channel, 0, "SelectMotifsStage::run: expected single-channel mask index, got {mask_channel}");
+                                            assert!(motif_idx < motif_count, "SelectMotifsStage::run: motif index out of bounds motif_idx={motif_idx} motif_count={motif_count}");
+                                            assert!(slice_idx < resources_slices_cloned.len(), "SelectMotifsStage::run: resource slice index out of bounds slice_idx={slice_idx} resources_len={}", resources_slices_cloned.len());
+                                            let slice = resources_slices_cloned[slice_idx];
+                                            grouped_matches[motif_idx].push(IdSlice(0, slice.0, slice.1));
+                                        }
+
+                                        Ok::<_, ThoError>(grouped_matches)
+                                    })
+                                }).await??;
+
+                                let mut motif_added_slices_guard = channels_motifs_added_slices[channel].write().await;
+                                for (motif_id, matched_slices) in mask_dists_ids.1.into_iter().zip(matches_by_motif.into_iter()) {
+                                    let slices = motif_added_slices_guard.entry(motif_id.clone()).or_insert(HashSet::new());
+                                    let mut added_slices = 0;
+                                    let mut skipped_slices = 0;
+                                    for slice in matched_slices {
+                                        if slices.len() > max_slices {
+                                            continue;
+                                        }
+                                        if slices.insert(slice) {
+                                            added_slices += 1;
+                                        } else {
+                                            skipped_slices += 1;
+                                        }
+                                    }
+
+                                    debug!("SelectMotifsStage::run: motif_id={motif_id} skipped_slices={skipped_slices} added_slices={added_slices}");
+                                }
                             }
-
-                            Ok::<_, ThoError>(grouped_matches)
-                        })
-                    }).await??;
-
-                    let mut motif_added_slices_guard = channels_motifs_added_slices[channel].write().await;
-                    for (motif_id, matched_slices) in mask_dists_ids.1.into_iter().zip(matches_by_motif.into_iter()) {
-                        let slices = motif_added_slices_guard.entry(motif_id.clone()).or_insert(HashSet::new());
-                        let mut added_slices = 0;
-                        let mut skipped_slices = 0;
-                        for slice in matched_slices {
-                            if slices.len() > max_slices {
-                                continue;
-                            }
-                            if slices.insert(slice) {
-                                added_slices += 1;
-                            } else {
-                                skipped_slices += 1;
-                            }
-                        }
-
-                        debug!("SelectMotifsStage::run: motif_id={motif_id} skipped_slices={skipped_slices} added_slices={added_slices}");
+                            Ok::<_, ThoError>(())
+                        }).await;
+                        Ok::<_, ThoError>(result)
                     }
-                }
-            }
+                })
+                .collect::<Vec<_>>();
+
+            collect_futures_with_progress(
+                futures,
+                crate::buffer_limits::SELECT_MOTIFS_STAGE_FIND_MOTIFS_BUFFER_UNORDERED_LIMIT,
+                StreamBuffering::Unordered,
+                "SelectMotifsStage::extend_with_one_find_run_channel_masks",
+            )
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, ThoError>>()?;
 
             debug!("SelectMotifsStage::run: 2. find_motifs_run_config={find_motifs_run_config:?}");
             print!(".");
