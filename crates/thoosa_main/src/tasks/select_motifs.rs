@@ -32,7 +32,7 @@ use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ExtendMotifsConfig, FindMotifsRunConfig, ComparisonMethod as RunConfigMetrics, MotifCriterion, MotifSelector, SelectMotifsRunConfig};
+use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ExtendMotifsConfig, FindMotifsRunConfig, ComparisonMethod as RunConfigMetrics, MotifCriterion, MotifSelector, SelectMotifsRunConfig, MaxSlices, MaxSlicesByResources, MaxSlicesAbs};
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
@@ -747,6 +747,7 @@ where
     }
 
     #[inline]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::load_stacked_motifs"))]
     async fn load_stacked_motifs(store:&Arc<RwLock<Box<dyn Store>>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_ids: &Vec<RunId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
         let find_motifs_run_configs = find_motifs_run_ids
             .iter()
@@ -807,6 +808,7 @@ where
         })
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::extend_motifs_for_run_config"))]
     async fn extend_motifs_for_run_config(
         &self,
         select_motifs_run_config: &SelectMotifsRunConfig,
@@ -880,7 +882,7 @@ where
                     .await {
                         Ok(v) => Ok::<_, ThoError>(Some(v)),
                         Err(e) => {
-                            error!("SelectMotifsStage::run: failed to select slices for {run_configs__stacked_motifs_dbg:?}: e={e:?}");
+                            error!("SelectMotifsStage::run: got error={e:?} while selecting slices for {run_configs__stacked_motifs_dbg:?}:");
                             Ok::<_, ThoError>(None)
                         }
                     }
@@ -1106,8 +1108,19 @@ where
                 ),
             )
             .await?;
+            let max_slices = select_motifs_run_config.max_slices.as_ref().map(|max_slices| {
+                match max_slices {
+                    MaxSlices::ByResourcesCount( MaxSlicesByResources {k}) => {
+                        *k * num_resources as u32
+                    }
+                    MaxSlices::Abs(MaxSlicesAbs{count}) => {
+                        *count
+                    }
+                }
+            }).unwrap_or(u32::MAX) as usize;
 
             debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?} find_motifs_run_id={find_motifs_run_id}");
+            //TODO
             for channel_mask_dists_ids in channel_masks_dists_ids.into_iter().enumerate() {
                 if let (channel, Some(mask_dists_ids)) = channel_mask_dists_ids {
                     debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
@@ -1120,11 +1133,17 @@ where
                     for motif_id in mask_dists_ids.1 {
                         let resources_iter = resources_iter.clone();
                         let slices = motif_added_slices_guard.entry(motif_id.clone()).or_insert(HashSet::new());
+
+                        //TODO remember 'full' motifs
+
                         let mut added_slices = 0;
                         let mut skipped_slices = 0;
 
                         for slice_1 in resources_iter {
                             if let Some(mask) = mask_in_channel.next() {
+                                if slices.len() > max_slices {
+                                    continue;
+                                }
                                 debug!("SelectMotifsStage::run: motif_id={motif_id:?} channel={channel} slice_1={slice_1:?} mask={mask}");
                                 if mask {
                                     slices.insert(IdSlice(0, slice_1.0, slice_1.1));
@@ -1176,9 +1195,7 @@ where
         mut ctx: C,
     ) -> Result<Vec<(u32, f64)>, ThoError> {
         assert!((0.0..=1.0).contains(&select_motifs_run_config.threshold), "SelectMotifsRunConfig::threshold must be within 0..1, got {}", select_motifs_run_config.threshold);
-        debug!("SelectMotifsStage::run: 0. self.find_motif_run_ids_motif_ids={:?}", self.find_motif_run_ids_motif_ids);
-
-
+        info!("SelectMotifsStage::run: 0. self.find_motif_run_ids_motif_ids={:?}", self.find_motif_run_ids_motif_ids);
 
         let motif_criteria: Vec<MotifCriterion> = Vec::from(&select_motifs_run_config.motif_criteria);
         if motif_criteria.is_empty() {
@@ -1203,16 +1220,20 @@ where
 
             let kee_score = with_data!(ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
                 let motif_slices = motif_data.data().t_ref();
+                debug!("SelectMotifsStage::run: motif_id={motif_id} motif_criteria={motif_criteria:?} threshold={threshold:.6} motif_slices={motif_slices:?}");
+
                 if motif_slices.size()[0] < 3 {
                     return Ok::<(bool, f64), ThoError>((false, 0.0));
                 }
                 let mut score_sum = 0.0f64;
                 let mut avg_score = 1.0;
+
+
                 for (idx, criterion) in motif_criteria.iter().enumerate() {
                     let criterion_score = Self::clc_criterion_score(motif_slices, criterion)?;
                     score_sum += criterion_score;
                     avg_score = score_sum / (idx + 1) as f64;
-                    debug!("SelectMotifsStage::run: motif_id={motif_id} criterion={criterion:?} criterion_score={criterion_score:.6} avg_score={avg_score:.6} threshold={threshold:.6}");
+                    debug!("SelectMotifsStage::run: motif_id={motif_id} criterion={criterion:?} criterion_score={criterion_score:.6} avg_score={avg_score:.6}");
                     if avg_score < threshold {
                         return Ok::<(bool, f64), ThoError>((false, avg_score));
                     }
@@ -1226,7 +1247,7 @@ where
             }
         }
 
-        debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered extended_motif_ids.len={}", extended_motif_ids_filtered.len());
+        info!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered extended_motif_ids.len={}", extended_motif_ids_filtered.len());
         Ok(extended_motif_ids_filtered)
     }
 
@@ -1281,10 +1302,12 @@ where
                     ctx.branch("extend_motifs_for_run_config".into(), false, false),
                 ).await?;
 
+                info!("SelectMotifsStage::run: extend_motifs_for_run_config done");
+
                 let select_motifs_run_config_id = select_motifs_run_config.id.expect("no select_motifs_run_config_id");
                 for (channel, motif_slices) in channels_motifs_added_slices.into_iter().enumerate() {
                     for (motif_id, slices) in motif_slices {
-                        debug!("SelectMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
+                        info!("SelectMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
                         self.store.write().add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices)?;
                     }
                 }
@@ -2005,14 +2028,16 @@ pub mod tests {
 
         let motif_21_t = Tensor::from_slice(&[
             0.0f32, 1.0, 0.0,
+            0.0f32, 1.0, 0.0,
             0.0,    1.0, 0.0,
         ])
-            .view([2, 3]);
+            .view([3, 3]);
         let motif_22_t = Tensor::from_slice(&[
+            0.0f32, 0.0, 0.0,
             0.0f32, 0.0, 0.0,
             10.0,  10.0, 10.0,
         ])
-            .view([2, 3]);
+            .view([3, 3]);
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(21)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_21_t)),
@@ -2049,6 +2074,8 @@ pub mod tests {
         let result_debug:String = result
             .with_data_ref(0, &mut ctx_for_result, None, |v, _ctx| Ok(format!("{v:?}")))
             .await?;
+
+        debug!("result_debug={result_debug}");
 
         assert!(result_debug.contains("(21,"));
         assert!(!result_debug.contains("(22,"));

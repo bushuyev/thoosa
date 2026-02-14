@@ -20,7 +20,6 @@ cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logg
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-motif-slices --motifs-by=good_motifs_run_id:711
 
 
-
 for run_id in  1 2 3 ; do ./target/x86_64-unknown-linux-gnu/release/thoosa_hbac --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-motif-slices --motifs-by=run_id:"$run_id"; done
 for run_id in $(echo "1, 2, 3" | tr -d ' ' | tr ',' ' '); do
   ./target/x86_64-unknown-linux-gnu/release/thoosa_hbac \

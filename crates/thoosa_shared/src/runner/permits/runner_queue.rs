@@ -375,7 +375,9 @@ impl Arbiter {
                                     } else {
                                         debug!("Arbiter::spawn, select, recv: sid={sid:?} req.requester_id={:?} sending double request error", req.requester_id);
 
-                                        let _ = req.reply.send(Err(Cause::SomethingElse(format!("Got double request for super_id={sid:?}")).into()));
+                                        // let _ = req.reply.send(Err(Cause::SomethingElse(format!("Got double request for super_id={sid:?}")).into()));
+                                        //TODO this shold never happen but somehow still does - same super_id is received for the second time although it doesn't appear in the send logs.
+                                        upsert_req(&mut q, req);
                                     }
 
                                 } else {
