@@ -51,7 +51,7 @@ use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::run_configs::RunId;
 use thoosa_with_data::with_data;
-use crate::buffer_limits::FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT;
+use crate::buffer_limits::{CROSS_LOADERS_LIMIT, FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT};
 use crate::tasks::random_slices_stats::{RandomStats, RandomStatsInput};
 
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
@@ -365,7 +365,7 @@ where
 
         let cross_loaders = collect_futures_with_progress(
             futures,
-            10,//TODO config
+            CROSS_LOADERS_LIMIT,//TODO config
             StreamBuffering::Unordered,
             "FindMotifsStage::new",
         )
