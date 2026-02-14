@@ -24,14 +24,14 @@ use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::traits::{Adjustable, DataId, MonoMetrics, WithId};
+use thoosa_shared::traits::{Adjustable, MonoMetrics, WithId};
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, MotifSlicesSelector};
-use crate::tasks::motif_loader::{load_motif_slices, MotifMeta};
+use crate::tasks::motif_loader::MotifMeta;
 use crate::tasks::random_motif::{RandomMotif, RandomMotifInput, RandomMotifOutput};
 use crate::tasks::slices_stats::{Aggr, Metrics, SlicesStats, SlicesStatsInput};
 
@@ -85,7 +85,7 @@ where
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     clc_stats: Arc<SlicesStats<C>>,
-    random_motifs: RwLock<HashMap<RunId, Arc<RandomMotif<C>>>>,
+    random_motifs: RwLock<HashMap<RunId, Arc<RandomMotif<L, C>>>>,
     pd: PhantomData<C>,
 }
 
@@ -106,13 +106,20 @@ where
         }
     }
 
-    fn random_motif_stage(&self, find_motifs_run_id: RunId) -> Arc<RandomMotif<C>> {
+    fn random_motif_stage(&self, find_motifs_run_id: RunId) -> Arc<RandomMotif<L, C>> {
         if let Some(stage) = self.random_motifs.read().get(&find_motifs_run_id) {
             return Arc::clone(stage);
         }
 
         let mut random_motifs = self.random_motifs.write();
-        Arc::clone(random_motifs.entry(find_motifs_run_id).or_insert_with(|| Arc::new(RandomMotif::new(Arc::clone(&self.store), find_motifs_run_id))))
+        Arc::clone(random_motifs.entry(find_motifs_run_id).or_insert_with(|| {
+            Arc::new(RandomMotif::new(
+                Arc::clone(&self.store),
+                Arc::clone(&self.loader),
+                Arc::clone(&self.ws),
+                find_motifs_run_id,
+            ))
+        }))
     }
 }
 
@@ -164,35 +171,25 @@ where
                 ctx.branch(Some("random_stats_random_motif"), false, false),
             )
             .await?;
-        let (slices, resources_map) = with_data!(
+        let motifs = with_data!(
             ctx.branch(Some("random_stats_random_motif_with_data"), false, false),
             random_motif;
             |_ctx, random_motif: &RandomMotifOutput| {
-                Ok::<_, ThoError>((random_motif.slices().clone(), random_motif.resources_map().clone()))
+                random_motif
+                    .motifs()
+                    .iter()
+                    .map(|motif| ThoTensor::new(motif.id().clone(), motif.t_ref().shallow_clone()))
+                    .collect::<Result<Vec<_>, _>>()
             }
         )?;
 
-        debug!("RandomStats::run: slices.len={} resources_map.len={}", slices.len(), resources_map.len());
+        debug!("RandomStats::run: motifs.len={}", motifs.len());
 
-        let channels = self.ws.read().channels();
+        let channels = motifs.len();
         assert_ne!(channels, 0, "no channels");
 
-        let mut stats_values = Vec::with_capacity(channels as usize);
-        for channel in 0..channels {
-            let (window, motif) = load_motif_slices(
-                DataId(channel),
-                find_motifs_run_id,
-                channel as i64,
-                resources_map.clone(),
-                slices.clone(),
-                Arc::clone(&self.store),
-                Arc::clone(&self.loader),
-                ctx.branch(Some(&format!("random_stats_channel_{channel}")), false, false),
-                &self.ws,
-                "random_stats",
-            )
-            .await?;
-
+        let mut stats_values = Vec::with_capacity(channels);
+        for (channel, motif) in motifs.into_iter().enumerate() {
             let slice_count = motif.t_ref().size()[0];
             if slice_count < 2 {
                 return Err(ThoError::new(format!("RandomStats: not enough slices for channel {channel}, got {slice_count}")));
@@ -201,7 +198,7 @@ where
             let stats_input = SlicesStatsInput::new(
                 metrics,
                 aggr,
-                DataWithExtra::new(motif, MotifMeta { channel: channel as i64, find_motifs_run_id, window }),
+                DataWithExtra::new(motif, MotifMeta { channel: channel as i64, find_motifs_run_id, window: motif_width }),
             );
             let stats_input = Arc::new(DevicesWrap::wrap(stats_input, cache_area.into()));
             let stats_input_size = stats_input.size().clone();
