@@ -988,14 +988,14 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
     };
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(150),
+        cycles: RangeOrValue::Value(100),
         batch_size: RangeOrValue::Value(10),
         // lr: RangeOrValue::Value(0.0001),
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
     };
-    let opt_config = Arc::new(OptConfig::new(100, 10));
+    let opt_config = Arc::new(OptConfig::new(30, 10));
 
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
