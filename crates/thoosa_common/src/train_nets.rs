@@ -965,13 +965,12 @@ pub struct SelfAttentionNetParams {
     d_model: u32,
     n_heads: u32,
     ff_mult: u32,
-    max_len: u32,
     dropout: f64,
 }
 
 impl SelfAttentionNetParams {
-    pub fn new(d_model: u32, n_heads: u32, ff_mult: u32, max_len: u32, dropout: f64) -> Self {
-        Self { d_model, n_heads, ff_mult, max_len, dropout }
+    pub fn new(d_model: u32, n_heads: u32, ff_mult: u32, dropout: f64) -> Self {
+        Self { d_model, n_heads, ff_mult, dropout }
     }
 }
 
@@ -1242,7 +1241,6 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
                 sa_params.d_model,
                 sa_params.n_heads,
                 sa_params.ff_mult,
-                sa_params.max_len,
                 sa_params.dropout,
             )?
             .closure(
@@ -2061,6 +2059,8 @@ pub enum LabelNetTypeArgs {
     ConvNet(ConvNetArgs),
 
     LinNet(LinNetArgs),
+
+    SelfAttentionNet(SelfAttentionNetArgs)
 }
 
 #[allow(non_snake_case, unused_assignments, unused_variables)]
@@ -2129,12 +2129,38 @@ pub struct LinNetArgs {
     pub slices_len: u32,
 }
 
+
+#[allow(non_snake_case, unused_assignments, unused_variables)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct SelfAttentionNetArgs {
+    #[in_map]
+    #[run_config]
+    pub d_model: u32,
+    #[in_map]
+    #[run_config]
+    pub n_heads: u32,
+    #[in_map]
+    #[run_config]
+    pub ff_mult: u32,
+    #[in_map]
+    #[run_config]
+    pub dropout: f64,
+}
+
+
+
 impl LinNetArgs {
     pub fn new(num_layers: u32, slices_len: u32) -> Self {
         Self {
             num_layers,
             slices_len,
         }
+    }
+}
+
+impl SelfAttentionNetArgs {
+    pub fn new(d_model: u32, n_heads: u32, ff_mult: u32, dropout: f64) -> Self {
+        Self { d_model, n_heads, ff_mult, dropout }
     }
 }
 
@@ -2460,7 +2486,7 @@ mod train_tests {
             19,
             &[128, 256, 384],
             11i64,
-            SelfAttentionNetParams::new(64, 4, 4, 512, 0.1),
+            SelfAttentionNetParams::new(64, 4, 4, 0.1),
         ).await
     }
 
@@ -2523,6 +2549,73 @@ mod train_tests {
 
         debug!(
             "heavy_test_train_conv_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",
+            first_loss,
+        );
+
+        assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
+        assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heavy_test_train_self_attention_label_node() -> Result<(), ThoError> {
+        tch::manual_seed(42);
+        let motif_nets = 30;
+        let self_attention_net_params = SelfAttentionNetParams::new(64, 4, 4, 0.1);
+        let params = LabelNetParams::new(
+            motif_nets,
+            LabelNetTypeParams::SelfAttentionNetParams(self_attention_net_params),
+        );
+
+        let mut vs_0 = VarStore::new(Cpu);
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = self_attention_label_node(&params)?.build_tch_module(&vs_0.root())?;
+        let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-3)?;
+
+        let batch = 32usize;
+        let (x_eval, y_eval, lengths_eval) = gen_motifs_output(
+            batch,
+            motif_nets as usize,
+            220..=320,
+            LabelSignal::ByOrder,
+            0.35,
+            Some(22),
+        )?;
+        let target_eval = y_eval.unsqueeze(1);
+        let lengths_eval = lengths_eval.iter().map(|v| *v as i64).collect::<Vec<_>>();
+
+        let mut eval_lengths_before = lengths_eval.clone();
+        let logits_eval_before = net.tho_forward(&x_eval.as_ref().into(), Some(eval_lengths_before.as_mut_slice()), false)?;
+        let eval_loss_before = logits_eval_before.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+
+        let mut first_loss = None;
+        let mut last_loss = 0.0;
+        for step in 0..120 {
+            let (x_train, y_train, lengths_train) = gen_motifs_output(
+                batch,
+                motif_nets as usize,
+                220..=320,
+                LabelSignal::ByOrder,
+                0.35,
+                Some(1_000 + step as u64),
+            )?;
+            let target_train = y_train.unsqueeze(1);
+            let mut batch_lengths = lengths_train.iter().map(|v| *v as i64).collect::<Vec<_>>();
+            let logits = net.tho_forward(&x_train.as_ref().into(), Some(batch_lengths.as_mut_slice()), true)?;
+            let loss = logits.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_train, None, None, Reduction::Mean);
+            if first_loss.is_none() {
+                first_loss = Some(loss.double_value(&[]));
+            }
+            last_loss = loss.double_value(&[]);
+            opt.backward_step(&loss);
+        }
+
+        let mut lengths_eval = lengths_eval.clone();
+        let logits_eval = net.tho_forward(&x_eval.as_ref().into(), Some(lengths_eval.as_mut_slice()), false)?;
+        let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+
+        debug!(
+            "heavy_test_train_self_attention_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",
             first_loss,
         );
 
