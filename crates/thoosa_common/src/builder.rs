@@ -5,7 +5,7 @@ use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
-use crate::my_tch::{AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, Split1, ThoModule, my_linear};
+use crate::my_tch::{AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, my_linear};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 use crate::tho_tensor::ThoTensor;
@@ -137,6 +137,14 @@ pub enum Node {
         kernel_size: u32,
         stride: u32,
         padding: u32,
+    },
+    SelfAttention {
+        path: String,
+        d_model: u32,
+        n_heads: u32,
+        ff_mult: u32,
+        max_len: u32,
+        dropout: f64,
     },
     Dropout {
         p: f64,
@@ -344,6 +352,17 @@ impl Node {
                 padding as i64,
             )),
 
+            Node::SelfAttention { path, d_model, n_heads, ff_mult, max_len, dropout } => {
+                Box::new(SelfAttention::new(
+                    &(vs / path),
+                    d_model as i64,
+                    n_heads as i64,
+                    ff_mult as i64,
+                    max_len as i64,
+                    dropout,
+                )?)
+            }
+
             Node::Dropout { p } => Box::new(MyDropout::new(p)),
 
             Node::Func { func } => Box::new(MyFuncModule::new(func)),
@@ -534,6 +553,32 @@ impl SeqBuilder {
             attn_hidden,
         });
 
+        Ok(self)
+    }
+
+    pub fn self_attention<P: ToString>(&mut self, path: P, d_model: u32, n_heads: u32, ff_mult: u32, max_len: u32, dropout: f64) -> Result<&mut Self, ThoError> {
+        if d_model == 0 {
+            return Err(ThoError::new(format!("self_attention, d_model > 0: path={}", path.to_string())));
+        }
+        if n_heads == 0 {
+            return Err(ThoError::new(format!("self_attention, n_heads > 0: path={}", path.to_string())));
+        }
+        if ff_mult == 0 {
+            return Err(ThoError::new(format!("self_attention, ff_mult > 0: path={}", path.to_string())));
+        }
+        if max_len == 0 {
+            return Err(ThoError::new(format!("self_attention, max_len > 0: path={}", path.to_string())));
+        }
+
+        self.elts.push(Node::SelfAttention {
+            path: path.to_string(),
+            d_model,
+            n_heads,
+            ff_mult,
+            max_len,
+            dropout,
+        });
+        self.num_features = d_model;
         Ok(self)
     }
 
