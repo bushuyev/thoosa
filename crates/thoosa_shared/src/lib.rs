@@ -15,7 +15,7 @@ use chrono::SecondsFormat;
 use lazy_static::lazy_static;
 use log::{debug, info, trace, warn};
 use num_traits::PrimInt;
-use rand::Rng;
+use rand::{Rng, RngExt};
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::backtrace::Backtrace;
@@ -1120,7 +1120,6 @@ pub fn cdt() -> String {
 }
 
 pub fn cdt_for_dir() -> String {
-    use rand::RngCore;
 
     let mut rng = rand::rng();
 

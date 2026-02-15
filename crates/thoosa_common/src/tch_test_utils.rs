@@ -1,5 +1,5 @@
 use tch::Tensor;
-use rand::{Rng, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng};
 use rand::prelude::{SliceRandom, StdRng};
 use thoosa_shared::test_utils::{gen_motif, MotifKind};
 use thoosa_shared::ThoError;
@@ -110,7 +110,7 @@ pub fn generate_series_with_motif(
     seed: Option<u64>,
     motif_kind: &MotifKind, // "triangle" or "sine"
 ) -> Result<(Vec<f32>, Vec<Interval>), ThoError> {
-    let mut rng = seed.map(|seed|StdRng::seed_from_u64(seed)).unwrap_or(StdRng::from_os_rng());
+    let mut rng = seed.map(|seed|StdRng::seed_from_u64(seed)).unwrap_or(rand::make_rng());
 
     // random-walk background using our own Normal(0, step_sigma)
     let mut sig = vec![0f32; len];
@@ -272,7 +272,7 @@ pub fn avg_pairwise_distance(xs: &[Vec<f32>]) -> f32 {
 
 /// Generate N z-normalized motifs by adding smoothed noise scaled by `amp`.
 pub fn generate_motifs_with_amp(base: &[f32], n: usize, amp: f32, seed: Option<u64>) -> Vec<Vec<f32>> {
-    let mut rng = seed.map(|seed|StdRng::seed_from_u64(seed)).unwrap_or(StdRng::from_os_rng());
+    let mut rng = seed.map(|seed|StdRng::seed_from_u64(seed)).unwrap_or(rand::make_rng());
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         let mut y = base.to_vec();
@@ -349,7 +349,7 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
     for (channel_idx, channel_kinds) in channels_motif_kinds.iter().enumerate() {
         let total_repeats: usize = channel_kinds.iter().map(|(repeats, _, _)| *repeats).sum();
 
-        let mut rng = StdRng::from_os_rng();
+        let mut rng = rand::make_rng();
         let mut signal = vec![0f32; resource_len];
         for idx in 1..resource_len {
             signal[idx] = signal[idx - 1] + normal_step(&mut rng, STEP_SIGMA);
@@ -507,7 +507,7 @@ pub fn resource_tensor_two_easy_motifs(
     // --- RNG ---
     let mut rng = match seed {
         Some(s) => StdRng::seed_from_u64(s),
-        None => StdRng::from_os_rng(),
+        None => rand::make_rng(),
     };
 
     // --- helpers ---

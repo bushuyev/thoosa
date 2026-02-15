@@ -41,8 +41,8 @@ thoosa_named_derive = { path = "thoosa_macros/thoosa_named_derive" }
 thoosa_dummy_data_derive = { path = "thoosa_macros/thoosa_dummy_data_derive" }
 
 rayon = "1"
-rand = "0"
-rand_distr = "0"
+rand = { version = "0.10" }
+rand_distr = "0.6"
 log = "0"
 chrono = { version = "0" }
 tch = "0.20"

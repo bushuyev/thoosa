@@ -743,7 +743,7 @@ mod tests {
     use log::LevelFilter::{Debug, Info, Trace};
     use mockall::predicate::always;
     use parking_lot::RwLock;
-    use rand::{rng, Rng};
+    use rand::{rng, Rng, RngExt};
     use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;

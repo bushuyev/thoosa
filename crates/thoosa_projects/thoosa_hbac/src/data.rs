@@ -5,7 +5,7 @@ use polars::prelude::{
     BooleanChunked, Expr, IntoLazy, JoinArgs, JoinType, LazyCsvReader, LazyFileListReader,
     LazyFrame, NamedFrom, ScanArgsParquet, Series, SortMultipleOptions, col, concat_list, lit,
 };
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;

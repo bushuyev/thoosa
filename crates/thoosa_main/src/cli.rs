@@ -1886,7 +1886,7 @@ mod cli_tests {
     use parking_lot::lock_api::MutexGuard;
     use parking_lot::{Mutex, RawMutex, RawRwLock, RwLock};
     use plotters::prelude::{IntoLinspace, BLACK};
-    use rand::{rng, Rng};
+    use rand::{rng, Rng, RngExt};
     use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
     use rayon::prelude::IntoParallelIterator;
     use std::cmp::{max, min};

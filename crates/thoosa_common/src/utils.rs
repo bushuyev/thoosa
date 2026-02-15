@@ -12,7 +12,7 @@ use plotters::drawing::IntoDrawingArea;
 use plotters::element::PathElement;
 use plotters::prelude::*;
 use rand::prelude::ThreadRng;
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::sync::Arc;
 use tch::display::PrinterOptions;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
