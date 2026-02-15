@@ -2124,6 +2124,7 @@ mod train_tests {
     use std::rc::Rc;
     use std::sync::Arc;
     use std::{fs, mem};
+    use rand::prelude::SliceRandom;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::nn::{init, AdamW, LinearConfig, Module, OptimizerConfig, VarStore};
     use tch::Device::{Cpu, Cuda};
@@ -2923,224 +2924,248 @@ mod train_tests {
         ByOrder,
     }
 
-
-    // /// Generate dummy outputs that look like "motif detector logits over time".
-    // ///
-    // /// Returns:
-    // /// - `x`: [batch, motif_nets, L] float logits
-    // /// - `y`: [batch] float labels in {0.0, 1.0}
-    // ///
-    // /// Notes:
-    // /// - `L` is sampled once per call from `l_range` and used for the whole batch.
-    // /// - Logits are mostly negative (no-match) with a few positive peaks (matches),
-    // ///   which is typical for scanning.
-    // /// - `similarity` in [0,1] controls how hard the classification is.
-    // ///   At ~1.0, classes may become nearly indistinguishable (intentionally).
-    // pub fn gen_motifs_output(
-    //     batch: usize,
-    //     motif_nets: usize,
-    //     l_range: RangeInclusive<usize>,
-    //     label_signal: LabelSignal,
-    //     similarity: f32,
-    //     seed: Option<u64>,
-    // ) -> Result<(Tensor, Tensor), ThoError> {
-    //
-    //     assert_ne!(batch, 0, "batch must be > 0");
-    //     assert_ne!(motif_nets, 0, "motif_nets must be > 0");
-    //
-    //     let (l_lo, l_hi) = (*l_range.start(), *l_range.end());
-    //
-    //     assert!(!(l_lo == 0 || l_hi == 0 || l_lo > l_hi), "l_range must be non-empty and >= 1");
-    //
-    //     let mut rng = match seed {
-    //         Some(s) => StdRng::seed_from_u64(s),
-    //         None => {
-    //             let mut tr = rand::rng();      // ThreadRng handle (rand 0.10)
-    //             StdRng::from_rng(&mut tr)      // inf
-    //         },
-    //     };
-    //
-    //     let l = rng.random_range(l_lo..=l_hi);
-    //
-    //     // Difficulty knob.
-    //     let sim = similarity.clamp(0.0, 1.0);
-    //
-    //     // Background logits: mostly "no match" (negative).
-    //     let base_mean = -2.0_f32;
-    //     let noise_std = 1.0_f32;
-    //
-    //     // Signal amplitude: big when sim=0, small when sim=1.
-    //     let signal_amp = 8.0 * (1.0 - sim) + 1.5;
-    //
-    //     // Leakage: chance that "other-class" motifs also get peaks (makes it harder).
-    //     let leak_p = (0.60 * sim) as f64;
-    //
-    //     // Peak shape.
-    //     let sigma = 2.0_f32;
-    //     let radius: isize = 6;
-    //
-    //     let normal = Normal::new(base_mean as f64, noise_std as f64)
-    //         .map_err(|e| ThoError::new(format!("Normal dist error: {e:?}")))?;
-    //
-    //     let mut data = vec![0.0_f32; batch * motif_nets * l];
-    //     for v in &mut data {
-    //         *v = normal.sample(&mut rng) as f32;
-    //     }
-    //
-    //     let mut labels = vec![0.0_f32; batch];
-    //
-    //     // Helpers
-    //     let mut add_bump = |row: &mut [f32], center: usize, amp: f32| {
-    //         let c = center as isize;
-    //         for dt in -radius..=radius {
-    //             let t = c + dt;
-    //             if t < 0 || (t as usize) >= row.len() {
-    //                 continue;
-    //             }
-    //             let x = (dt as f32) / sigma;
-    //             let w = (-0.5 * x * x).exp(); // Gaussian
-    //             row[t as usize] += amp * w;
-    //         }
-    //     };
-    //
-    //     let row_mut = |data: &mut [f32], b: usize, m: usize, l: usize| -> &mut [f32] {
-    //         let off = (b * motif_nets + m) * l;
-    //         &mut data[off..off + l]
-    //     };
-    //
-    //     // Define motif groups used by ByMotifs.
-    //     let k_group = (motif_nets / 4).max(1).min(motif_nets);
-    //     let pos_group: Vec<usize> = (0..k_group).collect();
-    //     let neg_group: Vec<usize> = (k_group..(2 * k_group).min(motif_nets)).collect();
-    //
-    //     // Define motif group size used by ByOrder.
-    //     let k_order = motif_nets.min(4).max(1);
-    //     let canonical_order: Vec<usize> = (0..k_order).collect();
-    //
-    //     for b in 0..batch {
-    //         let y = rng.random_bool(0.5);
-    //         labels[b] = if y { 1.0 } else { 0.0 };
-    //
-    //         match label_signal {
-    //             LabelSignal::ByMotifs => {
-    //                 // Primary group depends on label.
-    //                 let (primary, secondary) = if y {
-    //                     (pos_group.as_slice(), neg_group.as_slice())
-    //                 } else {
-    //                     // If neg_group is empty (few motifs), treat as "no-peaks primary"
-    //                     (neg_group.as_slice(), pos_group.as_slice())
-    //                 };
-    //
-    //                 // Put clear peaks on primary motifs.
-    //                 for &m in primary {
-    //                     let center = rng.random_range(0..l);
-    //                     let row = row_mut(&mut data, b, m, l);
-    //                     add_bump(row, center, signal_amp);
-    //                 }
-    //
-    //                 // Add some leaked peaks to secondary motifs (hardness).
-    //                 for &m in secondary {
-    //                     if rng.random_bool(leak_p) {
-    //                         let center = rng.random_range(0..l);
-    //                         let row = row_mut(&mut data, b, m, l);
-    //                         add_bump(row, center, signal_amp * 0.6);
-    //                     }
-    //                 }
-    //
-    //                 // Some random "spurious" peaks everywhere (small).
-    //                 let spur_p = (0.15 * sim) as f64;
-    //                 for m in 0..motif_nets {
-    //                     if rng.random_bool(spur_p) {
-    //                         let center = rng.random_range(0..l);
-    //                         let row = row_mut(&mut data, b, m, l);
-    //                         add_bump(row, center, signal_amp * 0.25);
-    //                     }
-    //                 }
-    //             }
-    //
-    //             LabelSignal::ByOrder => {
-    //                 // Choose time centers (in increasing time).
-    //                 let mut centers = Vec::with_capacity(k_order);
-    //                 for i in 0..k_order {
-    //                     let base = ((i + 1) * l) / (k_order + 1);
-    //                     let jitter = (l / (10 * (k_order + 1))).max(1);
-    //                     let lo = base.saturating_sub(jitter);
-    //                     let hi = (base + jitter).min(l - 1);
-    //                     centers.push(rng.random_range(lo..=hi));
-    //                 }
-    //                 centers.sort_unstable();
-    //
-    //                 // Determine motif order for this sample.
-    //                 let mut order = canonical_order.clone();
-    //                 if !y {
-    //                     // Negative class: perturb order more when similarity is low.
-    //                     let swaps = ((1.0 - sim) * (k_order as f32)).ceil() as usize;
-    //
-    //                     if swaps >= k_order && k_order >= 2 {
-    //                         order.reverse();
-    //                     } else {
-    //                         // Do a few random swaps (adjacent or random).
-    //                         for _ in 0..swaps {
-    //                             let i = rng.random_range(0..k_order);
-    //                             let j = rng.random_range(0..k_order);
-    //                             order.swap(i, j);
-    //                         }
-    //                     }
-    //                 }
-    //
-    //                 // Add peaks: motif `order[i]` peaks at time `centers[i]`.
-    //                 for i in 0..k_order {
-    //                     let m = order[i];
-    //                     let t = centers[i];
-    //                     let row = row_mut(&mut data, b, m, l);
-    //                     add_bump(row, t, signal_amp);
-    //                 }
-    //
-    //                 // Leakage/spurious peaks to make it harder.
-    //                 let spur_p = (0.10 + 0.20 * sim) as f64;
-    //                 for m in 0..motif_nets {
-    //                     if rng.random_bool(spur_p) {
-    //                         let center = rng.random_range(0..l);
-    //                         let row = row_mut(&mut data, b, m, l);
-    //                         add_bump(row, center, signal_amp * 0.20);
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     }
-    //
-    //     let x = Tensor::from_slice(&data).reshape([
-    //         batch as i64,
-    //         motif_nets as i64,
-    //         l as i64,
-    //     ]);
-    //
-    //     let y = Tensor::from_slice(&labels).to_kind(Kind::Float);
-    //
-    //     Ok((x, y))
-    // }
+    #[inline]
+    fn row_mut<'a>(
+        data: &'a mut [f32],
+        motif_nets: usize,
+        b: usize,
+        m: usize,
+        l: usize,
+    ) -> &'a mut [f32] {
+        let off = (b * motif_nets + m) * l;
+        &mut data[off..off + l]
+    }
 
 
-    // #[test]
-    // fn shapes_ok() {
-    //     let (x, y) = gen_motifs_output(
-    //         16,
-    //         7,
-    //         50..=80,
-    //         LabelSignal::ByMotifs,
-    //         0.2,
-    //         Some(123),
-    //     )
-    //         .unwrap();
-    //
-    //     let xs = x.size();
-    //     assert_eq!(xs.len(), 3);
-    //     assert_eq!(xs[0], 16);
-    //     assert_eq!(xs[1], 7);
-    //     assert!(xs[2] >= 50 && xs[2] <= 80);
-    //
-    //     let ys = y.size();
-    //     assert_eq!(ys, vec![16]);
-    // }
+
+
+
+    /// Returns:
+    /// - `x`: [batch, motif_nets, max_L] float logits (padded)
+    /// - `y`: [batch] float labels in {0.0, 1.0}
+    /// - `lengths`: Vec<usize> where lengths[b] == true L for sample b
+    pub fn gen_motifs_output(
+        batch: usize,
+        motif_nets: usize,
+        l_range: RangeInclusive<usize>,
+        label_signal: LabelSignal,
+        similarity: f32,
+        seed: Option<u64>,
+    ) -> Result<(Tensor, Tensor, Vec<usize>), ThoError> {
+        assert_ne!(batch, 0, "batch must be > 0");
+        assert_ne!(motif_nets, 0, "motif_nets must be > 0");
+
+        let (l_lo, l_hi) = (*l_range.start(), *l_range.end());
+        assert!(
+            !(l_lo == 0 || l_hi == 0 || l_lo > l_hi),
+            "l_range must be non-empty and >= 1"
+        );
+
+        let mut rng = match seed {
+            Some(s) => StdRng::seed_from_u64(s),
+            None => {
+                let mut tr = rand::rng();     // rand 0.10
+                StdRng::from_rng(&mut tr)     // infallible
+            }
+        };
+
+        // --- sample per-sample lengths (try to make them distinct if possible) ---
+        let mut lengths: Vec<usize> = Vec::with_capacity(batch);
+        let range_len = l_hi - l_lo + 1;
+
+        if range_len >= batch {
+            let mut all: Vec<usize> = (l_lo..=l_hi).collect();
+            all.shuffle(&mut rng);
+            lengths.extend_from_slice(&all[..batch]);
+        } else {
+            for _ in 0..batch {
+                lengths.push(rng.random_range(l_lo..=l_hi));
+            }
+        }
+
+        let max_l = *lengths.iter().max().unwrap();
+
+        // Difficulty knob.
+        let sim = similarity.clamp(0.0, 1.0);
+
+        // Background logits: mostly "no match" (negative).
+        let base_mean = -2.0_f32;
+        let noise_std = 1.0_f32;
+
+        // Signal amplitude: big when sim=0, small when sim=1.
+        let signal_amp = 8.0 * (1.0 - sim) + 1.5;
+
+        // Leakage: chance that "other-class" motifs also get peaks (makes it harder).
+        let leak_p = (0.60 * sim) as f64;
+
+        // Peak shape.
+        let sigma = 2.0_f32;
+        let radius: isize = 6;
+
+        let normal = Normal::new(base_mean as f64, noise_std as f64)
+            .map_err(|e| ThoError::new(format!("Normal dist error: {e:?}")))?;
+
+        // Allocate padded tensor storage: [batch * motif_nets * max_l]
+        // Fill padding with a constant "no match" value (base_mean).
+        let mut data = vec![base_mean; batch * motif_nets * max_l];
+
+        // Add noise only in the valid prefix [0..lengths[b]] for each (b,m).
+        for b in 0..batch {
+            let l_b = lengths[b];
+            for m in 0..motif_nets {
+                let row = row_mut(&mut data, motif_nets, b, m, max_l);
+                for v in &mut row[..l_b] {
+                    *v = normal.sample(&mut rng) as f32;
+                }
+            }
+        }
+
+        let mut labels = vec![0.0_f32; batch];
+
+        // Helper: add a gaussian bump (peak) into a row slice.
+        let mut add_bump = |row: &mut [f32], center: usize, amp: f32| {
+            let c = center as isize;
+            for dt in -radius..=radius {
+                let t = c + dt;
+                if t < 0 || (t as usize) >= row.len() {
+                    continue;
+                }
+                let x = (dt as f32) / sigma;
+                let w = (-0.5 * x * x).exp(); // Gaussian
+                row[t as usize] += amp * w;
+            }
+        };
+
+        // Define motif groups used by ByMotifs.
+        let k_group = (motif_nets / 4).max(1);
+        let pos_group: Vec<usize> = (0..k_group).collect();
+        let neg_group: Vec<usize> = (k_group..(2 * k_group).min(motif_nets)).collect();
+
+        // Define motif group size used by ByOrder.
+        let k_order = motif_nets.min(4).max(1);
+        let canonical_order: Vec<usize> = (0..k_order).collect();
+
+        for b in 0..batch {
+            let l_b = lengths[b];
+            let y = rng.random_bool(0.5);
+            labels[b] = if y { 1.0 } else { 0.0 };
+
+            match label_signal {
+                LabelSignal::ByMotifs => {
+                    let (primary, secondary) = if y {
+                        (pos_group.as_slice(), neg_group.as_slice())
+                    } else {
+                        (neg_group.as_slice(), pos_group.as_slice())
+                    };
+
+                    // Clear peaks on primary motifs.
+                    for &m in primary {
+                        let center = rng.random_range(0..l_b);
+                        let row = row_mut(&mut data, motif_nets, b, m, max_l);
+                        add_bump(&mut row[..l_b], center, signal_amp);
+                    }
+
+                    // Leaked peaks on secondary motifs.
+                    for &m in secondary {
+                        if rng.random_bool(leak_p) {
+                            let center = rng.random_range(0..l_b);
+                            let row = row_mut(&mut data, motif_nets, b, m, max_l);
+                            add_bump(&mut row[..l_b], center, signal_amp * 0.6);
+                        }
+                    }
+
+                    // Spurious peaks everywhere (small).
+                    let spur_p = (0.15 * sim) as f64;
+                    for m in 0..motif_nets {
+                        if rng.random_bool(spur_p) {
+                            let center = rng.random_range(0..l_b);
+                            let row = row_mut(&mut data, motif_nets, b, m, max_l);
+                            add_bump(&mut row[..l_b], center, signal_amp * 0.25);
+                        }
+                    }
+                }
+
+                LabelSignal::ByOrder => {
+                    // Choose time centers (in increasing time).
+                    let mut centers = Vec::with_capacity(k_order);
+                    for i in 0..k_order {
+                        let base = ((i + 1) * l_b) / (k_order + 1);
+                        let jitter = (l_b / (10 * (k_order + 1))).max(1);
+                        let lo = base.saturating_sub(jitter);
+                        let hi = (base + jitter).min(l_b - 1);
+                        centers.push(rng.random_range(lo..=hi));
+                    }
+                    centers.sort_unstable();
+
+                    // Determine motif order for this sample.
+                    let mut order = canonical_order.clone();
+                    if !y {
+                        let swaps = ((1.0 - sim) * (k_order as f32)).ceil() as usize;
+                        if swaps >= k_order && k_order >= 2 {
+                            order.reverse();
+                        } else {
+                            for _ in 0..swaps {
+                                let i = rng.random_range(0..k_order);
+                                let j = rng.random_range(0..k_order);
+                                order.swap(i, j);
+                            }
+                        }
+                    }
+
+                    // Add peaks: motif `order[i]` peaks at time `centers[i]`.
+                    for i in 0..k_order {
+                        let m = order[i];
+                        let t = centers[i];
+                        let row = row_mut(&mut data, motif_nets, b, m, max_l);
+                        add_bump(&mut row[..l_b], t, signal_amp);
+                    }
+
+                    // Spurious peaks to make it harder.
+                    let spur_p = (0.10 + 0.20 * sim) as f64;
+                    for m in 0..motif_nets {
+                        if rng.random_bool(spur_p) {
+                            let center = rng.random_range(0..l_b);
+                            let row = row_mut(&mut data, motif_nets, b, m, max_l);
+                            add_bump(&mut row[..l_b], center, signal_amp * 0.20);
+                        }
+                    }
+                }
+            }
+        }
+
+        let x = Tensor::from_slice(&data).reshape([
+            batch as i64,
+            motif_nets as i64,
+            max_l as i64,
+        ]);
+
+        let y = Tensor::from_slice(&labels).to_kind(Kind::Float);
+
+        Ok((x, y, lengths))
+    }
+
+    #[test]
+    fn shapes_ok() {
+        let (x, y, lengths) = gen_motifs_output(
+            3,
+            5,
+            5..=8,
+            LabelSignal::ByMotifs,
+            0.2,
+            Some(123),
+        ).unwrap();
+
+        debug!("lengths={lengths:?}");
+        debug!("x=\n{x} y=\n{y}");
+
+        let xs = x.size();
+        assert_eq!(xs.len(), 3);
+        assert_eq!(xs[0], 16);
+        assert_eq!(xs[1], 7);
+        assert!(xs[2] >= 50 && xs[2] <= 80);
+
+        let ys = y.size();
+        assert_eq!(ys, vec![16]);
+    }
 
 }
