@@ -26,7 +26,7 @@ use std::sync::Arc;
 use log::{debug, error, trace, warn};
 use mockall::mock;
 use mockall::predicate::eq;
-use rand::Rng;
+use rand::{Rng, RngExt};
 use rand::seq::SliceRandom;
 use rusqlite::types::Value;
 use rusqlite::{Connection, Error, Transaction, params};

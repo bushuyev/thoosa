@@ -1,5 +1,3 @@
-#[cfg(not(test))]
-use rand::RngCore;
 use std::fmt::{Debug, Display};
 use std::ops::Range;
 // Use deterministic MT RNG for tests via opt_rnd(); build uniform from next_u32
@@ -8,6 +6,7 @@ use crate::opt_rng::opt_rnd;
 use crate::val::Val;
 use log::trace;
 use once_cell::sync::Lazy;
+use rand::Rng;
 
 pub trait FieldName: Display + Debug + Clone {
     //+ for<'a>  Add<&'a dyn AsRef<Self>>

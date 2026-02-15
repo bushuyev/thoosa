@@ -755,7 +755,7 @@ mod tests {
     use log::LevelFilter::{Info, Trace};
     use log::{LevelFilter, debug, set_max_level};
     use parking_lot::RwLock;
-    use rand::Rng;
+    use rand::{Rng, RngExt};
     use std::marker::PhantomData;
     use std::sync::Arc;
     use std::sync::atomic::Ordering::Relaxed;

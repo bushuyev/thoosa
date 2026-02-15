@@ -5,8 +5,10 @@ use std::sync::Arc;
 use cached_derive::Cached;
 use log::{debug, warn};
 use parking_lot::RwLock;
+use rand::prelude::StdRng;
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::Rng;
+use rand::rngs::ThreadRng;
 use tch::Tensor;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::tho_device::ThoDevice;
@@ -242,7 +244,7 @@ pub(crate) fn random_non_overlapping_slices(
         picked: usize,
     }
 
-    let mut rng = rand::thread_rng();
+    let mut rng:StdRng = rand::make_rng();
 
     let mut states: Vec<ResState> = resources
         .iter()
@@ -420,7 +422,7 @@ mod tests {
         let input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync> = Arc::new(|len| len - 1);
 
         let err = random_non_overlapping_slices(&resources, 2, motif_width, input_len_adjuster).expect_err("expected adjusted-length filtering error");
-        
+
         assert!(format!("{err:?}").contains("no suitable resource for 2 of 10 width"));
     }
 }
