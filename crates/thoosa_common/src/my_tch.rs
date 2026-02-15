@@ -943,6 +943,200 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAttnPool1d {
     }
 }
 
+fn valid_time_mask(lengths: &[i64], batch: i64, max_l: i64, device: tch::Device) -> Result<Tensor, ThoError> {
+    if lengths.len() != batch as usize {
+        return Err(ThoError::new(format!(
+            "SelfAttention::tho_forward lengths mismatch: batch={batch} lengths.len={}",
+            lengths.len()
+        )));
+    }
+    let pos = Tensor::f_arange(max_l, (Kind::Int64, device))?.f_unsqueeze(0)?;
+    let len = Tensor::f_from_slice(lengths)?.f_to_device(device)?.f_view([batch, 1])?;
+    pos.f_lt_tensor(&len).map_err(|e| e.into())
+}
+
+fn self_attention_forward_t(
+    x: &Tensor,
+    key_valid: &Tensor,
+    w_q: &nn::Linear,
+    w_k: &nn::Linear,
+    w_v: &nn::Linear,
+    w_o: &nn::Linear,
+    n_heads: i64,
+    head_dim: i64,
+    dropout: f64,
+    train: bool,
+) -> Tensor {
+    let (b, l, _d) = {
+        let s = x.size();
+        (s[0], s[1], s[2])
+    };
+
+    let q = x.apply(w_q);
+    let k = x.apply(w_k);
+    let v = x.apply(w_v);
+
+    let q = q.view([b, l, n_heads, head_dim]).transpose(1, 2);
+    let k = k.view([b, l, n_heads, head_dim]).transpose(1, 2);
+    let v = v.view([b, l, n_heads, head_dim]).transpose(1, 2);
+
+    let scale = (head_dim as f64).sqrt();
+    let mut scores = q.matmul(&k.transpose(-2, -1)) / scale;
+    let key_mask_f = key_valid.unsqueeze(1).unsqueeze(2).to_kind(scores.kind());
+    let ones = Tensor::ones(key_mask_f.size(), (scores.kind(), scores.device()));
+    let inv = &ones - &key_mask_f;
+    scores = scores + inv * (-1e9);
+
+    let attn = scores.softmax(-1, scores.kind()).dropout(dropout, train);
+    let y = attn.matmul(&v);
+    let y = y.transpose(1, 2).contiguous().view([b, l, n_heads * head_dim]);
+
+    y.apply(w_o).dropout(dropout, train)
+}
+
+fn attn_block_forward_t(
+    x: &Tensor,
+    key_valid: &Tensor,
+    ln1: &nn::LayerNorm,
+    ln2: &nn::LayerNorm,
+    w_q: &nn::Linear,
+    w_k: &nn::Linear,
+    w_v: &nn::Linear,
+    w_o: &nn::Linear,
+    ff1: &nn::Linear,
+    ff2: &nn::Linear,
+    n_heads: i64,
+    head_dim: i64,
+    dropout: f64,
+    train: bool,
+) -> Tensor {
+    let h = x.apply(ln1);
+    let a = self_attention_forward_t(&h, key_valid, w_q, w_k, w_v, w_o, n_heads, head_dim, dropout, train);
+    let x = x + a;
+
+    let h2 = x.apply(ln2);
+    let f = h2.apply(ff1).gelu("none").dropout(dropout, train).apply(ff2).dropout(dropout, train);
+
+    x + f
+}
+
+#[derive(Debug)]
+pub struct SelfAttention {
+    pos_emb: nn::Embedding,
+    ln1: nn::LayerNorm,
+    ln2: nn::LayerNorm,
+    w_q: nn::Linear,
+    w_k: nn::Linear,
+    w_v: nn::Linear,
+    w_o: nn::Linear,
+    ff1: nn::Linear,
+    ff2: nn::Linear,
+    n_heads: i64,
+    head_dim: i64,
+    dropout: f64,
+    max_len: i64,
+}
+
+impl SelfAttention {
+    pub fn new(vs: &nn::Path, d_model: i64, n_heads: i64, ff_mult: i64, max_len: i64, dropout: f64) -> Result<Self, ThoError> {
+        if d_model <= 0 {
+            return Err(ThoError::new(format!("SelfAttention::new d_model must be > 0, got {d_model}")));
+        }
+        if n_heads <= 0 {
+            return Err(ThoError::new(format!("SelfAttention::new n_heads must be > 0, got {n_heads}")));
+        }
+        if d_model % n_heads != 0 {
+            return Err(ThoError::new(format!("SelfAttention::new d_model must be divisible by n_heads, got d_model={d_model} n_heads={n_heads}")));
+        }
+        if ff_mult <= 0 {
+            return Err(ThoError::new(format!("SelfAttention::new ff_mult must be > 0, got {ff_mult}")));
+        }
+        if max_len <= 0 {
+            return Err(ThoError::new(format!("SelfAttention::new max_len must be > 0, got {max_len}")));
+        }
+        if !(0.0..1.0).contains(&dropout) {
+            return Err(ThoError::new(format!("SelfAttention::new dropout must be in [0,1), got {dropout}")));
+        }
+
+        let head_dim = d_model / n_heads;
+        let lin = |name: &str| nn::linear(vs / name, d_model, d_model, Default::default());
+        let ln_cfg = nn::LayerNormConfig { eps: 1e-5, ..Default::default() };
+
+        Ok(Self {
+            pos_emb: nn::embedding(vs / "pos_emb", max_len, d_model, Default::default()),
+            ln1: nn::layer_norm(vs / "ln1", vec![d_model], ln_cfg),
+            ln2: nn::layer_norm(vs / "ln2", vec![d_model], ln_cfg),
+            w_q: lin("q"),
+            w_k: lin("k"),
+            w_v: lin("v"),
+            w_o: lin("o"),
+            ff1: nn::linear(vs / "ff1", d_model, d_model * ff_mult, Default::default()),
+            ff2: nn::linear(vs / "ff2", d_model * ff_mult, d_model, Default::default()),
+            n_heads,
+            head_dim,
+            dropout,
+            max_len,
+        })
+    }
+}
+
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        let s = t.size();
+        if s.len() != 3 {
+            return Err(ThoError::new(format!("SelfAttention::tho_forward expected [B,L,D], got {:?}", s)));
+        }
+
+        let b = s[0];
+        let l = s[1];
+        let d = s[2];
+        if d != self.n_heads * self.head_dim {
+            return Err(ThoError::new(format!(
+                "SelfAttention::tho_forward d_model mismatch, expected {}, got {d}",
+                self.n_heads * self.head_dim
+            )));
+        }
+        if l > self.max_len {
+            return Err(ThoError::new(format!(
+                "SelfAttention::tho_forward input length exceeds max_len: length={l} max_len={}",
+                self.max_len
+            )));
+        }
+
+        let x = t.as_ref();
+        let pos_ids = Tensor::arange(l, (Kind::Int64, x.device()));
+        let pos = self.pos_emb.forward(&pos_ids).unsqueeze(0);
+        let mut h = x + pos;
+
+        let key_valid = if let Some(lengths) = lengths.as_deref() {
+            valid_time_mask(lengths, b, l, x.device())?
+        } else {
+            Tensor::ones([b, l], (Kind::Bool, x.device()))
+        };
+
+        let mask_f = key_valid.to_kind(Kind::Float).unsqueeze(-1);
+        h = h * &mask_f;
+        h = attn_block_forward_t(
+            &h,
+            &key_valid,
+            &self.ln1,
+            &self.ln2,
+            &self.w_q,
+            &self.w_k,
+            &self.w_v,
+            &self.w_o,
+            &self.ff1,
+            &self.ff2,
+            self.n_heads,
+            self.head_dim,
+            self.dropout,
+            train,
+        );
+
+        Ok(h.into())
+    }
+}
+
 #[cfg(test)]
 mod tch_tests {
     use std::sync::Arc;

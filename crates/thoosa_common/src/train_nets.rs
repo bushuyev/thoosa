@@ -30,7 +30,7 @@ use std::path::PathBuf;
 
 use tch::nn::{init, ConvConfig, LinearConfig, VarStore};
 use tch::Device::Cpu;
-use tch::{nn, Device, Tensor};
+use tch::{nn, Device, Kind, Tensor};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_shared::ThoError;
 
@@ -918,7 +918,8 @@ pub struct LabelNetParams {
 pub enum LabelNetTypeParams {
 
     LinNetParams(LinLenNetParams),
-    ConvNetParams(ConvNetParams)
+    ConvNetParams(ConvNetParams),
+    SelfAttentionNetParams(SelfAttentionNetParams),
 }
 
 impl Default for LabelNetTypeParams {
@@ -957,6 +958,21 @@ pub struct ConvNetParams {
     num_head_features:u32,
 
     joint: ConvNetJoint
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelfAttentionNetParams {
+    d_model: u32,
+    n_heads: u32,
+    ff_mult: u32,
+    max_len: u32,
+    dropout: f64,
+}
+
+impl SelfAttentionNetParams {
+    pub fn new(d_model: u32, n_heads: u32, ff_mult: u32, max_len: u32, dropout: f64) -> Self {
+        Self { d_model, n_heads, ff_mult, max_len, dropout }
+    }
 }
 
 
@@ -1011,9 +1027,28 @@ impl LabelNetParams {
             LabelNetTypeParams::ConvNetParams(_) => {
                 conv_label_node(&self)
             }
+            LabelNetTypeParams::SelfAttentionNetParams(_) => {
+                self_attention_label_node(&self)
+            }
         }
     }
 
+}
+
+fn self_attention_masked_mean(h: &Tensor, lengths: Option<&[i64]>) -> Result<Tensor, ThoError> {
+    let h_size = h.size();
+    if h_size.len() != 3 {
+        return Err(ThoError::new(format!("self_attention_masked_mean expected [B,L,D], got {:?}", h_size)));
+    }
+    if let Some(lengths) = lengths {
+        let mask = mask_from_lengths(lengths, h_size[1], h.device())?.f_squeeze_dim(1)?;
+        let mask_f = mask.f_to_kind(Kind::Float)?.f_unsqueeze(-1)?;
+        let sum = h.f_mul(&mask_f)?.f_sum_dim_intlist([1].as_slice(), false, Kind::Float)?;
+        let denom = mask_f.f_sum_dim_intlist([1].as_slice(), false, Kind::Float)?.f_clamp_min(1.0)?;
+        sum.f_div(&denom).map_err(|e| e.into())
+    } else {
+        h.f_mean_dim(1, false, None).map_err(|e| e.into())
+    }
 }
 
 pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
@@ -1167,6 +1202,70 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
         )?
         // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
+    };
+
+    build()
+}
+
+pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
+    let LabelNetTypeParams::SelfAttentionNetParams(sa_params) = &params.net_type else {
+        panic!("Unexpected params type: {:?}", params.net_type);
+    };
+
+    debug!("self_attention_label_node: params={params:?}");
+
+    let build = || -> Result<Node, ThoError> {
+        SeqBuilder::new(0, None)?
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    debug!("self_attention_label_node: input={t:?}");
+                    Ok(t.shallow_clone())
+                })),
+                None,
+            )?
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    debug!("self_attention_label_node: transpose input={:?}", t.size());
+                    Ok(t.transpose(1, 2))
+                })),
+                Some(params.motif_nets),
+            )?
+            .linear_feats(
+                "self_attention_in_proj",
+                params.motif_nets,
+                sa_params.d_model,
+                #[cfg(debug_assertions)]
+                "self_attention_in_proj".to_string(),
+            )?
+            .self_attention(
+                "self_attention_block",
+                sa_params.d_model,
+                sa_params.n_heads,
+                sa_params.ff_mult,
+                sa_params.max_len,
+                sa_params.dropout,
+            )?
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
+                    debug!("self_attention_label_node: pooling input={:?} lengths={lengths:?}", t.size());
+                    self_attention_masked_mean(t, lengths)
+                })),
+                None,
+            )?
+            .linear_s(
+                1,
+                #[cfg(debug_assertions)]
+                "self_attention_label_head_last".to_string(),
+                "self_attention_label_head_last",
+            )?
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    debug!("self_attention_label_node: self_attention_label_head_last={t:?}");
+                    Ok(t.shallow_clone())
+                })),
+                None,
+            )?
+            .end_seq()
     };
 
     build()
@@ -2095,7 +2194,7 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, LinNetArgs, ConvNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node, ConvNetJoint};
+    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, LinNetArgs, ConvNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore,
     };
@@ -2326,7 +2425,7 @@ mod train_tests {
     }
 
     #[tokio::test]
-    async fn test_save_load_cnn_label_node() -> Result<(), ThoError> {
+    async fn test_save_load_conv_label_node() -> Result<(), ThoError> {
         _test_save_load_conv_label_node(
             3, 19, &[2000, 12030, 17000], 11i64,
             ConvNetParams::new(3, 64, 10, 10, 256, ConvNetJoint::MinMax)
@@ -2353,6 +2452,16 @@ mod train_tests {
         ).await?;
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_save_load_self_attention_label_node() -> Result<(), ThoError> {
+        _test_save_load_self_attention_label_node(
+            19,
+            &[128, 256, 384],
+            11i64,
+            SelfAttentionNetParams::new(64, 4, 4, 512, 0.1),
+        ).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2495,6 +2604,80 @@ mod train_tests {
             )?;
         }
 
+
+        Ok(())
+    }
+
+    async fn _test_save_load_self_attention_label_node(motif_nets: u32, all_slices: &[i32], batch: i64, self_attention_net_params: SelfAttentionNetParams) -> Result<(), ThoError> {
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        debug!("test_dir={test_dir:?}");
+
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+            test_dir,
+            motif_nets,
+            1000,
+            32000,
+        )?));
+        let params = LabelNetParams::new(
+            motif_nets,
+            LabelNetTypeParams::SelfAttentionNetParams(self_attention_net_params),
+        );
+
+        let mut vs_0 = VarStore::new(Cpu);
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = self_attention_label_node(&params)?.build_tch_module(&vs_0.root())?;
+        vs_0.freeze();
+
+        for slices in all_slices {
+            let mut lengths = vec![*slices as i64; batch as usize];
+            let _ = net.tho_forward(
+                &Tensor::rand(
+                    [
+                        batch,
+                        motif_nets as i64,
+                        *slices as i64,
+                    ],
+                    FLOAT_CPU,
+                ).into(),
+                Some(lengths.as_mut_slice()),
+                false,
+            )?;
+        }
+
+        let net_id = ws
+            .write()
+            .save_label_net(1, &"test_label", &vs_0, &params)?;
+
+        debug!("net_id={net_id:?} vs_0.variables().len()={}",vs_0.variables().len());
+
+        let model_base_path = ws.read().labels_nets_path().join(&net_id);
+        let params_for_builder = params.clone();
+        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
+                                                                                             move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
+                                                                                             model_base_path.join(NET_WEIGHTS_FILE),
+                                                                                             Cpu,
+        )?;
+
+        assert!(vs_0.variables().len() > 0);
+        assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
+
+        if matches!(Device::cuda_if_available(), Cuda(_)) {
+            let cuda_net = loaded_module.copy_to_device(1).await?;
+            for slices in all_slices {
+                let mut lengths = vec![*slices as i64; batch as usize];
+                let _ = cuda_net.tho_forward(
+                    &Tensor::rand(
+                        [
+                            batch,
+                            motif_nets as i64,
+                            *slices as i64,
+                        ],
+                        FLOAT_CUDA,
+                    ).into(),
+                    Some(lengths.as_mut_slice()),
+                    false,
+                )?;
+            }
+        }
 
         Ok(())
     }
