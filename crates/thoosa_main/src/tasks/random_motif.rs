@@ -210,7 +210,7 @@ where
         let mut motifs = Vec::with_capacity(channels as usize);
         for channel in 0..channels {
             let (_window, motif) = load_motif_slices(
-                DataId(channel),
+                DataId(0),
                 self.find_motifs_run_id,
                 channel as i64,
                 resources_map.clone(),

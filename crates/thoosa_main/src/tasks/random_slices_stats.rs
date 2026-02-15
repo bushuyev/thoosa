@@ -226,70 +226,93 @@ where
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="random_non_overlapping_slices"))]
 pub(crate) fn random_non_overlapping_slices(
     resources: &[Resource],
-    max_slices: u32,
-    motif_width: u32,
+    number_of_slices: u32,
+    slice_width: u32,
     input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>,
 ) -> Result<(Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError> {
-    if resources.is_empty() {
-        return Err(ThoError::new("random_non_overlapping_slices: no resources available for random slices"));
+
+
+    assert_ne!(number_of_slices, 0, "number_of_slices is 0");
+    assert_ne!(slice_width, 0, "slice_width is 0");
+
+    #[derive(Clone)]
+    struct ResState {
+        res: Resource,
+        starts: Vec<u32>, // available slice starts (aligned, non-overlapping by construction)
+        picked: usize,
     }
 
-    let mut candidates = resources
+    let mut rng = rand::thread_rng();
+
+    let mut states: Vec<ResState> = resources
         .iter()
-        .filter_map(|resource| {
-            let adjusted_length = input_len_adjuster(resource.length());
-            (adjusted_length >= motif_width).then_some((resource.clone(), adjusted_length))
-        })
-        .collect::<Vec<_>>();
+        .filter_map(|r| {
+            let resource_len = input_len_adjuster(r.length());
 
-    if candidates.is_empty() {
-        return Err(ThoError::new("random_non_overlapping_slices: no resources long enough for motif width"));
+            if resource_len < slice_width {
+                return None;
+            }
+            let bins = resource_len / slice_width; // number of non-overlapping aligned slices
+            if bins == 0 {
+                return None;
+            }
+            let mut starts: Vec<u32> = (0..bins).map(|i| i * slice_width).collect();
+            starts.shuffle(&mut rng);
+            Some(ResState {
+                res: r.clone(),
+                starts,
+                picked: 0,
+            })
+        })
+        .collect();
+
+    if states.is_empty() {
+        return Err(ThoError::new(format!("random_non_overlapping_slices: no suitable resource for {number_of_slices} of {slice_width} width")));
     }
 
-    let mut rng = rand::rng();
-    candidates.shuffle(&mut rng);
+    let available_total: usize = states.iter().map(|s| s.starts.len()).sum();
+    if available_total < number_of_slices as usize {
+        return Err(ThoError::new(format!("random_non_overlapping_slices: not enough resources ({available_total}) available for {number_of_slices} random slices")));
+    }
 
-    let mut slices = Vec::new();
-    let mut resources_map = HashMap::new();
-    let mut used_positions: HashMap<ResourceId, Vec<u32>> = HashMap::new();
+    let mut chosen: Vec<TensorIdSliceIdx> = Vec::with_capacity(number_of_slices as usize);
+    let mut used_resources: HashMap<ResourceId, Resource> = HashMap::new();
 
-    let max_attempts = (max_slices as usize).saturating_mul(50).saturating_add(100);
-    let mut attempts = 0usize;
-
-    while slices.len() < max_slices as usize && attempts < max_attempts {
-        attempts += 1;
-
-        let (resource, adjusted_length) = match candidates.choose(&mut rng) {
-            Some(candidate) => candidate,
-            None => break,
-        };
-
-        let max_start = match adjusted_length.checked_sub(motif_width) {
-            Some(max_start) => max_start,
-            None => continue,
-        };
-
-        let candidate = rng.random_range(0..=max_start);
-        let positions = used_positions.entry(resource.id()).or_default();
-
-        if positions.iter().any(|&pos| slices_overlap(pos, candidate, motif_width)) {
-            continue;
+    while chosen.len() < number_of_slices as usize {
+        // Find the minimum picked-count among resources that still have available slices.
+        let mut min_picked: Option<usize> = None;
+        for s in &states {
+            if s.starts.is_empty() {
+                continue;
+            }
+            min_picked = Some(match min_picked {
+                None => s.picked,
+                Some(m) => m.min(s.picked),
+            });
         }
 
-        positions.push(candidate);
-        resources_map.entry(resource.id()).or_insert_with(|| resource.clone());
-        slices.push(TensorIdSliceIdx(resource.id(), candidate));
+
+        let min_p = min_picked.expect("no slices");
+
+        // Candidates = those with min_picked and remaining starts.
+        let mut candidates: Vec<usize> = Vec::new();
+        for (i, s) in states.iter().enumerate() {
+            if !s.starts.is_empty() && s.picked == min_p {
+                candidates.push(i);
+            }
+        }
+
+        let pick_i = *candidates.choose(&mut rng).expect("cant choose slices");
+
+        let s = &mut states[pick_i];
+        let start = s.starts.pop().expect("no more slices");
+        s.picked += 1;
+
+        chosen.push(TensorIdSliceIdx(s.res.id(), start));
+        used_resources.entry(s.res.id()).or_insert(s.res.clone());
     }
 
-    if slices.len() < 2 {
-        return Err(ThoError::new(format!("random_non_overlapping_slices: expected at least 2 slices, got {}", slices.len())));
-    }
-
-    if slices.len() < max_slices as usize {
-        warn!("random_non_overlapping_slices: requested max_slices={max_slices}, generated {}", slices.len());
-    }
-
-    Ok((slices, resources_map))
+    Ok((chosen, used_resources))
 }
 
 fn slices_overlap(a: u32, b: u32, width: u32) -> bool {
@@ -376,11 +399,11 @@ mod tests {
     #[test]
     fn test_random_non_overlapping_slices_uses_adjusted_length() -> Result<(), ThoError> {
         let resources = vec![
-            Resource::new(1, 1, "resource_a", 11),
-            Resource::new(2, 1, "resource_b", 11),
+            Resource::new(1, 1, "resource_a", 10),
+            Resource::new(2, 1, "resource_b", 10),
         ];
         let motif_width = 10;
-        let input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync> = Arc::new(|len| len - 1);
+        let input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync> = Arc::new(|len| len);
 
         let (slices, resources_map) = random_non_overlapping_slices(&resources, 2, motif_width, input_len_adjuster)?;
         assert_eq!(slices.len(), 2);
@@ -397,6 +420,7 @@ mod tests {
         let input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync> = Arc::new(|len| len - 1);
 
         let err = random_non_overlapping_slices(&resources, 2, motif_width, input_len_adjuster).expect_err("expected adjusted-length filtering error");
-        assert!(format!("{err:?}").contains("no resources long enough"));
+        
+        assert!(format!("{err:?}").contains("no suitable resource for 2 of 10 width"));
     }
 }
