@@ -1022,7 +1022,6 @@ fn attn_block_forward_t(
 
 #[derive(Debug)]
 pub struct SelfAttention {
-    pos_emb: nn::Embedding,
     ln1: nn::LayerNorm,
     ln2: nn::LayerNorm,
     w_q: nn::Linear,
@@ -1034,11 +1033,10 @@ pub struct SelfAttention {
     n_heads: i64,
     head_dim: i64,
     dropout: f64,
-    max_len: i64,
 }
 
 impl SelfAttention {
-    pub fn new(vs: &nn::Path, d_model: i64, n_heads: i64, ff_mult: i64, max_len: i64, dropout: f64) -> Result<Self, ThoError> {
+    pub fn new(vs: &nn::Path, d_model: i64, n_heads: i64, ff_mult: i64, dropout: f64) -> Result<Self, ThoError> {
         if d_model <= 0 {
             return Err(ThoError::new(format!("SelfAttention::new d_model must be > 0, got {d_model}")));
         }
@@ -1051,9 +1049,6 @@ impl SelfAttention {
         if ff_mult <= 0 {
             return Err(ThoError::new(format!("SelfAttention::new ff_mult must be > 0, got {ff_mult}")));
         }
-        if max_len <= 0 {
-            return Err(ThoError::new(format!("SelfAttention::new max_len must be > 0, got {max_len}")));
-        }
         if !(0.0..1.0).contains(&dropout) {
             return Err(ThoError::new(format!("SelfAttention::new dropout must be in [0,1), got {dropout}")));
         }
@@ -1063,7 +1058,6 @@ impl SelfAttention {
         let ln_cfg = nn::LayerNormConfig { eps: 1e-5, ..Default::default() };
 
         Ok(Self {
-            pos_emb: nn::embedding(vs / "pos_emb", max_len, d_model, Default::default()),
             ln1: nn::layer_norm(vs / "ln1", vec![d_model], ln_cfg),
             ln2: nn::layer_norm(vs / "ln2", vec![d_model], ln_cfg),
             w_q: lin("q"),
@@ -1075,9 +1069,17 @@ impl SelfAttention {
             n_heads,
             head_dim,
             dropout,
-            max_len,
         })
     }
+}
+
+fn sinusoidal_positional_encoding(length: i64, d_model: i64, device: tch::Device, kind: Kind) -> Tensor {
+    let half = (d_model + 1) / 2;
+    let pos = Tensor::arange(length, (Kind::Float, device)).unsqueeze(1);
+    let exponent = Tensor::arange(half, (Kind::Float, device)) * (-2.0 * 10000_f64.ln() / d_model as f64);
+    let div_term = exponent.exp().unsqueeze(0);
+    let angles = pos * div_term;
+    Tensor::stack(&[angles.sin(), angles.cos()], -1).flatten(1, 2).narrow(1, 0, d_model).to_kind(kind)
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
@@ -1096,16 +1098,9 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
                 self.n_heads * self.head_dim
             )));
         }
-        if l > self.max_len {
-            return Err(ThoError::new(format!(
-                "SelfAttention::tho_forward input length exceeds max_len: length={l} max_len={}",
-                self.max_len
-            )));
-        }
 
         let x = t.as_ref();
-        let pos_ids = Tensor::arange(l, (Kind::Int64, x.device()));
-        let pos = self.pos_emb.forward(&pos_ids).unsqueeze(0);
+        let pos = sinusoidal_positional_encoding(l, d, x.device(), x.kind()).unsqueeze(0);
         let mut h = x + pos;
 
         let key_valid = if let Some(lengths) = lengths.as_deref() {

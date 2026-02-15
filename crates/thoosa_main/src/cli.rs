@@ -44,7 +44,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{load_final_model, opt_train, AttnPool1dArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
+use thoosa_common::train_nets::{load_final_model, opt_train, AttnPool1dArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, SelfAttentionNetArgsRangeOrValue, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
 use thoosa_common::utils::{cuda_mem, from, lin_t, list_devices, plot_series, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
@@ -1019,18 +1019,24 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrV
         id: None,
         common_training_args: common_training_args.clone(),
 
-        net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
-            num_conv_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-            hidden_conv_channels: RangeOrValue::Range { range: Range { start: 8, end: 32 }, step: None },
-            // hidden_conv_channels: RangeOrValue::Value(64),
-            // num_head_layers: RangeOrValue::Value(10),
-            num_head_layers: RangeOrValue::Range { range: Range { start: 8, end: 32 }, step: None },
-            num_head_features: RangeOrValue::Range { range: Range { start: 8, end: 256 }, step: None },
-            // num_head_features: RangeOrValue::Value(256),
-            kernel: RangeOrValue::Value(100),
-            // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-            joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
-        }),
+        // net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
+        //     num_conv_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
+        //     hidden_conv_channels: RangeOrValue::Range { range: Range { start: 8, end: 32 }, step: None },
+        //     // hidden_conv_channels: RangeOrValue::Value(64),
+        //     // num_head_layers: RangeOrValue::Value(10),
+        //     num_head_layers: RangeOrValue::Range { range: Range { start: 8, end: 32 }, step: None },
+        //     num_head_features: RangeOrValue::Range { range: Range { start: 8, end: 256 }, step: None },
+        //     // num_head_features: RangeOrValue::Value(256),
+        //     kernel: RangeOrValue::Value(100),
+        //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+        //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
+        // }),
+        net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
+            d_model: RangeOrValue::Value(64),
+            n_heads: RangeOrValue::Value(4),
+            ff_mult: RangeOrValue::Value(4),
+            dropout: RangeOrValue::Value(0.1),
+        })
 
     };
     //////////////////////train final

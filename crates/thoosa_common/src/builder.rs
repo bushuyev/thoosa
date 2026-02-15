@@ -143,7 +143,6 @@ pub enum Node {
         d_model: u32,
         n_heads: u32,
         ff_mult: u32,
-        max_len: u32,
         dropout: f64,
     },
     Dropout {
@@ -352,13 +351,12 @@ impl Node {
                 padding as i64,
             )),
 
-            Node::SelfAttention { path, d_model, n_heads, ff_mult, max_len, dropout } => {
+            Node::SelfAttention { path, d_model, n_heads, ff_mult, dropout } => {
                 Box::new(SelfAttention::new(
                     &(vs / path),
                     d_model as i64,
                     n_heads as i64,
                     ff_mult as i64,
-                    max_len as i64,
                     dropout,
                 )?)
             }
@@ -556,7 +554,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn self_attention<P: ToString>(&mut self, path: P, d_model: u32, n_heads: u32, ff_mult: u32, max_len: u32, dropout: f64) -> Result<&mut Self, ThoError> {
+    pub fn self_attention<P: ToString>(&mut self, path: P, d_model: u32, n_heads: u32, ff_mult: u32, dropout: f64) -> Result<&mut Self, ThoError> {
         if d_model == 0 {
             return Err(ThoError::new(format!("self_attention, d_model > 0: path={}", path.to_string())));
         }
@@ -566,16 +564,12 @@ impl SeqBuilder {
         if ff_mult == 0 {
             return Err(ThoError::new(format!("self_attention, ff_mult > 0: path={}", path.to_string())));
         }
-        if max_len == 0 {
-            return Err(ThoError::new(format!("self_attention, max_len > 0: path={}", path.to_string())));
-        }
 
         self.elts.push(Node::SelfAttention {
             path: path.to_string(),
             d_model,
             n_heads,
             ff_mult,
-            max_len,
             dropout,
         });
         self.num_features = d_model;
