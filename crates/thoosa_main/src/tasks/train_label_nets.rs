@@ -355,6 +355,8 @@ where
                                                let (x_1, lengths_1) = pad_stack_with_mask(x_1, num_nets as i64, max_input)?;
                                                let (x_0, lengths_0) = pad_stack_with_mask(x_0, num_nets as i64, max_input)?;
 
+                                               debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: x_1.size={:?}, x_0.size={:?}, lengths_1={:?}, lengths_0={:?}", x_1.size(), x_0.size(), lengths_1, lengths_0);
+
                                                mix_x_binary_with_labels(&x_1, Some(lengths_1.as_slice()), &x_0, Some(lengths_0.as_slice()))
                                            })?;
 
@@ -1018,19 +1020,19 @@ mod tests {
         let resources_1_valid = Arc::new(vec![
             Resource::new(3, 1, "aaa_1_vl", 10),
             Resource::new(4, 1, "bbb_1_vl", 10),
-            Resource::new(4, 1, "ccc_1_vl", 10),
+            Resource::new(5, 1, "ccc_1_vl", 10),
         ]);
 
 
         let resources_0_train = Arc::new(vec![
-            Resource::new(5, 1, "aaa_0_tr", 10),
-            Resource::new(6, 1, "bbb_0_tr", 10),
-            Resource::new(7, 1, "ccc_0_tr", 10)
+            Resource::new(6, 1, "aaa_0_tr", 10),
+            Resource::new(7, 1, "bbb_0_tr", 10),
+            Resource::new(8, 1, "ccc_0_tr", 10)
         ]);
         let resources_0_valid = Arc::new(vec![
-            Resource::new(8, 1, "aaa_0_vl", 10),
-            Resource::new(9, 1, "bbb_0_vl", 10),
-            Resource::new(9, 1, "ccc_0_vl", 10),
+            Resource::new(9,  1, "aaa_0_vl", 10),
+            Resource::new(10, 1, "bbb_0_vl", 10),
+            Resource::new(11, 1, "ccc_0_vl", 10),
         ]);
 
         let loader = Arc::new(
@@ -1071,7 +1073,7 @@ mod tests {
                     })
                 }.boxed()
             }),
-            mock_run_ctx::default(1)
+            mock_run_ctx::default(0)
         );
 
         let mut batch = resource_batch.train_batch_stream().await;
