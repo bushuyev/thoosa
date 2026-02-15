@@ -282,7 +282,7 @@ where
             futures,
             crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT,
             StreamBuffering::Unordered,
-            "train motif failed",
+            "train motif",
         ).await;
         //gpt TODO!! collect_futures_with_progress drops errors; results.len() may be smaller than the number of selected motifs.
 

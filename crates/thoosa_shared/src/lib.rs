@@ -254,7 +254,6 @@ pub enum Cause {
     },
     SomethingElse(String),
     NotFound,
-    NotReady,
 }
 
 pub struct ThoError {
