@@ -280,7 +280,7 @@ where
             input,
             run_context,
             contexts,
-            |task, input, selector, device_idx, mut run_ctx| async move {
+            |task, input, selector, device_idx, run_ctx| async move {
                 if let Some(selector) = selector {
                     input
                         .with_selected_data_ref(
@@ -449,12 +449,12 @@ where
         let (device_idx, ctx_id) = {
             (run_context.device_idx(), run_context.id().clone())
         };
-        debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} input.id={:?}", os_thread_id(), input.id());
+        debug!("OOMHandler::run: 0.  ctx_id={ctx_id:?} task={task:?} os_thread_id={} input.id={:?}", os_thread_id(), input.id());
 
         // Identify this task by its output id for Arbiter fairness.
         let out_key = format!("stage_id={task:?} input_id={:?}", input.id());//TODO it's for all failed error
 
-        debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} acquired_permits={:?}", os_thread_id(), run_context.acquired_permits());
+        debug!("OOMHandler::run: 1. ctx_id={ctx_id:?} task={task:?} os_thread_id={} acquired_permits={:?}", os_thread_id(), run_context.acquired_permits());
 
         let mut i = 0;
 
@@ -470,16 +470,16 @@ where
         }) {
             Err(te) => {
                 pref_oom_count();
-                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  te={te:?}", os_thread_id());
+                debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={task:?} os_thread_id={}  te={te:?}", os_thread_id());
 
                 match te.what() {
                     Cause::OutOfMemory => {
-                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={} before adjusters", os_thread_id());
+                        debug!("OOMHandler::run, error: 1. ctx_id={ctx_id:?} task={task:?} os_thread_id={} before adjusters", os_thread_id());
 
                         let mut task = task;
 
                         for adjuster in adjusters {
-                            debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} adjuster={adjuster:?} os_thread_id={}  starting adjuster", os_thread_id());
+                            debug!("OOMHandler::run, error: 2. ctx_id={ctx_id:?} task={task:?} adjuster={adjuster:?} os_thread_id={}  starting adjuster", os_thread_id());
 
                             loop {
                                 i += 1;
@@ -487,7 +487,7 @@ where
                                     //TODO config
                                     panic!("OOMHandler: ctx_id={ctx_id:?}  i={i}");
                                 }
-                                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={} oom i={i} in loop", os_thread_id());
+                                debug!("OOMHandler::run, error: 3. ctx_id={ctx_id:?} task={task:?} os_thread_id={} oom i={i} in loop", os_thread_id());
 
                                 let adjust_result = match adjuster {
                                     Adjusters::Input(input_ad) => {
@@ -502,13 +502,13 @@ where
                                             .await
                                         {
                                             Ok(v) => {
-                                                debug!("OOMHandler::run, error, input adjuster ok: {v:?}");
+                                                debug!("OOMHandler::run, error, 4. input adjuster ok: {v:?}");
                                                 input_select_adjusted = Some(v);
                                                 Ok(())
                                             }
                                             Err(adjuster_err) => {
                                                 let msg = format!("adjuster failed: {adjuster_err:?}");
-                                                debug!("OOMHandler::run, error, input adjuster failed: {msg:?}");
+                                                debug!("OOMHandler::run, error, 5. input adjuster failed: {msg:?}");
 
                                                 match adjuster_err {
                                                     AdjusterError::AdjustFailed(v) => {
@@ -531,7 +531,7 @@ where
                                             .adjust(task, &mut contexts.runnable)
                                             .await{
                                             Ok(v) => {
-                                                debug!("OOMHandler::run, error, task adjuster ok: {v:?}");
+                                                debug!("OOMHandler::run, error, 6. task adjuster ok: {v:?}");
                                                 task = v;
                                                 Ok(())
                                             }
@@ -561,14 +561,14 @@ where
                                             .adjust(run_context, &mut contexts.run_ctx)
                                             .await{
                                             Ok(v) => {
-                                                debug!("OOMHandler::run, error, run context adjuster ok: {v:?}");
+                                                debug!("OOMHandler::run, error, 7. run context adjuster ok: {v:?}");
 
                                                 run_context = v;
                                                 Ok(())
                                             }
                                             Err(adjuster_error) => {
                                                 let msg = format!("adjuster failed: {adjuster_error:?}");
-                                                debug!("OOMHandler::run, error, run context adjuster failed: {msg:?}");
+                                                debug!("OOMHandler::run, error, 8. run context adjuster failed: {msg:?}");
 
                                                 match adjuster_error {
                                                     AdjusterError::AdjustFailed(v) => {

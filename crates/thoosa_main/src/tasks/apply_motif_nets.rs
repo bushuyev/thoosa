@@ -372,9 +372,21 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
         P: RunCtx,
     {
-        with_data!(permits_ctx, self.batch, self.motif_net; |ctx, batch:&ThoTensor<ChannelsData2, SynKey>, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+        debug!("ApplyMotifNetInputWrapper::with_data_ref: 00. ctx.id={:?}", permits_ctx.id());
+
+        with_data!(permits_ctx, self.batch, self.motif_net; move |ctx:P, batch:&ThoTensor<ChannelsData2, SynKey>, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
             let input = ApplyMotifNetInput::new(batch, motif_net);
-            do_run(&input, &ctx)
+
+            debug!("ApplyMotifNetInputWrapper::with_data_ref: 0. ctx.id={:?}", ctx.id());
+
+            let r = do_run(&input, &ctx);
+
+            let id = ctx.id().clone();
+            drop(ctx);
+
+            debug!("ApplyMotifNetInputWrapper::with_data_ref: 1. ctx.id={id:?}");
+
+            r
         })
     }
 
@@ -409,9 +421,16 @@ impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
             .with_selected_data(to_device_idx, permits_ctx.branch(Some("apply_motif_net_input_selected_batch"), false, false), selector, |selected_batch, _ctx| Ok(selected_batch))
             .await?;
 
-        with_data!(permits_ctx, self.motif_net; |ctx, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+        with_data!(permits_ctx, self.motif_net; |mut ctx:P, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
             let input = ApplyMotifNetInput::new(&selected_batch, motif_net);
-            do_run(&input, &ctx)
+            debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 0. ctx.id={:?}", ctx.id());
+            let r = do_run(&input, &ctx);
+
+            let id = ctx.id().clone();
+            drop(ctx);
+            debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 1. ctx.id={id:?}");
+
+            r
         })
     }
 }

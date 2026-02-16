@@ -68,7 +68,7 @@ where
         TrainLabelNetsRunConfigFields,
     >>,
     pd: PhantomData<L>,
-    motif_loader: Arc<LM>,
+    applied_motif_loader: Arc<LM>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     num_nets:u32,
     store: Arc<RwLock<Box<dyn Store>>>,
@@ -107,7 +107,7 @@ where
         return Err(ThoError::new("No motifs nets to train on"));
     }
 
-    let motif_loader = Arc::new(ABStage::new(
+    let applied_motif_loader = Arc::new(ABStage::new(
         SynKey::new([
             mono_key!("Loader_with_motifs", "stage"),
             mono_key!(format!("{train_motif_nets_run_ids:?}"), "train_motif_nets_run_ids"),
@@ -118,7 +118,7 @@ where
 
     TrainLabelNets::new(
         train_motif_nets_run_ids,
-        motif_loader,
+        applied_motif_loader,
         num_nets,
         run_configs,
         ws,
@@ -136,7 +136,7 @@ where
 
     pub async fn new(
         train_motif_nets_run_ids: Vec<RunId>,
-        motif_loader: Arc<LM>,
+        applied_motif_loader: Arc<LM>,
         num_nets:u32,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -147,7 +147,7 @@ where
         Ok(Self {
             run_configs: Arc::new(run_configs),
             pd: PhantomData,
-            motif_loader,
+            applied_motif_loader,
             ws:Arc::clone(&ws),
             num_nets,
             store: Arc::clone(store),
@@ -310,7 +310,7 @@ where
 
                 let opt_config = Arc::clone(&self.opt_config);
                 let train_motifs_nodes_run_configs = Arc::clone(&train_motifs_nodes_run_configs);
-                let loader = Arc::clone(&self.motif_loader);
+                let applied_motif_loader = Arc::clone(&self.applied_motif_loader);
                 let train_motif_nets_run_ids = self.train_motif_nets_run_ids.clone();
 
                 debug!("TrainLabelNets::run: label={label} train_motif_nets_run_ids={train_motif_nets_run_ids:?} train_motifs_nodes_run_configs={train_motifs_nodes_run_configs:?}");
@@ -334,10 +334,10 @@ where
                     let train_net = Arc::new(TrainNet::new(
                         move |ctx_for_batch:C,rc:&TrainLabelNetsRunConfig| {
                             let label = label_for_batches.clone();
-                            let loader = Arc::clone(&loader);
+                            let applied_motif_loader = Arc::clone(&applied_motif_loader);
 
                             ready(Ok(ResourcesBatch::new(
-                                   Arc::clone(&loader),
+                                   Arc::clone(&applied_motif_loader),
                                    rc.common_training_args.batch_size,
                                    Arc::clone(&resources_1_train),
                                    Arc::clone(&resources_1_valid),
@@ -366,7 +366,7 @@ where
                                            Ok((x.into(), lengths, y.into()))
                                        }.boxed()
                                    }),
-                                   ctx_for_batch
+                                ctx_for_batch
                                ))).boxed()
 
 
