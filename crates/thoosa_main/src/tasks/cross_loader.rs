@@ -317,7 +317,7 @@ where
         let device_idx = ctx.device_idx();
         let output_merge_mode = self.output_merge_mode;
 
-        let resources = input.with_data_ref(0, &mut ctx.branch(Some("cross_loader_resources"), false, false), None, |input: &ResourcesConfigInput<ResC>, _ctx|{
+        let resources = input.with_data_ref(0, ctx.branch(Some("cross_loader_resources"), false, false), None, |input: &ResourcesConfigInput<ResC>, _ctx|{
                 Ok(input
                     .resources_config
                     .to_resources(&self.store)?
@@ -796,7 +796,7 @@ impl Default for RangeOrSlice {
 }
 
 impl RangeOrSlice {
-    pub async fn select<R>(&self, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, run_ctx:&mut R) -> Result<Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, ThoError>
+    pub async fn select<R>(&self, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, mut run_ctx: R) -> Result<Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, ThoError>
     where
         R:RunCtx
     {
@@ -810,7 +810,7 @@ impl RangeOrSlice {
                 let channels = batch[*i].size().dim_0();
                 let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
                 vec![
-                    Arc::new(DevicesWrap::wrap(batch[*i].with_selected_data(run_ctx.device_idx(), run_ctx, selector, |data, run_ctx|{
+                    Arc::new(DevicesWrap::wrap(batch[*i].with_selected_data(run_ctx.device_idx(), run_ctx.branch(Some("cross_loader_range_or_slice_select"), false, false), selector, |data, run_ctx|{
                         Ok(data)
                     }).await?, CacheArea::default()))
                 ]
@@ -840,7 +840,7 @@ impl WithDataRef for CrossInputSelectorWrap
     async fn with_data_ref<Rt, F, P>(
         &self,
         _to_device_idx: usize,
-        permits_ctx: &mut P,
+        permits_ctx: P,
         _trace_ctx: Option<&'static str>,
         do_run: F,
     ) -> Result<Rt, ThoError>
@@ -863,7 +863,7 @@ impl WithDataRef for CrossInputSelectorWrap
                     self.resources_1.as_slice(),
                     self.batch_0_offsets.clone(),
                     self.batch_1_offsets.clone(),
-                ), ctx)
+                ), &ctx)
 
         })
     }
@@ -878,7 +878,7 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
     async fn with_selected_data_ref<'o, Rt, F, C>(
         &self,
         _to_device_idx: usize,
-        run_ctx: &mut C,
+        mut run_ctx: C,
         selector: CrossInputSelector,
         _trace_ctx: Option<&'static str>,
         do_run: F,
@@ -890,8 +890,8 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
 
         debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: selector.batch_0_selector={:?} selector.batch_1_selector={:?}", selector.batch_0_selector, selector.batch_1_selector);
 
-        let t_0_batch = selector.batch_0_selector.select(self.batch_0.clone(), run_ctx).await?;
-        let t_1_batch = selector.batch_1_selector.select(self.batch_1.clone(), run_ctx).await?;
+        let t_0_batch = selector.batch_0_selector.select(self.batch_0.clone(), run_ctx.branch(Some("cross_loader_batch_0_select"), false, false)).await?;
+        let t_1_batch = selector.batch_1_selector.select(self.batch_1.clone(), run_ctx.branch(Some("cross_loader_batch_1_select"), false, false)).await?;
 
         //TODO move to RangeOrSlice::select
         let (resources_0, offsets_0) = match &selector.batch_0_selector {
@@ -933,7 +933,7 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
                     resources_1,
                     offsets_0.clone(),
                     offsets_1.clone(),
-                ), ctx)
+                ), &ctx)
 
         })
     }
@@ -1358,7 +1358,7 @@ mod tests {
         let mut selector = CrossInputSelector::default();
 
         let mut run_ctx = RunCtxWithPermits::new(1, "test");
-        let r = input.with_selected_data_ref(1, &mut run_ctx, selector.clone(), None, |data, ctx|{
+        let r = input.with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_full"), false, false), selector.clone(), None, |data, ctx|{
             assert_eq!(data.tensors().len(), 4);
 
             assert!(batch_0_tensors[0].allclose(&data.tensors()[0].t.to_device(Cpu), 0.02, 0.02, false));
@@ -1426,7 +1426,7 @@ mod tests {
 
         let mut run_ctx = RunCtxWithPermits::new(1, "test_adjuster_slice");
         input
-            .with_selected_data_ref(1, &mut run_ctx, selector.clone(), None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_degrades_0"), false, false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1_offsets()[0], 0);
                 assert_eq!(data.tensors()[1].t.size()[1], 4);
                 Ok(())
@@ -1443,7 +1443,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 4 && range.end == 8));
 
         input
-            .with_selected_data_ref(1, &mut run_ctx, selector.clone(), None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_degrades_1"), false, false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1_offsets()[0], 4);
                 assert_eq!(data.tensors()[1].t.size()[1], 4);
                 Ok(())
@@ -1516,7 +1516,7 @@ mod tests {
 
         let mut run_ctx = RunCtxWithPermits::new(1, "test_adjuster_slice_resources");
         input
-            .with_selected_data_ref(1, &mut run_ctx, selector.clone(), None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_0"), false, false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
                 assert_eq!(data.batch_1_offsets()[0], 0);
                 assert_eq!(data.tensors()[1].t.size()[1], 3);
@@ -1534,7 +1534,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 3 && range.end == 6));
 
         input
-            .with_selected_data_ref(1, &mut run_ctx, selector.clone(), None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_1"), false, false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
                 assert_eq!(data.batch_1_offsets()[0], 3);
                 assert_eq!(data.tensors()[1].t.size()[1], 3);
@@ -1552,7 +1552,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((1, range)) if range.start == 0 && range.end == 3));
 
         input
-            .with_selected_data_ref(1, &mut run_ctx, selector, None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_2"), false, false), selector, None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[1].id());
                 assert_eq!(data.batch_1_offsets()[0], 0);
                 assert_eq!(data.tensors()[1].t.size()[1], 3);

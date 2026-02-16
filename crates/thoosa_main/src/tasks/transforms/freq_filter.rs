@@ -151,7 +151,7 @@ where
         let filtered = input
             .with_data_ref(
                 device_idx,
-               &mut ctx_for_data, None, |input_tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+               ctx_for_data, None, |input_tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
 
                let mut filtered_t = input_tensor.t_ref().shallow_clone();
                for filter in self.filters.iter() {

@@ -364,7 +364,7 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
     async fn with_data_ref<R, F, P>(
         &self,
         _to_device_idx: usize,
-        permits_ctx: &mut P,
+        permits_ctx: P,
         _trace_ctx: Option<&'static str>,
         do_run: F,
     ) -> Result<R, ThoError>
@@ -374,7 +374,7 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
     {
         with_data!(permits_ctx, self.batch, self.motif_net; |ctx, batch:&ThoTensor<ChannelsData2, SynKey>, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
             let input = ApplyMotifNetInput::new(batch, motif_net);
-            do_run(&input, ctx)
+            do_run(&input, &ctx)
         })
     }
 
@@ -395,7 +395,7 @@ impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
     async fn with_selected_data_ref<'o, R, F, P>(
         &self,
         to_device_idx: usize,
-        permits_ctx: &mut P,
+        mut permits_ctx: P,
         selector: ChannelsData2Selector,
         _trace_ctx: Option<&'static str>,
         do_run: F,
@@ -406,12 +406,12 @@ impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
     {
         let selected_batch = self
             .batch
-            .with_selected_data(to_device_idx, permits_ctx, selector, |selected_batch, _ctx| Ok(selected_batch))
+            .with_selected_data(to_device_idx, permits_ctx.branch(Some("apply_motif_net_input_selected_batch"), false, false), selector, |selected_batch, _ctx| Ok(selected_batch))
             .await?;
 
         with_data!(permits_ctx, self.motif_net; |ctx, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
             let input = ApplyMotifNetInput::new(&selected_batch, motif_net);
-            do_run(&input, ctx)
+            do_run(&input, &ctx)
         })
     }
 }

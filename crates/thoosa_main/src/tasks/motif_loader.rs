@@ -424,7 +424,7 @@ where
                 //TODO async OOM: move into OOMHandler as util fn
                 match raw_tensor.with_selected_data(
                     device_idx,
-                    &mut ctx_for_data.branch(Some("motif_loader_selected_data_with_selected_data"), false, false),
+                    ctx_for_data.branch(Some("motif_loader_selected_data_with_selected_data"), false, false),
                     selector.clone(),
                     |tt, _ctx| {
                         debug!("load_motif_slices:  motif_id={motif_id} resource_id={resource_id} try_count={try_count} resource_id={resource_id}  tt.size={:?}", tt.size());
@@ -575,7 +575,7 @@ pub mod mock_motif_loader {
                 block_in_place(|| {
                     Handle::current().block_on(async {
                         input.with_data_ref(0,
-                        &mut ctx, None, |v: &MotifLoaderInput, _ctx| {
+                        ctx, None, |v: &MotifLoaderInput, _ctx| {
                             Ok(Arc::clone(data_map
                                 .get(v)
                                 .expect(&format!("no mock data for v={v:? } in MockMotifLoader"))))
@@ -680,7 +680,7 @@ mod tests {
 
         let mut ctx_for_data = ctx.write().branch(Some("motif_loader_test_data"), false, false);
         let r = motif.with_data_ref(0,
-            &mut ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, _ctx|{
+            ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, _ctx|{
                         let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
 
                         trace!("motif.t={} dist={dist}", t.data().t_ref());
@@ -748,7 +748,7 @@ mod tests {
         let mut ctx_for_data = ctx.write().branch(Some("random_slices_loader_data"), false, false);
         let r = slices.with_data_ref(
             0,
-            &mut ctx_for_data, None, |t: &ThoTensor<MotifSlices, DataId>, _ctx| {
+            ctx_for_data, None, |t: &ThoTensor<MotifSlices, DataId>, _ctx| {
                 let dist = average_euclidean_distance(t.t_ref()).unwrap();
 
                 trace!("random slices: \t{} dist={dist}", t.t_ref());

@@ -167,7 +167,7 @@ where
     async fn with_data_ref<Rt, F, P>(
         &self,
         _to_device_idx: usize,
-        permits_ctx: &mut P,
+        permits_ctx: P,
         _trace_ctx: Option<&'static str>,
         do_run: F,
     ) -> Result<Rt, ThoError>
@@ -176,7 +176,7 @@ where
         P: RunCtx,
     {
         debug!("CrossInput::with_data_ref: do_run");
-        do_run(self, permits_ctx)
+        do_run(self, &permits_ctx)
     }
 
     fn cache_area(&self) -> &CacheArea {
@@ -191,7 +191,7 @@ where
     async fn with_selected_data_ref<'o, Rt, F, P>(
         &self,
         _to_device_idx: usize,
-        permits_ctx: &mut P,
+        permits_ctx: P,
         selector: CrossInputBatch1Selector,
         _trace_ctx: Option<&'static str>,
         do_run: F,
@@ -217,7 +217,7 @@ where
             self.resources_1_offsets[range].to_vec(),
         );
 
-        do_run(&input, permits_ctx)
+        do_run(&input, &permits_ctx)
     }
 }
 

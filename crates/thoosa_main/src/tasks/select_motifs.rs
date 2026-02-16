@@ -331,7 +331,7 @@ impl WithId for SelectMotifsInputSelectorWrap {
 impl WithDataRef for SelectMotifsInputSelectorWrap {
     type O<'o> = ClcResourcesMotifsDistInput<'o>;
 
-    async fn with_data_ref<R, F, P>(&self, _to_device_idx: usize, permits_ctx: &mut P, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_data_ref<R, F, P>(&self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         F: for <'f> FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
         P: RunCtx,
@@ -353,7 +353,7 @@ impl WithDataRef for SelectMotifsInputSelectorWrap {
                     self.resource_offsets.clone(),
                     stacked_motifs,
                     motifs_stats,
-                ), ctx)
+                ), &ctx)
 
         })
     }
@@ -364,7 +364,7 @@ impl WithDataRef for SelectMotifsInputSelectorWrap {
 }
 
 impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, _to_device_idx: usize, ctx: &mut P, selector: SelectMotifsInputSelector, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, _to_device_idx: usize, mut ctx: P, selector: SelectMotifsInputSelector, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         P: RunCtx,
         for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>
@@ -386,7 +386,7 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
                 let t = self.batch.get(i).ok_or_else(|| ThoError::new(format!("SelectMotifsInputSelectorWrap: invalid slice idx {i}")))?;
                 let channels = t.size().dim_0();
                 let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
-                let selected = Arc::new(DevicesWrap::wrap(t.with_selected_data(ctx.device_idx(), ctx, selector, |data, _ctx|{
+                let selected = Arc::new(DevicesWrap::wrap(t.with_selected_data(ctx.device_idx(), ctx.branch(Some("select_motifs_input_selected_slice"), false, false), selector, |data, _ctx|{
                     Ok(data)
                 }).await?, CacheArea::default()));
                 let offset = self.resource_offsets.get(i).copied().unwrap_or(0);
@@ -413,7 +413,7 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
                     motifs_stats,
                 );
 
-                do_run(&inpt, ctx)
+                do_run(&inpt, &ctx)
         })
     }
 }
@@ -946,7 +946,7 @@ where
                         let motif_stat = clc_dist
                             .run(clc_input, ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc"), false, false))
                             .await?
-                            .with_data_ref(0, &mut ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc_with_data_ref"), false, false), None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
+                            .with_data_ref(0, ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc_with_data_ref"), false, false), None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
                             .await?;
                         Ok::<_, ThoError>((motif_id, motif_stat))
                     })
@@ -1930,7 +1930,7 @@ pub mod tests {
 
         let mut ctx_for_data = ctx.branch(Some("test_clc_stacked_motifs_statistics_data"), false, false);
         let motifs_stats_t: Tensor = motifs_stats
-            .with_data_ref(0, &mut ctx_for_data, None, |motifs_stats: &ThoTensor<_, _>, _ctx| Ok(motifs_stats.t_ref().shallow_clone()))
+            .with_data_ref(0, ctx_for_data, None, |motifs_stats: &ThoTensor<_, _>, _ctx| Ok(motifs_stats.t_ref().shallow_clone()))
             .await?;
         assert_eq!(motifs_stats_t.size(), vec![2, 4]);
 
@@ -2021,7 +2021,7 @@ pub mod tests {
 
         let mut ctx_for_result = mock_run_ctx::default(0);
         let result_debug:String = result
-            .with_data_ref(0, &mut ctx_for_result, None, |v, _ctx| Ok(format!("{v:?}")))
+            .with_data_ref(0, ctx_for_result, None, |v, _ctx| Ok(format!("{v:?}")))
             .await?;
         assert!(result_debug.contains("(11,"));
         assert!(result_debug.contains("(12,"));
@@ -2108,7 +2108,7 @@ pub mod tests {
 
         let mut ctx_for_result = mock_run_ctx::default(0);
         let result_debug:String = result
-            .with_data_ref(0, &mut ctx_for_result, None, |v, _ctx| Ok(format!("{v:?}")))
+            .with_data_ref(0, ctx_for_result, None, |v, _ctx| Ok(format!("{v:?}")))
             .await?;
 
         debug!("result_debug={result_debug}");

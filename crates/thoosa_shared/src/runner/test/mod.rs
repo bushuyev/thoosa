@@ -283,7 +283,7 @@ where
 
                 multed
                     .with_data_ref(device_idx,
-                                   &mut ctx_device.branch(Some("run_mul_task_data"), false, false), None, |guard: &<R as Stage>::Out, _ctx| {
+                                   ctx_device.branch(Some("run_mul_task_data"), false, false), None, |guard: &<R as Stage>::Out, _ctx| {
                            // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
 
                            check_arc(res, &guard);
@@ -956,7 +956,7 @@ mod tests {
 
         let mut ctx_device_1 = RunCtxWithPermits::new(1, "noname");
         let ctx_device_1_0 = ctx_device_1.branch(Some("test_load_dummy_1_0"), false, false);
-        let mut ctx_device_1_data = ctx_device_1.branch(Some("test_load_dummy_1_0_data"), false, false);
+        let ctx_device_1_data = ctx_device_1.branch(Some("test_load_dummy_1_0_data"), false, false);
 
         let loaded_tensor_1_0 = Arc::clone(&loader)
             .run_cached(
@@ -970,7 +970,7 @@ mod tests {
         debug!("loaded_tensor_1_0={loaded_tensor_1_0:?}");
         loaded_tensor_1_0
             .with_data_ref(1,
-           &mut ctx_device_1_data, None, |data: &DLoadedTensor, _ctx| {
+           ctx_device_1_data, None, |data: &DLoadedTensor, _ctx| {
                            assert_eq!(data.data.0, [0.0, 1.0, 2.0]);
 
                            Ok(())
@@ -1009,7 +1009,7 @@ mod tests {
         ));
         let mut ctx_device_0 = RunCtxWithPermits::new(1, "noname");
         let ctx_device_0_run = ctx_device_0.branch(Some("test_load_and_mul_no_oom_run"), false, false);
-        let mut ctx_device_0_data = ctx_device_0.branch(Some("test_load_and_mul_no_oom_data"), false, false);
+        let ctx_device_0_data = ctx_device_0.branch(Some("test_load_and_mul_no_oom_data"), false, false);
 
         let multed = load_and_mut
             .run_cached(
@@ -1022,7 +1022,7 @@ mod tests {
 
         multed
             .with_data_ref(1,
-                           &mut ctx_device_0_data, None, |data: &DMulTaskOutput, _ctx| {
+                           ctx_device_0_data, None, |data: &DMulTaskOutput, _ctx| {
                                            assert_eq!(
                                                data.data.0,
                                                (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()

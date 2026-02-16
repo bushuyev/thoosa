@@ -1544,11 +1544,11 @@ async fn plot_motif(
     let dist = clc_dist
         .run/*_cached*/(clc_input, ctx.branch(Some("plot_motif_clc_dist"), false, false))
         .await?
-        .with_data_ref(0, &mut ctx_for_dist, None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
+        .with_data_ref(0, ctx_for_dist, None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
         .await?;
 
 
-    let r = motif.with_data_ref(0, &mut ctx.branch(Some("plot_motif_data"), false, false), None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>, _ctx| {
+    let r = motif.with_data_ref(0, ctx.branch(Some("plot_motif_data"), false, false), None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>, _ctx| {
             let run_id = motif.extra().find_motifs_run_id;
             let channel = motif.extra().channel;
 
