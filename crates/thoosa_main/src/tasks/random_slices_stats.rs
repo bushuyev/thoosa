@@ -233,6 +233,7 @@ pub(crate) fn random_non_overlapping_slices(
     input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>,
 ) -> Result<(Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError> {
 
+    debug!("random_non_overlapping_slices: resources={resources:?} number_of_slices={number_of_slices:?} slice_width={slice_width:?}");
 
     assert_ne!(number_of_slices, 0, "number_of_slices is 0");
     assert_ne!(slice_width, 0, "slice_width is 0");
