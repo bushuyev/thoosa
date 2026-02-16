@@ -385,7 +385,7 @@ mod tests {
 
         let mut ctx_for_data = ctx.write().branch(Some("random_stats_data"), false, false);
         let size = output
-            .with_data_ref(0, &mut ctx_for_data, None, |t: &ThoTensor<ChannelsMotifsDists, SynKey>, _ctx| {
+            .with_data_ref(0, ctx_for_data, None, |t: &ThoTensor<ChannelsMotifsDists, SynKey>, _ctx| {
                 debug!("t=\n{}", t.as_ref());
                 assert!(Tensor::from_slice(&[4.0825f32, 4.0825, 4.0825]).view((3, 1)).allclose(t.as_ref(), 0.02, 0.02, false));
 

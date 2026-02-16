@@ -507,7 +507,7 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
 impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
     type O<'o> = TrainStepInput<DI, DO>;
 
-    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: &mut P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
         P: RunCtx,
@@ -515,7 +515,7 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 
 
         if self.x.device_idx() == to_device_idx {
-            do_run(self, permits_ctx)
+            do_run(self, &permits_ctx)
 
         } else {
 
@@ -528,7 +528,7 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 
             let input = TrainStepInput::new(x, lengths, expected_y);
 
-            do_run(&input, permits_ctx)
+            do_run(&input, &permits_ctx)
         }
     }
 
@@ -538,7 +538,7 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 }
 
 impl<DI: Dims, DO: Dims> WithSelectDataRef<()> for TrainStepInput<DI, DO> {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: &mut P, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: P, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
         P: RunCtx,

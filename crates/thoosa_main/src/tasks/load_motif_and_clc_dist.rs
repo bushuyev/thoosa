@@ -350,7 +350,7 @@ mod tests {
         let result = stage.run/*_cached*/(Arc::clone(&input), stage_ctx).await?;
 
         let mut ctx_for_data = ctx.write().branch(Some("load_motif_and_clc_dist_data"), false, false);
-        let result_value: ScalarStatsValue = result.with_data_ref(0, &mut ctx_for_data, None, |val: &ScalarStatsValue, _ctx| Ok(val.clone())).await?;
+        let result_value: ScalarStatsValue = result.with_data_ref(0, ctx_for_data, None, |val: &ScalarStatsValue, _ctx| Ok(val.clone())).await?;
 
         assert_eq!(result_value.value(), 20.0);
         assert_eq!(result_value.id(), &expected_id);

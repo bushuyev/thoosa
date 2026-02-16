@@ -279,7 +279,7 @@ impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
 impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     type O<'o> = ClcResourcesMotifsDistInput<'o>;
 
-    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: &mut P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         F: for <'f> FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
         P:RunCtx
@@ -301,7 +301,7 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
                     self.resource_ids.clone(),
                     stacked_motifs,
                     motifs_stats,
-                ), ctx)
+                ), &ctx)
 
         })
     }
@@ -333,7 +333,7 @@ impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapperSelector {}
 
 
 impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, ctx: &mut P, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, ctx: P, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         P:RunCtx,
         for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>
@@ -361,7 +361,7 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
                     motifs_stats,
                 );
 
-                do_run(&inpt, ctx)
+                do_run(&inpt, &ctx)
         })
     }
 }
