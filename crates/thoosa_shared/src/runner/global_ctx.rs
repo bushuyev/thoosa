@@ -134,7 +134,7 @@ impl GlobalCtx {
         num_permits: NumPermits,
         requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoError> {
-        info!("GlobalCtx::acquire_many: requester_id={requester_id:?} asking for many permits, self.semaphores[{device_idx}]={:?} \nbacktrace={}", self.semaphores[device_idx], Backtrace::capture());
+        debug!("GlobalCtx::acquire_many: num_permits={num_permits} requester_id={requester_id:?} asking for many permits, self.semaphores[{device_idx}]={:?} \nbacktrace={}", self.semaphores[device_idx], Backtrace::capture());
         assert!(!requester_id.as_any().is::<()>(), "Got () requester_id backtrace={}", Backtrace::capture());
 
         self.semaphores[device_idx].acquire(num_permits, requester_id).await

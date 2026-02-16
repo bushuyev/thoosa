@@ -149,7 +149,7 @@ where
 
         //gpt TODO!! if no motif nets load, these expects will panic; consider returning a structured error.
         let motif_width = motif_width.into_iter().next().expect("no motif_width");
-        let slice_step = slice_step.into_iter().next().expect("no motif_width");
+        let slice_step = slice_step.into_iter().next().expect("no slice_step");//TODO shouldn't necessarily be what was used during motif training
         debug!("ApplyMotifNets::new: motif_width={motif_width:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets.len());
 
         let mut select_motifs_run_id_sorted = train_motif_nets_run_ids.clone();//TODO move to util CompKey::from Vec
@@ -399,6 +399,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
     fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
+        debug!("ApplyMotifNet::run: input={input:?} ctx={ctx:?}  run_ctx.id={:?}", ctx.id());
 
         let net_wrapper = Arc::clone(&self.net_wrapper);
         let cache_area = ctx.cache_area();
@@ -406,7 +407,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
             with_data!(ctx, net_wrapper, input; |_ctx, net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, input:&ThoTensor<ChannelsData2, SynKey>|{
                 let motif_id = net.extra().motif_id();
 
-                 #[cfg(test)]
+                #[cfg(test)]
                 if self.fail_if_size_bigger_than.map(|v| v < input.size()[1] as usize).unwrap_or(false) {
                     debug!("AsyncStage for ApplyMotifNet::run, triggering OOM: motif_id={motif_id} input.size={:?} self.fail_if_size_bigger_than={:?}", input.size(), self.fail_if_size_bigger_than);
                     return Err(ThoError::oom());
@@ -416,20 +417,18 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
 
                 let motif_width = net.extra().motif_net_params.num_features() as i64;
 
-                debug!("ApplyMotifNet::run, ok: motif_id={motif_id} c={c} motif_width={motif_width} input.id={:?} input.t.size={:?} self.slice_step={}", input.id(), input.t.size(), self.slice_step);
+                debug!("ApplyMotifNet::run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={:?} input.t.size={:?} self.slice_step={}", input.id(), input.t.size(), self.slice_step);
                 let t = input.t.f_i((c, ..))?;
                 let t  = if t.size()[0] >= motif_width {
                     t
                 } else {
-                    debug!("ApplyMotifNet::run, ok: motif_id={motif_id} padding t.size={:?} to motif_width={motif_width}", t.size());
+                    debug!("ApplyMotifNet::run: 1. motif_id={motif_id} padding t.size={:?} to motif_width={motif_width}", t.size());
                     pad_to(&t, &[motif_width], 0.0)?
                 };
 
-
-
                 let slices = t.f_unfold(0, motif_width, self.slice_step as i64)?; //.reshape([-1, motif_width]);
 
-                debug!("ApplyMotifNet::run, ok: motif_id={motif_id} slices.size={:?}",  slices.size());
+                debug!("ApplyMotifNet::run: 2. motif_id={motif_id} slices.size={:?}",  slices.size());
 
                 let out_id = self.out_id(input.id());
                 let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
@@ -448,7 +447,7 @@ impl <C> AsyncStage for ApplyMotifNet<C> where
 
                 let out = ThoTensor::new(out_id, out.t().f_sigmoid()?)?;
 
-                debug!("ApplyMotifNet::run, ok: motif_id={motif_id} out.size={:?}", out.size());
+                debug!("ApplyMotifNet::run, ok: motif_id={motif_id} input.id={:?} out.size={:?}", input.id(), out.size());
 
                 Ok(Arc::new(DevicesWrap::wrap(out, cache_area.into())))
             })

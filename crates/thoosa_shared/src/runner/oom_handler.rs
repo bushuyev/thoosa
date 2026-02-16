@@ -374,7 +374,7 @@ where
             contexts,
             |task, input, selector, device_idx, mut run_ctx| async move {
                 let input_id = input.id();
-                debug!("AsyncOOMHandler::run: input_id={input_id:?} run_ctx={run_ctx:?}");
+                debug!("AsyncOOMHandler::run: input_id={input_id:?} run_ctx={run_ctx:?} run_ctx.id={:?}", run_ctx.id());
 
                 let cache_area = input.cache_area();
 
@@ -474,7 +474,7 @@ where
 
                 match te.what() {
                     Cause::OutOfMemory => {
-                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  oom 0", os_thread_id());
+                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={} before adjusters", os_thread_id());
 
                         let mut task = task;
 
@@ -484,10 +484,10 @@ where
                             loop {
                                 i += 1;
                                 if i > 10000 {
-                                    //TODO
+                                    //TODO config
                                     panic!("OOMHandler: ctx_id={ctx_id:?}  i={i}");
                                 }
-                                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={} oom i={i}", os_thread_id());
+                                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={} oom i={i} in loop", os_thread_id());
 
                                 let adjust_result = match adjuster {
                                     Adjusters::Input(input_ad) => {
@@ -502,14 +502,15 @@ where
                                             .await
                                         {
                                             Ok(v) => {
+                                                debug!("OOMHandler::run, error, input adjuster ok: {v:?}");
                                                 input_select_adjusted = Some(v);
                                                 Ok(())
                                             }
-                                            Err(v) => {
-                                                let msg = format!("adjuster failed: {te:?}");
-                                                error!("OOMHandler::run, error, Adjusters::Input: msg={msg:?}");
+                                            Err(adjuster_err) => {
+                                                let msg = format!("adjuster failed: {adjuster_err:?}");
+                                                debug!("OOMHandler::run, error, input adjuster failed: {msg:?}");
 
-                                                match v {
+                                                match adjuster_err {
                                                     AdjusterError::AdjustFailed(v) => {
                                                         input_select_adjusted = Some(v);
                                                         Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
@@ -530,14 +531,15 @@ where
                                             .adjust(task, &mut contexts.runnable)
                                             .await{
                                             Ok(v) => {
+                                                debug!("OOMHandler::run, error, task adjuster ok: {v:?}");
                                                 task = v;
                                                 Ok(())
                                             }
-                                            Err(v) => {
-                                                let msg = format!("adjuster failed: {te:?}");
-                                                error!("OOMHandler::run, error, Adjusters::Task: {msg:?}");
+                                            Err(adjuster_err) => {
+                                                let msg = format!("adjuster failed: {adjuster_err:?}");
+                                                debug!("OOMHandler::run, error, task adjuster failed: {msg:?}");
 
-                                                match v {
+                                                match adjuster_err {
                                                     AdjusterError::AdjustFailed(v) => {
                                                         task = v;
                                                         Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
@@ -559,14 +561,16 @@ where
                                             .adjust(run_context, &mut contexts.run_ctx)
                                             .await{
                                             Ok(v) => {
+                                                debug!("OOMHandler::run, error, run context adjuster ok: {v:?}");
+
                                                 run_context = v;
                                                 Ok(())
                                             }
-                                            Err(v) => {
-                                                let msg = format!("adjuster failed: {te:?}");
-                                                error!("OOMHandler::run, error, Adjusters::RunContext: {msg:?}");
+                                            Err(adjuster_error) => {
+                                                let msg = format!("adjuster failed: {adjuster_error:?}");
+                                                debug!("OOMHandler::run, error, run context adjuster failed: {msg:?}");
 
-                                                match v {
+                                                match adjuster_error {
                                                     AdjusterError::AdjustFailed(v) => {
                                                         run_context = v;
                                                         Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
@@ -586,7 +590,7 @@ where
 
                                     match te.what() {
                                         Cause::OutOfMemory | Cause::AdjusterFailed => {
-                                            debug!("OOMHandler::run: on adjust_result ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+                                            debug!("OOMHandler::run, error: on adjust_result ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                             if !adjuster.degrade(&mut contexts) {
                                                 match adjuster {
@@ -644,7 +648,7 @@ where
                                         }
                                     }
                                     Err(te) => {
-                                        debug!("OOMHandler::run: err te={te:?}");
+                                        debug!("OOMHandler::run, error: err te={te:?}");
 
                                         run_context.drop_permits(DropIf::IfNotMax);
 
@@ -693,7 +697,7 @@ where
                 // Err(Cause::SomethingElse(format!("XXX")).into())
             }
             Ok(o) => {
-                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={} done without oom ", os_thread_id());
+                debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} done without oom ", os_thread_id());
 
                 Ok(o)
             },

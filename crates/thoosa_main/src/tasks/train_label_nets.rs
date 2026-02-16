@@ -677,7 +677,7 @@ where
                 let loader = Arc::clone(&loader);
                 let x_1 = Arc::clone(&x_1);
                 let x_0 = Arc::clone(&x_0);
-                let ctx_for_build_fn = {
+                let mut ctx_for_build_fn = {
                     let mut guard = ctx.lock();
                     guard.branch(Some("for_build_fn"), false, false)
                 };
@@ -695,8 +695,8 @@ where
                             debug!("ResourcesBatch::build_batch_stream: before move");
 
                             let ( ctx_x1, ctx_x0) = {
-                                let mut guard = ctx.lock();
-                                (guard.branch(Some("x_1_batch_loader"), false, false), guard.branch(Some("x_0_batch_loader"), false, false))
+
+                                (ctx_for_build_fn.branch(Some("x_1_batch_loader"), false, false), ctx_for_build_fn.branch(Some("x_0_batch_loader"), false, false))
                             };
                             async move {
                                 let result = (async {

@@ -4,14 +4,14 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use log::{debug, error};
-use tch::{nn, Kind, TchError, Tensor};
+use tch::{nn, Kind, Scalar, TchError, Tensor};
 
 use tch::nn::{ConvConfig, Module};
 use tch::nn::{
     BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, ModuleT, Path, batch_norm1d,
 };
 
-use thoosa_shared::ThoError;
+use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::traits::SimpleId;
 use crate::builder::{clc_avg_pool1d_out, clc_conv1d_out, clc_max_pool1d_out, Node};
 // use crate::{data, utils};
@@ -1004,7 +1004,10 @@ fn self_attention_forward_t(
     let v = v.f_view([b, l, n_heads, head_dim])?.f_transpose(1, 2)?;
 
     let scale = (head_dim as f64).sqrt();
-    let mut scores = q.f_matmul(&k.f_transpose(-2, -1)?)?.f_div_scalar(scale)?;
+    let mut scores = {
+        let tensor = q.f_matmul(&k.f_transpose(-2, -1)?)?;
+        panic_to_err!(tensor.f_div_scalar(scale))?
+    };
     let key_mask_f = key_valid.f_unsqueeze(1)?.f_unsqueeze(2)?.f_to_kind(scores.kind())?;
     let ones = Tensor::f_ones(key_mask_f.size(), (scores.kind(), scores.device()))?;
     let inv = ones.f_sub(&key_mask_f)?;
@@ -1130,7 +1133,7 @@ fn sinusoidal_positional_encoding(length: i64, d_model: i64, device: tch::Device
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        debug!("SelfAttention::tho_forward:  t.size={:?} lengths={lengths:?}", t.size());
+        debug!("SelfAttention::tho_forward:  t.id={:?} t.size={:?} lengths={lengths:?}", t.id(), t.size());
 
         let s = t.size();
         if s.len() != 3 {

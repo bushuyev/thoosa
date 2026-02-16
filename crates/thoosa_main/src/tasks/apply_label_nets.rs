@@ -17,7 +17,7 @@ use thoosa_common::ws::Workspace;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
-use thoosa_shared::runner::common::{OutId, RunCtx};
+use thoosa_shared::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, WithId};
@@ -321,7 +321,8 @@ where
 
             debug!("ApplyLabelNet::run: in async out_id={out_id:?}");
 
-            with_data!(ctx, net_wrapper, input; |ctx:Self::Ctx, net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, input:&ThoTensor<MotifProbability, SynKey>|{
+            with_data!(ctx, net_wrapper, input; |mut ctx:Self::Ctx, net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, input:&ThoTensor<MotifProbability, SynKey>|{
+                
                 let batch_input = input.t_ref().f_unsqueeze(0)?;
                 let batch_input: ThoTensor<MotifsNetsSelectionDims, thoosa_shared::traits::SimpleId> = batch_input.into();
                 debug!("ApplyLabelNet::run: batch_input=\n{batch_input}");
