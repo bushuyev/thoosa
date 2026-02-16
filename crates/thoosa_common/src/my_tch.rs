@@ -966,32 +966,55 @@ fn self_attention_forward_t(
     head_dim: i64,
     dropout: f64,
     train: bool,
-) -> Tensor {
+) -> Result<Tensor, ThoError> {
     let (b, l, _d) = {
         let s = x.size();
         (s[0], s[1], s[2])
     };
 
-    let q = x.apply(w_q);
-    let k = x.apply(w_k);
-    let v = x.apply(w_v);
+    debug!("SelfAttention::tho_forward: \
+        x.size={:?}, \
+        key_valid.size={:?}, \
+        w_q.ws.size={:?}, w_q.bs.size={:?}, \
+        w_k.ws.size={:?}, w_k.bs.size={:?}, \
+        w_v.ws.size={:?}, w_v.bs.size={:?}, \
+        w_o.ws.size={:?}, w_o.bs.size={:?}, \
+        n_heads={:?}, \
+        head_dim={:?}, \
+        dropout={:?}
+     ",
+        x.size(),
+        key_valid.size(),
+        w_q.ws.size(), w_q.bs.as_ref().map(|v|v.size()),
+        w_k.ws.size(), w_k.bs.as_ref().map(|v|v.size()),
+        w_v.ws.size(), w_v.bs.as_ref().map(|v|v.size()),
+        w_o.ws.size(), w_o.bs.as_ref().map(|v|v.size()),
+        n_heads,
+        head_dim,
+        dropout
+    );
 
-    let q = q.view([b, l, n_heads, head_dim]).transpose(1, 2);
-    let k = k.view([b, l, n_heads, head_dim]).transpose(1, 2);
-    let v = v.view([b, l, n_heads, head_dim]).transpose(1, 2);
+
+    let q = x.f_linear(&w_q.ws, w_q.bs.as_ref())?;
+    let k = x.f_linear(&w_k.ws, w_k.bs.as_ref())?;
+    let v = x.f_linear(&w_v.ws, w_v.bs.as_ref())?;
+
+    let q = q.f_view([b, l, n_heads, head_dim])?.f_transpose(1, 2)?;
+    let k = k.f_view([b, l, n_heads, head_dim])?.f_transpose(1, 2)?;
+    let v = v.f_view([b, l, n_heads, head_dim])?.f_transpose(1, 2)?;
 
     let scale = (head_dim as f64).sqrt();
-    let mut scores = q.matmul(&k.transpose(-2, -1)) / scale;
-    let key_mask_f = key_valid.unsqueeze(1).unsqueeze(2).to_kind(scores.kind());
-    let ones = Tensor::ones(key_mask_f.size(), (scores.kind(), scores.device()));
-    let inv = &ones - &key_mask_f;
-    scores = scores + inv * (-1e9);
+    let mut scores = q.f_matmul(&k.f_transpose(-2, -1)?)?.f_div_scalar(scale)?;
+    let key_mask_f = key_valid.f_unsqueeze(1)?.f_unsqueeze(2)?.f_to_kind(scores.kind())?;
+    let ones = Tensor::f_ones(key_mask_f.size(), (scores.kind(), scores.device()))?;
+    let inv = ones.f_sub(&key_mask_f)?;
+    scores = scores.f_add(&inv.f_mul_scalar(-1e9)?)?;
 
-    let attn = scores.softmax(-1, scores.kind()).dropout(dropout, train);
-    let y = attn.matmul(&v);
-    let y = y.transpose(1, 2).contiguous().view([b, l, n_heads * head_dim]);
+    let attn = scores.f_softmax(-1, scores.kind())?.f_dropout(dropout, train)?;
+    let y = attn.f_matmul(&v)?;
+    let y = y.f_transpose(1, 2)?.f_contiguous()?.f_view([b, l, n_heads * head_dim])?;
 
-    y.apply(w_o).dropout(dropout, train)
+    y.f_linear(&w_o.ws, w_o.bs.as_ref())?.f_dropout(dropout, train).map_err(|e| e.into())
 }
 
 fn attn_block_forward_t(
@@ -1009,15 +1032,32 @@ fn attn_block_forward_t(
     head_dim: i64,
     dropout: f64,
     train: bool,
-) -> Tensor {
-    let h = x.apply(ln1);
-    let a = self_attention_forward_t(&h, key_valid, w_q, w_k, w_v, w_o, n_heads, head_dim, dropout, train);
-    let x = x + a;
+) -> Result<Tensor, ThoError> {
+    let h = x.f_layer_norm(
+        ln1.normalized_shape.as_slice(),
+        ln1.ws.as_ref(),
+        ln1.bs.as_ref(),
+        1e-5,
+        true,
+    )?;
+    let a = self_attention_forward_t(&h, key_valid, w_q, w_k, w_v, w_o, n_heads, head_dim, dropout, train)?;
+    let x = x.f_add(&a)?;
 
-    let h2 = x.apply(ln2);
-    let f = h2.apply(ff1).gelu("none").dropout(dropout, train).apply(ff2).dropout(dropout, train);
+    let h2 = x.f_layer_norm(
+        ln2.normalized_shape.as_slice(),
+        ln2.ws.as_ref(),
+        ln2.bs.as_ref(),
+        1e-5,
+        true,
+    )?;
+    let f = h2
+        .f_linear(&ff1.ws, ff1.bs.as_ref())?
+        .f_gelu("none")?
+        .f_dropout(dropout, train)?
+        .f_linear(&ff2.ws, ff2.bs.as_ref())?
+        .f_dropout(dropout, train)?;
 
-    x + f
+    x.f_add(&f).map_err(|e| e.into())
 }
 
 #[derive(Debug)]
@@ -1037,6 +1077,8 @@ pub struct SelfAttention {
 
 impl SelfAttention {
     pub fn new(vs: &nn::Path, d_model: i64, n_heads: i64, ff_mult: i64, dropout: f64) -> Result<Self, ThoError> {
+        debug!("SelfAttention::new: d_model={d_model}, n_heads={n_heads}, ff_mult={ff_mult}, dropout={dropout} ");
+
         if d_model <= 0 {
             return Err(ThoError::new(format!("SelfAttention::new d_model must be > 0, got {d_model}")));
         }
@@ -1073,17 +1115,23 @@ impl SelfAttention {
     }
 }
 
-fn sinusoidal_positional_encoding(length: i64, d_model: i64, device: tch::Device, kind: Kind) -> Tensor {
+fn sinusoidal_positional_encoding(length: i64, d_model: i64, device: tch::Device, kind: Kind) -> Result<Tensor, ThoError> {
     let half = (d_model + 1) / 2;
-    let pos = Tensor::arange(length, (Kind::Float, device)).unsqueeze(1);
-    let exponent = Tensor::arange(half, (Kind::Float, device)) * (-2.0 * 10000_f64.ln() / d_model as f64);
-    let div_term = exponent.exp().unsqueeze(0);
-    let angles = pos * div_term;
-    Tensor::stack(&[angles.sin(), angles.cos()], -1).flatten(1, 2).narrow(1, 0, d_model).to_kind(kind)
+    let pos = Tensor::f_arange(length, (Kind::Float, device))?.f_unsqueeze(1)?;
+    let exponent = Tensor::f_arange(half, (Kind::Float, device))?.f_mul_scalar(-2.0 * 10000_f64.ln() / d_model as f64)?;
+    let div_term = exponent.f_exp()?.f_unsqueeze(0)?;
+    let angles = pos.f_mul(&div_term)?;
+    Tensor::f_stack(&[angles.f_sin()?, angles.f_cos()?], -1)?
+        .f_flatten(1, 2)?
+        .f_narrow(1, 0, d_model)?
+        .f_to_kind(kind)
+        .map_err(|e| e.into())
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        debug!("SelfAttention::tho_forward:  t.size={:?} lengths={lengths:?}", t.size());
+
         let s = t.size();
         if s.len() != 3 {
             return Err(ThoError::new(format!("SelfAttention::tho_forward expected [B,L,D], got {:?}", s)));
@@ -1100,17 +1148,17 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
         }
 
         let x = t.as_ref();
-        let pos = sinusoidal_positional_encoding(l, d, x.device(), x.kind()).unsqueeze(0);
-        let mut h = x + pos;
+        let pos = sinusoidal_positional_encoding(l, d, x.device(), x.kind())?.f_unsqueeze(0)?;
+        let mut h = x.f_add(&pos)?;
 
         let key_valid = if let Some(lengths) = lengths.as_deref() {
             valid_time_mask(lengths, b, l, x.device())?
         } else {
-            Tensor::ones([b, l], (Kind::Bool, x.device()))
+            Tensor::f_ones([b, l], (Kind::Bool, x.device()))?
         };
 
-        let mask_f = key_valid.to_kind(Kind::Float).unsqueeze(-1);
-        h = h * &mask_f;
+        let mask_f = key_valid.f_to_kind(Kind::Float)?.f_unsqueeze(-1)?;
+        h = h.f_mul(&mask_f)?;
         h = attn_block_forward_t(
             &h,
             &key_valid,
@@ -1126,7 +1174,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
             self.head_dim,
             self.dropout,
             train,
-        );
+        )?;
 
         Ok(h.into())
     }

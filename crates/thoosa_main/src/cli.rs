@@ -496,7 +496,7 @@ where
                         &store,
                         init_ctx,
                         opt_config,
-                        Some(0.3)
+                        Some(0.2)
                     ).await.map(|v|Arc::new(v))
                 },
                 ||root_ctx.branch( Some("train label nets"), true, false),
