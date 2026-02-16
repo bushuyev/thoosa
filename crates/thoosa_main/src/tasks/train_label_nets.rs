@@ -84,7 +84,8 @@ pub async fn new_train_label_nets_with_ml<L, C, R>(
     store: &Arc<RwLock<Box<dyn Store>>>,
     stage_ctx:R,
     opt_config:Arc<OptConfig>,
-    max_loss: Option<f32>
+    max_loss: Option<f32>,
+    slices_step: u32
 ) -> Result<TrainLabelNets<L, ABStage<L, ApplyMotifNets<C>, C>, C>, ThoError>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
@@ -98,6 +99,7 @@ where
         train_motif_nets_run_ids.clone(),
         stage_ctx,
         max_loss,
+        slices_step,
         #[cfg(test)]
         None
     ).await?);
@@ -282,7 +284,7 @@ where
     fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
         let cache_area = ctx.cache_area();
 
-        let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
+        let train_label_nets_run_configs = Arc::clone(&self.run_configs);
         let cache_area = cache_area.clone();
         let channels = self.ws.read().channels() as i64;
 
@@ -309,11 +311,11 @@ where
                 let mut ctx_for_task = ctx.branch(Some(&format!("Train_{label}")), true, false);//into is needed because mock needs SynKey or &str
 
                 let opt_config = Arc::clone(&self.opt_config);
-                let train_motifs_nodes_run_configs = Arc::clone(&train_motifs_nodes_run_configs);
+                let train_label_nets_run_configs = Arc::clone(&train_label_nets_run_configs);
                 let applied_motif_loader = Arc::clone(&self.applied_motif_loader);
                 let train_motif_nets_run_ids = self.train_motif_nets_run_ids.clone();
 
-                debug!("TrainLabelNets::run: label={label} train_motif_nets_run_ids={train_motif_nets_run_ids:?} train_motifs_nodes_run_configs={train_motifs_nodes_run_configs:?}");
+                debug!("TrainLabelNets::run: label={label} train_motif_nets_run_ids={train_motif_nets_run_ids:?} train_label_nets_run_configs={train_label_nets_run_configs:?}");
 
 
                 let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
@@ -397,7 +399,7 @@ where
 
                         },
                         opt_config,
-                        train_motifs_nodes_run_configs,
+                        train_label_nets_run_configs,
                         |pred: &Tensor, target: &Tensor| {
                             debug!("TrainLabelNets::run, loss_fn: pred.size={:?}", pred.size());
                             let pred_y = pred;//.squeeze();
@@ -972,7 +974,8 @@ mod tests {
             &store,
             mock_run_ctx::default(1),
             Arc::new(OptConfig::new(30, 10)),
-            Some(0.3)
+            Some(0.3),
+            10
         ).await?);
 
 
