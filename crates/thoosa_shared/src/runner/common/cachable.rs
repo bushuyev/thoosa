@@ -425,11 +425,11 @@ where
         P: RunCtx + 'a
     {
         Box::pin(async move {
-            let mut permits_ctx = permits_ctx;
-            if permits_ctx.acquired_permits() == 0 {
-                let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
-                permits_ctx.add_permit(permit);
-            }
+            // let mut permits_ctx = permits_ctx;
+            // if permits_ctx.acquired_permits() == 0 {
+            //     let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
+            //     permits_ctx.add_permit(permit);
+            // }
 
 
             match wrap.load_from_any_device_(to_device_idx).await {
@@ -450,10 +450,10 @@ where
         P: RunCtx
     {
         let mut permits_ctx = permits_ctx;
-        if permits_ctx.acquired_permits() == 0 {
-            let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
-            permits_ctx.add_permit(permit);
-        }
+        // if permits_ctx.acquired_permits() == 0 {
+        //     let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
+        //     permits_ctx.add_permit(permit);
+        // }
 
         let read_guard: RwLockReadGuard<'_, Option<O>> = wrap.cached_data[to_device_idx].read().await;
 
@@ -500,10 +500,10 @@ where
         Self: Sized
     {
         let mut permits_ctx = permits_ctx;
-        if permits_ctx.acquired_permits() == 0 {
-            let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
-            permits_ctx.add_permit(permit);
-        }
+        // if permits_ctx.acquired_permits() == 0 {
+        //     let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
+        //     permits_ctx.add_permit(permit);
+        // }
         let read_guard: RwLockReadGuard<'_, Option<O>> = wrap.cached_data[to_device_idx].read().await;
 
         if read_guard.is_some() {
