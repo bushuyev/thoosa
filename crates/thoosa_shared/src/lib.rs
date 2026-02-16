@@ -291,7 +291,7 @@ impl ThoError {
         let backtrace = Backtrace::capture();
         let is_oom = matches!(&what, Cause::OutOfMemory);
 
-        debug!("{}", backtrace.to_string());
+        debug!("msg={msg} {}", backtrace.to_string());
         Self {
             msg: msg.into(),
             backtrace,
