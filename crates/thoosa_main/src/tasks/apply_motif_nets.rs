@@ -46,7 +46,7 @@ use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, Permit
 use thoosa_shared::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_shared::runner::cache_areas::CacheArea;
-use thoosa_shared::runner::common::{OutId, RunCtx};
+use thoosa_shared::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
@@ -500,9 +500,13 @@ impl <C> SyncStage for ApplyMotifNet<C> where
             pad_to(&t, &[motif_width], 0.0)?
         };
 
-        let slices = t.f_unfold(0, motif_width, self.slice_step as i64)?;
+        let slices_r = t.f_unfold(0, motif_width, self.slice_step as i64);
+        debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices_r={slices_r:?}");
 
+        let slices = slices_r?;
         debug!("ApplyMotifNet::do_run: 2. motif_id={motif_id} slices.size={:?}", slices.size());
+
+
 
         let out_id = self.out_id(input.id());
         let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
