@@ -10,6 +10,7 @@ cargo run --bin thoosa_hbac --release  -- --term-logger-level=INFO --write-logge
 cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'100',window:'1000','slices_filter':{'AccumulateStats':{'aggr':{'Mean':{'k':'0.02'}}}}}" --max-chunk-size=100000
 cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'100',window:'1000','slices_filter':{'PrecalculateStats':{'aggr':{'Mean':{'k':'0.02'}}, 'slices':'1000'}}}" --max-chunk-size=100000
 cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'100',window:'1000','freq_filter': [{'BandPassFilter': {'low_hz':'20.', 'band_hz':'10.', kernel_size:'100', stride:'1', 'padding':'0'}}],'slices_filter':{'PrecalculateStats':{'aggr':{'Mean':{'k':'0.02'}}, 'slices':'1000'}}}" --max-chunk-size=100000
+cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac  find-motifs --resources="group:pure group 10" --run-config-cnt="{step:'10',window:'1000','freq_filter': [{'BandPassFilter': {'low_hz':'0.0..190.0:20.0,1', 'band_hz':'2.', kernel_size:'100', stride:'10', 'padding':'0'}}],'slices_filter':{'PrecalculateStats':{'aggr':{'Quantile':{'q':'0.02'}}, 'slices':'1000'}}}" --max-chunk-size=10000
 
 
 
@@ -21,7 +22,7 @@ cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logg
 
 
 for run_id in  1 2 3 ; do ./target/x86_64-unknown-linux-gnu/release/thoosa_hbac --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-motif-slices --motifs-by=run_id:"$run_id"; done
-for run_id in $(echo "1, 2, 3" | tr -d ' ' | tr ',' ' '); do
+for run_id in $(echo "7781375, 7781376, 7781377, 7781378, 7781379, 7781380, 7781381, 7781382, 7781383, 7781384" | tr -d ' ' | tr ',' ' '); do
   ./target/x86_64-unknown-linux-gnu/release/thoosa_hbac \
     --term-logger-level=INFO --write-logger-level=INFO \
     --ws-path=/home/bu/tmp/ws_test_hbac/ \
@@ -29,8 +30,8 @@ for run_id in $(echo "1, 2, 3" | tr -d ' ' | tr ',' ' '); do
 done
 
 
-cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="group:pure group 1000" --run-config-cnt="{motif_selector: {ByAvgEucDist:{'k':'0.5'}}}"
-cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="not_group:pure group 100" --run-config-cnt="{motif_selector: {ByAvgEucDist:{'k':'0.5'}}}"
+cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="group:pure group 1000" --run-config-cnt="{motif_criteria: {'norm_thickness': {'eps':'0.00000001'}}, 'threshold':'0.9'}"
+cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="not_group:pure group 100" --run-config-cnt="{motif_criteria: {ByAvgEucDist:{'k':'0.5'}}}"
 
 
 cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  train-motifs-nets --select-motifs-run-ids=1867  --run-config-cnt="{ 'common_training_args': { 'cycles' : '100', 'batch_size': '11', 'lr': '0.001', 'opt_max_evals':'3', 'opt_n_init': '3', 'patience':'10', 'min_delta':'0.0001'}, 'num_layers': '3..4', 'step':'10', 'channels':'32', 'kernel':'10', 'net': {CosineNet:{'_dummy':0}}}"

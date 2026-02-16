@@ -201,7 +201,7 @@ where
         )?;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
 
-        let resources = self.store.read().list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices)?;
+        let resources = self.store.read().list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices * 100/*TODO this is to compensate for filter, add proper coefficient */)?;
         let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, motif_width, input_len_adjuster)?;
 
         let channels = self.ws.read().channels();
