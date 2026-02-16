@@ -512,7 +512,7 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
         P: RunCtx,
     {
-        let _ = trace_ctx;
+
 
         if self.x.device_idx() == to_device_idx {
             do_run(self, permits_ctx)
