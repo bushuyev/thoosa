@@ -49,6 +49,7 @@ where
         store: &Arc<RwLock<Box<dyn Store>>>,
         train_label_nets_run_ids: Vec<RunId>,
         stage_ctx: R,
+        slices_step: u32,
     ) -> Result<Self, ThoError>
     where
         R: RunCtx + Adjustable + 'static,
@@ -79,7 +80,9 @@ where
                     ws,
                     store,
                     train_motif_nets_run_ids.clone(),
-                    stage_ctx, Some(0.3),
+                    stage_ctx,
+                    Some(0.3),
+                    slices_step,
                     None,
                 )
                 .await?
@@ -90,7 +93,9 @@ where
                     ws,
                     store,
                     train_motif_nets_run_ids.clone(),
-                    stage_ctx, Some(0.3),
+                    stage_ctx,
+                    Some(0.3),
+                    slices_step,
                 )
                 .await?
             }
@@ -322,7 +327,7 @@ where
             debug!("ApplyLabelNet::run: in async out_id={out_id:?}");
 
             with_data!(ctx, net_wrapper, input; |mut ctx:Self::Ctx, net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, input:&ThoTensor<MotifProbability, SynKey>|{
-                
+
                 let batch_input = input.t_ref().f_unsqueeze(0)?;
                 let batch_input: ThoTensor<MotifsNetsSelectionDims, thoosa_shared::traits::SimpleId> = batch_input.into();
                 debug!("ApplyLabelNet::run: batch_input=\n{batch_input}");
@@ -355,6 +360,8 @@ where
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use log::LevelFilter::Trace;
+    use log::{set_max_level, trace};
     use parking_lot::RwLock;
     use tch::{Device, Kind, Tensor};
     use tch::nn::{self, VarStore};
@@ -395,6 +402,8 @@ mod tests {
                         let batch = t.size()[0];
                         let out = Tensor::f_ones(&[batch, 1], (Kind::Float, t.device()))?
                             .f_mul_scalar_(k)?;
+
+                        trace!("const_motif_net: k={k} \nout={out}");
                         Ok(out)
                     })));
                     Ok(Box::new(module) as Box<dyn ThoModule<Batch<Slice>, MotifProbability>>)
@@ -452,8 +461,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_apply_label_nets_orders_and_values() -> Result<(), ThoError> {
+        set_max_level(Trace);
         GlobalCtx::init_devices(2);
-
+        let batch = 3;
         let train_motif_nets_run_id = 10;
         let train_label_nets_run_id = 20;
         let motif_width = 4;
@@ -518,11 +528,12 @@ mod tests {
             &store,
             vec![train_label_nets_run_id],
             mock_run_ctx::default(0),
+            step,
         ).await?);
 
         let input = ThoTensor::<ChannelsData2, SynKey>::new(
             SynKey::new([mono_key!("input", "input")]),
-            Tensor::f_zeros(&[1, motif_width as i64], (Kind::Float, device))?,
+            Tensor::f_zeros(&[batch, motif_width as i64], (Kind::Float, device))?,
         )?;
 
         let mut run_ctx = mock_run_ctx::default(0);
