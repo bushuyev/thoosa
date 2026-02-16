@@ -285,7 +285,7 @@ where
                     input
                         .with_selected_data_ref(
                                 device_idx,
-                                &mut run_ctx,
+                                run_ctx,
                                 selector,
                                 None,
                                 |data, ctx| {
@@ -298,7 +298,7 @@ where
                     input
                         .with_data_ref(
                                 device_idx,
-                                &mut run_ctx,
+                                run_ctx,
                                 None,
                                 |data, ctx| {
                                     Arc::clone(&task)
@@ -382,7 +382,7 @@ where
                     debug!("AsyncOOMHandler::run: input_id={input_id:?} selector={selector:?}");
 
                     let selected = input
-                        .with_selected_data(device_idx, &mut run_ctx.branch(Some("oom_handler_data"), false, false), selector.clone(), |data, _ctx| Ok(data))
+                        .with_selected_data(device_idx, run_ctx.branch(Some("oom_handler_data"), false, false), selector.clone(), |data, _ctx| Ok(data))
                         .await?;
 
                     Arc::new(DevicesWrap::wrap(selected, cache_area.clone()))

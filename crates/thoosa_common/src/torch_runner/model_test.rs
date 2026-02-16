@@ -699,7 +699,7 @@ mod tests {
             let stage = Arc::clone(&self);
             let mut ctx = ctx;
             let output = input
-                .with_data_ref(device_idx, &mut ctx, None, move |tensor: &Self::In<'_>, run_ctx| {
+                .with_data_ref(device_idx, ctx, None, move |tensor: &Self::In<'_>, run_ctx| {
                     Arc::clone(&stage).do_run(tensor, run_ctx)
                 })
                 .await?;
@@ -917,7 +917,7 @@ mod tests {
         debug!("acc={acc:?}");
 
         acc.with_data_ref(0,
-                          &mut ctx.branch(Some("join_and_classify_cpu_data"), false, false), None, |acc_t: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+                          ctx.branch(Some("join_and_classify_cpu_data"), false, false), None, |acc_t: &ThoTensor<ClsOut, SimpleId>, _ctx| {
                                       debug!("acc_t={acc_t:?} t=\n{}", acc_t.t_ref());
 
                                       // Dim impls are to define domain-specific operations on tensors
@@ -974,7 +974,7 @@ mod tests {
 
         let mut ctx_for_data = ctx.write().branch(Some("join_and_classify_cpu_many_data"), false, false);
         acc.with_data_ref(1,
-                          &mut ctx_for_data, None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+                          ctx_for_data, None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
                                       let v = ClsOut::accuracy(acc);
                                       assert!(v > 0.9, "training accuracy too low (4 files): {v}");
                                       Ok(())
@@ -1037,7 +1037,7 @@ mod tests {
         // ctx.add_permit(GlobalCtx::global().acquire_many(1, 1, Arc::new(simple_id!("zzz"))).await?);
 
         acc.with_data_ref(1,
-                          &mut ctx.branch(Some("join_and_classify_oom_data"), false, false), None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+                          ctx.branch(Some("join_and_classify_oom_data"), false, false), None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
               debug!("acc={}", acc.t_ref());
 
               let v = ClsOut::accuracy(acc);

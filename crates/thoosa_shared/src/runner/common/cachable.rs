@@ -22,7 +22,7 @@ use thoosa_shared::runner::cache_areas::CacheArea;
 use crate::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
 use crate::runner::cache_areas::CacheAreaId;
 use crate::traits::{Data, Named, Select};
-use crate::runner::common::{OutId, PermitsCtx, RunCtx};
+use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage};
 #[cfg(test)]
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -159,13 +159,13 @@ where
     where
         Self:Sized;
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: &'a mut P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         Self:Sized,
         F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
         P:RunCtx + 'a;
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: &mut P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         Self:Sized,
         O: Select<S, Output=O>,
@@ -176,7 +176,7 @@ where
     async fn with_selected_data<S, R, P>(
         wrap:&DevicesWrap<O>,
         to_device_idx: usize,
-        permits_ctx: &mut P,
+        permits_ctx: P,
         selector: S,
         do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>,
     ) -> Result<R, ThoError>
@@ -242,7 +242,7 @@ where
         }
     }
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: &'a mut P, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
             for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
             P: RunCtx + 'a
@@ -251,14 +251,14 @@ where
             match wrap.load_from_any_device_(to_device_idx).await {
                 Ok(v) => {
                     let data = v.deref();
-                    do_run(data, permits_ctx)
+                    do_run(data, &permits_ctx)
                 }
                 Err(e) => Err(e),
             }
         })
     }
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: &mut P, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         O: Select<S, Output=O>,
         for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError>,
@@ -269,13 +269,13 @@ where
             Ok(v) => {
                 let data = v.deref();
                 let sub = data.subview(selector)?;
-                do_run(&sub, permits_ctx)
+                do_run(&sub, &permits_ctx)
             }
             Err(e) => Err(e),
         }
     }
 
-    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: &mut P, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>) -> Result<R, ThoError>
+    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>) -> Result<R, ThoError>
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
@@ -286,7 +286,7 @@ where
         match wrap.load_from_any_device_(to_device_idx).await {
             Ok(v) => {
                 let data = v.deref();
-                do_run(data.subview(selector)?, permits_ctx)
+                do_run(data.subview(selector)?, &permits_ctx)
             }
             Err(e) => Err(e),
         }
@@ -419,12 +419,13 @@ where
         }
     }
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: &'a mut P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a
     {
         Box::pin(async move {
+            let mut permits_ctx = permits_ctx;
             if permits_ctx.acquired_permits() == 0 {
                 let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
                 permits_ctx.add_permit(permit);
@@ -434,20 +435,21 @@ where
             match wrap.load_from_any_device_(to_device_idx).await {
                 Ok(v) => {
                     let data = v.deref();
-                    DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, permits_ctx), data)
+                    DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
                 }
                 Err(e) => Err(e),
             }
         })
     }
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: &mut P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         O: Select<S, Output=O>,
         for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError>,
         S:Debug + Clone + 'static,
         P: RunCtx
     {
+        let mut permits_ctx = permits_ctx;
         if permits_ctx.acquired_permits() == 0 {
             let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
             permits_ctx.add_permit(permit);
@@ -463,7 +465,7 @@ where
 
             let data: O = base.subview(selector.clone())?;
 
-            return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, permits_ctx), data);
+            return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
         }
 
         drop(read_guard);
@@ -482,14 +484,14 @@ where
 
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
-                return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, permits_ctx), data);
+                return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
             }
         }
 
         Err(Cause::NotFound.into())
     }
 
-    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: &mut P, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>) -> Result<R, ThoError>
+    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>) -> Result<R, ThoError>
     where
         O: Select<S>,
         <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
@@ -497,6 +499,7 @@ where
         P:RunCtx,
         Self: Sized
     {
+        let mut permits_ctx = permits_ctx;
         if permits_ctx.acquired_permits() == 0 {
             let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
             permits_ctx.add_permit(permit);
@@ -509,7 +512,7 @@ where
                 .expect("no value behind guard")
                 .subview(selector.clone())?;
 
-            return do_run(data, permits_ctx);
+            return do_run(data, &permits_ctx);
         }
 
         drop(read_guard);
@@ -527,7 +530,7 @@ where
 
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
-                return do_run(data, permits_ctx);
+                return do_run(data, &permits_ctx);
             }
         }
 
@@ -756,7 +759,7 @@ where
     pub async fn with_selected_data<S, R, P>(
         &self,
         to_device_idx: usize,
-        permits_ctx: &mut P,
+        permits_ctx: P,
         selector: S,
         do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>,
     ) -> Result<R, ThoError>
@@ -1008,7 +1011,7 @@ pub trait WithDataRef: WithId + Debug {
     async fn with_data_ref<R, F, P>(
         &self,
         to_device_idx: usize,
-        permits_ctx: &mut P,
+        permits_ctx: P,
         trace_ctx: Option<&'static str>,
         do_run: F,
     ) -> Result<R, ThoError>
@@ -1036,7 +1039,7 @@ where
     async fn with_selected_data_ref<'o, R, F, P>(
         &self,
         to_device_idx: usize,
-        _permits_ctx: &mut P,
+        _permits_ctx: P,
         selector: S,
         trace_ctx: Option<&'static str>,
         do_run: F,
@@ -1053,7 +1056,7 @@ where
 {
     type O<'o> = O;
 
-    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: &mut P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
             for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
             P:RunCtx
@@ -1082,7 +1085,7 @@ where
     O: Select<S, Output=O> + Data + WithId + Send + Sync + CopyToDevice,
     O::M: DevicesWrapCopyMode<O>,
 {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: &mut P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
@@ -1123,7 +1126,7 @@ mod tests {
         let mut ctx_for_data = mock_run_ctx::default(1);
         tested
             .with_data_ref(1,
-               &mut ctx_for_data, None, |data_on_1: &MockDataWithId, _ctx| {
+               ctx_for_data, None, |data_on_1: &MockDataWithId, _ctx| {
                    assert_eq!(data_on_1.device(), &1);
 
                    Ok(())
