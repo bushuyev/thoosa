@@ -66,6 +66,7 @@ pub async fn new_train_final_net_with_ml<L, C, R>(
     store: &Arc<RwLock<Box<dyn Store>>>,
     stage_ctx: R,
     opt_config: Arc<OptConfig>,
+    slices_step: u32,
 ) -> Result<TrainFinalNet<L, ABStage<L, ApplyLabelNets<C>, C>, C>, ThoError>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
@@ -73,7 +74,7 @@ where
     R: RunCtx + Adjustable + 'static,
 {
     //gpt Build a label-net application stage that wraps the raw loader with motif+label inference.
-    let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, train_label_nets_run_ids.clone(), stage_ctx).await?);
+    let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, train_label_nets_run_ids.clone(), stage_ctx, slices_step).await?);
 
     let label_loader = Arc::new(ABStage::new(
         SynKey::new([mono_key!("Loader_with_label_nets", "Loader_with_label_nets"), mono_key!(format!("{train_label_nets_run_ids:?}"), "train_label_nets_run_ids")]),
@@ -543,7 +544,7 @@ mod tests {
         );
 
         let mut run_ctx = mock_run_ctx::default(1);
-        let train_final_net = Arc::new(new_train_final_net_with_ml(vec![train_label_nets_run_id], loader, run_configs, &ws, &store, run_ctx.branch(Some("new_train_final_net_with_ml"), false, false), Arc::new(OptConfig::new(10, 3))).await?);
+        let train_final_net = Arc::new(new_train_final_net_with_ml(vec![train_label_nets_run_id], loader, run_configs, &ws, &store, run_ctx.branch(Some("new_train_final_net_with_ml"), false, false), Arc::new(OptConfig::new(10, 3)), step).await?);
 
         let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string()))), CacheArea::default()));
 

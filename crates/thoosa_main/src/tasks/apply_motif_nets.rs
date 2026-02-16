@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Instant;
 use async_trait::async_trait;
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use parking_lot::RwLock;
 use tch::{nn, Device, IndexOp, Kind, Tensor};
 use tch::Kind::Float;
@@ -79,6 +79,7 @@ where
         train_motif_nets_run_ids: Vec<RunId>,
         mut stage_ctx:R,
         max_loss: Option<f32>,
+        slice_step: u32,
         #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>
     ) -> Result<Self, ThoError>
@@ -129,11 +130,11 @@ where
 
         //TODO all motif nets should have same width/step, handle different ones?
         let mut motif_width = HashSet::new();
-        let mut slice_step = HashSet::new();
+        // let mut slice_step = HashSet::new();
         for v in &loaded_motif_nets {
             with_data!(stage_ctx.branch(Some("apply_motif_nets_meta"), false, false), v; |_ctx, v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
                 motif_width.insert(v.extra().motif_net_params.num_features());
-                slice_step.insert(v.extra().motif_net_params.stride());
+                // slice_step.insert(v.extra().motif_net_params.stride());
 
                 Ok::<_, ThoError>(())
             })?;
@@ -148,7 +149,7 @@ where
 
         //gpt TODO!! if no motif nets load, these expects will panic; consider returning a structured error.
         let motif_width = motif_width.into_iter().next().expect("no motif_width");
-        let slice_step = slice_step.into_iter().next().expect("no slice_step");//TODO shouldn't necessarily be what was used during motif training
+        // let slice_step = slice_step.into_iter().next().expect("no slice_step");//TODO shouldn't necessarily be what was used during motif training
         debug!("ApplyMotifNets::new: motif_width={motif_width:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets.len());
 
         let mut select_motifs_run_id_sorted = train_motif_nets_run_ids.clone();//TODO move to util CompKey::from Vec
@@ -499,7 +500,11 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+
+
         let motif_id = input.motif_net.extra().motif_id();
+
+        trace!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t=\n{}", self.id, input.batch.t);
 
         #[cfg(test)]
         if self.fail_if_size_bigger_than.map(|v| v < input.batch.size()[1] as usize).unwrap_or(false) {
@@ -519,12 +524,8 @@ impl <C> SyncStage for ApplyMotifNet<C> where
             pad_to(&t, &[motif_width], 0.0)?
         };
 
-        let slices_r = t.f_unfold(0, motif_width, self.slice_step as i64);
-        debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices_r={slices_r:?}");
-
-        let slices = slices_r?;
-        debug!("ApplyMotifNet::do_run: 2. motif_id={motif_id} slices.size={:?}", slices.size());
-
+        let slices = t.f_unfold(0, motif_width, self.slice_step as i64)?;
+        debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices={slices:?}");
 
 
         let out_id = self.out_id(input.id());
@@ -541,8 +542,9 @@ impl <C> SyncStage for ApplyMotifNet<C> where
             COUNT.fetch_add(1, Relaxed);
         }
 
-        let out = ThoTensor::new(out_id, out.t().f_sigmoid()?)?;
+        let out = ThoTensor::new(out_id, out.t())?;//TODO .f_sigmoid()?
 
+        trace!("ApplyMotifNet::do_run, self.id={:?} out=\n{}", self.id, out.t);
         debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.size={:?}", input.id(), out.size());
 
         Ok(out)
@@ -807,6 +809,7 @@ pub(crate) mod tests {
             &store,
             vec![select_motifs_run_id],
             mock_run_ctx::default(1), Some(0.3),
+            10,
             trigger_oom_len
         ).await?);
 
@@ -929,6 +932,7 @@ pub(crate) mod tests {
             vec![select_motifs_run_id],
             mock_run_ctx::default(1), Some(0.3) //Some(1000)
             ,
+            10,
             trigger_oom_len
         ).await?);
 

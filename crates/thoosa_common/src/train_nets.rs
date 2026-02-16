@@ -71,6 +71,12 @@ pub struct TrainLabelNetsArgs {
 
     #[arg(long)]
     pub run_config_cnt: String, //TrainLabelNetsRunConfig
+
+    #[arg(long)]
+    pub max_motif_net_loss: Option<f32>,
+
+    #[arg(long)]
+    pub motif_slices_step: Option<u32>
 }
 
 impl TrainLabelNetsArgs {
@@ -3791,6 +3797,5 @@ mod train_tests {
             ).unwrap();
         }
     }
-
 
 }
