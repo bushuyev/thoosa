@@ -15,13 +15,12 @@ use tch::{nn, Device, IndexOp, Kind, Tensor};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::nn::VarStore;
-use tokio::task::JoinError;
 use tracing::warn;
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
 
 use thoosa_shared::runner::global_ctx::GlobalCtx;
-use thoosa_shared::runner::oom_handler::{Adjusters, AsyncOOMHandler, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopRunnableContext, OOMHandler};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::builder::SeqBuilder;
 use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
@@ -45,10 +44,10 @@ use thoosa_common::torch_runner::output_builders::{BuildAs, SingleDimTensorOutpu
 use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use thoosa_shared::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
-use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::{OutId, RunCtx};
-use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
 use crate::tasks::load_motif_and_clc_dist::MotifSlicesSelector;
@@ -211,6 +210,7 @@ where
                 let input = Arc::clone(&input);
                 let out_id = apply_motif_net.out_id(&input.id());
                 let apply_motif_net_ctx = ctx.branch(Some(&format!("apply_motif_nets_{out_id:?}")), true, false);
+                let apply_motif_net_input = Arc::new(ApplyMotifNetInputWrapper::new(Arc::clone(&input), Arc::clone(&apply_motif_net.net_wrapper)));
 
                 let slice_step = self.slice_step;
 
@@ -223,7 +223,7 @@ where
                 async move {
                     let map = HashMap::new();
 
-                     let r= AsyncOOMHandler::new(
+                     let r= OOMHandler::new(
                          vec![
                              Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
                              Adjusters::RunContext(Box::new(DumpToCpu::new())),
@@ -234,7 +234,7 @@ where
                          ], None)
                      .run(
                          &apply_motif_net,
-                         Arc::clone(&input),
+                         Arc::clone(&apply_motif_net_input),
                          apply_motif_net_ctx,
                          Contexts::new(
                              SplitsAdjusterContextImpl::new(input._size(), SingleDimTensorOutputBuilder::new(out_id.clone(), 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
@@ -298,17 +298,17 @@ where
 
 #[derive(Debug)]
 struct ApplyMotifNetInput<'a> {
-    batch: &'a ThoTensor<Batch<ChannelsData2>, SynKey>,
+    batch: &'a ThoTensor<ChannelsData2, SynKey>,
     motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>
 }
 
 
 impl Data for ApplyMotifNetInput<'_> {
-    type Metrics = MonoMetrics<0, 3>;
+    type Metrics = MonoMetrics<1, 2>;
     type M = CpuOnly<Self>;
 
     fn size(&self) -> Self::Metrics {
-        MonoMetrics::<0, 3>::try_from(self.batch.size()).unwrap_or_default()
+        MonoMetrics::<1, 2>::try_from(self.batch.size()).unwrap_or_default()
     }
 
     fn device(&self) -> usize {
@@ -321,17 +321,98 @@ impl Data for ApplyMotifNetInput<'_> {
 }
 
 impl <'a> ApplyMotifNetInput<'a> {
-    pub fn new(batch: &'a ThoTensor<Batch<ChannelsData2>, SynKey>, motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>) -> Self {
+    pub fn new(batch: &'a ThoTensor<ChannelsData2, SynKey>, motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>) -> Self {
         Self {  batch, motif_net }
     }
 }
 
 impl <'a> Input for ApplyMotifNetInput<'a> {}
 impl <'a> WithId for ApplyMotifNetInput<'a> {
-    type ID = ();
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
-        &()
+        self.batch.id()
+    }
+}
+
+#[derive(Debug)]
+struct ApplyMotifNetInputWrapper {
+    batch: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>,
+    motif_net: Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
+}
+
+impl ApplyMotifNetInputWrapper {
+    fn new(
+        batch: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>,
+        motif_net: Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
+    ) -> Self {
+        Self { batch, motif_net }
+    }
+}
+
+impl WithId for ApplyMotifNetInputWrapper {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        self.batch.id()
+    }
+}
+
+impl WithDataRef for ApplyMotifNetInputWrapper {
+    type O<'o> = ApplyMotifNetInput<'o>;
+
+    async fn with_data_ref<R, F, P>(
+        &self,
+        _to_device_idx: usize,
+        permits_ctx: &mut P,
+        _trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> Result<R, ThoError>
+    where
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
+        P: RunCtx,
+    {
+        with_data!(permits_ctx, self.batch, self.motif_net; |ctx, batch:&ThoTensor<ChannelsData2, SynKey>, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+            let input = ApplyMotifNetInput::new(batch, motif_net);
+            do_run(&input, ctx)
+        })
+    }
+
+    fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics {
+        self.batch.size().clone()
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.batch.mem_size() + self.motif_net.mem_size()
+    }
+
+    fn cache_area(&self) -> &CacheArea {
+        self.batch.cache_area()
+    }
+}
+
+impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
+    async fn with_selected_data_ref<'o, R, F, P>(
+        &self,
+        to_device_idx: usize,
+        permits_ctx: &mut P,
+        selector: ChannelsData2Selector,
+        _trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> Result<R, ThoError>
+    where
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
+        P: RunCtx,
+    {
+        let selected_batch = self
+            .batch
+            .with_selected_data(to_device_idx, permits_ctx, selector, |selected_batch, _ctx| Ok(selected_batch))
+            .await?;
+
+        with_data!(permits_ctx, self.motif_net; |ctx, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+            let input = ApplyMotifNetInput::new(&selected_batch, motif_net);
+            do_run(&input, ctx)
+        })
     }
 }
 
@@ -390,68 +471,58 @@ impl <C>  Stage for ApplyMotifNet<C>
 where
     C: RunCtx + Adjustable{
     type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData2, SynKey>;
+    type In<'a> = ApplyMotifNetInput<'a>;
     type Out = ThoTensor<MotifProbability, SynKey>;
 }
 
-impl <C> AsyncStage for ApplyMotifNet<C> where
+impl <C> SyncStage for ApplyMotifNet<C> where
     C: RunCtx + Adjustable + 'static
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
-    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
-        debug!("ApplyMotifNet::run: input={input:?} ctx={ctx:?}  run_ctx.id={:?}", ctx.id());
+    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let motif_id = input.motif_net.extra().motif_id();
 
-        let net_wrapper = Arc::clone(&self.net_wrapper);
-        let cache_area = ctx.cache_area();
-        async move {
-            with_data!(ctx, net_wrapper, input; |_ctx, net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, input:&ThoTensor<ChannelsData2, SynKey>|{
-                let motif_id = net.extra().motif_id();
-
-                #[cfg(test)]
-                if self.fail_if_size_bigger_than.map(|v| v < input.size()[1] as usize).unwrap_or(false) {
-                    debug!("AsyncStage for ApplyMotifNet::run, triggering OOM: motif_id={motif_id} input.size={:?} self.fail_if_size_bigger_than={:?}", input.size(), self.fail_if_size_bigger_than);
-                    return Err(ThoError::oom());
-                }
-
-                let c = net.extra().channel() as i64;
-
-                let motif_width = net.extra().motif_net_params.num_features() as i64;
-
-                debug!("ApplyMotifNet::run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={:?} input.t.size={:?} self.slice_step={}", input.id(), input.t.size(), self.slice_step);
-                let t = input.t.f_i((c, ..))?;
-                let t  = if t.size()[0] >= motif_width {
-                    t
-                } else {
-                    debug!("ApplyMotifNet::run: 1. motif_id={motif_id} padding t.size={:?} to motif_width={motif_width}", t.size());
-                    pad_to(&t, &[motif_width], 0.0)?
-                };
-
-                let slices = t.f_unfold(0, motif_width, self.slice_step as i64)?; //.reshape([-1, motif_width]);
-
-                debug!("ApplyMotifNet::run: 2. motif_id={motif_id} slices.size={:?}",  slices.size());
-
-                let out_id = self.out_id(input.id());
-                let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
-                let out = net.data().tho_forward(&slices_tensor, None, false)?;
-
-
-                #[allow(unexpected_cfgs)]
-                #[cfg(tho_debug_plots)]
-                {
-                    static COUNT:AtomicU64 = AtomicU64::new(0);
-
-                    plot_t(&t.view((1, -1)), &format!("{COUNT:?}_input_{}", input.id()), false)?;
-                    plot_t(&out.as_ref().transpose(0,1), &format!("{COUNT:?}_input_{}_motif_applied_{motif_id}_", input.id()), false)?;//.f_mul_scalar(100.)?
-                    COUNT.fetch_add(1, Relaxed);
-                }
-
-                let out = ThoTensor::new(out_id, out.t().f_sigmoid()?)?;
-
-                debug!("ApplyMotifNet::run, ok: motif_id={motif_id} input.id={:?} out.size={:?}", input.id(), out.size());
-
-                Ok(Arc::new(DevicesWrap::wrap(out, cache_area.into())))
-            })
+        #[cfg(test)]
+        if self.fail_if_size_bigger_than.map(|v| v < input.batch.size()[1] as usize).unwrap_or(false) {
+            debug!("SyncStage for ApplyMotifNet::do_run, triggering OOM: motif_id={motif_id} input.size={:?} self.fail_if_size_bigger_than={:?}", input.batch.size(), self.fail_if_size_bigger_than);
+            return Err(ThoError::oom());
         }
+
+        let c = input.motif_net.extra().channel() as i64;
+        let motif_width = input.motif_net.extra().motif_net_params.num_features() as i64;
+
+        debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={:?} input.t.size={:?} self.slice_step={}", input.batch.id(), input.batch.t.size(), self.slice_step);
+        let t = input.batch.t.f_i((c, ..))?;
+        let t = if t.size()[0] >= motif_width {
+            t
+        } else {
+            debug!("ApplyMotifNet::do_run: 1. motif_id={motif_id} padding t.size={:?} to motif_width={motif_width}", t.size());
+            pad_to(&t, &[motif_width], 0.0)?
+        };
+
+        let slices = t.f_unfold(0, motif_width, self.slice_step as i64)?;
+
+        debug!("ApplyMotifNet::do_run: 2. motif_id={motif_id} slices.size={:?}", slices.size());
+
+        let out_id = self.out_id(input.id());
+        let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
+        let out = input.motif_net.data().tho_forward(&slices_tensor, None, false)?;
+
+        #[allow(unexpected_cfgs)]
+        #[cfg(tho_debug_plots)]
+        {
+            static COUNT:AtomicU64 = AtomicU64::new(0);
+
+            plot_t(&t.view((1, -1)), &format!("{COUNT:?}_input_{}", input.id()), false)?;
+            plot_t(&out.as_ref().transpose(0, 1), &format!("{COUNT:?}_input_{}_motif_applied_{motif_id}_", input.id()), false)?;
+            COUNT.fetch_add(1, Relaxed);
+        }
+
+        let out = ThoTensor::new(out_id, out.t().f_sigmoid()?)?;
+
+        debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.size={:?}", input.id(), out.size());
+
+        Ok(out)
     }
 }
 
