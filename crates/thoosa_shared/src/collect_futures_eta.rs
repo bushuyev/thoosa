@@ -14,20 +14,23 @@ struct CollectEtaInvocation {
     completed: usize,
     started_at: Instant,
     last_completion_at: Option<Instant>,
-    completion_gap_sum: Duration,
-    completion_gap_count: u64,
+    warmup: usize,
+    ewma_interval_s: Option<f64>,
+    alpha: f64,
 }
 
 impl CollectEtaInvocation {
-    fn new(descr: &str, total: usize) -> Self {
+    fn new(descr: &str, total: usize, concurrency: usize) -> Self {
+        let warmup = concurrency.max(1).min(total.max(1));
         Self {
             descr: descr.to_string(),
             total,
             completed: 0,
             started_at: Instant::now(),
             last_completion_at: None,
-            completion_gap_sum: Duration::ZERO,
-            completion_gap_count: 0,
+            warmup,
+            ewma_interval_s: None,
+            alpha: 0.15,
         }
     }
 
@@ -41,23 +44,48 @@ impl CollectEtaInvocation {
         }
         self.completed = self.completed.saturating_add(1);
         if let Some(last_completion_at) = self.last_completion_at {
-            let gap = now.saturating_duration_since(last_completion_at);
-            self.completion_gap_sum = self.completion_gap_sum.checked_add(gap).unwrap_or(Duration::MAX);
-            self.completion_gap_count = self.completion_gap_count.saturating_add(1);
+            let dt = now.saturating_duration_since(last_completion_at).as_secs_f64().max(1e-6);
+            self.ewma_interval_s = Some(match self.ewma_interval_s {
+                None => dt,
+                Some(prev) => self.alpha * dt + (1.0 - self.alpha) * prev,
+            });
         }
         self.last_completion_at = Some(now);
     }
 
-    fn avg_completion_time(&self, now: Instant) -> Option<Duration> {
+    fn conservative_rate_per_sec(&self, now: Instant) -> Option<f64> {
         if self.completed == 0 {
             return None;
         }
-        let elapsed_avg = div_duration(now.saturating_duration_since(self.started_at), self.completed as u64);
-        if self.completion_gap_count == 0 {
-            return Some(elapsed_avg);
+        let elapsed_s = now.saturating_duration_since(self.started_at).as_secs_f64();
+        if elapsed_s <= 0.0 {
+            return None;
         }
-        let gap_avg = div_duration(self.completion_gap_sum, self.completion_gap_count);
-        Some(elapsed_avg.max(gap_avg))
+        let elapsed_rate = self.completed as f64 / elapsed_s;
+        let ewma_rate = self.ewma_interval_s.map(|interval| 1.0 / interval.max(1e-6));
+        let rate = match ewma_rate {
+            Some(r) if r.is_finite() && r > 0.0 => elapsed_rate.min(r),
+            _ => elapsed_rate,
+        };
+        (rate.is_finite() && rate > 0.0).then_some(rate)
+    }
+
+    fn eta_interval_s(&self, now: Instant) -> Option<f64> {
+        if self.completed < self.warmup {
+            return None;
+        }
+        self.conservative_rate_per_sec(now).map(|rate| 1.0 / rate)
+    }
+
+    fn historical_interval_s(&self, now: Instant) -> Option<f64> {
+        if self.completed == 0 {
+            return None;
+        }
+        let elapsed_s = now.saturating_duration_since(self.started_at).as_secs_f64();
+        if elapsed_s <= 0.0 {
+            return None;
+        }
+        Some((elapsed_s / self.completed as f64).max(1e-6))
     }
 
     fn eta(&self, now: Instant) -> Option<Duration> {
@@ -65,7 +93,8 @@ impl CollectEtaInvocation {
         if remaining == 0 {
             return Some(Duration::ZERO);
         }
-        self.avg_completion_time(now).map(|avg| mul_duration(avg, remaining))
+        let interval_s = self.eta_interval_s(now)?;
+        Some(Duration::from_secs_f64(remaining as f64 * interval_s))
     }
 }
 
@@ -73,7 +102,7 @@ impl CollectEtaInvocation {
 struct CollectEtaState {
     invocations: HashMap<u64, CollectEtaInvocation>,
     last_log_at: Option<Instant>,
-    historical_avg_completion: Option<Duration>,
+    historical_interval_s: Option<f64>,
     historical_completed: u64,
 }
 
@@ -102,9 +131,9 @@ impl CollectEtaTracker {
         }
     }
 
-    fn register(&self, descr: &str, total: usize) -> u64 {
+    fn register(&self, descr: &str, total: usize, concurrency: usize) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.state.lock().invocations.insert(id, CollectEtaInvocation::new(descr, total));
+        self.state.lock().invocations.insert(id, CollectEtaInvocation::new(descr, total, concurrency));
         id
     }
 
@@ -126,23 +155,23 @@ impl CollectEtaTracker {
         let mut state = self.state.lock();
         if let Some(invocation) = state.invocations.remove(&id) {
             if invocation.completed > 0 {
-                if let Some(avg) = invocation.avg_completion_time(now) {
-                    Self::update_historical_avg(&mut state, avg, invocation.completed as u64);
+                if let Some(interval_s) = invocation.historical_interval_s(now) {
+                    Self::update_historical_interval(&mut state, interval_s, invocation.completed as u64);
                 }
             }
         }
     }
 
-    fn update_historical_avg(state: &mut CollectEtaState, avg: Duration, completed_weight: u64) {
+    fn update_historical_interval(state: &mut CollectEtaState, interval_s: f64, completed_weight: u64) {
         if completed_weight == 0 {
             return;
         }
         let next_completed = state.historical_completed.saturating_add(completed_weight);
-        state.historical_avg_completion = Some(match (state.historical_avg_completion, state.historical_completed) {
-            (Some(current_avg), current_weight) if current_weight > 0 => {
-                weighted_duration_avg(current_avg, current_weight, avg, completed_weight)
+        state.historical_interval_s = Some(match (state.historical_interval_s, state.historical_completed) {
+            (Some(current_interval), current_weight) if current_weight > 0 => {
+                weighted_f64_avg(current_interval, current_weight, interval_s, completed_weight)
             }
-            _ => avg,
+            _ => interval_s,
         });
         state.historical_completed = next_completed;
     }
@@ -152,14 +181,14 @@ impl CollectEtaTracker {
             active_collectors: state.invocations.len(),
             ..Default::default()
         };
-        let mut fallback_avg = state.historical_avg_completion;
+        let mut fallback_interval_s = state.historical_interval_s;
 
         for invocation in state.invocations.values() {
             let remaining = invocation.remaining();
             snapshot.total_completed = snapshot.total_completed.saturating_add(invocation.completed);
             snapshot.total_remaining = snapshot.total_remaining.saturating_add(remaining);
-            if let Some(avg) = invocation.avg_completion_time(now) {
-                fallback_avg = Some(fallback_avg.map(|current| current.max(avg)).unwrap_or(avg));
+            if let Some(interval_s) = invocation.eta_interval_s(now) {
+                fallback_interval_s = Some(fallback_interval_s.map(|current| current.max(interval_s)).unwrap_or(interval_s));
             }
         }
 
@@ -168,7 +197,9 @@ impl CollectEtaTracker {
             if remaining == 0 {
                 continue;
             }
-            let eta = invocation.eta(now).or_else(|| fallback_avg.map(|avg| mul_duration(avg, remaining)));
+            let eta = invocation
+                .eta(now)
+                .or_else(|| fallback_interval_s.map(|interval_s| Duration::from_secs_f64(remaining as f64 * interval_s)));
             if let Some(eta) = eta {
                 let is_slowest = snapshot.max_eta.map(|current| eta > current).unwrap_or(true);
                 if is_slowest {
@@ -206,7 +237,8 @@ impl CollectEtaTracker {
         if let Some(max_eta) = snapshot.max_eta {
             info!("collect_futures_with_progress ETA: active={} completed={} remaining={} max_eta={} slowest=\"{}\" ({}/{})", snapshot.active_collectors, snapshot.total_completed, snapshot.total_remaining, format_duration(max_eta), snapshot.slowest_descr.as_deref().unwrap_or("unknown"), snapshot.slowest_completed, snapshot.slowest_total);
         } else {
-            info!("collect_futures_with_progress ETA: active={} completed={} remaining={} max_eta=unknown (waiting for first completions)", snapshot.active_collectors, snapshot.total_completed, snapshot.total_remaining);
+            let unknown_reason = if snapshot.total_completed == 0 { "waiting for first completions" } else { "warming up throughput model" };
+            info!("collect_futures_with_progress ETA: active={} completed={} remaining={} max_eta=unknown ({})", snapshot.active_collectors, snapshot.total_completed, snapshot.total_remaining, unknown_reason);
         }
         true
     }
@@ -218,9 +250,9 @@ pub(crate) struct CollectEtaInvocationGuard {
 }
 
 impl CollectEtaInvocationGuard {
-    pub(crate) fn new(descr: &str, total: usize) -> Self {
+    pub(crate) fn new(descr: &str, total: usize, concurrency: usize) -> Self {
         Self {
-            id: COLLECT_ETA_TRACKER.register(descr, total),
+            id: COLLECT_ETA_TRACKER.register(descr, total, concurrency),
         }
     }
 
@@ -245,26 +277,7 @@ pub(crate) fn collect_eta_maybe_log(force: bool) {
     let _ = COLLECT_ETA_TRACKER.maybe_log(force);
 }
 
-fn duration_from_nanos_saturating(nanos: u128) -> Duration {
-    let secs = nanos / 1_000_000_000;
-    if secs > u64::MAX as u128 {
-        return Duration::MAX;
-    }
-    Duration::new(secs as u64, (nanos % 1_000_000_000) as u32)
-}
-
-fn div_duration(duration: Duration, by: u64) -> Duration {
-    if by == 0 {
-        return Duration::ZERO;
-    }
-    duration_from_nanos_saturating(duration.as_nanos() / by as u128)
-}
-
-fn mul_duration(duration: Duration, mul: usize) -> Duration {
-    duration_from_nanos_saturating(duration.as_nanos().saturating_mul(mul as u128))
-}
-
-fn weighted_duration_avg(a: Duration, a_weight: u64, b: Duration, b_weight: u64) -> Duration {
+fn weighted_f64_avg(a: f64, a_weight: u64, b: f64, b_weight: u64) -> f64 {
     if a_weight == 0 {
         return b;
     }
@@ -273,13 +286,9 @@ fn weighted_duration_avg(a: Duration, a_weight: u64, b: Duration, b_weight: u64)
     }
     let total_weight = a_weight.saturating_add(b_weight);
     if total_weight == 0 {
-        return Duration::ZERO;
+        return 0.0;
     }
-    let weighted_sum = a
-        .as_nanos()
-        .saturating_mul(a_weight as u128)
-        .saturating_add(b.as_nanos().saturating_mul(b_weight as u128));
-    duration_from_nanos_saturating(weighted_sum / total_weight as u128)
+    (a * a_weight as f64 + b * b_weight as f64) / total_weight as f64
 }
 
 fn format_duration(duration: Duration) -> String {
@@ -318,28 +327,32 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
-    fn snapshot_uses_completion_gaps_for_eta() {
+    fn snapshot_waits_for_warmup_before_estimating() {
         let tracker = CollectEtaTracker::new();
-        let id = tracker.register("self_attention", 4);
+        let id = tracker.register("warmup", 6, 3);
         let now = Instant::now();
+        tracker.record_completion_at(id, now + Duration::from_secs(1));
         tracker.record_completion_at(id, now + Duration::from_secs(2));
-        tracker.record_completion_at(id, now + Duration::from_secs(5));
         let state = tracker.state.lock();
-        let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(5));
-        assert_eq!(snapshot.total_completed, 2);
-        assert_eq!(snapshot.total_remaining, 2);
-        assert_eq!(snapshot.max_eta, Some(Duration::from_secs(6)));
-        assert_eq!(snapshot.slowest_descr.as_deref(), Some("self_attention"));
-        assert_eq!(snapshot.slowest_completed, 2);
-        assert_eq!(snapshot.slowest_total, 4);
+        let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(2));
+        assert_eq!(snapshot.max_eta, None);
+        drop(state);
+
+        tracker.record_completion_at(id, now + Duration::from_secs(3));
+        let state = tracker.state.lock();
+        let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(3));
+        assert_eq!(snapshot.total_completed, 3);
+        assert_eq!(snapshot.total_remaining, 3);
+        let eta = snapshot.max_eta.expect("eta should be present after warmup");
+        assert!(eta.as_secs_f64() >= 2.0 && eta.as_secs_f64() <= 4.0, "eta={eta:?}");
     }
 
     #[test]
     fn snapshot_uses_max_eta_across_collectors() {
         let tracker = CollectEtaTracker::new();
         let now = Instant::now();
-        let fast = tracker.register("fast", 5);
-        let slow = tracker.register("slow", 5);
+        let fast = tracker.register("fast", 5, 2);
+        let slow = tracker.register("slow", 5, 2);
         tracker.record_completion_at(fast, now + Duration::from_secs(1));
         tracker.record_completion_at(fast, now + Duration::from_secs(2));
         tracker.record_completion_at(slow, now + Duration::from_secs(1));
@@ -348,7 +361,8 @@ mod tests {
         let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(5));
         assert_eq!(snapshot.total_completed, 4);
         assert_eq!(snapshot.total_remaining, 6);
-        assert_eq!(snapshot.max_eta, Some(Duration::from_secs(12)));
+        let max_eta = snapshot.max_eta.expect("max eta should be present");
+        assert!(max_eta.as_secs_f64() >= 11.0 && max_eta.as_secs_f64() <= 13.0, "max_eta={max_eta:?}");
         assert_eq!(snapshot.slowest_descr.as_deref(), Some("slow"));
     }
 
@@ -356,7 +370,7 @@ mod tests {
     fn maybe_log_respects_interval_and_force() {
         let tracker = CollectEtaTracker::new();
         let now = Instant::now();
-        let _ = tracker.register("gated", 2);
+        let _ = tracker.register("gated", 2, 1);
         assert!(tracker.maybe_log_at(false, now));
         assert!(!tracker.maybe_log_at(false, now + Duration::from_secs(3)));
         assert!(tracker.maybe_log_at(false, now + COLLECT_ETA_LOG_INTERVAL));
@@ -365,36 +379,40 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_uses_elapsed_average_when_gap_average_is_too_small() {
+    fn snapshot_estimates_from_completion_rate_without_zero_ms() {
         let tracker = CollectEtaTracker::new();
-        let id = tracker.register("bursty", 4);
+        let id = tracker.register("parallelish", 20, 5);
         let now = Instant::now();
-        tracker.record_completion_at(id, now + Duration::from_secs(10));
-        tracker.record_completion_at(id, now + Duration::from_secs(10) + Duration::from_millis(1));
+        tracker.record_completion_at(id, now + Duration::from_millis(1000));
+        tracker.record_completion_at(id, now + Duration::from_millis(1200));
+        tracker.record_completion_at(id, now + Duration::from_millis(1400));
+        tracker.record_completion_at(id, now + Duration::from_millis(1600));
+        tracker.record_completion_at(id, now + Duration::from_millis(1800));
         let state = tracker.state.lock();
-        let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(10) + Duration::from_millis(1));
-        assert_eq!(snapshot.total_completed, 2);
-        assert_eq!(snapshot.total_remaining, 2);
+        let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_millis(1800));
+        assert_eq!(snapshot.total_completed, 5);
+        assert_eq!(snapshot.total_remaining, 15);
         let eta = snapshot.max_eta.expect("eta should be present");
-        assert!(eta >= Duration::from_secs(10), "eta was unexpectedly small: {eta:?}");
+        assert!(eta.as_secs_f64() >= 4.0, "eta was unexpectedly small: {eta:?}");
     }
 
     #[test]
-    fn snapshot_uses_historical_average_for_collectors_without_completions() {
+    fn snapshot_uses_historical_interval_for_collectors_without_completions() {
         let tracker = CollectEtaTracker::new();
         let now = Instant::now();
 
-        let done = tracker.register("done", 2);
+        let done = tracker.register("done", 2, 2);
+        tracker.record_completion_at(done, now + Duration::from_secs(1));
         tracker.record_completion_at(done, now + Duration::from_secs(2));
-        tracker.record_completion_at(done, now + Duration::from_secs(4));
-        tracker.unregister_at(done, now + Duration::from_secs(4));
+        tracker.unregister_at(done, now + Duration::from_secs(2));
 
-        let _pending = tracker.register("pending", 3);
+        let _pending = tracker.register("pending", 3, 3);
         let state = tracker.state.lock();
-        let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(4));
+        let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(2));
         assert_eq!(snapshot.total_completed, 0);
         assert_eq!(snapshot.total_remaining, 3);
-        assert_eq!(snapshot.max_eta, Some(Duration::from_secs(6)));
+        let max_eta = snapshot.max_eta.expect("historical fallback eta should be present");
+        assert!(max_eta.as_secs_f64() >= 2.0 && max_eta.as_secs_f64() <= 4.0, "max_eta={max_eta:?}");
         assert_eq!(snapshot.slowest_descr.as_deref(), Some("pending"));
     }
 }

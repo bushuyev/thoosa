@@ -235,7 +235,8 @@ where
     let mut results = Vec::with_capacity(futures.len());
     let (mut ok, mut err) = (0usize, 0usize);
     let total = futures.len();
-    let eta_guard = (total > 0).then(|| CollectEtaInvocationGuard::new(descr, total));
+    let eta_concurrency = buffer_limit.max(1).min(total.max(1));
+    let eta_guard = (total > 0).then(|| CollectEtaInvocationGuard::new(descr, total, eta_concurrency));
     let eta_invocation_id = eta_guard.as_ref().map(CollectEtaInvocationGuard::id);
 
     match buffering {
