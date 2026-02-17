@@ -715,6 +715,8 @@ async fn run_all(
         select_motifs_run_config: select_motifs_run_config_for_opt,
     };
 
+    check_opt_run_config::<_, FindAndSelectMotifsRunConfig>(&find_and_select_run_config)?;
+
     let select_motifs_run_ids = match run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
         None,
         find_and_select_run_config,
@@ -1889,6 +1891,29 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
     Ok(())
 }
 
+//to check if there are no `#field_ident field value Real(87.0) is not valid: ThoosaError { msg: "can't convert Real(87.0)", frame_0
+fn check_opt_run_config<RCRV, RC>(find_and_select_run_config: &RCRV) -> Result<(), ThoError>
+where
+    RCRV: OptRunConfigSource,
+    RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>> + ToHashmap
+{
+    let opt_run_config = find_and_select_run_config.opt_run_configs()?;
+    let const_vals = opt_run_config.grid_run_config_source().const_params();
+    let grid_vals_vec = opt_run_config.grid_run_config_source().grid_to_vals();
+    let opt_hps = opt_run_config.opt_params();
+
+    for grid_vals in grid_vals_vec {
+        let opt_vals = opt_hps.iter().map(|hp| NamedVal::new(hp.name().clone(), hp.random_sample())).collect::<Vec<_>>();
+
+        for i in 0..100 {
+            let mut run_config: RC = [const_vals.as_slice(), grid_vals.as_slice(), &opt_vals].concat().into_iter().into();
+
+            debug!("run_config={run_config:?}");
+        }
+    }
+    Ok(())
+}
+
 
 
 #[cfg(test)]
@@ -1911,13 +1936,15 @@ mod cli_tests {
     use std::sync::Arc;
     use std::vec::IntoIter;
     use std::{fs, ptr};
+    use std::ops::Range;
     use std::time::Duration;
     use tch::Device::{Cpu, Cuda};
     use tch::display::{set_print_options, PrinterOptions};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Kind::Float;
-    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilter, SelectMotifsRunConfigRangeOrValue};
+    use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilter, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+    use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, NotchBandFilter};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::my_tch::ThoModule;
@@ -1927,7 +1954,7 @@ mod cli_tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
-    use thoosa_common::transforms::filters::BandPassFilterParams;
+    use thoosa_common::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue};
     use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, plot_t, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
     use thoosa_common::ws::{mock_ws_simp, FsWorkspace, Workspace};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
@@ -1936,12 +1963,13 @@ mod cli_tests {
         FixedFindMotifsConfig, SelectMotifsParams};
     use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesArgs};
     use thoosa_properties_map::ToHashmap;
+    use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
     use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::test_utils::{set_panic_hook, MotifKind};
-    use thoosa_shared::{cdt, cdt_for_dir, mono_key, panic_to_err_async, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoError};
+    use thoosa_shared::{cdt, cdt_for_dir, mono_key, panic_to_err_async, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp, sig_three_imp, sig_two_imp, RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
@@ -1953,11 +1981,13 @@ mod cli_tests {
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::traits::{Data, DataId};
+    use thoosa_shared::val::NamedVal;
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
     use thoosa_with_data::with_data;
     use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
     use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
     use crate::tasks::cross_loader::ResourcesConfigInput;
+    use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue};
     use crate::tasks::find_motifs::FindMotifsStage;
     use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage};
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
@@ -2504,5 +2534,5 @@ mod cli_tests {
 
         Ok(())
     }
-
+    
 }
