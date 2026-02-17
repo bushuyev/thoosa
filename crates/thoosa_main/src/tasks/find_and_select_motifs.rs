@@ -402,7 +402,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
             futures,
             crate::buffer_limits::FIND_AND_SELECT_MOTIFS_RUN_BUFFER_ORDERED_LIMIT,
             StreamBuffering::Unordered,
-            "FindAndSelectMotifsStage::run failed",
+            "FindAndSelectMotifsStage::run",
         )
         .await;
 

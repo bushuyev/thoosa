@@ -827,18 +827,6 @@ mod tpe_optimizer_tests {
         }
     }
 
-    #[test]
-    fn test_0() {
-        let t = Tensor::stack(
-            &[
-                Tensor::from_slice(&[0.1, 1.1, 20.1, 3.1, 4.1]),
-                // Tensor::from_slice(&[0.2, 1.2, 20.2, 3.2, 4.2])
-            ],
-            0,
-        );
-
-        debug!("t={t} argmax={}", t.argmax(1, true).i(0).double_value(&[]));
-    }
 }
 
 #[derive(Debug, Clone)]
