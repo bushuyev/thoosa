@@ -3,6 +3,7 @@ use crate::{RangeOrValue, ThoError, round_to_digits};
 use num_traits::ToPrimitive;
 use std::fmt::Debug;
 use std::ops::Range;
+use log::warn;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Val {
@@ -314,7 +315,7 @@ impl TryFrom<Val> for f64 {
                 .try_into()
                 .map_err(ThoError::from),
             Val::Str(v) => v.parse().map_err(ThoError::from),
-            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
+            _ => Err(ThoError::new(format!("TryFrom<Val> for f64: can't convert {value:?}"))),
         }
     }
 }
@@ -324,6 +325,12 @@ impl TryFrom<Val> for i64 {
 
     fn try_from(value: Val) -> Result<i64, ThoError> {
         match value {
+            Val::Real(v) =>  {
+                if  v - v.trunc() > f64::EPSILON {
+                    warn!("Truncating {v:?} to i64");
+                }
+                Ok(v as i64)
+            },
             Val::Int(v) => v
                 .try_into()
                 .map_err(ThoError::from),
@@ -331,7 +338,7 @@ impl TryFrom<Val> for i64 {
                 .try_into()
                 .map_err(ThoError::from),
             Val::Str(v) => v.parse().map_err(ThoError::from),
-            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
+            _ => Err(ThoError::new(format!("TryFrom<Val> for i64: can't convert {value:?}"))),
         }
     }
 }
@@ -341,6 +348,12 @@ impl TryFrom<&Val> for i64 {
 
     fn try_from(value: &Val) -> Result<i64, ThoError> {
         match value {
+            Val::Real(v) =>  {
+                if  *v - v.trunc() > f64::EPSILON {
+                    warn!("Truncating {v:?} to i64");
+                }
+                Ok(*v as i64)
+            },
             Val::Int(v) => (*v)
                 .try_into()
                 .map_err(ThoError::from),
@@ -348,7 +361,7 @@ impl TryFrom<&Val> for i64 {
                 .try_into()
                 .map_err(ThoError::from),
             Val::Str(v) => v.parse().map_err(ThoError::from),
-            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
+            _ => Err(ThoError::new(format!("TryFrom<&Val> for i64: can't convert {value:?}"))),
         }
     }
 }
@@ -366,7 +379,7 @@ impl TryFrom<Val> for u32 {
                 .try_into()
                 .map_err(ThoError::from),
             Val::Str(v) => v.parse().map_err(ThoError::from),
-            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
+            _ => Err(ThoError::new(format!("TryFrom<Val> for u32: can't convert {value:?}"))),
         }
     }
 }
