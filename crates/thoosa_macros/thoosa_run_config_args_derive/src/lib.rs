@@ -217,9 +217,10 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         #field_ident:Option<#inner_ty>,
                                     });
 
+                                    let field_ident_str = field_ident.to_string();
                                     a.builder_add_val_match_cases.push(quote! {
                                         #fields_enum_ident::#camel_field_ident => {
-                                            self.#field_ident = Some(val.try_into().expect(&format!("#field_ident field value {val:?} is not valid")));
+                                            self.#field_ident = Some(val.try_into().expect(&format!("{} field value {val:?} is not valid", #field_ident_str)));
                                         }
                                     });
 
@@ -375,9 +376,10 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         #field_ident:Option<#field_type>,
                                     });
 
+                                    let field_ident_str = field_ident.to_string();
                                     a.builder_add_val_match_cases.push(quote! {
                                         #fields_enum_ident::#camel_field_ident => {
-                                            self.#field_ident = Some(val.try_into().expect(&format!("#field_ident field value {val:?} is not valid")));
+                                            self.#field_ident = Some(val.try_into().expect(&format!("{} field value {val:?} is not valid", #field_ident_str)));
                                         }
                                     });
                                     let expect_msg = format!("no {}", field_ident);
