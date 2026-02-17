@@ -61,3 +61,30 @@ select run_id, label_id, sl.motif_id, count(*) from slices sl left join labeled_
 
 
 insert into selected_motifs (motif_id, run_id, rate) select motif_id, 0, 0.0 from (select motif_id, count(*) cnt from slices group by motif_id having cnt < 100 and cnt > 10);
+
+
+
+Key                                                                   | busy time, mls | elapsed time, mls | invocations |  per inv. |
+---------------------------------------------------------------------------------------------------------------------------------------
+CrossLoader::run                                                      |      2 321 493 |        10 360 654 |         180 |    12 897 |
+CrossUnfoldClc::do_run                                                |      2 284 764 |         2 284 940 |     163 980 |        13 |
+DistsMask::to_cpu                                                     |          5 687 |         3 368 684 |     163 980 |         0 |
+DistsTracker::build_groups                                            |             10 |           208 908 |         180 |         0 |
+DistsTracker::consume                                                 |          2 679 |         4 462 813 |     163 980 |         0 |
+FindMotifsStage::run                                                  |      2 321 883 |         2 591 304 |           1 | 2 321 883 |
+OOMHandler::run                                                       |      2 310 429 |         2 318 615 |     167 580 |        13 |
+RandomMotif::run                                                      |      6 454 280 |        62 924 149 |         180 |    35 857 |
+RandomStats::run                                                      |      6 466 484 |        63 006 653 |         180 |    35 924 |
+RawTensorLoader::run                                                  |         25 562 |            25 576 |      17 088 |         1 |
+Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey>::subview |         20 282 |            21 682 |   3 600 000 |         0 |
+SimpleMotifTracker::dump                                              |        484 729 |           489 012 |   5 700 049 |         0 |
+SimpleMotifTracker::track                                             |        132 808 |           224 806 | 193 376 859 |         0 |
+SlicesStats::do_run                                                   |         10 737 |            10 740 |       3 600 |         2 |
+cross_batch_clc/unfold_and_cat                                        |         10 553 |            10 770 |     327 960 |         0 |
+cuda_utils::copy_d2h_from_ptr                                         |          4 163 |         3 381 004 |     184 668 |         0 |
+cuda_utils::copy_h2d_from_ptr                                         |          8 739 |        55 967 801 |   3 101 886 |         0 |
+cuda_utils::move_d2h                                                  |          4 747 |         3 367 817 |     163 980 |         0 |
+distance::clc_dist_d2_and_mask                                        |      1 515 727 |         1 515 906 |     163 980 |         9 |
+load_motif_slices                                                     |        142 834 |        56 613 460 |       3 600 |        39 |
+random_non_overlapping_slices                                         |          6 247 |             6 248 |         180 |        34 |
+
