@@ -1344,7 +1344,7 @@ where
                 let select_motifs_run_config_id = select_motifs_run_config.id.expect("no select_motifs_run_config_id");
                 for (channel, motif_slices) in channels_motifs_added_slices.into_iter().enumerate() {
                     for (motif_id, slices) in motif_slices {
-                        info!("SelectMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
+                        debug!("SelectMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
                         self.store.write().add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices)?;
                     }
                 }

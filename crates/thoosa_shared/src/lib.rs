@@ -268,7 +268,9 @@ where
     }
 
     drop(eta_guard);
-    collect_eta_maybe_log(true);
+    if eta_invocation_id.is_some() {
+        collect_eta_maybe_log(true);
+    }
 
     results
 }

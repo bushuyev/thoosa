@@ -339,7 +339,7 @@ where
         let mut skip_0_i = 0;
 
         for (i_0, resource_0) in resources.iter().enumerate() {
-            info!("CrossLoader::run:  find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
+            debug!("CrossLoader::run:  find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
 
             let t_0 = Arc::clone(&self.loader)
                 .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone(), CacheArea::default())), ctx.branch(Some("cross_loader_t_0"), false, false))
