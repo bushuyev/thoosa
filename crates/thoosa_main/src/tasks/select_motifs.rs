@@ -59,6 +59,7 @@ use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage, MotifSlicesSelector};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+use crate::buffer_limits::LOAD_STACKED_MOTIFS_LIMIT;
 use crate::tasks::find_motifs::config_to_stage;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::tasks::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResourcesMotifsDistInput, ClcResourcesMotifsDistOutput};
@@ -785,7 +786,7 @@ where
 
             let run_configs__stacked_motifs = collect_futures_with_progress(
                 futures,
-                1,
+                LOAD_STACKED_MOTIFS_LIMIT,
                 StreamBuffering::Ordered,
                 "SelectMotifsStage::load_stacked_motifs",
             )
