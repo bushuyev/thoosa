@@ -44,7 +44,7 @@ use thoosa_shared::{with_async_perf_log, collect_futures_with_progress_i, mono_k
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_store::{IdSlice, Store};
+use thoosa_store::{IdSlice, Store, block_on_store_future};
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::applicables_runner::Output;
@@ -697,8 +697,7 @@ where
         let find_motif_run_ids_motif_ids = find_motifs_run_ids
             .iter()
             .map(|find_motifs_run_id| {
-                store
-                    .list_motifs(*find_motifs_run_id)
+                block_on_store_future(store.list_motifs(*find_motifs_run_id))
                     .map(|motif_ids| (*find_motifs_run_id, motif_ids))
             })
             .collect::<Result<HashMap<_, _>, ThoError>>()
@@ -757,7 +756,7 @@ where
             .map(|find_motifs_run_id| -> Result<_, ThoError> {
                 Ok(Arc::new(FindMotifsRunConfig::from_properties_map_with_id(
                     *find_motifs_run_id,
-                    &store.list_run_config_values(*find_motifs_run_id)?,
+                    &block_on_store_future(store.list_run_config_values(*find_motifs_run_id))?,
                 )?))
             })
             .collect::<Result<Vec<_>, ThoError>>()?;
@@ -1375,7 +1374,7 @@ where
                     for (motif_id, slices) in motif_slices {
                         debug!("SelectMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
 
-                        self.store.add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices)?
+                        block_on_store_future(self.store.add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices))?
                     }
                 }
             }

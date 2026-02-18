@@ -39,7 +39,7 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_store::Store;
+use thoosa_store::{Store, block_on_store_future};
 use thoosa_with_data::with_data;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
@@ -238,18 +238,18 @@ impl SavableResult for TrainLabelNetsOutput {
     }
 
     fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
-        let run_id = thoosa_shared::with_perf_log(
+        let run_id = block_on_store_future(thoosa_shared::with_perf_log(
             || {
                 store.save_run_config(
                     Some(&self.train_motif_nets_run_ids),
-                    &TrainLabelNetsRunConfig::type_name(),
+                    TrainLabelNetsRunConfig::type_name(),
                     "TrainLabelNetsResult",
                     "todo",
                     HashMap::new(),
                 )
             },
             "TrainLabelNetsOutput::save/store_write_save_run_config",
-        )?;
+        ))?;
 
         self.id = run_id;
 

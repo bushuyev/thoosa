@@ -105,7 +105,7 @@ where
             let store_guard = store;
             let mut run_ids = HashSet::new();
             for run_id in &train_label_nets_run_ids {
-                run_ids.extend(store_guard.list_output_run_ids(*run_id)?);
+                run_ids.extend(store_guard.list_output_run_ids(*run_id).await?);
             }
             let mut run_ids = run_ids.into_iter().collect::<Vec<_>>();
             run_ids.sort();

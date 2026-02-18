@@ -24,7 +24,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::{collect_futures_with_progress_i, mono_key, sample_n_owned, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, WithId};
-use thoosa_store::Store;
+use thoosa_store::{Store, block_on_store_future};
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::cross_dims::{ChannelsMotifsSlices, MotifSlices};
@@ -202,7 +202,7 @@ where
         })?;
 
         let find_motifs_run_config_id = find_motifs_run_config.id;
-        let motif_ids = self.store.list_motifs(find_motifs_run_config_id.expect("no id in find_motifs_run_config"))?;
+        let motif_ids = block_on_store_future(self.store.list_motifs(find_motifs_run_config_id.expect("no id in find_motifs_run_config")))?;
         debug!("StackedMotifsLoader::run: motif_ids={motif_ids:?}");
 
         if motif_ids.is_empty() {

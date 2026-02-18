@@ -1212,7 +1212,7 @@ mod tests {
     use thoosa_shared::mono_key;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_store::fs_store::ChunkedSlicesReader;
-    use thoosa_store::{MockStoreBuilder, SlicesMatch, SqlStore};
+    use thoosa_store::{MockStoreBuilder, SlicesMatch, SqlStore, block_on_store_future};
     use tokio::task::yield_now;
     use tokio::time::sleep;
     use tracing::subscriber::NoSubscriber;
@@ -1600,7 +1600,7 @@ mod tests {
             || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").store_path().to_path_buf(),
             "CrossLoader::test_cross_clc/ws_read_store_path",
         );
-        let store = Arc::new(SqlStore::from_path(store_path)?);
+        let store = Arc::new(block_on_store_future(SqlStore::from_path(&store_path))?);
 
         let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"]
             .into_iter()
@@ -1617,28 +1617,25 @@ mod tests {
 
         {
             let store_guard = Arc::clone(&store);
-            let mut conn_guard = thoosa_shared::with_perf_log(
-                || store_guard.conn().try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "CrossLoader::test_cross_clc/store_conn_lock_for_transaction",
-            );
-            let t = conn_guard.transaction()?;
-            let import_id = store_guard.save_import("test resources".to_string(), &t)?;
-            store_guard.save_resources_labels(&resource_stats, import_id, &t)?;
+            let mut conn = thoosa_store::rusqlite::Connection::open(&store_path)?;
+            let t = conn.transaction()?;
+            let import_id = block_on_store_future(store_guard.save_import("test resources".to_string(), &t))?;
+            block_on_store_future(store_guard.save_resources_labels(&resource_stats, import_id, &t))?;
             t.commit()?;
         }
 
-        let run_id = store.save_run_config(
+        let run_id = block_on_store_future(store.save_run_config(
             None,
             &"find_motifs",
             "test_cross_clc",
             "",
             HashMap::new(),
-        )?;
+        ))?;
         let run_config = FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, 2, None, None);
         let fixed_config = FixedFindMotifsConfig::new(2, false);
 
         let resource_key_refs = resource_keys.iter().map(|v| v.as_str()).collect::<Vec<_>>();
-        let resources = store.list_resources_by_file_stems(&resource_key_refs)?;
+        let resources = block_on_store_future(store.list_resources_by_file_stems(&resource_key_refs))?;
         let resources_to_move = resources.clone();
         let oom_triggered = Arc::new(AtomicBool::new(false));
         let oom_triggered_cloned = Arc::clone(&oom_triggered);

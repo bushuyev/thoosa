@@ -842,7 +842,7 @@ mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::test_utils::init_test_logging;
     use thoosa_shared::{ThoError, cdt_for_dir};
-    use thoosa_store::SqlStore;
+    use thoosa_store::{SqlStore, block_on_store_future};
 
     #[ctor::ctor]
     fn init() {
@@ -1005,7 +1005,7 @@ mod tests {
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
-        let store = Arc::new(SqlStore::in_mem()?);
+        let store = Arc::new(block_on_store_future(SqlStore::in_mem())?);
 
         let _resources = import_resources(
             &ws,
@@ -1021,7 +1021,7 @@ mod tests {
             false,
         )?;
 
-        let labels = store.list_labels()?;
+        let labels = block_on_store_future(store.list_labels())?;
 
         assert_eq!(
             vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"],
