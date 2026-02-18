@@ -15,7 +15,7 @@ use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::ThoError;
-use crate::LOCK_TIMEOUT;
+use crate::{with_perf_log, LOCK_TIMEOUT};
 use tracing::error;
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -93,11 +93,18 @@ impl RunCtxWithPermits {
 impl PermitsCtx for RunCtxWithPermits {
 
     fn add_permit(&mut self, permit: RunnerPerm) {
-        self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::add_permit: timed out waiting for permits lock").push(permit);
+        with_perf_log(
+            || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::add_permit: timed out waiting for permits lock"),
+            "RunCtxWithPermits/add_permit/permits",
+        )
+        .push(permit);
     }
 
     fn drop_permits(&mut self, drop_if: DropIf) {
-        let mut permits = self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop_permits: timed out waiting for permits lock");
+        let mut permits = with_perf_log(
+            || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop_permits: timed out waiting for permits lock"),
+            "RunCtxWithPermits/drop_permits/permits",
+        );
         let acquired_permits: NumPermits = permits.iter().map(|p| p.num_permits()).sum();
         debug!("TorchRunCtx: acquired_permits={acquired_permits} ctx.id={:?} drop_if={drop_if:?}",self.id);
 
@@ -116,7 +123,13 @@ impl PermitsCtx for RunCtxWithPermits {
     }
 
     fn acquired_permits(&self) -> NumPermits {
-        self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::acquired_permits: timed out waiting for permits lock").iter().map(|p| p.num_permits()).sum()
+        with_perf_log(
+            || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::acquired_permits: timed out waiting for permits lock"),
+            "RunCtxWithPermits/acquired_permits/permits",
+        )
+        .iter()
+        .map(|p| p.num_permits())
+        .sum()
     }
 }
 
@@ -187,7 +200,11 @@ impl RunCtx for RunCtxWithPermits {
 
     fn add_purge_gpu_closure(&mut self, cl:Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>>+ Send + Sync>) {
         if let Some(purge_gpu_closures) = self.purge_gpu_closures.as_ref() {
-            purge_gpu_closures.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::add_purge_gpu_closure: timed out waiting for purge_gpu_closures lock").push(cl);
+            with_perf_log(
+                || purge_gpu_closures.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::add_purge_gpu_closure: timed out waiting for purge_gpu_closures lock"),
+                "RunCtxWithPermits/add_purge_gpu_closure/purge_gpu_closures",
+            )
+            .push(cl);
         }
     }
 
@@ -199,7 +216,15 @@ impl Drop for RunCtxWithPermits {
         if let Some(purge_gpu_closures) = self.purge_gpu_closures.take() {
             let count = Arc::strong_count(&purge_gpu_closures);
 
-            debug!("Drop for RunCtx2::drop: id={:?} count={count} purge_gpu_closures.len={}", self.id, purge_gpu_closures.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for purge_gpu_closures lock").len());
+            debug!(
+                "Drop for RunCtx2::drop: id={:?} count={count} purge_gpu_closures.len={}",
+                self.id,
+                with_perf_log(
+                    || purge_gpu_closures.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for purge_gpu_closures lock"),
+                    "RunCtxWithPermits/drop/purge_gpu_closures",
+                )
+                .len()
+            );
 
             if count == 1 {// it's topmost ctx
                 match Arc::into_inner(purge_gpu_closures) {
@@ -219,11 +244,28 @@ impl Drop for RunCtxWithPermits {
         }
 
         if let Some((return_to_id, return_to_perms)) = self.return_to.take() {
-            debug!("Drop for RunCtx2::drop: id={:?} giving permits back to parent self.perms.permits.len={}", self.id, self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock").len());
+            debug!(
+                "Drop for RunCtx2::drop: id={:?} giving permits back to parent self.perms.permits.len={}",
+                self.id,
+                with_perf_log(
+                    || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
+                    "RunCtxWithPermits/drop/permits_len",
+                )
+                .len()
+            );
 
-            let mut local_perms = mem::take(&mut *self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"));
+            let mut local_perms = mem::take(
+                &mut *with_perf_log(
+                    || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
+                    "RunCtxWithPermits/drop/permits_take",
+                ),
+            );
             if !local_perms.is_empty() {
-                return_to_perms.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for return_to_perms lock").append(&mut local_perms);
+                with_perf_log(
+                    || return_to_perms.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for return_to_perms lock"),
+                    "RunCtxWithPermits/drop/return_to_perms",
+                )
+                .append(&mut local_perms);
 
                 // #[cfg(debug_assertions)] TODO
                 {
@@ -234,7 +276,15 @@ impl Drop for RunCtxWithPermits {
             }
 
         } else {
-            debug!("Drop for RunCtx2::drop: id={:?} dropping permits self.perms.permits.len={}", self.id, self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock").len());
+            debug!(
+                "Drop for RunCtx2::drop: id={:?} dropping permits self.perms.permits.len={}",
+                self.id,
+                with_perf_log(
+                    || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
+                    "RunCtxWithPermits/drop/permits_len_final",
+                )
+                .len()
+            );
         }
     }
 }

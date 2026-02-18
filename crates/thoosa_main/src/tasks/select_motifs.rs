@@ -697,8 +697,10 @@ where
         let find_motif_run_ids_motif_ids = find_motifs_run_ids
             .iter()
             .map(|find_motifs_run_id| {
-                store
-                    .try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout")
+                with_perf_log(
+                    || store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                    "SelectMotifsStage/new/read_store",
+                )
                     .list_motifs(*find_motifs_run_id)
                     .map(|motif_ids| (*find_motifs_run_id, motif_ids))
             })
@@ -706,7 +708,11 @@ where
             //gpt TODO!! panics on missing motifs; consider propagating a typed error instead.
             .expect(&format!("can't load motifs for find_motifs_run_ids={find_motifs_run_ids:?}"));
 
-        let channels = ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels() as usize;
+        let channels = with_perf_log(
+            || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+            "SelectMotifsStage/new/read_ws",
+        )
+        .channels() as usize;
 
 
         Self {
@@ -754,7 +760,11 @@ where
             .map(|find_motifs_run_id| -> Result<_, ThoError> {
                 Ok(Arc::new(FindMotifsRunConfig::from_properties_map_with_id(
                     *find_motifs_run_id,
-                    &store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_run_config_values(*find_motifs_run_id)?,
+                    &with_perf_log(
+                        || store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                        "SelectMotifsStage/load_stacked_motifs/read_store",
+                    )
+                    .list_run_config_values(*find_motifs_run_id)?,
                 )?))
             })
             .collect::<Result<Vec<_>, ThoError>>()?;
@@ -1076,7 +1086,11 @@ where
             debug!("SelectMotifsStage::run: clc_resources_input={clc_resources_input:?}");
             debug!("SelectMotifsStage::run: 1. find_motifs_run_config={find_motifs_run_config:?}");
             let required_ids = HashMap::new();
-            let channels = ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels() as u32;
+            let channels = with_perf_log(
+                || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                "SelectMotifsStage/run/read_ws",
+            )
+            .channels() as u32;
 
             let ClcResourcesMotifsDistOutput {
                 find_motifs_run_id,
@@ -1339,7 +1353,11 @@ where
             )))
         }
 
-        let num_channels = self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels() as usize;
+        let num_channels = with_perf_log(
+            || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+            "SelectMotifsStage/run/read_ws",
+        )
+        .channels() as usize;
         let total_size = resources.iter().map(|resource| resource.length() as usize).sum::<usize>();
 
         let mut run_config_extended_motif_ids: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)> = vec![];
@@ -1365,7 +1383,7 @@ where
 
                         with_perf_log(||{
                             self.store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices)
-                        }, "SelectMotifsStage::run/add_slices_to_motif")?
+                        }, "SelectMotifsStage::run/write_store/add_slices_to_motif")?
                     }
                 }
             }

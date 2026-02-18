@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use crate::LOCK_TIMEOUT;
+use crate::{with_perf_log, LOCK_TIMEOUT};
 
 pub(crate) const COLLECT_ETA_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -133,7 +133,10 @@ impl CollectEtaTracker {
     }
 
     fn state_guard(&self) -> parking_lot::MutexGuard<'_, CollectEtaState> {
-        self.state.try_lock_for(LOCK_TIMEOUT).expect("CollectEtaTracker::state_guard: timed out waiting for tracker lock")
+        with_perf_log(
+            || self.state.try_lock_for(LOCK_TIMEOUT).expect("CollectEtaTracker::state_guard: timed out waiting for tracker lock"),
+            "CollectEtaTracker/state_guard",
+        )
     }
 
     fn register(&self, descr: &str, total: usize, concurrency: usize) -> u64 {

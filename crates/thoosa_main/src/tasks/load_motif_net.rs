@@ -121,10 +121,11 @@ where
         let (device_idx, cache_area) = (ctx.device_idx(), ctx.cache_area());
 
         let input = input.load_from_any_device_(0).await?;//TODO clone_from_cpu
-        let (params, module) = self
-            .ws
-            .try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout")
-            .load_motif_net(&input.net_id, &ThoDevice::from(device_idx).into())?;
+        let ws_guard = thoosa_shared::with_perf_log(
+            || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+            "LoadMotifNet/run/read_ws",
+        );
+        let (params, module) = ws_guard.load_motif_net(&input.net_id, &ThoDevice::from(device_idx).into())?;
 
         let (channel, motif_id) = FsWorkspace::parse_motif_path(&input.net_id)?;
 

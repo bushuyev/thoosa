@@ -102,7 +102,10 @@ where
     ) -> Result<Self, ThoError> {
         //gpt Collect all label-net output run ids produced by the input train_label_nets runs.
         let label_net_run_ids = {
-            let mut store_guard = store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
+            let mut store_guard = thoosa_shared::with_perf_log(
+                || store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                "TrainFinalNet/new/write_store",
+            );
             let mut run_ids = HashSet::new();
             for run_id in &train_label_nets_run_ids {
                 run_ids.extend(store_guard.list_output_run_ids(*run_id)?);
@@ -315,7 +318,10 @@ where
                             let loader = Arc::clone(&loader);
                             let (resource, labels) = resources[index].clone();
                             let ctx_for_loader = {
-                                let mut guard = ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
+                                let mut guard = thoosa_shared::with_perf_log(
+                                    || ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                                    "TrainFinalNet/build_batch_stream/lock_ctx",
+                                );
                                 guard.branch(Some("final_net_batch_loader"), false, false)
                             };
 
@@ -347,7 +353,10 @@ where
                     });
 
                     let (device_idx, ctx_for_build) = {
-                        let mut guard = ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
+                        let mut guard = thoosa_shared::with_perf_log(
+                            || ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                            "TrainFinalNet/build_batch_stream/lock_ctx",
+                        );
                         (guard.device_idx(), guard.branch(Some("final_net_batch_build"), false, false))
                     };
 

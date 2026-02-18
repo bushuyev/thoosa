@@ -455,7 +455,11 @@ pub mod mock_average_stage {
                 let call_idx = self.counter.fetch_add(1, Ordering::SeqCst);
                 let dim_0 = metrics.dim_0();
                 if let Some(call_log) = self.call_log.as_ref() {
-                    call_log.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").push(dim_0);
+                    thoosa_shared::with_perf_log(
+                        || call_log.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                        "MockSlicesStats/do_run/call_log",
+                    )
+                    .push(dim_0);
                 }
 
                 if self.fail_first && call_idx == 0 {
