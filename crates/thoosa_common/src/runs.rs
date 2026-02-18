@@ -5,7 +5,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::{ResourceType, ThoError};
-use thoosa_store::Store;
+use thoosa_store::{Store, block_on_store_future};
 
 
 #[derive(Debug)]
@@ -31,32 +31,26 @@ impl ResourcesConfig for Simple {
         store: &Arc<Box<S>>,
     ) -> Result<Vec<Resource>, ThoError> {
         Ok(match self.resources() {
-            ResourceType::List(list) => store
-                .list_resources_by_file_stems(
-                    &list.into_iter().map(|v| v.as_str()).collect::<Vec<_>>(),
-                )
-                .expect("list_resources_by_file_stems"),
-            ResourceType::Set(set) => store
-                .list_resource_set_resources_by_descr(set)
+            ResourceType::List(list) => block_on_store_future(store.list_resources_by_file_stems(
+                &list.into_iter().map(|v| v.as_str()).collect::<Vec<_>>(),
+            ))
+            .expect("list_resources_by_file_stems"),
+            ResourceType::Set(set) => block_on_store_future(store.list_resource_set_resources_by_descr(set))
                 .expect("list_resource_set_resources"),
             ResourceType::Group(group) => {
                 let store_guard = store;
-                store_guard
-                    .list_resource_set_group_sets(group)
+                block_on_store_future(store_guard.list_resource_set_group_sets(group))
                     .expect("list_resource_set_group_sets")
                     .into_iter()
                     .flat_map(|v| {
-                        store_guard
-                            .list_resource_set_resources_by_descr(&v.1)
+                        block_on_store_future(store_guard.list_resource_set_resources_by_descr(&v.1))
                             .expect("list_resource_set_resources_by_descr")
                     })
                     .collect()
             }
-            ResourceType::NotInGroup(descr) => store
-                .list_resources_not_in_group(descr, 1000)//TODO limit
-                .expect("list_resource_set_resources"),
-
-            })
+            ResourceType::NotInGroup(descr) => block_on_store_future(store.list_resources_not_in_group(descr, 1000))
+                .expect("list_resource_set_resources"), //TODO limit
+        })
     }
 
     fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
@@ -122,12 +116,10 @@ impl ResourcesConfig for Labeled {
     ) -> Result<Vec<(String, Vec<Resource>)>, ThoError> {
         let store_guard = store;
 
-        store_guard
-            .list_group_labeled_resources_sets(&self.group)?
+        block_on_store_future(store_guard.list_group_labeled_resources_sets(&self.group))?
             .into_iter()
             .map(|(label, resource_set)| {
-                store_guard
-                    .list_resource_set_resources_by_descr(&resource_set)
+                block_on_store_future(store_guard.list_resource_set_resources_by_descr(&resource_set))
                     .map(|data| (label, data))
             })
             .collect()
@@ -178,8 +170,7 @@ impl ResourcesConfig for Logits {
         &self,
         store: &Arc<Box<S>>,
     ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError> {
-        store
-            .list_resource_random_in_group(&self.group)?
+        block_on_store_future(store.list_resource_random_in_group(&self.group))?
             .into_iter()
             .map(move |(resource_id, labels_p)| {
                 debug!(
@@ -196,8 +187,7 @@ impl ResourcesConfig for Logits {
 
     fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
         
-        if store
-            .list_resource_random_in_group(&self.group)?.is_empty() {
+        if block_on_store_future(store.list_resource_random_in_group(&self.group))?.is_empty() {
             Err(ThoError::new(format!(
                 "resource config {self:?} resolved to no logits resources"
             )))

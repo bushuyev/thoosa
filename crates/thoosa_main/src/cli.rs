@@ -63,7 +63,8 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{cdt, cdt_for_dir, ResourceType, ThoError};
-use thoosa_store::{SqlStore, Store};
+use thoosa_store::{SqlStore, Store, block_on_store_future};
+use thoosa_store::rusqlite::Connection;
 use tokio::runtime::Runtime;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
@@ -291,7 +292,7 @@ where
         perf_path,
     )?;
 
-    let store = Arc::new(SqlStore::from_path(ws.read().store_path())?);
+    let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
 
     let devices = list_devices();
 
@@ -724,7 +725,8 @@ async fn run_all(
 
             let read_guard = store;
             let select_motifs_run_ids = read_guard
-                .list_input_run_ids(&best_find_and_select_result_ids)?
+                .list_input_run_ids(&best_find_and_select_result_ids)
+                .await?
                 .into_iter().map(
                     |opt_select_result_ids| opt_select_result_ids.1
                 ).collect::<Vec<_>>();
@@ -1268,14 +1270,14 @@ fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
     run_configs
         .into_iter()
         .map(|run_config| {
-            let run_config_id = store
+            let run_config_id = block_on_store_future(store
                 .save_run_config(
                     input_run_ids,
                     &<R>::type_name(),
                     descr,
                     &"todo",
                     run_config.to_properties_iter(None).collect(),
-                )
+                ))
                 .unwrap();
 
             // run_config_ids.push(run_config_id);
@@ -1302,7 +1304,7 @@ where
     import_resources_with_pure_sets(ws, store, labels, labeled_resources, resource_to_tensor, insert_label, Some(&[(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)]))
 }
 
- pub fn import_resources_with_pure_sets<F, R>(
+pub fn import_resources_with_pure_sets<F, R>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     labels: &[&str],
@@ -1316,19 +1318,19 @@ where
     R: Fn(String) -> Result<Tensor, ThoError> + Sync + Send,
 {
     let store_guard = store;
-
-    let mut conn_guard = store_guard.conn().lock();
-    let t = conn_guard.transaction()?;
+    let db_path = ws.read().store_path().to_path_buf();
+    let mut conn = Connection::open(db_path)?;
+    let t = conn.transaction()?;
 
     if insert_label {
         for label in labels {
-            store_guard.save_label(label, &t)?; //TODO merge with save_resources_labels
+            block_on_store_future(store_guard.save_label(label, &t))?; //TODO merge with save_resources_labels
         }
     }
 
     let labeled_resources_map = labeled_resources()?;
     let ws_guard = ws.write();
-    let import_id = store_guard.save_import(format!("Import on {}", cdt()), &t)?;
+    let import_id = block_on_store_future(store_guard.save_import(format!("Import on {}", cdt()), &t))?;
 
     let (imported_tensors_stats, failed_tensors): (
         HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
@@ -1364,7 +1366,7 @@ where
         })
         .expect("imported_tensors");
 
-    let resource_ids = store_guard.save_resources_labels(&imported_tensors_stats, import_id, &t)?;
+    let resource_ids = block_on_store_future(store_guard.save_resources_labels(&imported_tensors_stats, import_id, &t))?;
 
     info!(
         "Import id: {}, imported {} tensors to {:?}, failed {}",
@@ -1376,7 +1378,7 @@ where
 
     if let Some(pure_sets_lens) = pure_sets_lens {
         for pure_sets_len in pure_sets_lens {
-            store_guard.save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t)?;//
+            block_on_store_future(store_guard.save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t))?;//
         }
     }
 
@@ -1389,7 +1391,7 @@ where
     // store_guard.save_pure_balanced_sets("C100", Some(100), 0.6, 0.2, &t)?;
     // store_guard.save_pure_balanced_sets("All", None,  0.6, 0.2, &t)?;
 
-    store_guard.save_groups_by_label_cnt(100, &t)?;
+    block_on_store_future(store_guard.save_groups_by_label_cnt(100, &t))?;
     t.commit()?;
 
     trace!("import_resources: resource_ids={resource_ids:?}, failed_tensors={failed_tensors:?}");
@@ -1427,7 +1429,7 @@ pub async fn run_plot_motif_slices(
         MotifsBy::RunId { find_motifs_run_id, select_motifs_run_ids } => {
             debug!("run_plot_motif_slices: MotifsBy::RunId find_run_id={find_motifs_run_id} select_run_ids={select_motifs_run_ids:?}");
 
-            let motifs = store.list_motifs(find_motifs_run_id)?;
+            let motifs = store.list_motifs(find_motifs_run_id).await?;
             let motifs_len = motifs.len();
             let done_cnt = Arc::new(AtomicU32::new(0));
 
@@ -1472,7 +1474,8 @@ pub async fn run_plot_motif_slices(
             debug!("run_plot_motif_slices: MotifsBy::GoodMotifs selection_run_id={selection_run_id} channels={channels}");
 
             let motifs = store
-                .list_selected_motifs(selection_run_id, channels)?;
+                .list_selected_motifs(selection_run_id, channels)
+                .await?;
 
             let motif_ids: Vec<usize> = motifs
                 .into_iter()
@@ -1977,7 +1980,7 @@ mod cli_tests {
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::traits::{Data, DataId};
     use thoosa_shared::val::NamedVal;
-    use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
+    use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, block_on_store_future};
     use thoosa_with_data::with_data;
     use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
     use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
@@ -2006,55 +2009,6 @@ mod cli_tests {
         assert!(cli.write_perf_log_file);
     }
 
-    fn init_test_store(
-        store: &Arc<Box<dyn Store>>,
-        tensors_per_label: i32,
-    ) -> Result<Vec<ResourceId>, ThoError> {
-        let store_guard = store;
-        let mut mutex_guard = store_guard.conn().lock();
-        let t = mutex_guard.transaction()?;
-
-        store_guard.save_label("Label_0", &t)?;
-        store_guard.save_label("Label_1", &t)?;
-
-        let import_id = store_guard.save_import(format!("test on {}", cdt()), &t)?;
-
-        let resources = store_guard.save_resources_labels(
-            &(0..tensors_per_label)
-                .map(|i| {
-                    (
-                        format!("t_0_{i}"),
-                        (
-                            ResourceStats::new(vec![1, 1000]),
-                            vec![("Label_0".into(), 1.0)],
-                        ),
-                    )
-                })
-                .chain((0..tensors_per_label).map(|i| {
-                    (
-                        format!("t_1_{i}"),
-                        (
-                            ResourceStats::new(vec![1, 1000]),
-                            vec![("Label_1".into(), 1.0)],
-                        ),
-                    )
-                }))
-                .collect(),
-            import_id,
-            &t,
-        )?;
-
-        store_guard.save_pure_sets(tensors_per_label as usize / 10, true, &t)?;
-        store_guard.save_pure_sets(tensors_per_label as usize, true, &t)?;
-        // store_guard.save_pure_sets(4, true, &t)?;
-        // store_guard.save_pure_sets(6, true, &t)?;
-
-        t.commit()?;
-
-        Ok(resources)
-    }
-
-
     #[test]
     fn test_import_resources() -> Result<(), ThoError> {
         let n = 1000i64;
@@ -2066,7 +2020,7 @@ mod cli_tests {
             32000,
         )?));
 
-        let store = Arc::new(SqlStore::in_mem()?);
+        let store = Arc::new(block_on_store_future(SqlStore::in_mem())?);
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
 
@@ -2087,7 +2041,7 @@ mod cli_tests {
             false,
         )?;
 
-        let imported_resources = store.list_resources_by_ids(&imported_ids)?;
+        let imported_resources: Vec<Resource> = block_on_store_future(store.list_resources_by_ids(&imported_ids))?;
 
         debug!("imported={imported_resources:?}");
         let mut imported_keys = imported_resources
@@ -2305,7 +2259,7 @@ mod cli_tests {
         let tensors_path = ws.read().tensors_path().clone();
         let tensors_path_for_import = ws.read().tensors_path().clone();
 
-        let mut store = Arc::new(SqlStore::from_path(ws.read().store_path())?);
+        let mut store = Arc::new(block_on_store_future(SqlStore::from_path(ws.read().store_path()))?);
 
         debug!("test_run_all: import_hash={import_hash:?}");
 
@@ -2325,7 +2279,7 @@ mod cli_tests {
             Some(&[(20, true), (10, true)])
         )?;
 
-        let resources = store.list_resources_by_ids(&imported_ids)?;
+        let resources = block_on_store_future(store.list_resources_by_ids(&imported_ids))?;
 
         let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
             move |key, _| {
@@ -2429,7 +2383,7 @@ mod cli_tests {
         GlobalCtx::init_devices(2);
         let ws = Arc::new(RwLock::new(FsWorkspace::new("/home/bu/tmp/ws_test_hbac", 20, 684400, 200)?));
         let tensors_path = ws.read().tensors_path().clone();
-        let store = Arc::new(SqlStore::from_path(ws.read().store_path())?);
+        let store = Arc::new(block_on_store_future(SqlStore::from_path(ws.read().store_path()))?);
         let mut ctx = RunCtxWithPermits::new(0, "run_plot_motif_slices");
 
         let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
