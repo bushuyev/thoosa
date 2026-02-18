@@ -28,26 +28,43 @@ use crate::runner::common::runnable::{AsyncStage, Stage};
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::ThoError;
 use crate::traits::WithId;
-use crate::LOCK_TIMEOUT;
+use crate::{with_async_perf_log, with_perf_log, LOCK_TIMEOUT};
 
 async fn timed_tokio_read<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockReadGuard<'a, T> {
-    tokio::time::timeout(LOCK_TIMEOUT, lock.read()).await.unwrap_or_else(|_| panic!("{ctx}: timed out waiting for tokio::sync::RwLock read lock"))
+    with_async_perf_log(
+        async || tokio::time::timeout(LOCK_TIMEOUT, lock.read()).await.unwrap_or_else(|_| panic!("{ctx}: timed out waiting for tokio::sync::RwLock read lock")),
+        ctx,
+    )
+    .await
 }
 
 async fn timed_tokio_write<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockWriteGuard<'a, T> {
-    tokio::time::timeout(LOCK_TIMEOUT, lock.write()).await.unwrap_or_else(|_| panic!("{ctx}: timed out waiting for tokio::sync::RwLock write lock"))
+    with_async_perf_log(
+        async || tokio::time::timeout(LOCK_TIMEOUT, lock.write()).await.unwrap_or_else(|_| panic!("{ctx}: timed out waiting for tokio::sync::RwLock write lock")),
+        ctx,
+    )
+    .await
 }
 
 fn timed_parking_mutex_lock<'a, T>(lock: &'a Mutex<T>, ctx: &'static str) -> parking_lot::MutexGuard<'a, T> {
-    lock.try_lock_for(LOCK_TIMEOUT).unwrap_or_else(|| panic!("{ctx}: timed out waiting for parking_lot::Mutex lock"))
+    with_perf_log(
+        || lock.try_lock_for(LOCK_TIMEOUT).unwrap_or_else(|| panic!("{ctx}: timed out waiting for parking_lot::Mutex lock")),
+        ctx,
+    )
 }
 
 fn timed_parking_rw_read<'a, T>(lock: &'a parking_lot::RwLock<T>, ctx: &'static str) -> parking_lot::RwLockReadGuard<'a, T> {
-    lock.try_read_for(LOCK_TIMEOUT).unwrap_or_else(|| panic!("{ctx}: timed out waiting for parking_lot::RwLock read lock"))
+    with_perf_log(
+        || lock.try_read_for(LOCK_TIMEOUT).unwrap_or_else(|| panic!("{ctx}: timed out waiting for parking_lot::RwLock read lock")),
+        ctx,
+    )
 }
 
 fn timed_parking_rw_write<'a, T>(lock: &'a parking_lot::RwLock<T>, ctx: &'static str) -> parking_lot::RwLockWriteGuard<'a, T> {
-    lock.try_write_for(LOCK_TIMEOUT).unwrap_or_else(|| panic!("{ctx}: timed out waiting for parking_lot::RwLock write lock"))
+    with_perf_log(
+        || lock.try_write_for(LOCK_TIMEOUT).unwrap_or_else(|| panic!("{ctx}: timed out waiting for parking_lot::RwLock write lock")),
+        ctx,
+    )
 }
 
 #[async_trait]

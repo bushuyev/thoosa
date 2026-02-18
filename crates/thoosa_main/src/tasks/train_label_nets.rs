@@ -238,12 +238,17 @@ impl SavableResult for TrainLabelNetsOutput {
     }
 
     fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
-        let run_id = store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").save_run_config(
-            Some(&self.train_motif_nets_run_ids),
-            &TrainLabelNetsRunConfig::type_name(),
-            "TrainLabelNetsResult",
-            "todo",
-            HashMap::new(),
+        let run_id = thoosa_shared::with_perf_log(
+            || {
+                store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").save_run_config(
+                    Some(&self.train_motif_nets_run_ids),
+                    &TrainLabelNetsRunConfig::type_name(),
+                    "TrainLabelNetsResult",
+                    "todo",
+                    HashMap::new(),
+                )
+            },
+            "TrainLabelNetsOutput::save/store_write_save_run_config",
         )?;
 
         self.id = run_id;
@@ -286,7 +291,10 @@ where
 
         let train_label_nets_run_configs = Arc::clone(&self.run_configs);
         let cache_area = cache_area.clone();
-        let channels = self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels() as i64;
+        let channels = thoosa_shared::with_perf_log(
+            || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels() as i64,
+            "TrainLabelNets::run/ws_read_channels",
+        );
 
 
         debug!("TrainLabelNets::run: channels={channels} num_nets={}", self.num_nets);
@@ -680,7 +688,10 @@ where
                 let x_1 = Arc::clone(&x_1);
                 let x_0 = Arc::clone(&x_0);
                 let mut ctx_for_build_fn = {
-                    let mut guard = ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
+                    let mut guard = thoosa_shared::with_perf_log(
+                        || ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                        "ResourcesBatch::build_batch_stream/ctx_lock",
+                    );
                     guard.branch(Some("for_build_fn"), false, false)
                 };
                 async move {

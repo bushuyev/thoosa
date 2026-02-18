@@ -1596,7 +1596,11 @@ mod tests {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000, 32000)?));
-        let store = Arc::new(RwLock::new(SqlStore::from_path(ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").store_path())?));
+        let store_path = thoosa_shared::with_perf_log(
+            || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").store_path().to_path_buf(),
+            "CrossLoader::test_cross_clc/ws_read_store_path",
+        );
+        let store = Arc::new(RwLock::new(SqlStore::from_path(store_path)?));
 
         let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"]
             .into_iter()
@@ -1612,26 +1616,40 @@ mod tests {
             .collect::<HashMap<_, _>>();
 
         {
-            let store_guard = store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
-            let mut conn_guard = store_guard.conn().try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
+            let store_guard = thoosa_shared::with_perf_log(
+                || store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                "CrossLoader::test_cross_clc/store_write_for_transaction",
+            );
+            let mut conn_guard = thoosa_shared::with_perf_log(
+                || store_guard.conn().try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                "CrossLoader::test_cross_clc/store_conn_lock_for_transaction",
+            );
             let t = conn_guard.transaction()?;
             let import_id = store_guard.save_import("test resources".to_string(), &t)?;
             store_guard.save_resources_labels(&resource_stats, import_id, &t)?;
             t.commit()?;
         }
 
-        let run_id = store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").save_run_config(
-            None,
-            &"find_motifs",
-            "test_cross_clc",
-            "",
-            HashMap::new(),
+        let run_id = thoosa_shared::with_perf_log(
+            || {
+                store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").save_run_config(
+                    None,
+                    &"find_motifs",
+                    "test_cross_clc",
+                    "",
+                    HashMap::new(),
+                )
+            },
+            "CrossLoader::test_cross_clc/store_write_save_run_config",
         )?;
         let run_config = FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, 2, None, None);
         let fixed_config = FixedFindMotifsConfig::new(2, false);
 
         let resource_key_refs = resource_keys.iter().map(|v| v.as_str()).collect::<Vec<_>>();
-        let resources = store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_resources_by_file_stems(&resource_key_refs)?;
+        let resources = thoosa_shared::with_perf_log(
+            || store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_resources_by_file_stems(&resource_key_refs),
+            "CrossLoader::test_cross_clc/store_read_list_resources_by_file_stems",
+        )?;
         let resources_to_move = resources.clone();
         let oom_triggered = Arc::new(AtomicBool::new(false));
         let oom_triggered_cloned = Arc::clone(&oom_triggered);
@@ -1751,10 +1769,10 @@ mod tests {
         let expected_len = expected.len();
         assert!(expected_len > 0);
 
-        let slices_path = ws
-            .try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout")
-            .tmp_path()
-            .join(format!("{run_id}_0_slices.zstd"));
+        let slices_path = thoosa_shared::with_perf_log(
+            || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").tmp_path().join(format!("{run_id}_0_slices.zstd")),
+            "CrossLoader::test_cross_clc/ws_read_tmp_path",
+        );
         let reader = ChunkedSlicesReader::<SlicesMatch>::new(&slices_path)
             .map_err(|e| ThoError::from_error(format!("read slices file {slices_path:?}"), e))?;
 
