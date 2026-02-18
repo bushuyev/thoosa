@@ -14,7 +14,7 @@ use tch::{Device, IndexOp, Tensor};
 use thoosa_common::utils::{from};
 use thoosa_shared::ThoError;
 use thoosa_shared::resource::{Resource, ResourceId};
-use thoosa_store::{Store, block_on_store_future};
+use thoosa_store::Store;
 
 #[derive(Default)]
 pub enum Set {
@@ -127,11 +127,13 @@ where
     df.partition_by::<_, &str>(["frag_id"], false)
 }
 
-pub fn load_to_logits_tensors(
+pub async fn load_to_logits_tensors(
     group: &str,
     store: Arc<Box<dyn Store>>,
 ) -> Vec<(Resource, Vec<f32>)> {
-    block_on_store_future(store.list_resource_random_in_group(group))
+    store
+        .list_resource_random_in_group(group)
+        .await
         .expect("list_resource_random_in_group")
         .into_iter()
         .map(move |(resource_id, labels_p)| {
@@ -222,7 +224,7 @@ pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) {
     CsvWriter::new(&mut file).finish(&mut df).unwrap();
 }
 
-pub fn labeled_tensors_by_descr<'a>(
+pub async fn labeled_tensors_by_descr<'a>(
     label: &String,
     resource_set_descr: &String,
     store: Arc<Box<dyn Store>>,
@@ -237,12 +239,16 @@ pub fn labeled_tensors_by_descr<'a>(
     vec![
         (
             1,
-            block_on_store_future(store_lock.list_resource_set_resources_by_descr(resource_set_descr))
+            store_lock
+                .list_resource_set_resources_by_descr(resource_set_descr)
+                .await
                 .expect("list_resource_set_resources_by_descr"),
         ),
         (
             0,
-            block_on_store_future(store_lock.list_resource_random_not_labeled(label.as_str(), 100))
+            store_lock
+                .list_resource_random_not_labeled(label.as_str(), 100)
+                .await
                 .expect("list_resource_random_not_label"),
         ),
     ]

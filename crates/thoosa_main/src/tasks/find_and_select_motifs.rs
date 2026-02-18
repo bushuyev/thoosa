@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use async_trait::async_trait;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use tch::Device::Cpu;
@@ -26,7 +27,7 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_shared::{collect_futures_with_progress_i, mono_key, panic_to_err_async, parse_resources, ResourceType, StreamBuffering, ThoError};
-use thoosa_store::{Store, block_on_store_future};
+use thoosa_store::Store;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::find_motifs::FindMotifsStage;
 use crate::tasks::motif_loader::MotifLoader;
@@ -101,12 +102,13 @@ impl WithId for FindAndSelectMotifsResult {
     }
 }
 
+#[async_trait]
 impl SavableResult for FindAndSelectMotifsResult {
     fn value(&self) -> f32 {
         0.0
     }
 
-    fn save(
+    async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         _ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -128,13 +130,13 @@ impl SavableResult for FindAndSelectMotifsResult {
             .iter()
             .map(|v| v.select_motifs_run_config.id.expect("no select_motifs_run_config"))
             .collect::<Vec<_>>();
-        let id = block_on_store_future(store.save_run_config(
+        let id = store.save_run_config(
             Some(&best_run_ids),
             FindAndSelectMotifsRunConfig::type_name(),
             "OptSelectMotifsRunConfig",
             "best_run_ids",
             HashMap::from([]),
-        ))?;
+        ).await?;
         Ok(id)
     }
 }
@@ -183,7 +185,7 @@ impl FindAndSelectMotifsStage {
         }
     }
 
-    fn save_run_config_with_input<R>(
+    async fn save_run_config_with_input<R>(
         store: &Arc<Box<dyn Store>>,
         input_run_ids: Option<&[RunId]>,
         run_config: &mut R,
@@ -192,7 +194,9 @@ impl FindAndSelectMotifsStage {
     where
         R: RunConfig + ToHashmap,
     {
-        let run_id = block_on_store_future(store.save_run_config(input_run_ids, R::type_name(), descr, "todo", run_config.to_properties_iter(None).collect()))?;
+        let run_id = store
+            .save_run_config(input_run_ids, R::type_name(), descr, "todo", run_config.to_properties_iter(None).collect())
+            .await?;
         run_config.set_id(run_id);
         Ok(run_id)
     }
@@ -210,12 +214,12 @@ impl FindAndSelectMotifsStage {
         mut ctx: C
     ) -> Result<usize, ThoError> {
         let find_input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store)?,
+            ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store).await?,
             CacheArea::default(),
         ));
 
         let select_input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store)?,
+            ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store).await?,
             CacheArea::default(),
         ));
 
@@ -224,14 +228,14 @@ impl FindAndSelectMotifsStage {
             None,
             &mut run_config.find_motifs_run_config,
             "FindAndSelectMotifs/find",
-        )?;
+        ).await?;
         #[allow(unused_variables)]
         let select_run_id = Self::save_run_config_with_input(
             store,
             Some(&[find_run_id]),
             &mut run_config.select_motifs_run_config,
             "FindAndSelectMotifs/select",
-        )?;
+        ).await?;
 
         let find_stage: Arc<FindMotifsStage<Simple, RawTensorLoader<C>, C>> = Arc::new(
             FindMotifsStage::new(
@@ -267,7 +271,8 @@ impl FindAndSelectMotifsStage {
                 max_chunk_size,
                 #[cfg(test)]
                 None,
-            ),
+            )
+            .await?,
         );
 
         let select_stage_output:Arc<DevicesWrap<SelectMotifsSavableResult>> = select_stage
@@ -279,7 +284,7 @@ impl FindAndSelectMotifsStage {
             .take_data(device_idx)
             .await?;
         let selected_count = select_savable.total_selected_motifs();
-        select_savable.save(store, ws)?;
+        select_savable.save(store, ws).await?;
 
 
         #[allow(unexpected_cfgs)]

@@ -28,7 +28,7 @@ use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use thoosa_shared::traits::{Adjustable, MonoMetrics, WithId};
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
-use thoosa_store::{Store, block_on_store_future};
+use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
@@ -172,7 +172,7 @@ where
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
             find_motifs_run_id,
-            &block_on_store_future(self.store.list_run_config_values(find_motifs_run_id))?,
+            &self.store.list_run_config_values(find_motifs_run_id).await?,
         )?;
         let motif_width = find_motifs_run_config.window;
         assert_ne!(motif_width, 0, "RandomStats: motif_width must be > 0");

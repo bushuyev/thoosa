@@ -37,7 +37,7 @@ use thoosa_shared::{CopyToDevice, TensorIdSliceIdx};
 use thoosa_shared::val::Val;
 use thoosa_shared::{RangeOrValue, ResourceType, ThoError, make_combos};
 use thoosa_shared::{avg_hist, parse_key_val};
-use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store, block_on_store_future};
+use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store};
 use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 
 use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeAccumulatedMean, LocalMin, Tril};
@@ -137,12 +137,13 @@ impl FindMotifsSavableResult {
     }
 }
 
+#[async_trait]
 impl SavableResult for FindMotifsSavableResult {
     fn value(&self) -> f32 {
         0.0
     }
 
-    fn save(
+    async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -168,7 +169,7 @@ impl WithId for FindMotifsSavableResult {
 pub struct SimpleMotifTracker<'a> {
     last: Option<SlicesMatch>,
     motifs: Vec<SlicesMatch>,                //i_0, match_0, match_1, dist
-    dumper: Box<dyn MotifTrackerStore + 'a>, //lifetime is for DummyDumper
+    dumper: Option<Box<dyn MotifTrackerStore + 'a>>, //lifetime is for DummyDumper
     max_slices_counts: Option<u32>,
 }
 
@@ -182,7 +183,7 @@ impl<'a> SimpleMotifTracker<'a> {
         Self {
             last: None,
             motifs: Vec::with_capacity(CAPACITY),//TODO config + merge Vec::with_capacity + dump when capacity reached from origin/codex/fractional_splitter_async_consume
-            dumper,
+            dumper: Some(dumper),
             max_slices_counts,
         }
     }
@@ -214,13 +215,19 @@ impl<'a> SimpleMotifTracker<'a> {
 
         if self.motifs.len() > 0 {
             self.dumper
+                .as_mut()
+                .expect("dumper")
                 .save_slices(mem::take(&mut self.motifs))
                 .expect("dumper");
         }
     }
 
-    pub fn build_groups(&mut self, store: &Arc<Box<dyn Store>>) -> Result<usize, ThoError> {
-        self.dumper.load_slices_into_groups(store, self.max_slices_counts)
+    pub fn take_dumper(&mut self) -> Result<Box<dyn MotifTrackerStore + 'a>, ThoError> {
+        self.dumper.take().ok_or_else(|| ThoError::new("SimpleMotifTracker::take_dumper: dumper is already taken"))
+    }
+
+    pub fn max_slices_counts(&self) -> Option<u32> {
+        self.max_slices_counts
     }
 
     #[cfg(test)]
@@ -292,18 +299,19 @@ impl SelectMotifsSavableResult {
     }
 }
 
+#[async_trait]
 impl SavableResult for SelectMotifsSavableResult {
     fn value(&self) -> f32 {
         0.1
     }
 
-    fn save(
+    async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
         for (run_config, good_motif_ids_rates) in &self.run_config {
-            block_on_store_future(store.save_selected_motifs(run_config.id.expect("should be pre set in run_grid"), good_motif_ids_rates.clone()))?; //TODO mem::replace?
+            store.save_selected_motifs(run_config.id.expect("should be pre set in run_grid"), good_motif_ids_rates.clone()).await?; //TODO mem::replace?
 
         }
         //gpt TODO!! save returns a dummy run_id; run_grid currently ignores it and uses presaved ids.
@@ -314,6 +322,7 @@ impl SavableResult for SelectMotifsSavableResult {
 mod motif_find_tests {
     use std::{fs, mem, thread};
 
+    use async_trait::async_trait;
     use crossbeam_channel::internal::SelectHandle;
     use crossbeam_utils::sync::WaitGroup;
     use futures::executor::block_on;
@@ -485,6 +494,7 @@ mod motif_find_tests {
         }
     }
 
+    #[async_trait]
     impl<'a> MotifTrackerStore for DummyDumper<'a> {
         fn save_slices(&mut self, motifs: Vec<SlicesMatch>) -> Result<(), ThoError> {
             self.motifs
@@ -493,7 +503,7 @@ mod motif_find_tests {
             Ok(())
         }
 
-        fn load_slices_into_groups(
+        async fn load_slices_into_groups(
             &mut self,
             store: &Arc<Box<dyn Store>>,
             max_slices_counts: Option<u32>,
@@ -718,7 +728,7 @@ mod motif_find_tests {
 
 }
 
-pub fn plot_resource(
+pub async fn plot_resource(
     resource_config: Simple,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
@@ -726,7 +736,7 @@ pub fn plot_resource(
     let tensors_path = ws.read().tensors_path().clone();
     let channel = 0; //TODO
 
-    let resources = resource_config.to_resources(store)?;
+    let resources = resource_config.to_resources(store).await?;
     let all_tensors: Vec<Tensor> = resources
         .iter()
         .map(|r| -> Result<Tensor, ThoError> {

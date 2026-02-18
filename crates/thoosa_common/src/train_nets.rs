@@ -37,7 +37,7 @@ use thoosa_shared::ThoError;
 use async_trait::async_trait;
 use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_store::{Store, block_on_store_future};
+use thoosa_store::Store;
 
 use crate::dims::{
     Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, Slice, ThoBatch,
@@ -169,12 +169,13 @@ impl TrainLabelNetsRunConfigResult {
     }
 }
 
+#[async_trait]
 impl SavableResult for TrainLabelNetsRunConfigResult {
     fn value(&self) -> f32 {
         self.loss
     }
 
-    fn save(
+    async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -187,7 +188,7 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
             self.train_motif_nets_run_ids.as_slice()
         };
 
-        let run_config_id = block_on_store_future(store.save_run_config(
+        let run_config_id = store.save_run_config(
             Some(input_run_ids),
             &TrainLabelNetsRunConfig::type_name(),
             "Label",
@@ -195,7 +196,7 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
             self.train_label_nets_run_config
                 .to_properties_iter(None)
                 .collect(),
-        ))?;
+        ).await?;
 
         ws.read()
             .save_label_net(
@@ -239,17 +240,18 @@ impl TrainFinalNetsRunConfigResult {
     }
 }
 
+#[async_trait]
 impl SavableResult for TrainFinalNetsRunConfigResult {
     fn value(&self) -> f32 {
         self.loss
     }
 
-    fn save(
+    async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
-        let run_config_id = block_on_store_future(store.save_run_config(
+        let run_config_id = store.save_run_config(
             Some(&self.train_label_nodes_run_ids),
             &TrainFinalNetRunConfig::type_name(),
             "Final",
@@ -257,7 +259,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
             self.train_final_net_run_config
                 .to_properties_iter(None)
                 .collect(),
-        ))?;
+        ).await?;
 
         ws.read()
             .save_final_net(run_config_id, &self.var_store, &self.final_node_params)
@@ -1564,24 +1566,25 @@ impl TrainMotifsNetsResult {
     }
 }
 
+#[async_trait]
 impl SavableResult for TrainMotifsNetsResult {
     fn value(&self) -> f32 {
         0.0
     }
 
-    fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
+    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
 
-        self.id = block_on_store_future(store.save_run_config(
+        self.id = store.save_run_config(
             Some(&self.select_motifs_run_ids),
             &TrainMotifsNetsRunConfig::type_name(),
             "TrainMotifsNetResult",
             "todo",
             HashMap::new(),
-        ))?;
+        ).await?;
 
         for r in self.train_motif_nets_results.iter_mut() {
             r.train_motifs_nets_run_id = Some(self.id);
-            r.save(store, ws)?;
+            r.save(store, ws).await?;
         }
 
         Ok(self.id)
@@ -1611,12 +1614,13 @@ impl Output for TrainMotifsNetsResult {
 }
 
 
+#[async_trait]
 impl SavableResult for TrainMotifNetResult {
     fn value(&self) -> f32 {
         self.loss
     }
 
-    fn save(
+    async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -1626,13 +1630,13 @@ impl SavableResult for TrainMotifNetResult {
 
 
         let train_motifs_nets_run_id = self.train_motifs_nets_run_id.expect("no train_motifs_nets_run_id");
-        let run_config_id = block_on_store_future(store.save_run_config(
+        let run_config_id = store.save_run_config(
             Some(&[train_motifs_nets_run_id]),
             &TrainMotifsNetsRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
             "TrainMotifNetResult",
             "todo",
             self.run_config_values.to_properties_iter(None).collect(),
-        ))?;
+        ).await?;
 
         let path = ws.read().save_motif_net(
             &self.channel,
@@ -1642,7 +1646,7 @@ impl SavableResult for TrainMotifNetResult {
             &self.params,
         )?;
 
-        block_on_store_future(store.save_selected_net(train_motifs_nets_run_id, path, self.loss))?;
+        store.save_selected_net(train_motifs_nets_run_id, path, self.loss).await?;
 
         Ok(run_config_id)
 
