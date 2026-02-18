@@ -1027,6 +1027,7 @@ where
         Ok(Arc::new(DevicesWrap::wrap(motifs_stats, cache_area)))
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::extend_with_one_find_run"))]
     async fn extend_with_one_find_run(
         loader: Arc<L>,
         ws: Arc<RwLock<Box<dyn Workspace>>>,
