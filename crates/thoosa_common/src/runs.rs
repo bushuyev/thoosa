@@ -28,21 +28,19 @@ impl ResourcesConfig for Simple {
 
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
-        store: &Arc<RwLock<Box<S>>>,
+        store: &Arc<Box<S>>,
     ) -> Result<Vec<Resource>, ThoError> {
         Ok(match self.resources() {
             ResourceType::List(list) => store
-                .read()
                 .list_resources_by_file_stems(
                     &list.into_iter().map(|v| v.as_str()).collect::<Vec<_>>(),
                 )
                 .expect("list_resources_by_file_stems"),
             ResourceType::Set(set) => store
-                .read()
                 .list_resource_set_resources_by_descr(set)
                 .expect("list_resource_set_resources"),
             ResourceType::Group(group) => {
-                let store_guard = store.read();
+                let store_guard = store;
                 store_guard
                     .list_resource_set_group_sets(group)
                     .expect("list_resource_set_group_sets")
@@ -55,14 +53,13 @@ impl ResourcesConfig for Simple {
                     .collect()
             }
             ResourceType::NotInGroup(descr) => store
-                .read()
                 .list_resources_not_in_group(descr, 1000)//TODO limit
                 .expect("list_resource_set_resources"),
 
             })
     }
 
-    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoError> {
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
         if let ResourceType::List(list) = self.resources() {
             if list.is_empty() {
                 return Err(ThoError::new("resource list should not be empty"));
@@ -88,12 +85,12 @@ impl ResourcesConfig for Empty {
 
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
-        _store: &Arc<RwLock<Box<S>>>,
+        _store: &Arc<Box<S>>,
     ) -> Result<Self::R, ThoError> {
         Ok(())
     }
 
-    fn check<S: ResourceStore + ?Sized>(&self, _store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoError> {
+    fn check<S: ResourceStore + ?Sized>(&self, _store: &Arc<Box<S>>) -> Result<(), ThoError> {
         Ok(())
     }
 }
@@ -121,9 +118,9 @@ impl ResourcesConfig for Labeled {
 
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
-        store: &Arc<RwLock<Box<S>>>,
+        store: &Arc<Box<S>>,
     ) -> Result<Vec<(String, Vec<Resource>)>, ThoError> {
-        let store_guard = store.read();
+        let store_guard = store;
 
         store_guard
             .list_group_labeled_resources_sets(&self.group)?
@@ -136,7 +133,7 @@ impl ResourcesConfig for Labeled {
             .collect()
     }
 
-    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoError> {
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
         let labeled_resources = self.to_resources(store)?;
         if labeled_resources.is_empty() {
             return Err(ThoError::new(format!(
@@ -179,10 +176,9 @@ impl ResourcesConfig for Logits {
 
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
-        store: &Arc<RwLock<Box<S>>>,
+        store: &Arc<Box<S>>,
     ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError> {
         store
-            .read()
             .list_resource_random_in_group(&self.group)?
             .into_iter()
             .map(move |(resource_id, labels_p)| {
@@ -198,10 +194,9 @@ impl ResourcesConfig for Logits {
             .collect()
     }
 
-    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoError> {
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
         
         if store
-            .read()
             .list_resource_random_in_group(&self.group)?.is_empty() {
             Err(ThoError::new(format!(
                 "resource config {self:?} resolved to no logits resources"
@@ -239,7 +234,7 @@ impl<RC: ResourcesConfig> ResourcesConfig for NetResources<RC> {
 
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
-        store: &Arc<RwLock<Box<S>>>,
+        store: &Arc<Box<S>>,
     ) -> Result<(RC::R, RC::R), ThoError> {
         self.train_resources.to_resources(store).and_then(|train| {
             self.valid_resources
@@ -248,7 +243,7 @@ impl<RC: ResourcesConfig> ResourcesConfig for NetResources<RC> {
         })
     }
 
-    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoError> {
+    fn check<S: ResourceStore + ?Sized>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
         self.train_resources.check(store)?;
         self.valid_resources.check(store)?;
         Ok(())
@@ -265,7 +260,7 @@ pub trait SavableResult: Sync + Send + Debug {
     fn value(&self) -> f32;//TODO remove
     fn save(
         &mut self,//TODO consume
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError>;
 }
@@ -286,7 +281,7 @@ impl SavableResult for DummySavableOptResult {
 
     fn save(
         &mut self,
-        _store: &Arc<RwLock<Box<dyn Store>>>,
+        _store: &Arc<Box<dyn Store>>,
         _ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
         Ok(0)

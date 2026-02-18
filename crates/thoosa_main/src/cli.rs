@@ -291,7 +291,7 @@ where
         perf_path,
     )?;
 
-    let store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
+    let store = Arc::new(SqlStore::from_path(ws.read().store_path())?);
 
     let devices = list_devices();
 
@@ -638,7 +638,7 @@ where
 #[allow(unreachable_code)]
 async fn run_all(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
+    store: &Arc<Box<dyn Store>>,
     loader: &Arc<RawTensorLoader<RunCtxWithPermits>>,
     mut root_ctx: RunCtxWithPermits,
     run_all_args: &RunAllArgs,
@@ -722,7 +722,7 @@ async fn run_all(
             info!("opt FindAndSelectMotifsRunConfig done: find_and_select_run_ids={best_find_and_select_result_ids:?}");
             assert_eq!(best_find_and_select_result_ids.len(), 1); //should be one from run_opt
 
-            let read_guard = store.read();
+            let read_guard = store;
             let select_motifs_run_ids = read_guard
                 .list_input_run_ids(&best_find_and_select_result_ids)?
                 .into_iter().map(
@@ -1261,7 +1261,7 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
 
 fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
     input_run_ids: Option<&[RunId]>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
+    store: &Arc<Box<dyn Store>>,
     run_configs: &mut Vec<R>,
     descr: &str,
 ) -> Vec<RunId> {
@@ -1269,7 +1269,6 @@ fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
         .into_iter()
         .map(|run_config| {
             let run_config_id = store
-                .write()
                 .save_run_config(
                     input_run_ids,
                     &<R>::type_name(),
@@ -1289,7 +1288,7 @@ fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
 
 pub fn import_resources<F, R>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
+    store: &Arc<Box<dyn Store>>,
     labels: &[&str],
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
@@ -1305,7 +1304,7 @@ where
 
  pub fn import_resources_with_pure_sets<F, R>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
+    store: &Arc<Box<dyn Store>>,
     labels: &[&str],
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
@@ -1316,7 +1315,7 @@ where
     F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
     R: Fn(String) -> Result<Tensor, ThoError> + Sync + Send,
 {
-    let store_guard = store.write();
+    let store_guard = store;
 
     let mut conn_guard = store_guard.conn().lock();
     let t = conn_guard.transaction()?;
@@ -1400,7 +1399,7 @@ where
 
 pub async fn run_plot_motif_slices(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
+    store: &Arc<Box<dyn Store>>,
     loader: &Arc<RawTensorLoader<RunCtxWithPermits>>,
     plot_motif_slices_params: &PlotMotifSlicesArgs,
     device: &Device,
@@ -1428,7 +1427,7 @@ pub async fn run_plot_motif_slices(
         MotifsBy::RunId { find_motifs_run_id, select_motifs_run_ids } => {
             debug!("run_plot_motif_slices: MotifsBy::RunId find_run_id={find_motifs_run_id} select_run_ids={select_motifs_run_ids:?}");
 
-            let motifs = store.read().list_motifs(find_motifs_run_id)?;
+            let motifs = store.list_motifs(find_motifs_run_id)?;
             let motifs_len = motifs.len();
             let done_cnt = Arc::new(AtomicU32::new(0));
 
@@ -1473,7 +1472,6 @@ pub async fn run_plot_motif_slices(
             debug!("run_plot_motif_slices: MotifsBy::GoodMotifs selection_run_id={selection_run_id} channels={channels}");
 
             let motifs = store
-                .read()
                 .list_selected_motifs(selection_run_id, channels)?;
 
             let motif_ids: Vec<usize> = motifs
@@ -1586,7 +1584,7 @@ pub fn run_opt_step<RC, RCRV, CC, R, ST>(
     resource_config: &R,
     opt_step: ST,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
+    store: &Arc<Box<dyn Store>>,
     loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
     _descr: &str,
@@ -1603,7 +1601,7 @@ where
         &CC,
         &R,
         &Arc<RwLock<Box<dyn Workspace>>>,
-        &Arc<RwLock<Box<dyn Store>>>,
+        &Arc<Box<dyn Store>>,
         &Arc<RwLock<LoadRunner<Tensor>>>,
         Vec<Device>,
     ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoError>, //TODO remove Option & Vec
@@ -1649,7 +1647,7 @@ pub fn run_all_grid_step<RC, RCRV, R, FC, ST>(
     resource_config: &R,
     grid_step: ST,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
+    store: &Arc<Box<dyn Store>>,
     loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
     _descr: &str,
@@ -1662,7 +1660,7 @@ where
         &R,
         &FC,
         &Arc<RwLock<Box<dyn Workspace>>>,
-        &Arc<RwLock<Box<dyn Store>>>,
+        &Arc<Box<dyn Store>>,
         &Arc<RwLock<LoadRunner<Tensor>>>,
         Vec<Device>,
     ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoError>,
@@ -1724,14 +1722,14 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
     rcrv: RCRV,
     input: Arc<DevicesWrap<ST::In<'static>>>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
+    store: &Arc<Box<dyn Store>>,
     presave: bool,
     f: F,
     ctx_f: CtxF,
 ) -> Result<Vec<RunId>, ThoError>
 where
     F: AsyncFnOnce(Vec<RC>) -> Arc<ST>,//TODO return Result
-    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
+    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn Store>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
         + thoosa_properties_map::ToHashmap,
@@ -1779,7 +1777,7 @@ pub async fn run_opt</*ResConf, */RCRV, F, RC, ST, CtxF>(
     // fixed_config: FC,
     input: Arc<DevicesWrap<ST::In<'static>>>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
+    store: &Arc<Box<dyn Store>>,
     presave: bool,
     init_stage: F,
     ctx_f: CtxF,
@@ -1791,7 +1789,7 @@ where
         Vec<Hyperparameter<<RCRV as OptRunConfigSource>::P>>,
         <RCRV as OptRunConfigSource>::P,
     >) -> Result<Arc<ST>, ThoError>,
-    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
+    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn Store>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
     + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
     + thoosa_properties_map::ToHashmap,
@@ -2009,10 +2007,10 @@ mod cli_tests {
     }
 
     fn init_test_store(
-        mut store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         tensors_per_label: i32,
     ) -> Result<Vec<ResourceId>, ThoError> {
-        let store_guard = store.write();
+        let store_guard = store;
         let mut mutex_guard = store_guard.conn().lock();
         let t = mutex_guard.transaction()?;
 
@@ -2068,9 +2066,9 @@ mod cli_tests {
             32000,
         )?));
 
-        let store = Arc::new(RwLock::new(SqlStore::in_mem()?));
+        let store = Arc::new(SqlStore::in_mem()?);
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        // let store = Arc::new(RwLock::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
+        // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
 
         let imported_ids = import_resources(
             &ws,
@@ -2089,7 +2087,7 @@ mod cli_tests {
             false,
         )?;
 
-        let imported_resources = store.read().list_resources_by_ids(&imported_ids)?;
+        let imported_resources = store.list_resources_by_ids(&imported_ids)?;
 
         debug!("imported={imported_resources:?}");
         let mut imported_keys = imported_resources
@@ -2307,7 +2305,7 @@ mod cli_tests {
         let tensors_path = ws.read().tensors_path().clone();
         let tensors_path_for_import = ws.read().tensors_path().clone();
 
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
+        let mut store = Arc::new(SqlStore::from_path(ws.read().store_path())?);
 
         debug!("test_run_all: import_hash={import_hash:?}");
 
@@ -2327,7 +2325,7 @@ mod cli_tests {
             Some(&[(20, true), (10, true)])
         )?;
 
-        let resources = store.read().list_resources_by_ids(&imported_ids)?;
+        let resources = store.list_resources_by_ids(&imported_ids)?;
 
         let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
             move |key, _| {
@@ -2431,7 +2429,7 @@ mod cli_tests {
         GlobalCtx::init_devices(2);
         let ws = Arc::new(RwLock::new(FsWorkspace::new("/home/bu/tmp/ws_test_hbac", 20, 684400, 200)?));
         let tensors_path = ws.read().tensors_path().clone();
-        let store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
+        let store = Arc::new(SqlStore::from_path(ws.read().store_path())?);
         let mut ctx = RunCtxWithPermits::new(0, "run_plot_motif_slices");
 
         let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(

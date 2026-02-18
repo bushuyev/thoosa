@@ -83,7 +83,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     clc_stats: Arc<SlicesStats<C>>,
@@ -96,7 +96,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
+    pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
         
         Self {
             store,
@@ -172,11 +172,7 @@ where
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
             find_motifs_run_id,
-            &thoosa_shared::with_perf_log(
-                || self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "RandomStats/run/read_store",
-            )
-            .list_run_config_values(find_motifs_run_id)?,
+            &self.store.list_run_config_values(find_motifs_run_id)?,
         )?;
         let motif_width = find_motifs_run_config.window;
         assert_ne!(motif_width, 0, "RandomStats: motif_width must be > 0");
@@ -369,7 +365,7 @@ mod tests {
 
         let run_id = 42;
         let motif_width = 6;
-        let store = Arc::new(RwLock::new(
+        let store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_resources_not_in_group([(RANDOM_STATS_GROUP, Ok(resources.clone()))])
                 .with_list_run_config_values(
@@ -379,7 +375,7 @@ mod tests {
                         .collect()),
                 )
                 .build(),
-        ));
+        );
 
         let loader = Arc::new(
             mock_tensor_loader::build()

@@ -168,7 +168,7 @@ where
 {
     find_motifs_run_config_id: RunId,
     loader: Arc<L>,
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     batch_clc: Arc<CLC>,
     receiver_factory: Box<dyn Fn(&[Arc<Resource>]) -> Arc<RSV> + Send + Sync>,
     chunk_size: usize,
@@ -205,7 +205,7 @@ where
     pub fn new<ReceiverFactory, OnAllDone, OnBatchDone>(
         find_motifs_run_config_id: RunId,//fod logging
         loader: Arc<L>,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         batch_clc: Arc<CLC>,
         receiver_factory: ReceiverFactory,
         chunk_size: usize,
@@ -243,7 +243,7 @@ pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync> {
 }
 
 impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
-    pub(crate) fn check(self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<Self, ThoError> {
+    pub(crate) fn check(self, store: &Arc<Box<dyn Store>>) -> Result<Self, ThoError> {
         self.resources_config.check(store)?;
 
         Ok(self)
@@ -1600,7 +1600,7 @@ mod tests {
             || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").store_path().to_path_buf(),
             "CrossLoader::test_cross_clc/ws_read_store_path",
         );
-        let store = Arc::new(RwLock::new(SqlStore::from_path(store_path)?));
+        let store = Arc::new(SqlStore::from_path(store_path)?);
 
         let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"]
             .into_iter()
@@ -1616,10 +1616,7 @@ mod tests {
             .collect::<HashMap<_, _>>();
 
         {
-            let store_guard = thoosa_shared::with_perf_log(
-                || store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "CrossLoader::test_cross_clc/store_write_for_transaction",
-            );
+            let store_guard = Arc::clone(&store);
             let mut conn_guard = thoosa_shared::with_perf_log(
                 || store_guard.conn().try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
                 "CrossLoader::test_cross_clc/store_conn_lock_for_transaction",
@@ -1630,26 +1627,18 @@ mod tests {
             t.commit()?;
         }
 
-        let run_id = thoosa_shared::with_perf_log(
-            || {
-                store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").save_run_config(
-                    None,
-                    &"find_motifs",
-                    "test_cross_clc",
-                    "",
-                    HashMap::new(),
-                )
-            },
-            "CrossLoader::test_cross_clc/store_write_save_run_config",
+        let run_id = store.save_run_config(
+            None,
+            &"find_motifs",
+            "test_cross_clc",
+            "",
+            HashMap::new(),
         )?;
         let run_config = FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, 2, None, None);
         let fixed_config = FixedFindMotifsConfig::new(2, false);
 
         let resource_key_refs = resource_keys.iter().map(|v| v.as_str()).collect::<Vec<_>>();
-        let resources = thoosa_shared::with_perf_log(
-            || store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_resources_by_file_stems(&resource_key_refs),
-            "CrossLoader::test_cross_clc/store_read_list_resources_by_file_stems",
-        )?;
+        let resources = store.list_resources_by_file_stems(&resource_key_refs)?;
         let resources_to_move = resources.clone();
         let oom_triggered = Arc::new(AtomicBool::new(false));
         let oom_triggered_cloned = Arc::clone(&oom_triggered);
@@ -1859,14 +1848,14 @@ mod tests {
 
         let mut ctx = mock_run_ctx::default(0);
 
-        let mut mocked_store = Arc::new(RwLock::new(
+        let mut mocked_store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_resources_by_file_stems(
                     vec!["resource_a".to_string(), "resource_b".to_string()],
                     Ok(resources.clone()),
                 )
                 .build() as Box<dyn Store>,
-        ));
+        );
 
         let cross_loader = Arc::new(CrossLoader::new(
             1,
@@ -2047,14 +2036,14 @@ mod tests {
 
         let mut ctx = mock_run_ctx::default(1);
 
-        let mut mocked_store = Arc::new(RwLock::new(
+        let mut mocked_store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_resources_by_file_stems(
                     vec!["resource_a".to_string()],
                     Ok(resources.clone()),
                 )
                 .build() as Box<dyn Store>,
-        ));
+        );
 
         let cross_loader = Arc::new(CrossLoader::new(
             1,

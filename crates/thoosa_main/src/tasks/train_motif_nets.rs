@@ -66,7 +66,7 @@ where
     motif_loader:Arc<MotifLoader<L,C>>,
     random_slices_loader:Arc<RandomSlicesLoader<L,C>>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     pd:PhantomData<C>
 
 }
@@ -123,7 +123,7 @@ where
     pub fn new(
         loader:Arc<L>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         run_configs:  OptRunConfigs<
             Vec<NamedVal<TrainMotifsNetsRunConfigFields>>,
             Vec<NamedRange<TrainMotifsNetsRunConfigFields>>,
@@ -178,12 +178,7 @@ where
         //gpt Expand selection run ids into individual motif ids for training.
         let select_motifs_run_ids_clone = select_motifs_run_ids.clone();
         let motifs_rates_selected_motifs_run_ids = select_motifs_run_ids_clone.iter().flat_map(|select_motifs_run_id| {
-            let selected_motifs = thoosa_shared::with_perf_log(
-                || self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "TrainMotifNets/run/read_store",
-            )
-            .list_selected_motifs(*select_motifs_run_id, channels)
-            .expect("list_selected_motifs failed");
+            let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_id, channels).expect("list_selected_motifs failed");
 
             debug!("TrainMotifNets::run: select_motifs_run_id={select_motifs_run_id} selected_motifs={selected_motifs:?}");
 
@@ -271,11 +266,7 @@ where
 
                 debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", result.min_loss);
 
-                thoosa_shared::with_perf_log(
-                    || store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "TrainMotifNets/run/read_store",
-                )
-                .get_motif_meta(motif_id_rate.0)
+                store.get_motif_meta(motif_id_rate.0)
                 .map(|(channel, find_motifs_run_id)| {
                     TrainMotifNetResult::new(
                         result.min_loss,
@@ -550,7 +541,7 @@ mod tests {
        });
 
         let motif_id = 10u32;
-        let mut store = Arc::new(RwLock::new(
+        let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     find_motifs_run_id,
@@ -570,7 +561,7 @@ mod tests {
                 ])
                 .with_get_motif_meta( [(motif_id, Ok((0usize, find_motifs_run_id)))])
 
-                .build()));
+                .build());
 
         // let run_configs = cos_net_run_configs();
         let run_configs = cosine_net_run_configs();

@@ -362,7 +362,7 @@ mod tests {
             32000,
         )?));
 
-        let store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
+        let store = Arc::new(SqlStore::from_path(ws.read().store_path())?);
 
         plot_resource(
             Simple::new(ResourceType::List(vec![

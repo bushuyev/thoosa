@@ -132,7 +132,7 @@ where
     id:MonoKey,
     motif_loader:Arc<ML>,
     ws:Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     pd:PhantomData<C>,
 }
 
@@ -156,7 +156,7 @@ where
     pub fn new(
         ws: Arc<RwLock<Box<dyn Workspace>>>,
         motif_loader: Arc<ML>,
-        store: Arc<RwLock<Box<dyn Store>>>) -> Self
+        store: Arc<Box<dyn Store>>) -> Self
     {
         Self {
             id: "StackedMotifsLoader".into(),
@@ -202,11 +202,7 @@ where
         })?;
 
         let find_motifs_run_config_id = find_motifs_run_config.id;
-        let motif_ids = thoosa_shared::with_perf_log(
-            || self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "StackedMotifsLoader/run/read_store",
-        )
-        .list_motifs(find_motifs_run_config_id.expect("no id in find_motifs_run_config"))?;
+        let motif_ids = self.store.list_motifs(find_motifs_run_config_id.expect("no id in find_motifs_run_config"))?;
         debug!("StackedMotifsLoader::run: motif_ids={motif_ids:?}");
 
         if motif_ids.is_empty() {

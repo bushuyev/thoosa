@@ -46,7 +46,7 @@ where
 {
     pub async fn new<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         train_label_nets_run_ids: Vec<RunId>,
         stage_ctx: R,
         slices_step: u32,
@@ -60,10 +60,7 @@ where
 
         //gpt Resolve motif-net inputs by looking up train_motif_nets_run_ids used to produce the label nets.
         let train_motif_nets_run_ids = {
-            let mut store_guard = thoosa_shared::with_perf_log(
-                || store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "ApplyLabelNets/new/read_store",
-            );
+            let store_guard = store;
             let mut run_ids = HashSet::new();
             for run_id in &train_label_nets_run_ids {
                 run_ids.extend(store_guard.get_input_run_ids(*run_id, None)?);
@@ -105,10 +102,7 @@ where
         });
 
         let label_net_run_ids = {
-            let mut store_guard = thoosa_shared::with_perf_log(
-                || store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "ApplyLabelNets/new/write_store",
-            );
+            let store_guard = store;
             let mut run_ids = HashSet::new();
             for run_id in &train_label_nets_run_ids {
                 run_ids.extend(store_guard.list_output_run_ids(*run_id)?);
@@ -510,7 +504,7 @@ mod tests {
                 .build(),
         ));
 
-        let store = Arc::new(RwLock::new(
+        let store = Arc::new(
             MockStoreBuilder::new()
                 .with_get_input_run_ids([
                     (train_label_nets_run_id, Ok(vec![train_motif_nets_run_id])),
@@ -529,7 +523,7 @@ mod tests {
                     (train_label_nets_run_id, Ok(vec![100, 101, 200])),
                 ])
                 .build(),
-        ));
+        );
 
         let apply_label_nets = Arc::new(ApplyLabelNets::new(
             &ws,

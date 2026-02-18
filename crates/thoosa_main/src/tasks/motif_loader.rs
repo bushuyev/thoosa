@@ -109,7 +109,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pd: PhantomData<C>,
@@ -121,7 +121,7 @@ where
     C: RunCtx + 'static,
 {
     pub fn new(
-        store: Arc<RwLock<Box<dyn Store>>>,
+        store: Arc<Box<dyn Store>>,
         loader: Arc<L>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Self {
@@ -189,10 +189,7 @@ where
 
         let motif_id_value = motif_id.clone().0;
         //gpt TODO!! select_motifs_run_id from MotifLoaderInput is ignored; list_motif_slices(None, ...) loads slices from all runs.
-        let (channel, find_motifs_run_id, slices, resources_map) = thoosa_shared::with_perf_log(
-            || self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_motif_slices(motif_id_value, None, Some(1000), None),
-            "MotifLoader::run/store_read_list_motif_slices",
-        )?;//TODO config
+        let (channel, find_motifs_run_id, slices, resources_map) = self.store.list_motif_slices(motif_id_value, None, Some(1000), None)?;//TODO config
 
         debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
 
@@ -225,7 +222,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pd: PhantomData<C>,
@@ -236,7 +233,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
-    pub fn new(store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
+    pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
         Self { store, loader, pd: PhantomData::default(), ws:Arc::clone(&ws) }
     }
 }
@@ -295,17 +292,11 @@ where
         })?;
 
 
-        let (channel, find_motifs_run_id) = thoosa_shared::with_perf_log(
-            || self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").get_motif_meta(*motif_id),
-            "RandomSlicesLoader::run/store_read_get_motif_meta",
-        )?;
+        let (channel, find_motifs_run_id) = self.store.get_motif_meta(*motif_id)?;
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
             find_motifs_run_id,
-            &thoosa_shared::with_perf_log(
-                || self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_run_config_values(find_motifs_run_id),
-                "RandomSlicesLoader::run/store_read_list_run_config_values",
-            )?,
+            &self.store.list_run_config_values(find_motifs_run_id)?,
         )?;
 
 
@@ -315,7 +306,7 @@ where
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
         let (channel, find_motifs_run_id, slices, resources_map) = thoosa_shared::with_perf_log(
             || {
-                self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_random_motif_slices(
+                self.store.list_random_motif_slices(
                     motif_id_value,
                     find_motifs_run_config.window,
                     None,
@@ -352,7 +343,7 @@ pub(crate) async fn load_motif_slices<L, C>(
     channel: i64,
     resources_map: HashMap<ResourceId, Resource>,
     slices: Vec<TensorIdSliceIdx>,
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     mut ctx: C,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -367,10 +358,7 @@ where
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
         find_motifs_run_id,
-        &thoosa_shared::with_perf_log(
-            || store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_run_config_values(find_motifs_run_id),
-            "load_motif_slices/store_read_list_run_config_values",
-        )?,
+        &store.list_run_config_values(find_motifs_run_id)?,
     )?;
 
     let resource_ids_slices = slices
@@ -666,7 +654,7 @@ mod tests {
             .build();
 
         let motif_loader = Arc::new(MotifLoader::new(
-            Arc::new(RwLock::new(store)),
+            Arc::new(store),
             Arc::new(
                 mock_tensor_loader::build()
                     .with_out_id()
@@ -747,7 +735,7 @@ mod tests {
             .build();
 
         let random_slices_loader = Arc::new(RandomSlicesLoader::new(
-            Arc::new(RwLock::new(store)),
+            Arc::new(store),
             Arc::new(
                 mock_tensor_loader::build()
                     .with_out_id()

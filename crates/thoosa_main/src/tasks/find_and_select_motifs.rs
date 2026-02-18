@@ -108,7 +108,7 @@ impl SavableResult for FindAndSelectMotifsResult {
 
     fn save(
         &mut self,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         _ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
 
@@ -123,11 +123,7 @@ impl SavableResult for FindAndSelectMotifsResult {
         // }).collect::<Result<Vec<_>, ThoError>>();
 
         //TODO it's not run_id, it's only to track best  find & select ids
-        let id = thoosa_shared::with_perf_log(
-            || store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "FindAndSelectMotifs/save_best_configs/write_store",
-        )
-        .save_run_config(
+        let id = store.save_run_config(
             Some(self.best_configs.iter().map(|v|v.select_motifs_run_config.id.expect("no select_motifs_run_config")).collect::<Vec<_>>().as_ref()),
             &FindAndSelectMotifsRunConfig::type_name(),
             "OptSelectMotifsRunConfig",
@@ -141,7 +137,7 @@ impl SavableResult for FindAndSelectMotifsResult {
 #[derive(Debug)]
 pub struct FindAndSelectMotifsStage {
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     loader: Arc<RawTensorLoader<RunCtxWithPermits>>,
     run_configs: Arc<
         OptRunConfigs<
@@ -160,7 +156,7 @@ impl FindAndSelectMotifsStage {
     pub fn new(
         loader: Arc<RawTensorLoader<RunCtxWithPermits>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         run_configs: OptRunConfigs<
             Vec<NamedVal<FindAndSelectMotifsRunConfigFields>>,
             Vec<NamedRange<FindAndSelectMotifsRunConfigFields>>,
@@ -183,7 +179,7 @@ impl FindAndSelectMotifsStage {
     }
 
     fn save_run_config_with_input<R>(
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         input_run_ids: Option<&[RunId]>,
         run_config: &mut R,
         descr: &str,
@@ -191,18 +187,14 @@ impl FindAndSelectMotifsStage {
     where
         R: RunConfig + ToHashmap,
     {
-        let run_id = thoosa_shared::with_perf_log(
-            || store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "FindAndSelectMotifs/save_run_config/write_store",
-        )
-        .save_run_config(input_run_ids, &R::type_name(), descr, "todo", run_config.to_properties_iter(None).collect())?;
+        let run_id = store.save_run_config(input_run_ids, &R::type_name(), descr, "todo", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(run_id);
         Ok(run_id)
     }
 
     async fn run_find_and_select<C:RunCtx + Adjustable>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         loader: Arc<RawTensorLoader<C>>,
         run_config: &mut FindAndSelectMotifsRunConfig,
         find_resources: &ResourceType,

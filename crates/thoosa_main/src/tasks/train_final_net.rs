@@ -54,7 +54,7 @@ where
     num_label_nets: u32,
     label_net_run_ids: Vec<RunId>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     opt_config: Arc<OptConfig>,
 }
 
@@ -63,7 +63,7 @@ pub async fn new_train_final_net_with_ml<L, C, R>(
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
+    store: &Arc<Box<dyn Store>>,
     stage_ctx: R,
     opt_config: Arc<OptConfig>,
     slices_step: u32,
@@ -97,15 +97,12 @@ where
         num_label_nets: u32,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         opt_config: Arc<OptConfig>,
     ) -> Result<Self, ThoError> {
         //gpt Collect all label-net output run ids produced by the input train_label_nets runs.
         let label_net_run_ids = {
-            let mut store_guard = thoosa_shared::with_perf_log(
-                || store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "TrainFinalNet/new/write_store",
-            );
+            let store_guard = store;
             let mut run_ids = HashSet::new();
             for run_id in &train_label_nets_run_ids {
                 run_ids.extend(store_guard.list_output_run_ids(*run_id)?);
@@ -160,7 +157,7 @@ impl SavableResult for TrainFinalNetOutput {
         self.result.value()
     }
 
-    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
+    fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
         self.result.save(store, ws)
     }
 }
@@ -519,7 +516,7 @@ mod tests {
         let train_logits = resources_train.iter().enumerate().map(|(i, r)| (r.clone(), if i % 2 == 0 { vec![1.0, 0.0] } else { vec![0.0, 1.0] })).collect::<Vec<_>>();
         let valid_logits = resources_valid.iter().enumerate().map(|(i, r)| (r.clone(), if i % 2 == 0 { vec![1.0, 0.0] } else { vec![0.0, 1.0] })).collect::<Vec<_>>();
 
-        let store = Arc::new(RwLock::new(
+        let store = Arc::new(
             MockStoreBuilder::new()
                 .with_get_input_run_ids([(train_label_nets_run_id, Ok(vec![train_motif_nets_run_id]))])
                 .with_list_selected_nets([
@@ -535,7 +532,7 @@ mod tests {
                 .with_list_output_run_ids([(train_label_nets_run_id, Ok(vec![100, 200]))])
                 .with_list_resource_random_in_group([(train_group, Ok(train_logits)), (valid_group, Ok(valid_logits))])
                 .build(),
-        ));
+        );
 
         let run_configs = OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
