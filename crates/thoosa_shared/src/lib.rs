@@ -211,7 +211,7 @@ async fn collect_stream_with_progress<T, S>(
                 match r {
                     Ok(item) => {
                         *ok += 1;
-                        info!("done {} ({}/{}) out of {} in {descr}", *ok + *err, *ok, *err, total);
+                        debug!("done {} ({}/{}) out of {} in {descr}", *ok + *err, *ok, *err, total);
                         results.push(item);
                     }
                     Err(e) => {

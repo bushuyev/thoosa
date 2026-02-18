@@ -214,6 +214,7 @@ impl CollectEtaTracker {
                     snapshot.slowest_total = invocation.total;
                 }
             }
+            info!("invocation: {invocation:?}");//TODO format
         }
         snapshot
     }

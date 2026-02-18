@@ -1293,7 +1293,7 @@ where
             }
         }
 
-        info!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered extended_motif_ids.len={}", extended_motif_ids_filtered.len());
+        debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered extended_motif_ids.len={}", extended_motif_ids_filtered.len());
         Ok(extended_motif_ids_filtered)
     }
 
@@ -1348,7 +1348,7 @@ where
                     ctx.branch("extend_motifs_for_run_config".into(), false, false),
                 ).await?;
 
-                info!("SelectMotifsStage::run: extend_motifs_for_run_config done");
+                debug!("SelectMotifsStage::run: extend_motifs_for_run_config done");
 
                 let select_motifs_run_config_id = select_motifs_run_config.id.expect("no select_motifs_run_config_id");
                 for (channel, motif_slices) in channels_motifs_added_slices.into_iter().enumerate() {
