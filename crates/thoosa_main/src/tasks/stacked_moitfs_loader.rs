@@ -192,13 +192,21 @@ where
         let device_idx = ctx.device_idx();
         let cache_area = ctx.cache_area();
 
-        let num_channels = self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels();
+        let num_channels = thoosa_shared::with_perf_log(
+            || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+            "StackedMotifsLoader/run/read_ws",
+        )
+        .channels();
         let find_motifs_run_config = with_data!(ctx.branch(Some("stacked_motifs_input"), false, false), input; |_ctx, input: &StackedMotifsInput|{
             Ok::<Arc<FindMotifsRunConfig>, ThoError>(Arc::clone(&input.find_motifs_run_config))
         })?;
 
         let find_motifs_run_config_id = find_motifs_run_config.id;
-        let motif_ids = self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_motifs(find_motifs_run_config_id.expect("no id in find_motifs_run_config"))?;
+        let motif_ids = thoosa_shared::with_perf_log(
+            || self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+            "StackedMotifsLoader/run/read_store",
+        )
+        .list_motifs(find_motifs_run_config_id.expect("no id in find_motifs_run_config"))?;
         debug!("StackedMotifsLoader::run: motif_ids={motif_ids:?}");
 
         if motif_ids.is_empty() {
