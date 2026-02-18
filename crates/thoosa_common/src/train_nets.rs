@@ -176,7 +176,7 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
 
     fn save(
         &mut self,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
         let mut input_run_ids = Vec::new();
@@ -187,7 +187,7 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
             self.train_motif_nets_run_ids.as_slice()
         };
 
-        let run_config_id = store.write().save_run_config(
+        let run_config_id = store.save_run_config(
             Some(input_run_ids),
             &TrainLabelNetsRunConfig::type_name(),
             "Label",
@@ -246,10 +246,10 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
 
     fn save(
         &mut self,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
-        let run_config_id = store.write().save_run_config(
+        let run_config_id = store.save_run_config(
             Some(&self.train_label_nodes_run_ids),
             &TrainFinalNetRunConfig::type_name(),
             "Final",
@@ -1569,9 +1569,9 @@ impl SavableResult for TrainMotifsNetsResult {
         0.0
     }
 
-    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
+    fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
 
-        self.id = store.write().save_run_config(
+        self.id = store.save_run_config(
             Some(&self.select_motifs_run_ids),
             &TrainMotifsNetsRunConfig::type_name(),
             "TrainMotifsNetResult",
@@ -1618,7 +1618,7 @@ impl SavableResult for TrainMotifNetResult {
 
     fn save(
         &mut self,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
         //TODO save loss to choose model
@@ -1626,7 +1626,7 @@ impl SavableResult for TrainMotifNetResult {
 
 
         let train_motifs_nets_run_id = self.train_motifs_nets_run_id.expect("no train_motifs_nets_run_id");
-        let run_config_id = store.write().save_run_config(
+        let run_config_id = store.save_run_config(
             Some(&[train_motifs_nets_run_id]),
             &TrainMotifsNetsRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
             "TrainMotifNetResult",
@@ -1642,7 +1642,7 @@ impl SavableResult for TrainMotifNetResult {
             &self.params,
         )?;
 
-        store.write().save_selected_net(train_motifs_nets_run_id, path, self.loss)?;
+        store.save_selected_net(train_motifs_nets_run_id, path, self.loss)?;
 
         Ok(run_config_id)
 

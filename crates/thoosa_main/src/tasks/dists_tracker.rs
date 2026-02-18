@@ -1459,7 +1459,7 @@ where
     C: RunCtx + 'static,
 {
     channel_trackers: Vec<Arc<RwLock<SimpleMotifTracker<'static>>>>,
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     _ctx: PhantomData<C>,
 }
 
@@ -1480,7 +1480,7 @@ where
 {
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         run_config: &FindMotifsRunConfig,
         fixed_config: &FixedFindMotifsConfig,
         max_slices_counts: Option<u32>,

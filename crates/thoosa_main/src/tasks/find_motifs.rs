@@ -169,7 +169,7 @@ where
 {
     pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         loader: Arc<L>,
         run_configs: Vec<FindMotifsRunConfig>,
         fixed_config: FixedFindMotifsConfig,
@@ -215,7 +215,7 @@ where
                             SlicesFilter::PrecalculateStats(v) => {
 
 
-                                let dists = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_id, Metrics::EucDist, to_stats_aggr(v.aggr)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), true, false)).await?;
+                                let dists: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>> = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_id, Metrics::EucDist, to_stats_aggr(v.aggr)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), true, false)).await?;
                                 let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
                                     debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: dists=\n{}", t.t);
@@ -589,7 +589,7 @@ mod tests {
 
         let resources_group = "group";
 
-        let mut store = Arc::new(RwLock::new(
+        let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     find_motifs_run_id,
@@ -613,7 +613,7 @@ mod tests {
                     resource.clone()
                 }).collect()))])
                 .with_save_groups_as_motifs() //TODO check if resource_intervals are in found groups
-                .build()));
+                .build());
 
         let loader = Arc::new(
             mock_tensor_loader::build()
