@@ -113,7 +113,7 @@ impl SavableResult for FindAndSelectMotifsResult {
     ) -> Result<u32, ThoError> {
 
         // let best_configs_ids = self.best_configs.iter().map(|config|{
-        //     store.write().save_run_config(
+        //     store.try_write_for(thoosa_shared::TIMEOUT).expect("lock timeout").save_run_config(
         //         Some(self.best_configs.iter().map(|v|v.id.unwrap()).collect::<Vec<_>>().as_ref()),
         //         &FindAndSelectMotifsRunConfig::type_name(),
         //         "FindAndSelectMotifs",
@@ -123,7 +123,7 @@ impl SavableResult for FindAndSelectMotifsResult {
         // }).collect::<Result<Vec<_>, ThoError>>();
 
         //TODO it's not run_id, it's only to track best  find & select ids
-        let id = store.write().save_run_config(
+        let id = store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").save_run_config(
             Some(self.best_configs.iter().map(|v|v.select_motifs_run_config.id.expect("no select_motifs_run_config")).collect::<Vec<_>>().as_ref()),
             &FindAndSelectMotifsRunConfig::type_name(),
             "OptSelectMotifsRunConfig",
@@ -187,7 +187,7 @@ impl FindAndSelectMotifsStage {
     where
         R: RunConfig + ToHashmap,
     {
-        let run_id = store.write().save_run_config(
+        let run_id = store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").save_run_config(
             input_run_ids,
             &R::type_name(),
             descr,
@@ -374,8 +374,8 @@ impl AsyncStage for FindAndSelectMotifsStage {
                             let loss = if selected_count == 0 { f32::MAX } else { 1.0 / selected_count as f32 };
                             debug!("FindAndSelectMotifsStage::run: run_config={run_config:?} selected_count={selected_count} loss={loss}");
 
-                            if loss < min_loss_ref.read().0 {
-                                *min_loss_ref.write() = (loss, Some(run_config.clone()));
+                            if loss < min_loss_ref.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").0 {
+                                *min_loss_ref.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout") = (loss, Some(run_config.clone()));
                             }
 
                             loss
@@ -387,7 +387,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
 
                     opt.optimize().await;
 
-                    let guard = min_loss.read();
+                    let guard = min_loss.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
                     let (best_loss, best_config) = (guard.0, guard.1.as_ref().map(|v|v.clone()));
                     if let Some(best_config) = best_config {
                         info!("FindAndSelectMotifsStage::run: best_loss={best_loss:?} best_config={best_config:?}");

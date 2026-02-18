@@ -238,7 +238,7 @@ impl SavableResult for TrainLabelNetsOutput {
     }
 
     fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
-        let run_id = store.write().save_run_config(
+        let run_id = store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").save_run_config(
             Some(&self.train_motif_nets_run_ids),
             &TrainLabelNetsRunConfig::type_name(),
             "TrainLabelNetsResult",
@@ -286,7 +286,7 @@ where
 
         let train_label_nets_run_configs = Arc::clone(&self.run_configs);
         let cache_area = cache_area.clone();
-        let channels = self.ws.read().channels() as i64;
+        let channels = self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels() as i64;
 
 
         debug!("TrainLabelNets::run: channels={channels} num_nets={}", self.num_nets);
@@ -680,7 +680,7 @@ where
                 let x_1 = Arc::clone(&x_1);
                 let x_0 = Arc::clone(&x_0);
                 let mut ctx_for_build_fn = {
-                    let mut guard = ctx.lock();
+                    let mut guard = ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
                     guard.branch(Some("for_build_fn"), false, false)
                 };
                 async move {

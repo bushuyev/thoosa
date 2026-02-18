@@ -17,6 +17,7 @@ use thoosa_shared::{backtrace_head_lines, Cause, ThoError};
 use tokio::sync::RwLock as AsyncRwLock;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
+use crate::LOCK_TIMEOUT;
 
 
 
@@ -90,16 +91,16 @@ impl GlobalCtx {
     }
 
     pub async fn purge_lock<'a>(&'a self) -> tokio::sync::MutexGuard<'a, ()> {
-        self.purge_lock.lock().await
+        tokio::time::timeout(LOCK_TIMEOUT, self.purge_lock.lock()).await.expect("GlobalCtx::purge_lock: timed out waiting for purge lock")
     }
 
     pub async fn register_cache(&self, cache: (&'static str, &'static dyn FuturesRunnerMapPurger)) {
-        assert!(self.caches.write().await.insert(cache.0, cache.1).is_none());
+        assert!(tokio::time::timeout(LOCK_TIMEOUT, self.caches.write()).await.expect("GlobalCtx::register_cache: timed out waiting for caches write lock").insert(cache.0, cache.1).is_none());
     }
 
     pub async fn remove_cache(&self, key:&'static str) {
 
-        assert!(self.caches.write().await.remove(key).is_some());
+        assert!(tokio::time::timeout(LOCK_TIMEOUT, self.caches.write()).await.expect("GlobalCtx::remove_cache: timed out waiting for caches write lock").remove(key).is_some());
     }
 
     pub fn global() -> &'static Self {
@@ -191,7 +192,7 @@ impl GlobalCtx {
 
     // #[cfg(debug_assertions)] TODO
     pub async fn debug_caches(&self, device_idx:usize) {
-        let maps = self.caches.read().await;
+        let maps = tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::debug_caches: timed out waiting for caches read lock");
 
         for (type_name, map) in maps.iter() {
             info!("GlobalCtx::debug_caches: type_name={type_name}");
@@ -212,7 +213,7 @@ impl GlobalCtx {
         debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?}");
 
         //should be ok to read lock -  caches are expected to be updated (GlobalCtx::register_cache) rarely, perhaps on app startup only or before running set of runs
-        let maps = self.caches.read().await;
+        let maps = tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock");
 
         for (type_name, map) in maps.iter() {
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
@@ -228,7 +229,7 @@ impl GlobalCtx {
 
     pub async fn purge_cpu(&self, purge_since: u64) {
         //should be ok to read lock - see dump_all_to_cpu
-        let maps = self.caches.read().await;
+        let maps = tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::purge_cpu: timed out waiting for caches read lock");
 
         debug!("GlobalCtx::purge_cpu: maps.len={}", maps.len());
 
@@ -238,11 +239,11 @@ impl GlobalCtx {
     }
 
     pub fn next_cache_area(&self) -> Result<CacheAreaId, ThoError> {
-        self.caches_areas.write().next_available_cache_area()
+        self.caches_areas.try_write_for(LOCK_TIMEOUT).expect("GlobalCtx::next_cache_area: timed out waiting for cache_areas write lock").next_available_cache_area()
     }
 
     pub fn dispose_cache_area(&self, cache_area:CacheAreaId) {
-        self.caches_areas.write().dispose_cache_area(cache_area)
+        self.caches_areas.try_write_for(LOCK_TIMEOUT).expect("GlobalCtx::dispose_cache_area: timed out waiting for cache_areas write lock").dispose_cache_area(cache_area)
     }
 
     #[allow(dead_code)]

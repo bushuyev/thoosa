@@ -196,7 +196,7 @@ where
                 async move {
                     let result = (async {
                         debug!("FindMotifsStage::new: run_config={run_config:?}");
-                        let channels = ws.read().channels();
+                        let channels = ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels();
 
                         let filter = run_config.slices_filter.clone();
 

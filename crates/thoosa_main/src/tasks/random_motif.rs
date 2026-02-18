@@ -197,14 +197,14 @@ where
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
             self.find_motifs_run_id,
-            &self.store.read().list_run_config_values(self.find_motifs_run_id)?,
+            &self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_run_config_values(self.find_motifs_run_id)?,
         )?;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
 
-        let resources = self.store.read().list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices * 100/*TODO this is to compensate for filter, add proper coefficient */)?;
+        let resources = self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices * 100/*TODO this is to compensate for filter, add proper coefficient */)?;
         let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, motif_width, input_len_adjuster)?;
 
-        let channels = self.ws.read().channels();
+        let channels = self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels();
         assert_ne!(channels, 0, "no channels");
 
         let mut motifs = Vec::with_capacity(channels as usize);

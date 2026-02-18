@@ -1596,7 +1596,7 @@ mod tests {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000, 32000)?));
-        let store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
+        let store = Arc::new(RwLock::new(SqlStore::from_path(ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").store_path())?));
 
         let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"]
             .into_iter()
@@ -1612,15 +1612,15 @@ mod tests {
             .collect::<HashMap<_, _>>();
 
         {
-            let store_guard = store.write();
-            let mut conn_guard = store_guard.conn().lock();
+            let store_guard = store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
+            let mut conn_guard = store_guard.conn().try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
             let t = conn_guard.transaction()?;
             let import_id = store_guard.save_import("test resources".to_string(), &t)?;
             store_guard.save_resources_labels(&resource_stats, import_id, &t)?;
             t.commit()?;
         }
 
-        let run_id = store.write().save_run_config(
+        let run_id = store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").save_run_config(
             None,
             &"find_motifs",
             "test_cross_clc",
@@ -1631,7 +1631,7 @@ mod tests {
         let fixed_config = FixedFindMotifsConfig::new(2, false);
 
         let resource_key_refs = resource_keys.iter().map(|v| v.as_str()).collect::<Vec<_>>();
-        let resources = store.read().list_resources_by_file_stems(&resource_key_refs)?;
+        let resources = store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_resources_by_file_stems(&resource_key_refs)?;
         let resources_to_move = resources.clone();
         let oom_triggered = Arc::new(AtomicBool::new(false));
         let oom_triggered_cloned = Arc::clone(&oom_triggered);
@@ -1752,7 +1752,7 @@ mod tests {
         assert!(expected_len > 0);
 
         let slices_path = ws
-            .read()
+            .try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout")
             .tmp_path()
             .join(format!("{run_id}_0_slices.zstd"));
         let reader = ChunkedSlicesReader::<SlicesMatch>::new(&slices_path)

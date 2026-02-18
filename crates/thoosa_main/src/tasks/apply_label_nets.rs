@@ -60,7 +60,7 @@ where
 
         //gpt Resolve motif-net inputs by looking up train_motif_nets_run_ids used to produce the label nets.
         let train_motif_nets_run_ids = {
-            let mut store_guard = store.read();
+            let mut store_guard = store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
             let mut run_ids = HashSet::new();
             for run_id in &train_label_nets_run_ids {
                 run_ids.extend(store_guard.get_input_run_ids(*run_id, None)?);
@@ -102,7 +102,7 @@ where
         });
 
         let label_net_run_ids = {
-            let mut store_guard = store.write();
+            let mut store_guard = store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
             let mut run_ids = HashSet::new();
             for run_id in &train_label_nets_run_ids {
                 run_ids.extend(store_guard.list_output_run_ids(*run_id)?);
@@ -118,7 +118,7 @@ where
             return Err(ThoError::new("ApplyLabelNets::new: no label nets found"));
         }
 
-        let label_nets = ws.read().load_label_nets(
+        let label_nets = ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").load_label_nets(
             Some(label_net_run_ids.as_slice()),
             &ThoDevice::from(device_idx).into(),
         )?;

@@ -346,16 +346,16 @@ mod tests {
         ));
         let expected_id = stage.out_id(input.id());
 
-        let stage_ctx = ctx.write().branch(Some("load_motif_and_clc_dist"), false, false);
+        let stage_ctx = ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("load_motif_and_clc_dist"), false, false);
         let result = stage.run/*_cached*/(Arc::clone(&input), stage_ctx).await?;
 
-        let mut ctx_for_data = ctx.write().branch(Some("load_motif_and_clc_dist_data"), false, false);
+        let mut ctx_for_data = ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("load_motif_and_clc_dist_data"), false, false);
         let result_value: ScalarStatsValue = result.with_data_ref(0, ctx_for_data, None, |val: &ScalarStatsValue, _ctx| Ok(val.clone())).await?;
 
         assert_eq!(result_value.value(), 20.0);
         assert_eq!(result_value.id(), &expected_id);
 
-        let recorded = call_log.lock().clone();
+        let recorded = call_log.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").clone();
         assert!(recorded.iter().any(|&d| d > 3), "expected at least one oversized run, got {recorded:?}");
 
         let split_calls = recorded.iter().filter(|&&d| d == 3).count();

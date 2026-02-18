@@ -1189,7 +1189,7 @@ mod tch_tests {
     use log::debug;
 
     use tch::Device::Cpu;
-    use tch::Kind::Float;
+    use tch::Kind::{Bool, Float};
     use tch::{Device, IndexOp, Kind, Tensor, nn};
 
     use tch::nn::{BatchNormConfig, ConvConfig, VarStore};
@@ -1199,7 +1199,7 @@ mod tch_tests {
     use crate::builder::SeqBuilder;
     use crate::builder::{Node, clc_conv1d_out};
     use crate::dims::{AnyDims, Batch};
-    use crate::my_tch::ThoModule;
+    use crate::my_tch::{valid_time_mask, ThoModule};
     use crate::train_nets::ThoModuleWithStore;
 
     #[test]
@@ -1523,6 +1523,29 @@ mod tch_tests {
                 .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
                 .end_seq()
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_valid_time_mask() -> Result<(), ThoError>{
+
+        let mask =valid_time_mask(
+            &[5, 11,3,7],
+            4,
+            11,
+            Cpu
+        )?;
+
+        assert_eq!(
+            mask,
+            Tensor::from_slice(&[
+                1 , 1 , 1 , 1 , 1 , 0, 0, 0, 0, 0, 0,
+                1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 ,
+                1 , 1 , 1 , 0, 0, 0, 0, 0, 0, 0, 0,
+                1 , 1 , 1 , 1 , 1 , 1 , 1 , 0, 0, 0, 0
+            ]).view((4, 11)).totype(Bool)
+        );
 
         Ok(())
     }
