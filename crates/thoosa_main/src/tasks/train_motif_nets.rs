@@ -41,7 +41,7 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::{collect_futures_with_progress_i, mono_key, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, Data, DataId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_store::Store;
+use thoosa_store::{Store, block_on_store_future};
 use thoosa_with_data::with_data;
 use thoosa_shared::comp_id::SynKey;
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
@@ -178,13 +178,13 @@ where
         //gpt Expand selection run ids into individual motif ids for training.
         let select_motifs_run_ids_clone = select_motifs_run_ids.clone();
         let motifs_rates_selected_motifs_run_ids = select_motifs_run_ids_clone.iter().flat_map(|select_motifs_run_id| {
-            let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_id, channels).expect("list_selected_motifs failed");
+            let selected_motifs = block_on_store_future(self.store.list_selected_motifs(*select_motifs_run_id, channels)).expect("list_selected_motifs failed");
 
             debug!("TrainMotifNets::run: select_motifs_run_id={select_motifs_run_id} selected_motifs={selected_motifs:?}");
 
             selected_motifs.into_iter()
                 .flat_map(move |channels_motifs|
-                    channels_motifs.into_iter().map(move |motif_id_rate| (motif_id_rate, select_motifs_run_id)))
+                    channels_motifs.into_iter().map(move |motif_id_rate| (motif_id_rate, *select_motifs_run_id)))
         }).collect::<Vec<_>>();
         let motifs_rates_selected_motifs_run_ids_len = motifs_rates_selected_motifs_run_ids.len();
         let futures = motifs_rates_selected_motifs_run_ids.into_iter()
@@ -266,14 +266,14 @@ where
 
                 debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", result.min_loss);
 
-                store.get_motif_meta(motif_id_rate.0).await
+                block_on_store_future(store.get_motif_meta(motif_id_rate.0))
                 .map(|(channel, find_motifs_run_id)| {
                     TrainMotifNetResult::new(
                         result.min_loss,
                         channel as u32,
                         motif_id_rate.0,
                         result.var_store,
-                        *select_motifs_run_id,
+                        select_motifs_run_id,
                         result.node_params,
                         result.run_config,
                     )

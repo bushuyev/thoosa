@@ -14,7 +14,7 @@ use tch::{Device, IndexOp, Tensor};
 use thoosa_common::utils::{from};
 use thoosa_shared::ThoError;
 use thoosa_shared::resource::{Resource, ResourceId};
-use thoosa_store::Store;
+use thoosa_store::{Store, block_on_store_future};
 
 #[derive(Default)]
 pub enum Set {
@@ -131,8 +131,7 @@ pub fn load_to_logits_tensors(
     group: &str,
     store: Arc<Box<dyn Store>>,
 ) -> Vec<(Resource, Vec<f32>)> {
-    store
-        .list_resource_random_in_group(group)
+    block_on_store_future(store.list_resource_random_in_group(group))
         .expect("list_resource_random_in_group")
         .into_iter()
         .map(move |(resource_id, labels_p)| {
@@ -238,14 +237,12 @@ pub fn labeled_tensors_by_descr<'a>(
     vec![
         (
             1,
-            store_lock
-                .list_resource_set_resources_by_descr(resource_set_descr)
+            block_on_store_future(store_lock.list_resource_set_resources_by_descr(resource_set_descr))
                 .expect("list_resource_set_resources_by_descr"),
         ),
         (
             0,
-            store_lock
-                .list_resource_random_not_labeled(label.as_str(), 100)
+            block_on_store_future(store_lock.list_resource_random_not_labeled(label.as_str(), 100))
                 .expect("list_resource_random_not_label"),
         ),
     ]

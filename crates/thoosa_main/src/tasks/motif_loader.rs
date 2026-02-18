@@ -25,7 +25,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
 use thoosa_shared::traits::{CachableIdTr, Data, DataId, Select, WithId};
-use thoosa_store::Store;
+use thoosa_store::{Store, block_on_store_future};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_with_data::with_data;
@@ -189,7 +189,7 @@ where
 
         let motif_id_value = motif_id.clone().0;
         //gpt TODO!! select_motifs_run_id from MotifLoaderInput is ignored; list_motif_slices(None, ...) loads slices from all runs.
-        let (channel, find_motifs_run_id, slices, resources_map) = self.store.list_motif_slices(motif_id_value, None, Some(1000), None)?;//TODO config
+        let (channel, find_motifs_run_id, slices, resources_map) = block_on_store_future(self.store.list_motif_slices(motif_id_value, None, Some(1000), None))?;//TODO config
 
         debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
 
@@ -292,11 +292,11 @@ where
         })?;
 
 
-        let (channel, find_motifs_run_id) = self.store.get_motif_meta(*motif_id).await?;
+        let (channel, find_motifs_run_id) = block_on_store_future(self.store.get_motif_meta(*motif_id))?;
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
             find_motifs_run_id,
-            &self.store.list_run_config_values(find_motifs_run_id)?,
+            &block_on_store_future(self.store.list_run_config_values(find_motifs_run_id))?,
         )?;
 
 
@@ -306,12 +306,12 @@ where
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
         let (channel, find_motifs_run_id, slices, resources_map) = thoosa_shared::with_perf_log(
             || {
-                self.store.list_random_motif_slices(
+                block_on_store_future(self.store.list_random_motif_slices(
                     motif_id_value,
                     find_motifs_run_config.window,
                     None,
                     input_len_adjuster,
-                )
+                ))
             },
             "RandomSlicesLoader::run/store_read_list_random_motif_slices",
         )?;
@@ -358,7 +358,7 @@ where
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
         find_motifs_run_id,
-        &store.list_run_config_values(find_motifs_run_id)?,
+        &block_on_store_future(store.list_run_config_values(find_motifs_run_id))?,
     )?;
 
     let resource_ids_slices = slices

@@ -26,7 +26,7 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_shared::{collect_futures_with_progress_i, mono_key, panic_to_err_async, parse_resources, ResourceType, StreamBuffering, ThoError};
-use thoosa_store::Store;
+use thoosa_store::{Store, block_on_store_future};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::find_motifs::FindMotifsStage;
 use crate::tasks::motif_loader::MotifLoader;
@@ -123,13 +123,18 @@ impl SavableResult for FindAndSelectMotifsResult {
         // }).collect::<Result<Vec<_>, ThoError>>();
 
         //TODO it's not run_id, it's only to track best  find & select ids
-        let id = store.save_run_config(
-            Some(self.best_configs.iter().map(|v|v.select_motifs_run_config.id.expect("no select_motifs_run_config")).collect::<Vec<_>>().as_ref()),
-            &FindAndSelectMotifsRunConfig::type_name(),
+        let best_run_ids = self
+            .best_configs
+            .iter()
+            .map(|v| v.select_motifs_run_config.id.expect("no select_motifs_run_config"))
+            .collect::<Vec<_>>();
+        let id = block_on_store_future(store.save_run_config(
+            Some(&best_run_ids),
+            FindAndSelectMotifsRunConfig::type_name(),
             "OptSelectMotifsRunConfig",
             "best_run_ids",
             HashMap::from([]),
-        )?;
+        ))?;
         Ok(id)
     }
 }
@@ -187,7 +192,7 @@ impl FindAndSelectMotifsStage {
     where
         R: RunConfig + ToHashmap,
     {
-        let run_id = store.save_run_config(input_run_ids, &R::type_name(), descr, "todo", run_config.to_properties_iter(None).collect())?;
+        let run_id = block_on_store_future(store.save_run_config(input_run_ids, R::type_name(), descr, "todo", run_config.to_properties_iter(None).collect()))?;
         run_config.set_id(run_id);
         Ok(run_id)
     }

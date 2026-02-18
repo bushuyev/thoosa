@@ -1,6 +1,7 @@
 use crate::ThoError;
 use crate::applicables_runner::Input;
 use crate::traits::WithId;
+use async_trait::async_trait;
 use log::trace;
 use mockall::automock;
 use std::cmp::Ordering;
@@ -11,35 +12,36 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
 
 #[automock]
+#[async_trait(?Send)]
 pub trait ResourceStore {
-    fn list_resources_by_file_stems<'a>(
+    async fn list_resources_by_file_stems<'a>(
         &self,
         file_stems: &'a [&'a str],
     ) -> Result<Vec<Resource>, ThoError>;
 
-    fn list_resource_set_resources_by_descr(
+    async fn list_resource_set_resources_by_descr(
         &self,
         descr: &str,
     ) -> Result<Vec<Resource>, ThoError>;
 
-    fn list_resource_set_group_sets(
+    async fn list_resource_set_group_sets(
         &self,
         group_descr: &str,
     ) -> Result<Vec<(usize, String)>, ThoError>;
 
-    fn list_group_labeled_resources_sets(
+    async fn list_group_labeled_resources_sets(
         &self,
         group_decr: &str,
     ) -> Result<Vec<(String, String)>, ThoError>;
 
-    fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoError>;
+    async fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoError>;
 
-    fn list_resource_random_in_group(
+    async fn list_resource_random_in_group(
         &self,
         group_descr: &str,
     ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError>;
 
-    fn list_resources_not_in_group(
+    async fn list_resources_not_in_group(
         &self,
         group_descr: &str,
         limit: u32,

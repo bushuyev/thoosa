@@ -89,12 +89,10 @@ where
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));
 
         //gpt Load all selected motif nets for the provided train_motif_nets_run_ids.
-        let selected_nets = train_motif_nets_run_ids
-            .iter()
-            .flat_map(|train_motif_nets_run_id| {
-                store.list_selected_nets(*train_motif_nets_run_id, max_loss).unwrap()
-            })
-            .collect::<Vec<_>>();
+        let mut selected_nets = Vec::new();
+        for train_motif_nets_run_id in &train_motif_nets_run_ids {
+            selected_nets.extend(store.list_selected_nets(*train_motif_nets_run_id, max_loss).await?);
+        }
         let selected_nets_len = selected_nets.len();
         let futures = selected_nets
             .into_iter()

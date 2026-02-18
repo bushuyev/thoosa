@@ -11,6 +11,7 @@
 extern crate core;
 
 pub mod fs_store;
+pub use rusqlite;
 
 use bytemuck::{Pod, Zeroable};
 use parking_lot::{Mutex, RwLock};
@@ -83,44 +84,44 @@ impl SetCond {
         }
     }
 }
-#[async_trait]
+#[async_trait(?Send)]
 pub trait Store: ResourceStore + Debug + Sync + Send {
-    fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
-    fn save_run_config<'a>(
+    async fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
+    async fn save_run_config<'a, 'b, 'c>(
         &self,
         input_run_id: Option<&'a [RunId]>,
-        run_config_type: &'a dyn Display,
-        descr: &'a str,
-        _keys: &'a str,
+        run_config_type: &'b str,
+        descr: &'c str,
+        _keys: &'c str,
         properties_vals: HashMap<String, Val>,
     ) -> Result<RunId, ThoError>;
 
-    fn get_input_run_ids<'a>(&self, run_id: RunId, input_type: Option<&'a dyn Display>) -> Result<Vec<RunId>, ThoError>;
+    async fn get_input_run_ids<'a>(&self, run_id: RunId, input_type: Option<&'a str>) -> Result<Vec<RunId>, ThoError>;
 
-    fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoError>; //corr_run_id, run_id, label
+    async fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoError>; //corr_run_id, run_id, label
 
-    fn list_output_run_ids(&self, input_run_id: RunId) -> Result<Vec<RunId>, ThoError>; //corr_run_id, run_id, label
+    async fn list_output_run_ids(&self, input_run_id: RunId) -> Result<Vec<RunId>, ThoError>; //corr_run_id, run_id, label
 
-    fn save_resources_set(
+    async fn save_resources_set(
         &self,
         set: String,
         resource_keys: Vec<String>,
         group_id: Option<usize>,
     ) -> Result<usize, ThoError>;
-    fn save_resource_set_group(&self, descr: String) -> Result<usize, ThoError>;
-    fn save_resources_labels<'a>(
+    async fn save_resource_set_group(&self, descr: String) -> Result<usize, ThoError>;
+    async fn save_resources_labels<'a>(
         &self,
         resource_stats_labels_probs: &'a HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
         import_id: u32,
         t: &'a Transaction<'a>,
     ) -> Result<Vec<ResourceId>, ThoError>;
-    fn save_pure_sets<'a>(
+    async fn save_pure_sets<'a>(
         &self,
         max_len: usize,
         only_unused: bool,
         t: &'a Transaction<'a>,
     ) -> Result<(), ThoError>;
-    fn save_pure_balanced_sets<'a>(
+    async fn save_pure_balanced_sets<'a>(
         &self,
         prefix: &str,
         limit: Option<usize>,
@@ -128,50 +129,50 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         valid_coeff: f32,
         t: &'a Transaction<'a>,
     ) -> Result<(), ThoError>;
-    fn save_set_by_labels(
+    async fn save_set_by_labels(
         &self,
         conds: Vec<(String, SetCond)>,
         only_unused: bool,
         limit: usize,
     ) -> Result<(), ThoError>;
-    fn save_groups_by_label_cnt<'a>(
+    async fn save_groups_by_label_cnt<'a>(
         &self,
         max_resources_in_set: usize,
         t: &'a Transaction<'a>,
     ) -> Result<(), ThoError>;
-    fn list_resources_by_ids(
+    async fn list_resources_by_ids(
         &self,
         file_stem: &Vec<ResourceId>,
     ) -> Result<Vec<Resource>, ThoError>;
-    fn list_resource_random_not_labeled(
+    async fn list_resource_random_not_labeled(
         &self,
         label: &str,
         limit: u32,
     ) -> Result<Vec<Resource>, ThoError>;
 
-    fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
+    async fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
 
-    fn list_labels(&self) -> Result<Vec<String>, ThoError>;
+    async fn list_labels(&self) -> Result<Vec<String>, ThoError>;
 
-    fn save_params_value<'a>(&self, params: HashMap<String, Val>, run_id: RunId, label: Option<&'a str>) -> Result<(), ThoError>;
-    fn save_slices(&self, run_id: RunId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> Result<(), ThoError>;
+    async fn save_params_value<'a>(&self, params: HashMap<String, Val>, run_id: RunId, label: Option<&'a str>) -> Result<(), ThoError>;
+    async fn save_slices(&self, run_id: RunId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> Result<(), ThoError>;
 
-    fn save_groups_as_motifs_with_slices_matches(&self, run_id: RunId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, as_ref: &dyn AsRef<Path>) -> Result<(), ThoError>;
+    async fn save_groups_as_motifs_with_slices_matches(&self, run_id: RunId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, path: PathBuf) -> Result<(), ThoError>;
 
-    fn save_groups_as_motifs(&self, run_id: RunId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> Result<(), ThoError>;
+    async fn save_groups_as_motifs(&self, run_id: RunId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> Result<(), ThoError>;
 
-    fn add_slices_to_motif(&self, run_id: RunId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> Result<(), ThoError>;
+    async fn add_slices_to_motif(&self, run_id: RunId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> Result<(), ThoError>;
 
-    fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
+    async fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
     // fn get_motif_meta<'a>(&self, motif_id: u32) -> BoxFuture<'a, Result<(usize, RunId), ThoError>>;
     async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError>;
-    fn list_motifs_slices(
+    async fn list_motifs_slices(
         &self,
         run_id: RunId,
         select_motifs_run_id: Option<Vec<RunId>>,
     ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError>;
 
-    fn list_motif_slices(
+    async fn list_motif_slices(
         &self,
         motif_id: u32,
         select_motifs_run_id: Option<Vec<RunId>>,
@@ -187,7 +188,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         ThoError,
     >;
 
-    fn list_random_motif_slices(
+    async fn list_random_motif_slices(
         &self,
         motif_id: u32,
         motif_width: u32,
@@ -203,60 +204,61 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         ThoError,
     >;
 
-    fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
+    async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
 
-    fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
+    async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
 
-    fn save_selected_motifs(&self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoError>;
+    async fn save_selected_motifs(&self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoError>;
 
-    fn list_selected_motifs(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
+    async fn list_selected_motifs(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
 
-    fn save_selected_net(&self, run_id: RunId, path: PathBuf, loss: f32) -> Result<(), ThoError>;
+    async fn save_selected_net(&self, run_id: RunId, path: PathBuf, loss: f32) -> Result<(), ThoError>;
 
-    fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError>;
+    async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError>;
 
-    fn run_config_descr(&self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError>;
+    async fn run_config_descr(&self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError>;
+    #[cfg(test)]
     fn conn(&self) -> &parking_lot::Mutex<Connection>; //parking_lot:: for mockall
 }
 
 mock! {
     pub Store {}
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl Store for Store {
-        fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
-        fn save_run_config<'a>(
+        async fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
+        async fn save_run_config<'a, 'b, 'c>(
             &self,
             input_run_id: Option<&'a [RunId]>,
-            run_config_type: &'a dyn Display,
-            descr: &'a str,
-            _keys: &'a str,
+            run_config_type: &'b str,
+            descr: &'c str,
+            _keys: &'c str,
             properties_vals: HashMap<String, Val>,
         ) -> Result<RunId, ThoError>;
-        fn get_input_run_ids<'a>(&self,run_id: RunId,input_type: Option<&'a dyn Display>,) -> Result<Vec<RunId>, ThoError>;
-        fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoError>;
-        fn list_output_run_ids(&self, input_run_id: RunId) -> Result<Vec<RunId>, ThoError>;
+        async fn get_input_run_ids<'a>(&self,run_id: RunId,input_type: Option<&'a str>,) -> Result<Vec<RunId>, ThoError>;
+        async fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoError>;
+        async fn list_output_run_ids(&self, input_run_id: RunId) -> Result<Vec<RunId>, ThoError>;
 
-        fn save_resources_set(
+        async fn save_resources_set(
             &self,
             set: String,
             resource_keys: Vec<String>,
             group_id: Option<usize>,
         ) -> Result<usize, ThoError>;
-        fn save_resource_set_group(&self, descr: String) -> Result<usize, ThoError>;
-        fn save_resources_labels<'a>(
+        async fn save_resource_set_group(&self, descr: String) -> Result<usize, ThoError>;
+        async fn save_resources_labels<'a>(
             &self,
             resource_stats_labels_probs: &'a HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
             import_id: u32,
             t: &'a Transaction<'a>,
         ) -> Result<Vec<ResourceId>, ThoError>;
-        fn save_pure_sets<'a>(
+        async fn save_pure_sets<'a>(
             &self,
             max_len: usize,
             only_unused: bool,
             t: &'a Transaction<'a>,
         ) -> Result<(), ThoError>;
-        fn save_pure_balanced_sets<'a>(
+        async fn save_pure_balanced_sets<'a>(
             &self,
             prefix: &str,
             limit: Option<usize>,
@@ -264,55 +266,55 @@ mock! {
             valid_coeff: f32,
             t: &'a Transaction<'a>,
         ) -> Result<(), ThoError>;
-        fn save_set_by_labels(
+        async fn save_set_by_labels(
             &self,
             conds: Vec<(String, SetCond)>,
             only_unused: bool,
             limit: usize,
         ) -> Result<(), ThoError>;
-        fn save_groups_by_label_cnt<'a>(
+        async fn save_groups_by_label_cnt<'a>(
             &self,
             max_resources_in_set: usize,
             t: &'a Transaction<'a>,
         ) -> Result<(), ThoError>;
-        fn list_resources_by_ids(
+        async fn list_resources_by_ids(
             &self,
             file_stem: &Vec<ResourceId>,
         ) -> Result<Vec<Resource>, ThoError>;
-        fn list_resource_random_not_labeled(
+        async fn list_resource_random_not_labeled(
             &self,
             label: &str,
             limit: u32,
         ) -> Result<Vec<Resource>, ThoError>;
-        fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
-        fn list_labels(&self) -> Result<Vec<String>, ThoError>;
-        fn save_params_value<'a>(
+        async fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
+        async fn list_labels(&self) -> Result<Vec<String>, ThoError>;
+        async fn save_params_value<'a>(
             &self,
             params: HashMap<String, Val>,
             run_id: RunId,
             label: Option<&'a str>,
         ) -> Result<(), ThoError>;
-        fn save_slices(
+        async fn save_slices(
             &self,
             run_id: RunId,
             channel: i64,
             slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>,
         ) -> Result<(), ThoError>;
-        fn save_groups_as_motifs_with_slices_matches(
+        async fn save_groups_as_motifs_with_slices_matches(
             &self,
             run_id: RunId,
             channel: i64,
             groups: HashMap<u16, HashSet<IdSlice>>,
-            as_ref: &dyn AsRef<Path>,
+            path: PathBuf,
         ) -> Result<(), ThoError>;
-        fn save_groups_as_motifs(
+        async fn save_groups_as_motifs(
             &self,
             run_id: RunId,
             channel: i64,
             groups: HashMap<u16, HashSet<IdSlice>>,
         ) -> Result<(), ThoError>;
 
-        fn add_slices_to_motif(
+        async fn add_slices_to_motif(
             &self,
             run_id: RunId,
             motif_id: u32,
@@ -320,8 +322,8 @@ mock! {
             groups: HashSet<IdSlice>,
         ) -> Result<(), ThoError>;
 
-        fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
-        fn list_motifs_slices(
+        async fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
+        async fn list_motifs_slices(
             &self,
             run_id: RunId,
             select_motifs_run_id: Option<Vec<RunId>>,
@@ -330,7 +332,7 @@ mock! {
         // fn get_motif_meta<'a>(&self, motif_id: u32) -> BoxFuture<'a, Result<(usize, RunId), ThoError>>;
         async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError>;
 
-        fn list_motif_slices(
+        async fn list_motif_slices(
             &self,
             motif_id: u32,
             select_motifs_run_id: Option<Vec<RunId>>,
@@ -345,7 +347,7 @@ mock! {
             ),
             ThoError,
         >;
-        fn list_random_motif_slices(
+        async fn list_random_motif_slices(
             &self,
             motif_id: u32,
             motif_width: u32,
@@ -360,63 +362,65 @@ mock! {
             ),
             ThoError,
         >;
-        fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
-        fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
-        fn save_selected_motifs(
+        async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
+        async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
+        async fn save_selected_motifs(
             &self,
             run_id: RunId,
             selected_motifs: Vec<(u32, f64)>,
         ) -> Result<RunId, ThoError>;
 
-        fn list_selected_motifs(
+        async fn list_selected_motifs(
             &self,
             motif_selection_id: RunId,
             channels: u32,
         ) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
-        fn save_selected_net(
+        async fn save_selected_net(
             &self,
             run_id: RunId,
             path: PathBuf,
             loss: f32,
         ) -> Result<(), ThoError>;
-        fn list_selected_nets(
+        async fn list_selected_nets(
             &self,
             run_id: RunId,
             loss: Option<f32>,
         ) -> Result<Vec<(PathBuf, f32)>, ThoError>;
-        fn run_config_descr(&self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError>;
+        async fn run_config_descr(&self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError>;
+        #[cfg(test)]
         fn conn(&self) -> &parking_lot::Mutex<Connection>;
     }
 
+    #[async_trait(?Send)]
     impl ResourceStore for Store {
-        fn list_resources_by_file_stems<'a>(
+        async fn list_resources_by_file_stems<'a>(
             &self,
             file_stems: &'a [&'a str],
         ) -> Result<Vec<Resource>, ThoError>;
 
-        fn list_resource_set_resources_by_descr(
+        async fn list_resource_set_resources_by_descr(
             &self,
             descr: &str,
         ) -> Result<Vec<Resource>, ThoError>;
 
-        fn list_resource_set_group_sets(
+        async fn list_resource_set_group_sets(
             &self,
             group_descr: &str,
         ) -> Result<Vec<(usize, String)>, ThoError>;
 
-        fn list_group_labeled_resources_sets(
+        async fn list_group_labeled_resources_sets(
             &self,
             group_decr: &str,
         ) -> Result<Vec<(String, String)>, ThoError>;
 
-        fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoError>;
+        async fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoError>;
 
-        fn list_resource_random_in_group(
+        async fn list_resource_random_in_group(
             &self,
             group_descr: &str,
         ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError>;
 
-        fn list_resources_not_in_group(
+        async fn list_resources_not_in_group(
             &self,
             group_descr: &str,
             limit:u32
@@ -443,8 +447,9 @@ pub struct SqlStore {
     conn_2: tokio_rusqlite::Connection,
 }
 
+#[async_trait(?Send)]
 impl ResourceStore for SqlStore {
-    fn list_resource_set_resources_by_descr(
+    async fn list_resource_set_resources_by_descr(
         &self,
         descr: &str,
     ) -> Result<Vec<Resource>, ThoError> {
@@ -465,7 +470,7 @@ impl ResourceStore for SqlStore {
 
         Ok(r)
     }
-    fn list_resources_by_file_stems<'a>(
+    async fn list_resources_by_file_stems<'a>(
         &self,
         file_stems: &'a [&'a str],
     ) -> Result<Vec<Resource>, ThoError> {
@@ -511,7 +516,7 @@ impl ResourceStore for SqlStore {
         Ok(resources)
     }
 
-    fn list_resource_set_group_sets(
+    async fn list_resource_set_group_sets(
         &self,
         group_descr: &str,
     ) -> Result<Vec<(usize, String)>, ThoError> {
@@ -543,7 +548,7 @@ impl ResourceStore for SqlStore {
     }
 
     ///returns Vec<(label, resource_set_descr)>
-    fn list_group_labeled_resources_sets(
+    async fn list_group_labeled_resources_sets(
         &self,
         group_descr: &str,
     ) -> Result<Vec<(String, String)>, ThoError> {
@@ -577,7 +582,7 @@ impl ResourceStore for SqlStore {
         Ok(labeled_resources_sets)
     }
 
-    fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoError> {
+    async fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -588,7 +593,7 @@ impl ResourceStore for SqlStore {
         Ok(set_resources)
     }
 
-    fn list_resource_random_in_group(
+    async fn list_resource_random_in_group(
         &self,
         group_descr: &str,
     ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError> {
@@ -650,7 +655,7 @@ impl ResourceStore for SqlStore {
         Ok(r)
     }
 
-    fn list_resources_not_in_group(
+    async fn list_resources_not_in_group(
         &self,
         group_descr: &str,
         limit:u32
@@ -689,10 +694,10 @@ impl ResourceStore for SqlStore {
 
 
 }
-#[async_trait]
+#[async_trait(?Send)]
 //TODO move out all prepare stmts
 impl Store for SqlStore {
-    fn save_import(&self, descr: String, t: &Transaction) -> Result<u32, ThoError> {
+    async fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError> {
         t.execute("INSERT INTO imports (descr) VALUES (?)", params![descr])?;
 
         let import_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
@@ -701,12 +706,12 @@ impl Store for SqlStore {
     }
 
     //TODO resources - save serialized resources config - run_resources is getting to big
-    fn save_run_config(
+    async fn save_run_config<'a, 'b, 'c>(
         &self,
-        input_run_id: Option<&[RunId]>,
-        run_config_type: &dyn Display,
-        descr: &str,
-        _keys: &str,
+        input_run_id: Option<&'a [RunId]>,
+        run_config_type: &'b str,
+        descr: &'c str,
+        _keys: &'c str,
         properties_vals: HashMap<String, Val>,
     ) -> Result<RunId, ThoError> {
         debug!("SqlStore::save_run_config: input_run_id={input_run_id:?} run_config_type={run_config_type} descr={descr}");
@@ -781,10 +786,10 @@ impl Store for SqlStore {
         Ok(run_id as RunId)
     }
 
-    fn get_input_run_ids(
+    async fn get_input_run_ids<'a>(
         &self,
         run_id: RunId,
-        input_type: Option<&dyn Display>,
+        input_type: Option<&'a str>,
     ) -> Result<Vec<RunId>, ThoError> {
         debug!("SqlStore::get_input_run_ids: run_id={run_id} input_type={:?}",input_type.map(|v| v.to_string()));
 
@@ -801,7 +806,7 @@ impl Store for SqlStore {
     }
 
     /// returns - Vec<run_id, input_run_id>
-    fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoError> {
+    async fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoError> {
         assert!(!ids.is_empty());
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
@@ -841,11 +846,11 @@ impl Store for SqlStore {
 
 
     //TODO remove?
-    fn save_params_value(
+    async fn save_params_value<'a>(
         &self,
         params: HashMap<String, Val>,
         run_id: RunId,
-        label: Option<&str>,
+        label: Option<&'a str>,
     ) -> Result<(), ThoError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
@@ -865,7 +870,7 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn save_label(&self, label: &str, t: &Transaction) -> Result<u32, ThoError> {
+    async fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoError> {
         t.execute("INSERT INTO labels (label) VALUES (?)", params![label])?;
 
         let label_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
@@ -873,7 +878,7 @@ impl Store for SqlStore {
         Ok(label_id)
     }
 
-    fn list_labels(&self) -> Result<Vec<String>, ThoError> {
+    async fn list_labels(&self) -> Result<Vec<String>, ThoError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
@@ -888,11 +893,11 @@ impl Store for SqlStore {
     }
 
     //TODO folds to util fn
-    fn save_resources_labels(
+    async fn save_resources_labels<'a>(
         &self,
-        resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
+        resource_stats_labels_probs: &'a HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
         import_id: u32,
-        t: &Transaction,
+        t: &'a Transaction<'a>,
     ) -> Result<Vec<ResourceId>, ThoError> {
         debug!(
             "save_resources_labels: resource_labels_probs.len()={}",
@@ -1032,7 +1037,7 @@ impl Store for SqlStore {
     }
 
     //TODO used in tests only, remove?
-    fn save_resources_set(
+    async fn save_resources_set(
         &self,
         descr: String,
         resource_keys: Vec<String>,
@@ -1089,7 +1094,7 @@ impl Store for SqlStore {
         Ok(resource_set_id)
     }
 
-    fn save_resource_set_group(&self, descr: String) -> Result<usize, ThoError> {
+    async fn save_resource_set_group(&self, descr: String) -> Result<usize, ThoError> {
         let mut conn_guard = self.conn.lock();
         let mut t = conn_guard.transaction()?;
 
@@ -1100,10 +1105,10 @@ impl Store for SqlStore {
         Ok(group_id)
     }
 
-    fn save_groups_by_label_cnt(
+    async fn save_groups_by_label_cnt<'a>(
         &self,
         max_resources_in_set: usize,
-        t: &Transaction,
+        t: &'a Transaction<'a>,
     ) -> Result<(), ThoError> {
         {
             let labels_cnt_labels_resources: HashMap<usize, HashMap<String, Vec<usize>>> = {
@@ -1234,11 +1239,11 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn save_pure_sets(
+    async fn save_pure_sets<'a>(
         &self,
         max_len: usize,
         only_unused: bool,
-        t: &Transaction,
+        t: &'a Transaction<'a>,
     ) -> Result<(), ThoError> {
         let group_id = Self::save_resource_set_group(format!("pure group {}", max_len), t)?;
 
@@ -1280,13 +1285,13 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn save_pure_balanced_sets(
+    async fn save_pure_balanced_sets<'a>(
         &self,
         prefix: &str,
         limit: Option<usize>,
         train_coeff: f32,
         valid_coeff: f32,
-        t: &Transaction,
+        t: &'a Transaction<'a>,
     ) -> Result<(), ThoError> {
         if train_coeff < 0.0 || valid_coeff < 0.0 {
             return Err(ThoError::new(format!("train_coeff and valid_coeff must be >= 0.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
@@ -1390,7 +1395,7 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn list_resource_random_not_labeled(
+    async fn list_resource_random_not_labeled(
         &self,
         label: &str,
         limit: u32,
@@ -1414,7 +1419,7 @@ impl Store for SqlStore {
         Ok(r)
     }
 
-    fn list_resources_by_ids(
+    async fn list_resources_by_ids(
         &self,
         resource_ids: &Vec<ResourceId>,
     ) -> Result<Vec<Resource>, ThoError> {
@@ -1461,7 +1466,7 @@ impl Store for SqlStore {
     }
 
     //TODO not used, remove?
-    fn save_set_by_labels(
+    async fn save_set_by_labels(
         &self,
         conds: Vec<(String, SetCond)>,
         _only_unused: bool,
@@ -1508,7 +1513,7 @@ impl Store for SqlStore {
         Ok(t.commit()?)
     }
     //TODO remove
-    fn save_slices(
+    async fn save_slices(
         &self,
         run_id: RunId,
         channel: i64,
@@ -1547,7 +1552,7 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn save_groups_as_motifs(
+    async fn save_groups_as_motifs(
         &self,
         run_id: RunId,
         channel: i64,
@@ -1591,7 +1596,7 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn add_slices_to_motif(
+    async fn add_slices_to_motif(
         &self,
         run_id: RunId,
         motif_id: u32,
@@ -1618,23 +1623,23 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn save_groups_as_motifs_with_slices_matches(
+    async fn save_groups_as_motifs_with_slices_matches(
         &self,
         run_id: RunId,
         channel: i64,
         groups: HashMap<u16, HashSet<IdSlice>>,
-        as_ref: &dyn AsRef<Path>,
+        path: PathBuf,
     ) -> Result<(), ThoError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
-        debug!("save_slices_groups_as_motifs_from_tmp_db: run_id={run_id:?}, channel={channel:?} path={}",as_ref.as_ref().to_string_lossy());
+        debug!("save_slices_groups_as_motifs_from_tmp_db: run_id={run_id:?}, channel={channel:?} path={}", path.to_string_lossy());
 
         {
             t.execute(
                 format!(
                     "ATTACH DATABASE '{}' AS slices_{run_id}_{channel}_tmp",
-                    as_ref.as_ref().to_string_lossy()
+                    path.to_string_lossy()
                 )
                 .as_str(),
                 [],
@@ -1703,7 +1708,7 @@ impl Store for SqlStore {
 
     }
 
-    fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError> {
+    async fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
         let motif_ids = {
@@ -1726,7 +1731,7 @@ impl Store for SqlStore {
     /**
      * returns map tensor_key - MotifSlice(motif_group, tensor slice idx, channel)
      */
-    fn list_motifs_slices(
+    async fn list_motifs_slices(
         &self,
         run_id: RunId,
         select_motifs_run_id: Option<Vec<RunId>>,
@@ -1853,7 +1858,7 @@ impl Store for SqlStore {
     }
 
     ///returns channel, find_motifs_run_id, slices, resources map
-    fn list_motif_slices(
+    async fn list_motif_slices(
         &self,
         motif_id: u32,
         select_motifs_run_id: Option<Vec<RunId>>,
@@ -2016,7 +2021,7 @@ impl Store for SqlStore {
     }
 
     ///gpt generated, returns slices from same tensors and same channel as target motif but not belonging to the motif
-    fn list_random_motif_slices(
+    async fn list_random_motif_slices(
         &self,
         motif_id: u32,
         motif_width: u32,
@@ -2258,7 +2263,7 @@ impl Store for SqlStore {
         Ok((channel, run_id, generated, resources_map))
     }
 
-    fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError> {
+    async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -2298,7 +2303,7 @@ impl Store for SqlStore {
         result
     }
 
-    fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError> {
+    async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -2353,7 +2358,7 @@ impl Store for SqlStore {
         Ok(result)
     }
 
-    fn save_selected_motifs(
+    async fn save_selected_motifs(
         &self,
         run_id: RunId,
         selected_motifs: Vec<(u32, f64)>,
@@ -2394,7 +2399,7 @@ impl Store for SqlStore {
     }
 
 
-    fn list_output_run_ids(&self, input_run_id: RunId) -> Result<Vec<RunId>, ThoError> {
+    async fn list_output_run_ids(&self, input_run_id: RunId) -> Result<Vec<RunId>, ThoError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -2416,7 +2421,7 @@ impl Store for SqlStore {
     /**k
      * returns vec of channel X (motif id, rate)
      */
-    fn list_selected_motifs(
+    async fn list_selected_motifs(
         &self,
         motif_selection_id: RunId,
         channels: u32,
@@ -2455,7 +2460,7 @@ impl Store for SqlStore {
         Ok(channels_motifs)
     }
 
-    fn save_selected_net(
+    async fn save_selected_net(
         &self,
         run_id: RunId,
         path: PathBuf,
@@ -2474,7 +2479,7 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError> {
+    async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -2505,7 +2510,7 @@ impl Store for SqlStore {
         Ok(selected_nets)
     }
 
-    fn run_config_descr(&self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError> {
+    async fn run_config_descr(&self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
@@ -2520,83 +2525,38 @@ impl Store for SqlStore {
         parse_corr_labels(descr.as_str())
     }
 
+    #[cfg(test)]
     fn conn(&self) -> &Mutex<Connection> {
         &self.conn
     }
 }
 
-fn open_in_path_from_sync<P: AsRef<Path>>(path: P) -> tokio_rusqlite::Connection {
-    match tokio::runtime::Handle::try_current() {
-        Ok(h) => {
-            // We're on a runtime thread -> block_in_place first.
-            tokio::task::block_in_place(|| {
-                h.block_on(async {
-                    let conn = tokio_rusqlite::Connection::open(path).await?;
-
-                    conn.call(|conn|{
-                        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-                        conn.pragma_update(None, "synchronous", "NORMAL").unwrap();
-                        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-
-                        Ok::<_, ()>(())
-                    }).await.unwrap();
-
-                    Ok::<_, rusqlite::Error>(conn)
-                })
-                    .expect("open_in_memory failed")
-            })
-        }
-        Err(_) => {
-            // No runtime -> make a local one.
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("runtime");
-            rt.block_on(async {
-                let conn = tokio_rusqlite::Connection::open(path).await?;
-
-                Ok::<_, Error>(conn)
-            })
-                .expect("open_in_memory failed")
-        }
-    }
-}
-
-fn open_in_memory_from_sync() -> tokio_rusqlite::Connection {
-    match tokio::runtime::Handle::try_current() {
-        Ok(h) => {
-            // We're on a runtime thread -> block_in_place first.
-            tokio::task::block_in_place(|| {
-                h.block_on(tokio_rusqlite::Connection::open_in_memory())
-                    .expect("open_in_memory failed")
-            })
-        }
-        Err(_) => {
-            // No runtime -> make a local one.
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("runtime");
-            rt.block_on(tokio_rusqlite::Connection::open_in_memory())
-                .expect("open_in_memory failed")
-        }
-    }
-}
-
 //TODO move all prepare to init
 impl SqlStore {
-    pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
-        Self::create_tables(
-            Connection::open(path.as_ref())?,
-            open_in_path_from_sync(path)
-        )
+    pub async fn from_path<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
+        let conn_2 = tokio_rusqlite::Connection::open(path.as_ref()).await?;
+        conn_2
+            .call(|conn| {
+                conn.pragma_update(None, "journal_mode", "WAL")?;
+                conn.pragma_update(None, "synchronous", "NORMAL")?;
+                conn.pragma_update(None, "foreign_keys", "ON")?;
+                Ok::<(), rusqlite::Error>(())
+            })
+            .await?;
+        Self::create_tables(Connection::open(path.as_ref())?, conn_2)
     }
     // #[cfg(test)]
-    pub fn in_mem() -> Result<Box<dyn Store>, ThoError> {
-        Self::create_tables(
-            Connection::open_in_memory()?,
-            open_in_memory_from_sync()
-        )
+    pub async fn in_mem() -> Result<Box<dyn Store>, ThoError> {
+        let conn_2 = tokio_rusqlite::Connection::open_in_memory().await?;
+        conn_2
+            .call(|conn| {
+                conn.pragma_update(None, "journal_mode", "WAL")?;
+                conn.pragma_update(None, "synchronous", "NORMAL")?;
+                conn.pragma_update(None, "foreign_keys", "ON")?;
+                Ok::<(), rusqlite::Error>(())
+            })
+            .await?;
+        Self::create_tables(Connection::open_in_memory()?, conn_2)
     }
 
     //TODO rename channel_id to channel - not a pk
@@ -3008,7 +2968,7 @@ impl SqlStore {
     fn get_input_run_ids_(
         t: &Transaction,
         run_id: RunId,
-        input_type: Option<&dyn Display>,
+        input_type: Option<&str>,
     ) -> Result<Vec<RunId>, ThoError> {
         let mut stmt = t.prepare("SELECT rci.input_run_id, rc.type FROM run_configs_input rci JOIN run_configs rc ON rc.id=rci.input_run_id WHERE run_id=?")?;
 
@@ -3092,6 +3052,16 @@ fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
         .flat_map(|v| ["(l.label='", v.0.as_str(), "' and ", v.1.p(), "?)", " or "])
         .take(inp_len)
         .collect::<String>()
+}
+
+pub fn block_on_store_future<F>(future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime").block_on(future),
+    }
 }
 
 pub struct SqlMotifTrackerStore {
@@ -3234,12 +3204,12 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
 
         let groups_by_slices_count = filter_groups_by_slices_count(max_slices_counts, groups);
         let groups_len = groups_by_slices_count.len();
-        store.save_groups_as_motifs_with_slices_matches(
+        block_on_store_future(store.save_groups_as_motifs_with_slices_matches(
             self.run_id,
             self.channel as i64,
             groups_by_slices_count,
-            &self.path,
-        )?;
+            self.path.clone(),
+        ))?;
 
         Ok(groups_len)
     }
@@ -3264,7 +3234,7 @@ mod store_tests {
     use std::time::Instant;
 
     use log::debug;
-    use rusqlite::params;
+    use rusqlite::{Transaction, params};
     use parking_lot::{Mutex, RawMutex, RwLock};
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
     use thoosa_shared::run_configs::RunId;
@@ -3272,9 +3242,65 @@ mod store_tests {
     use thoosa_shared::{TensorIdSliceIdx, cdt, cdt_for_dir, MotifSlice};
 
     use crate::{
-        MotifTrackerStore, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoError,
+        MotifTrackerStore, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoError, block_on_store_future,
     };
     use std::path::PathBuf;
+
+    trait StoreSyncExt {
+        fn save_import_sync<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
+        fn save_run_config_sync<'a, 'b, 'c>(&self, input_run_id: Option<&'a [RunId]>, run_config_type: &'b str, descr: &'c str, keys: &'c str, properties_vals: HashMap<String, Val>) -> Result<RunId, ThoError>;
+        fn get_input_run_ids_sync<'a>(&self, run_id: RunId, input_type: Option<&'a str>) -> Result<Vec<RunId>, ThoError>;
+        fn save_resources_set_sync(&self, set: String, resource_keys: Vec<String>, group_id: Option<usize>) -> Result<usize, ThoError>;
+        fn save_resource_set_group_sync(&self, descr: String) -> Result<usize, ThoError>;
+        fn save_resources_labels_sync<'a>(&self, resource_stats_labels_probs: &'a HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32, t: &'a Transaction<'a>) -> Result<Vec<ResourceId>, ThoError>;
+        fn save_pure_sets_sync<'a>(&self, max_len: usize, only_unused: bool, t: &'a Transaction<'a>) -> Result<(), ThoError>;
+        fn save_pure_balanced_sets_sync<'a>(&self, prefix: &str, limit: Option<usize>, train_coeff: f32, valid_coeff: f32, t: &'a Transaction<'a>) -> Result<(), ThoError>;
+        fn save_groups_by_label_cnt_sync<'a>(&self, max_resources_in_set: usize, t: &'a Transaction<'a>) -> Result<(), ThoError>;
+        fn list_resources_by_ids_sync(&self, file_stem: &Vec<ResourceId>) -> Result<Vec<Resource>, ThoError>;
+        fn list_resource_random_not_labeled_sync(&self, label: &str, limit: u32) -> Result<Vec<Resource>, ThoError>;
+        fn save_label_sync<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
+        fn list_labels_sync(&self) -> Result<Vec<String>, ThoError>;
+        fn list_motifs_slices_sync(&self, run_id: RunId, select_motifs_run_id: Option<Vec<RunId>>) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError>;
+        fn list_motif_slices_sync(&self, motif_id: u32, select_motifs_run_id: Option<Vec<RunId>>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>;
+        fn list_random_motif_slices_sync(&self, motif_id: u32, motif_width: u32, min_distance: Option<u32>, input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>;
+        fn list_run_config_values_sync(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
+        fn save_selected_motifs_sync(&self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoError>;
+        fn list_selected_motifs_sync(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
+        fn save_selected_net_sync(&self, run_id: RunId, path: PathBuf, loss: f32) -> Result<(), ThoError>;
+        fn list_selected_nets_sync(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError>;
+        fn list_resource_set_group_sets_sync(&self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoError>;
+        fn list_resource_random_in_group_sync(&self, group_descr: &str) -> Result<Vec<(Resource, Vec<f32>)>, ThoError>;
+        fn list_resources_not_in_group_sync(&self, group_descr: &str, limit: u32) -> Result<Vec<Resource>, ThoError>;
+        fn list_resources_by_file_stems_sync<'a>(&self, file_stems: &'a [&'a str]) -> Result<Vec<Resource>, ThoError>;
+    }
+
+    impl<T: Store + ?Sized> StoreSyncExt for T {
+        fn save_import_sync<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError> { block_on_store_future(self.save_import(descr, t)) }
+        fn save_run_config_sync<'a, 'b, 'c>(&self, input_run_id: Option<&'a [RunId]>, run_config_type: &'b str, descr: &'c str, keys: &'c str, properties_vals: HashMap<String, Val>) -> Result<RunId, ThoError> { block_on_store_future(self.save_run_config(input_run_id, run_config_type, descr, keys, properties_vals)) }
+        fn get_input_run_ids_sync<'a>(&self, run_id: RunId, input_type: Option<&'a str>) -> Result<Vec<RunId>, ThoError> { block_on_store_future(self.get_input_run_ids(run_id, input_type)) }
+        fn save_resources_set_sync(&self, set: String, resource_keys: Vec<String>, group_id: Option<usize>) -> Result<usize, ThoError> { block_on_store_future(self.save_resources_set(set, resource_keys, group_id)) }
+        fn save_resource_set_group_sync(&self, descr: String) -> Result<usize, ThoError> { block_on_store_future(self.save_resource_set_group(descr)) }
+        fn save_resources_labels_sync<'a>(&self, resource_stats_labels_probs: &'a HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32, t: &'a Transaction<'a>) -> Result<Vec<ResourceId>, ThoError> { block_on_store_future(self.save_resources_labels(resource_stats_labels_probs, import_id, t)) }
+        fn save_pure_sets_sync<'a>(&self, max_len: usize, only_unused: bool, t: &'a Transaction<'a>) -> Result<(), ThoError> { block_on_store_future(self.save_pure_sets(max_len, only_unused, t)) }
+        fn save_pure_balanced_sets_sync<'a>(&self, prefix: &str, limit: Option<usize>, train_coeff: f32, valid_coeff: f32, t: &'a Transaction<'a>) -> Result<(), ThoError> { block_on_store_future(self.save_pure_balanced_sets(prefix, limit, train_coeff, valid_coeff, t)) }
+        fn save_groups_by_label_cnt_sync<'a>(&self, max_resources_in_set: usize, t: &'a Transaction<'a>) -> Result<(), ThoError> { block_on_store_future(self.save_groups_by_label_cnt(max_resources_in_set, t)) }
+        fn list_resources_by_ids_sync(&self, file_stem: &Vec<ResourceId>) -> Result<Vec<Resource>, ThoError> { block_on_store_future(self.list_resources_by_ids(file_stem)) }
+        fn list_resource_random_not_labeled_sync(&self, label: &str, limit: u32) -> Result<Vec<Resource>, ThoError> { block_on_store_future(self.list_resource_random_not_labeled(label, limit)) }
+        fn save_label_sync<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoError> { block_on_store_future(self.save_label(label, t)) }
+        fn list_labels_sync(&self) -> Result<Vec<String>, ThoError> { block_on_store_future(self.list_labels()) }
+        fn list_motifs_slices_sync(&self, run_id: RunId, select_motifs_run_id: Option<Vec<RunId>>) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError> { block_on_store_future(self.list_motifs_slices(run_id, select_motifs_run_id)) }
+        fn list_motif_slices_sync(&self, motif_id: u32, select_motifs_run_id: Option<Vec<RunId>>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError> { block_on_store_future(self.list_motif_slices(motif_id, select_motifs_run_id, limit, all_but_in_run_id)) }
+        fn list_random_motif_slices_sync(&self, motif_id: u32, motif_width: u32, min_distance: Option<u32>, input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError> { block_on_store_future(self.list_random_motif_slices(motif_id, motif_width, min_distance, input_len_adjuster)) }
+        fn list_run_config_values_sync(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError> { block_on_store_future(self.list_run_config_values(run_id)) }
+        fn save_selected_motifs_sync(&self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoError> { block_on_store_future(self.save_selected_motifs(run_id, selected_motifs)) }
+        fn list_selected_motifs_sync(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError> { block_on_store_future(self.list_selected_motifs(motif_selection_id, channels)) }
+        fn save_selected_net_sync(&self, run_id: RunId, path: PathBuf, loss: f32) -> Result<(), ThoError> { block_on_store_future(self.save_selected_net(run_id, path, loss)) }
+        fn list_selected_nets_sync(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError> { block_on_store_future(self.list_selected_nets(run_id, loss)) }
+        fn list_resource_set_group_sets_sync(&self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoError> { block_on_store_future(self.list_resource_set_group_sets(group_descr)) }
+        fn list_resource_random_in_group_sync(&self, group_descr: &str) -> Result<Vec<(Resource, Vec<f32>)>, ThoError> { block_on_store_future(self.list_resource_random_in_group(group_descr)) }
+        fn list_resources_not_in_group_sync(&self, group_descr: &str, limit: u32) -> Result<Vec<Resource>, ThoError> { block_on_store_future(self.list_resources_not_in_group(group_descr, limit)) }
+        fn list_resources_by_file_stems_sync<'a>(&self, file_stems: &'a [&'a str]) -> Result<Vec<Resource>, ThoError> { block_on_store_future(self.list_resources_by_file_stems(file_stems)) }
+    }
 
     #[ctor::ctor]
     fn init() {
@@ -3284,22 +3310,22 @@ mod store_tests {
     #[test]
     fn test_group_resources() -> Result<(), ThoError> {
         // fs::remove_file("/tmp/test_db.db3").unwrap_or(());
-        // let mut store = SqlStore::from_path("/tmp/test_db.db3")?;
+        // let mut store = block_on_store_future(SqlStore::from_path("/tmp/test_db.db3"))?;
 
-        let mut store = SqlStore::in_mem()?;
+        let mut store = block_on_store_future(SqlStore::in_mem())?;
 
         let mut mutex_guard = store.conn().lock();
         let t = mutex_guard.transaction()?;
 
-        let import_id = store.save_import("test".to_string(), &t)?;
+        let import_id = store.save_import_sync("test".to_string(), &t)?;
 
-        let _aaa_id = store.save_label("aaa", &t);
-        let _bbb_id = store.save_label("bbb", &t);
-        let _ccc_id = store.save_label("ccc", &t);
+        let _aaa_id = store.save_label_sync("aaa", &t);
+        let _bbb_id = store.save_label_sync("bbb", &t);
+        let _ccc_id = store.save_label_sync("ccc", &t);
 
         //pure resources
         let n = 100;
-        store.save_resources_labels(
+        store.save_resources_labels_sync(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3314,7 +3340,7 @@ mod store_tests {
             &t,
         )?;
 
-        store.save_resources_labels(
+        store.save_resources_labels_sync(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3329,7 +3355,7 @@ mod store_tests {
             &t,
         )?;
 
-        store.save_resources_labels(
+        store.save_resources_labels_sync(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3345,7 +3371,7 @@ mod store_tests {
         )?;
 
         //two labels resources
-        store.save_resources_labels(
+        store.save_resources_labels_sync(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3363,7 +3389,7 @@ mod store_tests {
             &t,
         )?;
 
-        store.save_resources_labels(
+        store.save_resources_labels_sync(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3381,7 +3407,7 @@ mod store_tests {
             &t,
         )?;
 
-        store.save_resources_labels(
+        store.save_resources_labels_sync(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3400,7 +3426,7 @@ mod store_tests {
         )?;
 
         //three labels resources
-        store.save_resources_labels(
+        store.save_resources_labels_sync(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3423,7 +3449,7 @@ mod store_tests {
         )?;
 
         let t1 = Instant::now();
-        store.save_groups_by_label_cnt(10, &t)?;
+        store.save_groups_by_label_cnt_sync(10, &t)?;
 
         t.commit()?;
         //TODO asserts
@@ -3436,16 +3462,16 @@ mod store_tests {
 
     #[test]
     fn test_list_resources_not_labled() -> Result<(), ThoError> {
-        let mut store = SqlStore::in_mem()?;
+        let mut store = block_on_store_future(SqlStore::in_mem())?;
 
         let mut guard = store.conn().lock();
         let t = guard.transaction()?;
 
-        let import_id = store.save_import("test".to_string(), &t)?;
-        store.save_label("aaa", &t)?;
-        store.save_label("bbb", &t)?;
+        let import_id = store.save_import_sync("test".to_string(), &t)?;
+        store.save_label_sync("aaa", &t)?;
+        store.save_label_sync("bbb", &t)?;
 
-        store.save_resources_labels(
+        store.save_resources_labels_sync(
             &HashMap::from([
                 (
                     "aaa_only".to_string(),
@@ -3471,11 +3497,11 @@ mod store_tests {
 
         drop(guard);
 
-        let mut not_aaa = store.list_resource_random_not_labeled("aaa", 10)?;
+        let mut not_aaa = store.list_resource_random_not_labeled_sync("aaa", 10)?;
         not_aaa.sort_by(|a, b| a.file_stem().cmp(b.file_stem()));
         assert_eq!(vec!["bbb_only"], not_aaa.into_iter().map(|r| r.file_stem().to_string()).collect::<Vec<_>>());
 
-        let mut not_bbb = store.list_resource_random_not_labeled("bbb", 10)?;
+        let mut not_bbb = store.list_resource_random_not_labeled_sync("bbb", 10)?;
         not_bbb.sort_by(|a, b| a.file_stem().cmp(b.file_stem()));
         assert_eq!(vec!["aaa_only"], not_bbb.into_iter().map(|r| r.file_stem().to_string()).collect::<Vec<_>>());
 
@@ -3484,14 +3510,14 @@ mod store_tests {
 
     #[test]
     fn test_save_pure_balanced_sets_group_created() -> Result<(), ThoError> {
-        let mut store = Arc::new(SqlStore::in_mem()?);
+        let mut store = Arc::new(block_on_store_future(SqlStore::in_mem())?);
 
         init_test_store(&store)?;
 
-        let labels_count = store.list_labels()?.len();
-        let train_sets = store.list_resource_set_group_sets("A_balanced_group_train")?;
-        let valid_sets = store.list_resource_set_group_sets("A_balanced_group_validation")?;
-        let test_sets = store.list_resource_set_group_sets("A_balanced_group_test")?;
+        let labels_count = store.list_labels_sync()?.len();
+        let train_sets = store.list_resource_set_group_sets_sync("A_balanced_group_train")?;
+        let valid_sets = store.list_resource_set_group_sets_sync("A_balanced_group_validation")?;
+        let test_sets = store.list_resource_set_group_sets_sync("A_balanced_group_test")?;
 
         assert_eq!(labels_count, train_sets.len());
         assert_eq!(labels_count, valid_sets.len());
@@ -3507,23 +3533,23 @@ mod store_tests {
     fn test_save_slices() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
-        let mut store = Arc::new(SqlStore::from_path(
+        let mut store = Arc::new(block_on_store_future(SqlStore::from_path(
             test_dir.join("test_db.db3"),
-        )?);
+        ))?);
 
         let resource_ids = init_test_store(&store)?;
 
-        let all_group_id = store.save_resource_set_group("group 1 labels/100/100-200".into())?;
-        let _set_all_id = store.save_resources_set(
+        let all_group_id = store.save_resource_set_group_sync("group 1 labels/100/100-200".into())?;
+        let _set_all_id = store.save_resources_set_sync(
             "All".to_string(),
             vec!["1111".into(), "2222".into(), "3333".into()],
             Some(all_group_id),
         )?;
 
-        let group_sets = store.list_resource_set_group_sets("pure group 10")?;
+        let group_sets = store.list_resource_set_group_sets_sync("pure group 10")?;
         assert_eq!(3, group_sets.len());
 
-        let mut keys_labels_p = store.list_resource_random_in_group("group 1 labels/100/100-200")?;
+        let mut keys_labels_p = store.list_resource_random_in_group_sync("group 1 labels/100/100-200")?;
 
         keys_labels_p.sort_by(|a, b| ((a.1[0] * 10.) as u32).cmp(&((b.1[0] * 10.) as u32)));
 
@@ -3570,7 +3596,7 @@ mod store_tests {
             ),
         ];
 
-        let find_motifs_run_id = store.save_run_config(
+        let find_motifs_run_id = store.save_run_config_sync(
             None,
             &"todo",
             "find_motifs",
@@ -3623,7 +3649,7 @@ mod store_tests {
             }
         };
 
-        let motif_slices_map = store.list_motifs_slices(find_motifs_run_id, None)?;
+        let motif_slices_map = store.list_motifs_slices_sync(find_motifs_run_id, None)?;
         debug!("motif_slices_map={:?}", motif_slices_map);
 
         // assert_eq!(4, map.len());
@@ -3652,7 +3678,7 @@ mod store_tests {
         debug!("motif_slices_1111={motif_slices_1111:?}");
         debug!("motif_slices_444={motif_slices_444:?}");
 
-        let select_motifs_run_id = store.save_run_config(
+        let select_motifs_run_id = store.save_run_config_sync(
             Some(&[find_motifs_run_id]),
             &"todo",
             "find_motifs",
@@ -3664,7 +3690,7 @@ mod store_tests {
             ]),
         )?;
 
-        let _select_motifs_run_id = store.save_selected_motifs(
+        let _select_motifs_run_id = store.save_selected_motifs_sync(
             select_motifs_run_id,
             vec![
                 (motif_slices_444[0].motif_id, 0.1),  //motif_id corr
@@ -3672,14 +3698,14 @@ mod store_tests {
             ],
         )?;
 
-        let input_run_ids = store.get_input_run_ids(select_motifs_run_id, None)?;
+        let input_run_ids = store.get_input_run_ids_sync(select_motifs_run_id, None)?;
 
         assert_eq!(
             vec![find_motifs_run_id],
             input_run_ids
         );
 
-        let motifs = store.list_selected_motifs(select_motifs_run_id, 20)?;
+        let motifs = store.list_selected_motifs_sync(select_motifs_run_id, 20)?;
 
         debug!("motifs: {:?}", motifs);
 
@@ -3691,7 +3717,7 @@ mod store_tests {
         assert_eq!(expected_ids, motif_ids);
         //
         // //TODO
-        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, None, None)?;
+        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices_sync(motif_slices_1111[0].motif_id, None, None, None)?;
         slices.sort();
 
         debug!("slices={slices:?}");
@@ -3708,18 +3734,18 @@ mod store_tests {
         assert_eq!(7, channel);
         assert_eq!(find_motifs_run_id, run_id_);
 
-        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, Some(1), None)?;
+        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices_sync(motif_slices_1111[0].motif_id, None, Some(1), None)?;
         slices.sort();
 
 
-        let resources = store.list_resources_not_in_group("pure group 10", 10);
+        let resources = store.list_resources_not_in_group_sync("pure group 10", 10);
         debug!("resources={resources:?}");
 
-        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, Some(3), Some((0, 0)))?;
+        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices_sync(motif_slices_1111[0].motif_id, None, Some(3), Some((0, 0)))?;
 
         debug!("random slices={slices:?}");
         //
-        // // let (_channel, _run_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_id, channel as usize)))?;
+        // // let (_channel, _run_id_, mut slices) = store.list_motif_slices_sync(1, Some(10), Some((run_id, channel as usize)))?;
         // //
         // // slices.sort();
         // //
@@ -3747,9 +3773,9 @@ mod store_tests {
 
     #[test]
     fn test_save_list_selected_nets() -> Result<(), ThoError> {
-        let mut store = SqlStore::in_mem()?;
+        let mut store = block_on_store_future(SqlStore::in_mem())?;
 
-        let run_id = store.save_run_config(
+        let run_id = store.save_run_config_sync(
             None,
             &"selected_nets",
             "selected_nets",
@@ -3757,10 +3783,10 @@ mod store_tests {
             HashMap::new(),
         )?;
 
-        store.save_selected_net(run_id, PathBuf::from("nets/a"), 0.2)?;
-        store.save_selected_net(run_id, PathBuf::from("nets/b"), 0.1)?;
+        store.save_selected_net_sync(run_id, PathBuf::from("nets/a"), 0.2)?;
+        store.save_selected_net_sync(run_id, PathBuf::from("nets/b"), 0.1)?;
 
-        let selected = store.list_selected_nets(run_id, None)?;
+        let selected = store.list_selected_nets_sync(run_id, None)?;
 
         assert_eq!(2, selected.len());
         assert_eq!(PathBuf::from("nets/b"), selected[0].0);
@@ -3768,7 +3794,7 @@ mod store_tests {
         assert_eq!(PathBuf::from("nets/a"), selected[1].0);
         assert!((selected[1].1 - 0.2).abs() < 1e-6);
 
-        let filtered = store.list_selected_nets(run_id, Some(0.15))?;
+        let filtered = store.list_selected_nets_sync(run_id, Some(0.15))?;
         assert_eq!(1, filtered.len());
         assert_eq!(PathBuf::from("nets/b"), filtered[0].0);
         assert!((filtered[0].1 - 0.1).abs() < 1e-6);
@@ -3778,16 +3804,16 @@ mod store_tests {
 
     #[test]
     fn test_list_motifs_slices_filters_slice_run_ids() -> Result<(), ThoError> {
-        let mut store = SqlStore::in_mem()?;
+        let mut store = block_on_store_future(SqlStore::in_mem())?;
 
         let resource_ids = {
             let mut guard = store.conn().lock();
             let t = guard.transaction()?;
 
-            let import_id = store.save_import("test".to_string(), &t)?;
-            store.save_label("aaa", &t)?;
+            let import_id = store.save_import_sync("test".to_string(), &t)?;
+            store.save_label_sync("aaa", &t)?;
 
-            let ids = store.save_resources_labels(
+            let ids = store.save_resources_labels_sync(
                 &HashMap::from([(
                     "res_a".to_string(),
                     (ResourceStats::new(vec![1, 10]), vec![("aaa".into(), 1.0)]),
@@ -3801,8 +3827,8 @@ mod store_tests {
         };
 
         let find_run_id =
-            store.save_run_config(None, &"find", "find_motifs", "", HashMap::new())?;
-        let select_run_id = store.save_run_config(
+            store.save_run_config_sync(None, &"find", "find_motifs", "", HashMap::new())?;
+        let select_run_id = store.save_run_config_sync(
             Some(&[find_run_id]),
             &"select",
             "select_motifs",
@@ -3831,12 +3857,12 @@ mod store_tests {
             t.commit()?;
         }
 
-        let resource = store.list_resources_by_ids(&resource_ids)?.remove(0);
+        let resource = store.list_resources_by_ids_sync(&resource_ids)?.remove(0);
 
-        let find_only = store.list_motifs_slices(find_run_id, Some(vec![]))?;
-        let all_runs = store.list_motifs_slices(find_run_id, None)?;
+        let find_only = store.list_motifs_slices_sync(find_run_id, Some(vec![]))?;
+        let all_runs = store.list_motifs_slices_sync(find_run_id, None)?;
         let both_runs =
-            store.list_motifs_slices(find_run_id, Some(vec![select_run_id, select_run_id]))?;
+            store.list_motifs_slices_sync(find_run_id, Some(vec![select_run_id, select_run_id]))?;
 
         let find_only_slices = find_only.get(&resource).expect("resource slices");
         assert_eq!(1, find_only_slices.len());
@@ -3857,16 +3883,16 @@ mod store_tests {
 
     #[test]
     fn test_list_motif_slices_filters_slice_run_ids() -> Result<(), ThoError> {
-        let mut store = SqlStore::in_mem()?;
+        let mut store = block_on_store_future(SqlStore::in_mem())?;
 
         let resource_ids = {
             let mut guard = store.conn().lock();
             let t = guard.transaction()?;
 
-            let import_id = store.save_import("test".to_string(), &t)?;
-            store.save_label("aaa", &t)?;
+            let import_id = store.save_import_sync("test".to_string(), &t)?;
+            store.save_label_sync("aaa", &t)?;
 
-            let ids = store.save_resources_labels(
+            let ids = store.save_resources_labels_sync(
                 &HashMap::from([(
                     "res_a".to_string(),
                     (ResourceStats::new(vec![1, 10]), vec![("aaa".into(), 1.0)]),
@@ -3880,8 +3906,8 @@ mod store_tests {
         };
 
         let find_run_id =
-            store.save_run_config(None, &"find", "find_motifs", "", HashMap::new())?;
-        let select_run_id = store.save_run_config(
+            store.save_run_config_sync(None, &"find", "find_motifs", "", HashMap::new())?;
+        let select_run_id = store.save_run_config_sync(
             Some(&[find_run_id]),
             &"select",
             "select_motifs",
@@ -3910,17 +3936,17 @@ mod store_tests {
             t.commit()?;
         }
 
-        let (_, run_id, all_slices, _) = store.list_motif_slices(2, None, None, None)?;
+        let (_, run_id, all_slices, _) = store.list_motif_slices_sync(2, None, None, None)?;
         assert_eq!(find_run_id, run_id);
         let mut idxs = all_slices.iter().map(|s| s.1).collect::<Vec<_>>();
         idxs.sort();
         assert_eq!(vec![12, 32], idxs);
 
-        let (_, _, find_only, _) = store.list_motif_slices(2, Some(vec![]), None, None)?;
+        let (_, _, find_only, _) = store.list_motif_slices_sync(2, Some(vec![]), None, None)?;
         assert_eq!(vec![12], find_only.iter().map(|s| s.1).collect::<Vec<_>>());
 
         let (_, _, filtered, _) =
-            store.list_motif_slices(2, Some(vec![select_run_id, select_run_id]), None, None)?;
+            store.list_motif_slices_sync(2, Some(vec![select_run_id, select_run_id]), None, None)?;
         let mut idxs = filtered.iter().map(|s| s.1).collect::<Vec<_>>();
         idxs.sort();
         assert_eq!(vec![12, 32], idxs);
@@ -3936,13 +3962,13 @@ mod store_tests {
         let mut mutex_guard = store_guard.conn().lock();
         let t = mutex_guard.transaction()?;
 
-        let import_id = store_guard.save_import("test".to_string(), &t)?;
+        let import_id = store_guard.save_import_sync("test".to_string(), &t)?;
 
-        let _aaa_id = store_guard.save_label("aaa", &t)?;
-        let _bbb_id = store_guard.save_label("bbb", &t)?;
-        let _ccc_id = store_guard.save_label("ccc", &t)?;
+        let _aaa_id = store_guard.save_label_sync("aaa", &t)?;
+        let _bbb_id = store_guard.save_label_sync("bbb", &t)?;
+        let _ccc_id = store_guard.save_label_sync("ccc", &t)?;
 
-        let resource_ids = store_guard.save_resources_labels(
+        let resource_ids = store_guard.save_resources_labels_sync(
             &HashMap::from([
                 (
                     "1111".into(),
@@ -3969,8 +3995,8 @@ mod store_tests {
 
         debug!("resource_ids={resource_ids:?}");
 
-        store_guard.save_pure_sets(10, false, &t)?;
-        store_guard.save_pure_balanced_sets("A", None, 0.6, 0.2, &t)?;
+        store_guard.save_pure_sets_sync(10, false, &t)?;
+        store_guard.save_pure_balanced_sets_sync("A", None, 0.6, 0.2, &t)?;
         t.commit()?;
         Ok(resource_ids)
     }
@@ -3979,11 +4005,11 @@ mod store_tests {
     fn test_save_run_config() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
-        let mut store = Arc::new(SqlStore::from_path(
+        let mut store = Arc::new(block_on_store_future(SqlStore::from_path(
             test_dir.join("test_db.db3"),
-        )?);
+        ))?);
 
-        let run_id = store.save_run_config(
+        let run_id = store.save_run_config_sync(
             None,
             &"todo",
             "test",
@@ -3997,7 +4023,7 @@ mod store_tests {
             ]),
         )?;
 
-        let next_run_id = store.save_run_config(
+        let next_run_id = store.save_run_config_sync(
             Some(&[run_id]),
             &"todo",
             "test next",
@@ -4009,7 +4035,7 @@ mod store_tests {
             ]),
         )?;
 
-        let loaded_params = store.list_run_config_values(run_id)?;
+        let loaded_params = store.list_run_config_values_sync(run_id)?;
 
         assert_eq!(loaded_params.get("prop1").expect("prop1"), &Val::Int(1));
         assert_eq!(loaded_params.get("prop2").expect("prop2"), &Val::Real(2.0));
@@ -4023,7 +4049,7 @@ mod store_tests {
         );
         assert_eq!(loaded_params.get("prop5").expect("prop5"), &Val::Bool(true));
 
-        let netx_loaded_params = store.list_run_config_values(next_run_id)?;
+        let netx_loaded_params = store.list_run_config_values_sync(next_run_id)?;
 
         debug!("netx_loaded_params={netx_loaded_params:?}");
 
@@ -4056,23 +4082,23 @@ mod store_tests {
 
     #[test]
     fn test_get_prev_run_id() -> Result<(), ThoError> {
-        let mut store = SqlStore::in_mem()?;
+        let mut store = block_on_store_future(SqlStore::in_mem())?;
 
-        let input_run_id = store.save_run_config(None, &"aaa", "test 0", "", HashMap::new())?;
+        let input_run_id = store.save_run_config_sync(None, &"aaa", "test 0", "", HashMap::new())?;
         let run_id =
-            store.save_run_config(Some(&[input_run_id]), &"aaa", "test 1", "", HashMap::new())?;
+            store.save_run_config_sync(Some(&[input_run_id]), &"aaa", "test 1", "", HashMap::new())?;
 
-        assert_eq!(store.get_input_run_ids(run_id, None)?[0], input_run_id);
+        assert_eq!(store.get_input_run_ids_sync(run_id, None)?[0], input_run_id);
 
-        let input_run_id_0 = store.save_run_config(None, &"aaa", "test 0", "", HashMap::new())?;
-        let input_run_id_1 = store.save_run_config(
+        let input_run_id_0 = store.save_run_config_sync(None, &"aaa", "test 0", "", HashMap::new())?;
+        let input_run_id_1 = store.save_run_config_sync(
             Some(&[input_run_id_0]),
             &"bbb",
             "test 1",
             "",
             HashMap::new(),
         )?;
-        let run_id = store.save_run_config(
+        let run_id = store.save_run_config_sync(
             Some(&[input_run_id_1]),
             &"ccc",
             "test 1",
@@ -4081,7 +4107,7 @@ mod store_tests {
         )?;
 
         assert_eq!(
-            store.get_input_run_ids(run_id, Some(&"aaa"))?[0],
+            store.get_input_run_ids_sync(run_id, Some(&"aaa"))?[0],
             input_run_id_0
         );
 
@@ -4090,14 +4116,14 @@ mod store_tests {
 
     #[test]
     fn test_list_resources_by_file_stem() -> Result<(), ThoError> {
-        let mut store = SqlStore::in_mem()?;
+        let mut store = block_on_store_future(SqlStore::in_mem())?;
         {
             let mut mutex_guard = store.conn().lock();
             let t = mutex_guard.transaction()?;
 
-            let import_id = store.save_import("test".to_string(), &t)?;
+            let import_id = store.save_import_sync("test".to_string(), &t)?;
 
-            store.save_resources_labels(
+            store.save_resources_labels_sync(
                 &HashMap::from([
                     (
                         "resource_aaa_0".to_string(),
@@ -4126,7 +4152,7 @@ mod store_tests {
         assert_eq!(
             vec!["resource_aaa_0".to_string(), "resource_aaa_1".to_string()],
             store
-                .list_resources_by_file_stems(&vec!["%aaa%"])?
+                .list_resources_by_file_stems_sync(&vec!["%aaa%"])?
                 .into_iter()
                 .map(|r| r.file_stem().to_string())
                 .collect::<Vec<String>>()
@@ -4135,7 +4161,7 @@ mod store_tests {
         assert_eq!(
             vec!["resource_bbb_0".to_string(), "resource_bbb_1".to_string()],
             store
-                .list_resources_by_file_stems(&vec!["%bbb%"])?
+                .list_resources_by_file_stems_sync(&vec!["%bbb%"])?
                 .into_iter()
                 .map(|r| r.file_stem().to_string())
                 .collect::<Vec<String>>()
@@ -4146,11 +4172,11 @@ mod store_tests {
 
     #[test]
     fn test_list_random_slices_respects_constraints() -> Result<(), ThoError> {
-        let mut store = SqlStore::in_mem()?;
+        let mut store = block_on_store_future(SqlStore::in_mem())?;
 
         create_resources(&store, &[("res_a", 2048), ("res_b", 2048)])?;
 
-        let run_id = store.save_run_config(None, &"find_motifs", "random test", "", HashMap::new())?;
+        let run_id = store.save_run_config_sync(None, &"find_motifs", "random test", "", HashMap::new())?;
         let channel_id = 3i64;
 
         let res_a = fetch_resource_id(&store, "res_a")?;
@@ -4173,7 +4199,7 @@ mod store_tests {
 
         const WIDTH: u32 = 40;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_motif_slices(motif_id, WIDTH, None, Arc::new(|length: u32| length))?;
+            store.list_random_motif_slices_sync(motif_id, WIDTH, None, Arc::new(|length: u32| length))?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4209,12 +4235,12 @@ mod store_tests {
 
     #[test]
     fn test_list_random_slices_respects_min_distance() -> Result<(), ThoError> {
-        let mut store = SqlStore::in_mem()?;
+        let mut store = block_on_store_future(SqlStore::in_mem())?;
 
         create_resources(&store, &[("res_main", 4096)])?;
 
         let run_id =
-            store.save_run_config(None, &"find_motifs", "random spacing", "", HashMap::new())?;
+            store.save_run_config_sync(None, &"find_motifs", "random spacing", "", HashMap::new())?;
         let channel_id = 5i64;
         let res_main = fetch_resource_id(&store, "res_main")?;
 
@@ -4229,7 +4255,7 @@ mod store_tests {
         const WIDTH: u32 = 50;
         const MIN_DISTANCE: u32 = 300;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_motif_slices(motif_id, WIDTH, Some(MIN_DISTANCE), Arc::new(|length: u32| length))?;
+            store.list_random_motif_slices_sync(motif_id, WIDTH, Some(MIN_DISTANCE), Arc::new(|length: u32| length))?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4255,11 +4281,11 @@ mod store_tests {
 
     #[test]
     fn test_list_random_slices_uses_input_len_adjuster() -> Result<(), ThoError> {
-        let mut store = SqlStore::in_mem()?;
+        let mut store = block_on_store_future(SqlStore::in_mem())?;
 
         create_resources(&store, &[("res_main", 2000)])?;
 
-        let run_id = store.save_run_config(None, &"find_motifs", "length adjust", "", HashMap::new())?;
+        let run_id = store.save_run_config_sync(None, &"find_motifs", "length adjust", "", HashMap::new())?;
         let channel_id = 6i64;
         let res_main = fetch_resource_id(&store, "res_main")?;
 
@@ -4274,7 +4300,7 @@ mod store_tests {
         const WIDTH: u32 = 40;
         let input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync> = Arc::new(|length: u32| (length - 100) / 5);
         let (channel, _, random_slices, resources_map) =
-            store.list_random_motif_slices(motif_id, WIDTH, None, Arc::clone(&input_len_adjuster))?;
+            store.list_random_motif_slices_sync(motif_id, WIDTH, None, Arc::clone(&input_len_adjuster))?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4293,7 +4319,7 @@ mod store_tests {
         let mut guard = store.conn().lock();
         let t = guard.transaction()?;
 
-        let import_id = store.save_import("test resources".into(), &t)?;
+        let import_id = store.save_import_sync("test resources".into(), &t)?;
 
         let resources = specs.iter().fold(
             HashMap::new(),
@@ -4306,7 +4332,7 @@ mod store_tests {
             },
         );
 
-        store.save_resources_labels(&resources, import_id, &t)?;
+        store.save_resources_labels_sync(&resources, import_id, &t)?;
         t.commit()?;
 
         Ok(())

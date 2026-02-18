@@ -163,7 +163,7 @@ mod tests {
     use thoosa_shared::resource::{Resource, ResourceStore};
     use thoosa_shared::test_utils::{are_close, init_test_logging, set_panic_hook};
     use thoosa_shared::{ResourceType, ThoError, cdt_for_dir, recurse_files};
-    use thoosa_store::SqlStore;
+    use thoosa_store::{SqlStore, block_on_store_future};
 
     #[ctor::ctor]
     fn init() {
@@ -362,7 +362,7 @@ mod tests {
             32000,
         )?));
 
-        let store = Arc::new(SqlStore::from_path(ws.read().store_path())?);
+        let store = Arc::new(block_on_store_future(SqlStore::from_path(ws.read().store_path()))?);
 
         plot_resource(
             Simple::new(ResourceType::List(vec![

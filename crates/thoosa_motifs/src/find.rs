@@ -37,7 +37,7 @@ use thoosa_shared::{CopyToDevice, TensorIdSliceIdx};
 use thoosa_shared::val::Val;
 use thoosa_shared::{RangeOrValue, ResourceType, ThoError, make_combos};
 use thoosa_shared::{avg_hist, parse_key_val};
-use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store};
+use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store, block_on_store_future};
 use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 
 use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeAccumulatedMean, LocalMin, Tril};
@@ -303,7 +303,7 @@ impl SavableResult for SelectMotifsSavableResult {
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
         for (run_config, good_motif_ids_rates) in &self.run_config {
-            store.save_selected_motifs(run_config.id.expect("should be pre set in run_grid"), good_motif_ids_rates.clone())?; //TODO mem::replace?
+            block_on_store_future(store.save_selected_motifs(run_config.id.expect("should be pre set in run_grid"), good_motif_ids_rates.clone()))?; //TODO mem::replace?
 
         }
         //gpt TODO!! save returns a dummy run_id; run_grid currently ignores it and uses presaved ids.
