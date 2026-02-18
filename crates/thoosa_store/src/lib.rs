@@ -22,9 +22,11 @@ use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-use log::{debug, error, trace, warn};
-use mockall::mock;
+use async_trait::async_trait;
+use futures_util::future::BoxFuture;
+use futures_util::{FutureExt, StreamExt};
+use log::{debug, error, info, trace, warn};
+use mockall::{mock, PredicateBoxExt};
 use mockall::predicate::eq;
 use rand::{Rng, RngExt};
 use rand::seq::SliceRandom;
@@ -81,7 +83,7 @@ impl SetCond {
         }
     }
 }
-
+#[async_trait]
 pub trait Store: ResourceStore + Debug + Sync + Send {
     fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
     fn save_run_config<'a>(
@@ -161,7 +163,8 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     fn add_slices_to_motif(&self, run_id: RunId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> Result<(), ThoError>;
 
     fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
-    fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError>;
+    // fn get_motif_meta<'a>(&self, motif_id: u32) -> BoxFuture<'a, Result<(usize, RunId), ThoError>>;
+    async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError>;
     fn list_motifs_slices(
         &self,
         run_id: RunId,
@@ -219,6 +222,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 mock! {
     pub Store {}
 
+    #[async_trait]
     impl Store for Store {
         fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
         fn save_run_config<'a>(
@@ -323,7 +327,8 @@ mock! {
             select_motifs_run_id: Option<Vec<RunId>>,
         ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError>;
 
-        fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError>;
+        // fn get_motif_meta<'a>(&self, motif_id: u32) -> BoxFuture<'a, Result<(usize, RunId), ThoError>>;
+        async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError>;
 
         fn list_motif_slices(
             &self,
@@ -435,6 +440,7 @@ impl Debug for SqlMotifTrackerStore {
 #[derive(Debug)]
 pub struct SqlStore {
     conn: Mutex<Connection>,
+    conn_2: tokio_rusqlite::Connection,
 }
 
 impl ResourceStore for SqlStore {
@@ -683,7 +689,7 @@ impl ResourceStore for SqlStore {
 
 
 }
-
+#[async_trait]
 //TODO move out all prepare stmts
 impl Store for SqlStore {
     fn save_import(&self, descr: String, t: &Transaction) -> Result<u32, ThoError> {
@@ -1679,14 +1685,22 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError> {
-        let mut guard = self.conn.lock();
-        let t = guard.transaction()?;
+    async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError> {
 
-        let (channel, run_id) = Self::_motif_meta(motif_id, &t)?;
+        self.conn_2.call(move |conn|{
 
-        t.commit()?;
-        Ok((channel as usize, run_id))
+            let t = conn.transaction()?;
+
+            let (channel, run_id) = Self::_motif_meta(motif_id, &t)?;
+
+            t.commit()?;
+
+            info!("get_motif_meta invoked");
+
+            Ok::<_, ThoError>((channel as usize, run_id))
+
+        }).await.map_err(|e|ThoError::new("zzz"))
+
     }
 
     fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError> {
@@ -2511,19 +2525,87 @@ impl Store for SqlStore {
     }
 }
 
+fn open_in_path_from_sync<P: AsRef<Path>>(path: P) -> tokio_rusqlite::Connection {
+    match tokio::runtime::Handle::try_current() {
+        Ok(h) => {
+            // We're on a runtime thread -> block_in_place first.
+            tokio::task::block_in_place(|| {
+                h.block_on(async {
+                    let conn = tokio_rusqlite::Connection::open(path).await?;
+
+                    conn.call(|conn|{
+                        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+                        conn.pragma_update(None, "synchronous", "NORMAL").unwrap();
+                        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+                        Ok::<_, ()>(())
+                    }).await.unwrap();
+
+                    Ok::<_, rusqlite::Error>(conn)
+                })
+                    .expect("open_in_memory failed")
+            })
+        }
+        Err(_) => {
+            // No runtime -> make a local one.
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            rt.block_on(async {
+                let conn = tokio_rusqlite::Connection::open(path).await?;
+
+                Ok::<_, Error>(conn)
+            })
+                .expect("open_in_memory failed")
+        }
+    }
+}
+
+fn open_in_memory_from_sync() -> tokio_rusqlite::Connection {
+    match tokio::runtime::Handle::try_current() {
+        Ok(h) => {
+            // We're on a runtime thread -> block_in_place first.
+            tokio::task::block_in_place(|| {
+                h.block_on(tokio_rusqlite::Connection::open_in_memory())
+                    .expect("open_in_memory failed")
+            })
+        }
+        Err(_) => {
+            // No runtime -> make a local one.
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            rt.block_on(tokio_rusqlite::Connection::open_in_memory())
+                .expect("open_in_memory failed")
+        }
+    }
+}
+
 //TODO move all prepare to init
 impl SqlStore {
     pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
-        Self::create_tables(Connection::open(path)?)
+        Self::create_tables(
+            Connection::open(path.as_ref())?,
+            open_in_path_from_sync(path)
+        )
     }
     // #[cfg(test)]
     pub fn in_mem() -> Result<Box<dyn Store>, ThoError> {
-        Self::create_tables(Connection::open_in_memory()?)
+        Self::create_tables(
+            Connection::open_in_memory()?,
+            open_in_memory_from_sync()
+        )
     }
 
     //TODO rename channel_id to channel - not a pk
-    fn create_tables(mut conn: Connection) -> Result<Box<dyn Store>, ThoError> {
+    fn create_tables(mut conn: Connection, conn_2:tokio_rusqlite::Connection) -> Result<Box<dyn Store>, ThoError> {
         {
+            conn.pragma_update(None, "journal_mode", "WAL")?;
+            conn.pragma_update(None, "synchronous", "NORMAL")?;
+            conn.pragma_update(None, "foreign_keys", "ON")?;
+
             let t = conn.transaction()?;
 
             t.execute(
@@ -2709,6 +2791,7 @@ impl SqlStore {
         Ok(Box::new(Self {
             //TODO https://sqlite.org/cgi/src/doc/begin-concurrent/doc/begin_concurrent.md + pool
             conn: Mutex::new(conn),
+            conn_2,
         }))
     }
 
@@ -4306,7 +4389,10 @@ impl MockStoreBuilder {
         let map = results.into();
         self.store.expect_get_motif_meta().returning(
             move |motif_id|{
-                map.get(&motif_id).cloned().expect(&format!("mock is not configured to return motif meta for motif_id {motif_id}"))
+                let result = map.get(&motif_id).cloned().expect(&format!("mock is not configured to return motif meta for motif_id {motif_id}"));
+
+
+                result
             }
         );
         self

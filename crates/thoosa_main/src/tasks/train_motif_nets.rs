@@ -266,7 +266,7 @@ where
 
                 debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", result.min_loss);
 
-                store.get_motif_meta(motif_id_rate.0)
+                store.get_motif_meta(motif_id_rate.0).await
                 .map(|(channel, find_motifs_run_id)| {
                     TrainMotifNetResult::new(
                         result.min_loss,
