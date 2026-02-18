@@ -38,7 +38,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, collect_futures_with_progress_i, mono_key, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, Data, DataId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
@@ -173,7 +173,7 @@ where
 
         //gpt Expand selection run ids into individual motif ids for training.
         let select_motifs_run_ids_clone = select_motifs_run_ids.clone();
-        let futures = select_motifs_run_ids_clone.iter().flat_map(|select_motifs_run_id| {
+        let motifs_rates_selected_motifs_run_ids = select_motifs_run_ids_clone.iter().flat_map(|select_motifs_run_id| {
             let selected_motifs = self.store.read().list_selected_motifs(*select_motifs_run_id, channels).expect("list_selected_motifs failed");
 
             debug!("TrainMotifNets::run: select_motifs_run_id={select_motifs_run_id} selected_motifs={selected_motifs:?}");
@@ -181,7 +181,9 @@ where
             selected_motifs.into_iter()
                 .flat_map(move |channels_motifs|
                     channels_motifs.into_iter().map(move |motif_id_rate| (motif_id_rate, select_motifs_run_id)))
-        })
+        }).collect::<Vec<_>>();
+        let motifs_rates_selected_motifs_run_ids_len = motifs_rates_selected_motifs_run_ids.len();
+        let futures = motifs_rates_selected_motifs_run_ids.into_iter()
         .map(|(motif_id_rate, select_motifs_run_id)|{
             let motif_loader = Arc::clone(&self.motif_loader);
             let random_slices_loader = Arc::clone(&self.random_slices_loader);
@@ -273,13 +275,14 @@ where
                 })
             }
 
-        })
-        .collect::<Vec<_>>();
+        });
 
         debug!("TrainMotifNets::run: futures.len={}", futures.len());
 
-        let results = collect_futures_with_progress(
+
+        let results = collect_futures_with_progress_i(
             futures,
+            motifs_rates_selected_motifs_run_ids_len,
             crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT,
             StreamBuffering::Unordered,
             "train motif",

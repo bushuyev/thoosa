@@ -33,10 +33,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::{fmt, fs};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use futures::stream::StreamExt;
 use async_trait::async_trait;
 use ambassador::delegatable_trait;
+use futures_util::{FutureExt, TryFutureExt};
 use mockall::automock;
 use rand::seq::{IndexedRandom, SliceRandom};
 #[cfg(test)]
@@ -223,6 +224,13 @@ async fn collect_stream_with_progress<T, S>(
     }
 }
 
+const TIMEOUT:Duration = Duration::from_mins(10);
+
+
+
+
+
+
 pub async fn collect_futures_with_progress<T, F>(
     futures: Vec<F>,
     buffer_limit: usize,
@@ -232,16 +240,38 @@ pub async fn collect_futures_with_progress<T, F>(
 where
     F: std::future::Future<Output = Result<T, ThoError>>,
 {
-    let mut results = Vec::with_capacity(futures.len());
+    let size = futures.len();
+    collect_futures_with_progress_i(futures.into_iter(), size, buffer_limit, buffering, descr).await
+}
+
+
+pub async fn collect_futures_with_progress_i<T, F>(
+    futures: impl Iterator<Item=F>,
+    len:usize,
+    buffer_limit: usize,
+    buffering: StreamBuffering,
+    descr: &str,
+) -> Vec<T>
+where
+    F: std::future::Future<Output = Result<T, ThoError>>,
+{
+    let mut results = Vec::with_capacity(len);
     let (mut ok, mut err) = (0usize, 0usize);
-    let total = futures.len();
+    let total = len;
     let eta_concurrency = buffer_limit.max(1).min(total.max(1));
     let eta_guard = (total > 0).then(|| CollectEtaInvocationGuard::new(descr, total, eta_concurrency));
     let eta_invocation_id = eta_guard.as_ref().map(CollectEtaInvocationGuard::id);
 
+
     match buffering {
         StreamBuffering::Unordered => {
-            let mut stream = futures::stream::iter(futures).buffer_unordered(buffer_limit);
+            let mut stream = futures::stream::iter(futures)
+            .map(|fut| async move {
+                tokio::time::timeout(TIMEOUT, fut).await?
+            })
+                .buffer_unordered(buffer_limit);
+                // .filter_map(|r| async move { r.ok() }.boxed());
+
             collect_stream_with_progress(
                 &mut stream,
                 &mut results,
@@ -254,7 +284,12 @@ where
             .await;
         }
         StreamBuffering::Ordered => {
-            let mut stream = futures::stream::iter(futures).buffered(buffer_limit);
+            let mut stream = futures::stream::iter(futures)
+                .map(|fut| async move {
+                    tokio::time::timeout(TIMEOUT, fut).await?
+                })
+                .buffered(buffer_limit);
+
             collect_stream_with_progress(
                 &mut stream,
                 &mut results,
