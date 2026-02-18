@@ -292,7 +292,7 @@ where
         })?;
 
 
-        let (channel, find_motifs_run_id) = self.store.get_motif_meta(*motif_id)?;
+        let (channel, find_motifs_run_id) = self.store.get_motif_meta(*motif_id).await?;
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
             find_motifs_run_id,
