@@ -39,7 +39,7 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_store::{Store, block_on_store_future};
+use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
@@ -232,30 +232,34 @@ impl Output for TrainLabelNetsOutput {
 
 }
 
+#[async_trait]
 impl SavableResult for TrainLabelNetsOutput {
     fn value(&self) -> f32 {
         0.0
     }
 
-    fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
-        let run_id = block_on_store_future(thoosa_shared::with_perf_log(
-            || {
-                store.save_run_config(
+    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
+        let run_id = thoosa_shared::with_async_perf_log(
+            || async {
+                store
+                    .save_run_config(
                     Some(&self.train_motif_nets_run_ids),
                     TrainLabelNetsRunConfig::type_name(),
                     "TrainLabelNetsResult",
                     "todo",
                     HashMap::new(),
                 )
+                .await
             },
             "TrainLabelNetsOutput::save/store_write_save_run_config",
-        ))?;
+        )
+        .await?;
 
         self.id = run_id;
 
         for result in &mut self.results {
             result.set_train_label_nets_run_id(run_id);
-            result.save(store, ws)?;
+            result.save(store, ws).await?;
         }
 
         Ok(run_id)
@@ -301,9 +305,10 @@ where
 
         async move {
             //gpt Split resources into train/valid sets per label for binary label-vs-rest training.
-            let (train_labels_resource_keys, valid_label_resource_keys) = with_data!(ctx.branch(Some("train_label_nets_resources"), false, false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Labeled>>|{
-                Ok::<_, ThoError>(input.resources_config().to_resources(&self.store)?)
+            let resources_config = with_data!(ctx.branch(Some("train_label_nets_resources"), false, false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Labeled>>|{
+                Ok::<_, ThoError>(input.resources_config().clone())
             })?;
+            let (train_labels_resource_keys, valid_label_resource_keys) = resources_config.to_resources(&self.store).await?;
 
             let (labels_tain_and_valid_sets, labels_others_train_valid_resources) = Self::build_resource_maps(train_labels_resource_keys, valid_label_resource_keys);
             debug!("TrainLabelNets::run: labels_others_train_valid_resources={labels_others_train_valid_resources:?}");

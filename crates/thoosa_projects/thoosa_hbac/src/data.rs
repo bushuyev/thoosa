@@ -842,7 +842,7 @@ mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::test_utils::init_test_logging;
     use thoosa_shared::{ThoError, cdt_for_dir};
-    use thoosa_store::{SqlStore, block_on_store_future};
+    use thoosa_store::SqlStore;
 
     #[ctor::ctor]
     fn init() {
@@ -998,14 +998,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_import_resources() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_import_resources() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 1000, 1000)));
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
-        let store = Arc::new(block_on_store_future(SqlStore::in_mem())?);
+        let store = Arc::new(SqlStore::in_mem().await?);
 
         let _resources = import_resources(
             &ws,
@@ -1019,9 +1019,9 @@ mod tests {
             },
             true,
             false,
-        )?;
+        ).await?;
 
-        let labels = block_on_store_future(store.list_labels())?;
+        let labels = store.list_labels().await?;
 
         assert_eq!(
             vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"],

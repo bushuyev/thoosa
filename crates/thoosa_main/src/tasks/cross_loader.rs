@@ -146,7 +146,7 @@ where
 pub struct CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
-    ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
+    ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> Cached<
         In<'i> = Resource,
         Out = ThoTensor<ChannelsData2, SynKey>,
@@ -182,7 +182,7 @@ where
 impl<ResC, L, CLC, RSV, R, C> Debug for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
-    ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
+    ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
@@ -196,7 +196,7 @@ where
 impl<ResC, L, CLC, RSV, R, C> CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
-    ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
+    ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
@@ -238,19 +238,19 @@ where
 //TODO move to lib
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
-pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync> {
+pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync + Clone> {
     resources_config: RC,
 }
 
-impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
-    pub(crate) fn check(self, store: &Arc<Box<dyn Store>>) -> Result<Self, ThoError> {
-        self.resources_config.check(store)?;
+impl<RC: ResourcesConfig + Debug + Send + Sync + Clone> ResourcesConfigInput<RC> {
+    pub(crate) async fn check(self, store: &Arc<Box<dyn Store>>) -> Result<Self, ThoError> {
+        self.resources_config.check(store).await?;
 
         Ok(self)
     }
 }
 
-impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
+impl<RC: ResourcesConfig + Debug + Send + Sync + Clone> ResourcesConfigInput<RC> {
     pub fn new(resources_config: RC) -> Self {
         Self {
             resources_config,
@@ -263,7 +263,7 @@ impl<RC: ResourcesConfig + Debug + Send + Sync> ResourcesConfigInput<RC> {
     }
 }
 
-impl<ResC: ResourcesConfig + Debug + Send + Sync> WithId for ResourcesConfigInput<ResC> {
+impl<ResC: ResourcesConfig + Debug + Send + Sync + Clone> WithId for ResourcesConfigInput<ResC> {
     type ID = ();
 
     fn id(&self) -> &Self::ID {
@@ -271,13 +271,13 @@ impl<ResC: ResourcesConfig + Debug + Send + Sync> WithId for ResourcesConfigInpu
     }
 }
 
-impl<RC: ResourcesConfig + Debug + Send + Sync> Input for ResourcesConfigInput<RC> {}
+impl<RC: ResourcesConfig + Debug + Send + Sync + Clone> Input for ResourcesConfigInput<RC> {}
 
 
 impl<ResC, L, CLC, RSV, R, C> Stage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
-    ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
+    ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -300,7 +300,7 @@ where
     CpuOnly<ResourcesConfigInput<ResC>>: DevicesWrapCopyMode<ResourcesConfigInput<ResC>>,
     Self::Out: Data + WithId + Send + Sync,
     <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>,
-    ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
+    ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -317,15 +317,18 @@ where
         let device_idx = ctx.device_idx();
         let output_merge_mode = self.output_merge_mode;
 
-        let resources = input.with_data_ref(0, ctx.branch(Some("cross_loader_resources"), false, false), None, |input: &ResourcesConfigInput<ResC>, _ctx|{
-                Ok(input
-                    .resources_config
-                    .to_resources(&self.store)?
-                    .into_iter()
-                    .filter(|r|r.length() > self.step)
-                    .map(|r| Arc::new(r))
-                    .collect::<Vec<_>>())
-            }).await?;
+        let resources_config = input
+            .with_data_ref(0, ctx.branch(Some("cross_loader_resources"), false, false), None, |input: &ResourcesConfigInput<ResC>, _ctx| {
+                Ok(input.resources_config.clone())
+            })
+            .await?;
+        let resources = resources_config
+            .to_resources(&self.store)
+            .await?
+            .into_iter()
+            .filter(|r| r.length() > self.step)
+            .map(Arc::new)
+            .collect::<Vec<_>>();
 
         debug!("CrossLoader::run:  max_batch={max_batch} resources={resources:?}");
 
@@ -1212,7 +1215,7 @@ mod tests {
     use thoosa_shared::mono_key;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_store::fs_store::ChunkedSlicesReader;
-    use thoosa_store::{MockStoreBuilder, SlicesMatch, SqlStore, block_on_store_future};
+    use thoosa_store::{MockStoreBuilder, SlicesMatch, SqlStore};
     use tokio::task::yield_now;
     use tokio::time::sleep;
     use tracing::subscriber::NoSubscriber;
@@ -1600,7 +1603,7 @@ mod tests {
             || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").store_path().to_path_buf(),
             "CrossLoader::test_cross_clc/ws_read_store_path",
         );
-        let store = Arc::new(block_on_store_future(SqlStore::from_path(&store_path))?);
+        let store = Arc::new(SqlStore::from_path(&store_path).await?);
 
         let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"]
             .into_iter()
@@ -1615,27 +1618,21 @@ mod tests {
             .map(|key| (key.clone(), (ResourceStats::new(vec![1, tensor_len as u32]), vec![])))
             .collect::<HashMap<_, _>>();
 
-        {
-            let store_guard = Arc::clone(&store);
-            let mut conn = thoosa_store::rusqlite::Connection::open(&store_path)?;
-            let t = conn.transaction()?;
-            let import_id = block_on_store_future(store_guard.save_import("test resources".to_string(), &t))?;
-            block_on_store_future(store_guard.save_resources_labels(&resource_stats, import_id, &t))?;
-            t.commit()?;
-        }
+        let import_id = store.save_import("test resources".to_string()).await?;
+        store.save_resources_labels(&resource_stats, import_id).await?;
 
-        let run_id = block_on_store_future(store.save_run_config(
+        let run_id = store.save_run_config(
             None,
             &"find_motifs",
             "test_cross_clc",
             "",
             HashMap::new(),
-        ))?;
+        ).await?;
         let run_config = FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, 2, None, None);
         let fixed_config = FixedFindMotifsConfig::new(2, false);
 
         let resource_key_refs = resource_keys.iter().map(|v| v.as_str()).collect::<Vec<_>>();
-        let resources = block_on_store_future(store.list_resources_by_file_stems(&resource_key_refs))?;
+        let resources = store.list_resources_by_file_stems(&resource_key_refs).await?;
         let resources_to_move = resources.clone();
         let oom_triggered = Arc::new(AtomicBool::new(false));
         let oom_triggered_cloned = Arc::clone(&oom_triggered);

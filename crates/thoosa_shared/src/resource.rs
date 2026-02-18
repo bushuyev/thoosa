@@ -12,7 +12,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
 
 #[automock]
-#[async_trait(?Send)]
+#[async_trait]
 pub trait ResourceStore {
     async fn list_resources_by_file_stems<'a>(
         &self,
@@ -170,14 +170,15 @@ impl ResourceStats {
     }
 }
 
+#[async_trait]
 pub trait ResourcesConfig {
     type R;
-    fn to_resources<S: ResourceStore + ?Sized>(
+    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
         store: &Arc<Box<S>>,
     ) -> Result<Self::R, ThoError>;
 
-    fn check<S: ResourceStore + ?Sized>(&self, _store: &Arc<Box<S>>) -> Result<(), ThoError> {
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, _store: &Arc<Box<S>>) -> Result<(), ThoError> {
         Err(ThoError::new("resource config check is not implemented"))
     }
 }

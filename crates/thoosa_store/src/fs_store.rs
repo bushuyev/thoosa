@@ -1,4 +1,5 @@
-use crate::{IdSlice, MotifTrackerStore, SlicesMatch, Store, block_on_store_future, filter_groups_by_slices_count};
+use crate::{IdSlice, MotifTrackerStore, SlicesMatch, Store, filter_groups_by_slices_count};
+use async_trait::async_trait;
 use bytemuck::{AnyBitPattern, Pod};
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
@@ -138,6 +139,7 @@ impl FileMotifTrackerStore {
     }
 }
 
+#[async_trait]
 impl MotifTrackerStore for FileMotifTrackerStore {
     fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> Result<(), ThoError> {
         trace!("MotifTrackerStore::save_slices: slices_pairs.len()={}", slices_pairs.len());
@@ -148,7 +150,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         Ok(())
     }
 
-    fn load_slices_into_groups(&mut self, store: &Arc<Box<dyn Store>>, max_slices_counts: Option<u32>) -> Result<usize, ThoError> {
+    async fn load_slices_into_groups(&mut self, store: &Arc<Box<dyn Store>>, max_slices_counts: Option<u32>) -> Result<usize, ThoError> {
         debug!("MotifTrackerStore::load_slices_into_groups: max_slices_counts={max_slices_counts:?}");
 
         self.writer.shutdown()?;
@@ -162,7 +164,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         }));
         debug!("MotifTrackerStore::load_slices_into_groups: inserting {} groups {} slices", groups.len(), groups.values().map(|s| s.len()).sum::<usize>());
         let groups_len = groups.len();
-        block_on_store_future(store.save_groups_as_motifs(self.run_id, self.channel as i64, filter_groups_by_slices_count(max_slices_counts, groups)))?;
+        store.save_groups_as_motifs(self.run_id, self.channel as i64, filter_groups_by_slices_count(max_slices_counts, groups)).await?;
 
         fs::remove_file(&self.path)?;
 
@@ -288,7 +290,7 @@ impl<T: AnyBitPattern> Iterator for ChunkedSlicesReader<T> {
 #[cfg(test)]
 mod tests {
     use crate::fs_store::{ChunkedSlicesReader, FileMotifTrackerStore, SlicesMatch};
-    use crate::{IdSlice, SqlStore, block_on_store_future, filter_groups_by_slices_count};
+    use crate::{IdSlice, SqlStore, filter_groups_by_slices_count};
     use log::LevelFilter::Trace;
     use log::{debug, error};
     use parking_lot::{Mutex, RwLock};
@@ -299,17 +301,17 @@ mod tests {
     use thoosa_shared::test_utils::init_test_logging;
     use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir, group_slices};
 
-    #[test]
-    fn test_single_part() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_single_part() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(block_on_store_future(SqlStore::from_path(test_dir.join("main_store.db3")))?);
+        let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
 
-        let resource_ids = crate::store_tests::init_test_store(&mut store)?;
+        let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
 
-        let run_id = block_on_store_future(store.save_run_config(None, &"todo", "test", "keys", HashMap::new()))?;
+        let run_id = store.save_run_config(None, &"todo", "test", "keys", HashMap::new()).await?;
 
         let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
@@ -320,10 +322,10 @@ mod tests {
             SlicesMatch(TensorIdSliceIdx(resource_ids[0], 700), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
-        file_store.load_slices_into_groups(&store, None)?;
+        file_store.load_slices_into_groups(&store, None).await?;
 
-        let resources = block_on_store_future(store.list_resources_by_ids(&resource_ids))?;
-        let map = block_on_store_future(store.list_motifs_slices(run_id, None))?;
+        let resources = store.list_resources_by_ids(&resource_ids).await?;
+        let map = store.list_motifs_slices(run_id, None).await?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let mut slise_idxs = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
@@ -334,17 +336,17 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_two_motifs() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_two_motifs() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(block_on_store_future(SqlStore::from_path(test_dir.join("main_store.db3")))?);
+        let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
 
-        let resource_ids = crate::store_tests::init_test_store(&mut store)?;
+        let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
 
-        let run_id = block_on_store_future(store.save_run_config(None, &"todo", "test", "keys", HashMap::new()))?;
+        let run_id = store.save_run_config(None, &"todo", "test", "keys", HashMap::new()).await?;
 
         let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
@@ -355,10 +357,10 @@ mod tests {
             SlicesMatch(TensorIdSliceIdx(resource_ids[1], 400), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
-        file_store.load_slices_into_groups(&store, None)?;
+        file_store.load_slices_into_groups(&store, None).await?;
 
-        let resources = block_on_store_future(store.list_resources_by_ids(&resource_ids))?;
-        let map = block_on_store_future(store.list_motifs_slices(run_id, None))?;
+        let resources = store.list_resources_by_ids(&resource_ids).await?;
+        let map = store.list_motifs_slices(run_id, None).await?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let resoruce_0_motifs = motifs_slices.iter().map(|ms| ms.motif_id).collect::<HashSet<_>>();
@@ -379,17 +381,17 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_single_part_with_resources() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_single_part_with_resources() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(block_on_store_future(SqlStore::from_path(test_dir.join("main_store.db3")))?);
+        let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
 
-        let resource_ids = crate::store_tests::init_test_store(&mut store)?;
+        let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
 
-        let run_id = block_on_store_future(store.save_run_config(None, &"todo", "test", "keys", HashMap::new()))?;
+        let run_id = store.save_run_config(None, &"todo", "test", "keys", HashMap::new()).await?;
 
         let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
@@ -400,10 +402,10 @@ mod tests {
             SlicesMatch(TensorIdSliceIdx(resource_ids[1], 700), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
-        file_store.load_slices_into_groups(&store, None)?;
+        file_store.load_slices_into_groups(&store, None).await?;
 
-        let resources = block_on_store_future(store.list_resources_by_ids(&resource_ids))?;
-        let map = block_on_store_future(store.list_motifs_slices(run_id, None))?;
+        let resources = store.list_resources_by_ids(&resource_ids).await?;
+        let map = store.list_motifs_slices(run_id, None).await?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let mut slise_idxs_0 = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
@@ -420,18 +422,18 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_two_parts() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_two_parts() -> Result<(), ThoError> {
         // log::set_max_level(Trace);
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(block_on_store_future(SqlStore::from_path(test_dir.join("main_store.db3")))?);
+        let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
 
-        let resource_ids = crate::store_tests::init_test_store(&mut store)?;
+        let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
 
-        let run_id = block_on_store_future(store.save_run_config(None, &"todo", "test", "keys", HashMap::new()))?;
+        let run_id = store.save_run_config(None, &"todo", "test", "keys", HashMap::new()).await?;
 
         let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
@@ -445,10 +447,10 @@ mod tests {
             SlicesMatch(TensorIdSliceIdx(resource_ids[0], 700), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
-        file_store.load_slices_into_groups(&store, None)?;
+        file_store.load_slices_into_groups(&store, None).await?;
 
-        let resources = block_on_store_future(store.list_resources_by_ids(&resource_ids))?;
-        let map = block_on_store_future(store.list_motifs_slices(run_id, None))?;
+        let resources = store.list_resources_by_ids(&resource_ids).await?;
+        let map = store.list_motifs_slices(run_id, None).await?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let mut slise_idxs = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
@@ -459,24 +461,24 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_no_matches() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_no_matches() -> Result<(), ThoError> {
         // log::set_max_level(Trace);
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(block_on_store_future(SqlStore::from_path(test_dir.join("main_store.db3")))?);
+        let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
 
-        let resource_ids = crate::store_tests::init_test_store(&mut store)?;
+        let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
 
-        let run_id = block_on_store_future(store.save_run_config(None, &"todo", "test", "keys", HashMap::new()))?;
+        let run_id = store.save_run_config(None, &"todo", "test", "keys", HashMap::new()).await?;
 
         let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
-        file_store.load_slices_into_groups(&store, None)?;
+        file_store.load_slices_into_groups(&store, None).await?;
 
-        let map = block_on_store_future(store.list_motifs_slices(run_id, None))?;
+        let map = store.list_motifs_slices(run_id, None).await?;
 
         assert_eq!(0, map.len());
 

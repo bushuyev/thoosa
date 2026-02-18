@@ -163,7 +163,7 @@ mod tests {
     use thoosa_shared::resource::{Resource, ResourceStore};
     use thoosa_shared::test_utils::{are_close, init_test_logging, set_panic_hook};
     use thoosa_shared::{ResourceType, ThoError, cdt_for_dir, recurse_files};
-    use thoosa_store::{SqlStore, block_on_store_future};
+    use thoosa_store::SqlStore;
 
     #[ctor::ctor]
     fn init() {
@@ -354,7 +354,7 @@ mod tests {
     }
 
     // #[test]
-    fn test_plot_resource() -> Result<(), ThoError> {
+    async fn test_plot_resource() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             "/tmp/ws_test_clef",
             1,
@@ -362,7 +362,7 @@ mod tests {
             32000,
         )?));
 
-        let store = Arc::new(block_on_store_future(SqlStore::from_path(ws.read().store_path()))?);
+        let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
 
         plot_resource(
             Simple::new(ResourceType::List(vec![
@@ -380,7 +380,8 @@ mod tests {
             ])),
             &ws,
             &store,
-        )?;
+        )
+        .await?;
 
         Ok(())
     }

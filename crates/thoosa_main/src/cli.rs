@@ -11,7 +11,6 @@ use crate::version::VERSION;
 use async_trait::async_trait;
 use thoosa_shared::runner::common::runnable::Stage;
 use clap::{Args, Parser, Subcommand};
-use futures::executor::block_on;
 use futures_util::future::{join_all, try_join_all};
 use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, error, info, trace, warn, Level, LevelFilter};
@@ -63,8 +62,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{cdt, cdt_for_dir, ResourceType, ThoError};
-use thoosa_store::{SqlStore, Store, block_on_store_future};
-use thoosa_store::rusqlite::Connection;
+use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Runtime;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
@@ -344,7 +342,7 @@ where
                 },
                 true,
                 true,
-            )?;
+            ).await?;
 
             info!("ImportResources done");
         }
@@ -430,7 +428,7 @@ where
                         100_000, //TODO config
                         #[cfg(test)]
                         None
-                    ))
+                    ).await.expect("SelectMotifsStage::new failed"))
                 },
                 || root_ctx.branch( Some("select motifs"), true, false),
             ).await?;
@@ -648,13 +646,13 @@ async fn run_all(
 
     //gpt Build the input for FindMotifs: wrap resource config in DevicesWrap and allocate a fresh cache area.
     let find_motifs_input = Arc::new(DevicesWrap::wrap(
-        ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store)?,
+        ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store).await?,
         CacheArea::default()
     ));
 
     //gpt Build the input for SelectMotifs: separate resource config so selection can use its own dataset.
     let select_motifs_input = Arc::new(DevicesWrap::wrap(
-        ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store)?,
+        ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).await?,
         CacheArea::default()
     ));
 
@@ -662,14 +660,14 @@ async fn run_all(
     let train_labels_input = Arc::new(DevicesWrap::wrap(
         ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
                run_all_args.train_resource_config()
-        ).check(&store)?,
+        ).check(&store).await?,
         CacheArea::default()
     ));
 
     //gpt Build the input for final net training: usually a higher-level resource config (e.g., logits inputs).
     let train_final_input = Arc::new(DevicesWrap::wrap(
         ResourcesConfigInput::new(
-            run_all_args.train_final_resource_config()).check(&store)?,
+            run_all_args.train_final_resource_config()).check(&store).await?,
         CacheArea::default()
     ));
 
@@ -798,7 +796,7 @@ async fn run_all(
                         run_all_args.max_chunk_size as i64,
                         #[cfg(test)]
                         None
-                    ))
+                    ).await.expect("SelectMotifsStage::new failed"))
                 },
                 || root_ctx.branch(Some("select_motifs"), true, false),
             ).await?;
@@ -1261,34 +1259,30 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
     (find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value)
 }
 
-fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
+async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
     input_run_ids: Option<&[RunId]>,
     store: &Arc<Box<dyn Store>>,
     run_configs: &mut Vec<R>,
     descr: &str,
-) -> Vec<RunId> {
-    run_configs
-        .into_iter()
-        .map(|run_config| {
-            let run_config_id = block_on_store_future(store
-                .save_run_config(
-                    input_run_ids,
-                    &<R>::type_name(),
-                    descr,
-                    &"todo",
-                    run_config.to_properties_iter(None).collect(),
-                ))
-                .unwrap();
-
-            // run_config_ids.push(run_config_id);
-            run_config.set_id(run_config_id);
-
-            run_config_id
-        })
-        .collect()
+) -> Result<Vec<RunId>, ThoError> {
+    let mut run_ids = Vec::with_capacity(run_configs.len());
+    for run_config in run_configs.iter_mut() {
+        let run_config_id = store
+            .save_run_config(
+                input_run_ids,
+                &<R>::type_name(),
+                descr,
+                &"todo",
+                run_config.to_properties_iter(None).collect(),
+            )
+            .await?;
+        run_config.set_id(run_config_id);
+        run_ids.push(run_config_id);
+    }
+    Ok(run_ids)
 }
 
-pub fn import_resources<F, R>(
+pub async fn import_resources<F, R>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     labels: &[&str],
@@ -1301,10 +1295,10 @@ where
     F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
     R: Fn(String) -> Result<Tensor, ThoError> + Sync + Send,
 {
-    import_resources_with_pure_sets(ws, store, labels, labeled_resources, resource_to_tensor, insert_label, Some(&[(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)]))
+    import_resources_with_pure_sets(ws, store, labels, labeled_resources, resource_to_tensor, insert_label, Some(&[(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)])).await
 }
 
-pub fn import_resources_with_pure_sets<F, R>(
+pub async fn import_resources_with_pure_sets<F, R>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     labels: &[&str],
@@ -1318,19 +1312,16 @@ where
     R: Fn(String) -> Result<Tensor, ThoError> + Sync + Send,
 {
     let store_guard = store;
-    let db_path = ws.read().store_path().to_path_buf();
-    let mut conn = Connection::open(db_path)?;
-    let t = conn.transaction()?;
 
     if insert_label {
         for label in labels {
-            block_on_store_future(store_guard.save_label(label, &t))?; //TODO merge with save_resources_labels
+            store_guard.save_label(label).await?; //TODO merge with save_resources_labels
         }
     }
 
     let labeled_resources_map = labeled_resources()?;
     let ws_guard = ws.write();
-    let import_id = block_on_store_future(store_guard.save_import(format!("Import on {}", cdt()), &t))?;
+    let import_id = store_guard.save_import(format!("Import on {}", cdt())).await?;
 
     let (imported_tensors_stats, failed_tensors): (
         HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
@@ -1366,7 +1357,7 @@ where
         })
         .expect("imported_tensors");
 
-    let resource_ids = block_on_store_future(store_guard.save_resources_labels(&imported_tensors_stats, import_id, &t))?;
+    let resource_ids = store_guard.save_resources_labels(&imported_tensors_stats, import_id).await?;
 
     info!(
         "Import id: {}, imported {} tensors to {:?}, failed {}",
@@ -1378,7 +1369,7 @@ where
 
     if let Some(pure_sets_lens) = pure_sets_lens {
         for pure_sets_len in pure_sets_lens {
-            block_on_store_future(store_guard.save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t))?;//
+            store_guard.save_pure_sets(pure_sets_len.0, pure_sets_len.1).await?;//
         }
     }
 
@@ -1391,8 +1382,7 @@ where
     // store_guard.save_pure_balanced_sets("C100", Some(100), 0.6, 0.2, &t)?;
     // store_guard.save_pure_balanced_sets("All", None,  0.6, 0.2, &t)?;
 
-    block_on_store_future(store_guard.save_groups_by_label_cnt(100, &t))?;
-    t.commit()?;
+    store_guard.save_groups_by_label_cnt(100).await?;
 
     trace!("import_resources: resource_ids={resource_ids:?}, failed_tensors={failed_tensors:?}");
 
@@ -1580,7 +1570,7 @@ async fn plot_motif(
     Ok(())
 }
 
-pub fn run_opt_step<RC, RCRV, CC, R, ST>(
+pub async fn run_opt_step<RC, RCRV, CC, R, ST>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     common_config: &CC,
@@ -1632,7 +1622,7 @@ where
         for mut opt_run_config in opt_run_configs {
             debug!("run_step: saving opt_run_config={opt_run_config:?}");
 
-            let opt_run_config_id = opt_run_config.save(store, ws)?;
+            let opt_run_config_id = opt_run_config.save(store, ws).await?;
 
             opt_run_config_ids.push(opt_run_config_id);
         }
@@ -1643,7 +1633,7 @@ where
 }
 
 
-pub fn run_all_grid_step<RC, RCRV, R, FC, ST>(
+pub async fn run_all_grid_step<RC, RCRV, R, FC, ST>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     fixed_config: &FC,
@@ -1683,7 +1673,7 @@ where
             &store,
             &mut run_configs,
             "find motifs",
-        );
+        ).await?;
     }
     // let run_config_ids = save_run_configs(input_run_ids.as_ref().map(|v|v.as_slice()), &store, &mut run_configs, "find motifs");
 
@@ -1709,7 +1699,7 @@ where
         for mut opt_run_config in opt_run_configs {
             debug!("run_step: saving opt_run_config={opt_run_config:?}");
 
-            let opt_run_config_id = opt_run_config.save(store, ws)?;
+            let opt_run_config_id = opt_run_config.save(store, ws).await?;
 
             opt_run_config_ids.push(opt_run_config_id);
         }
@@ -1755,7 +1745,7 @@ where
             &store,
             &mut run_configs,
             "find motifs",
-        )
+        ).await?
     } else {
         vec![]
     };
@@ -1767,7 +1757,7 @@ where
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
 
     //gpt TODO!! savable.save returns a run_id, but it's ignored here; downstream uses presaved ids only.
-    savable.save(store, ws)?;
+    savable.save(store, ws).await?;
 
 
     Ok(run_ids)
@@ -1813,7 +1803,7 @@ where
     //gpt TODO!! Arc::into_inner will panic if the output Arc has multiple owners; consider a fallible path or cloning the inner data.
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
 
-    let run_id = savable.save(store, ws)?;
+    let run_id = savable.save(store, ws).await?;
 
 
     Ok(vec![run_id])//TODO
@@ -1980,7 +1970,7 @@ mod cli_tests {
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::traits::{Data, DataId};
     use thoosa_shared::val::NamedVal;
-    use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, block_on_store_future};
+    use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
     use thoosa_with_data::with_data;
     use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
     use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
@@ -2009,8 +1999,8 @@ mod cli_tests {
         assert!(cli.write_perf_log_file);
     }
 
-    #[test]
-    fn test_import_resources() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_import_resources() -> Result<(), ThoError> {
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
@@ -2020,7 +2010,7 @@ mod cli_tests {
             32000,
         )?));
 
-        let store = Arc::new(block_on_store_future(SqlStore::in_mem())?);
+        let store = Arc::new(SqlStore::in_mem().await?);
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
 
@@ -2039,9 +2029,9 @@ mod cli_tests {
             |_: String| Ok(Tensor::from_slice(&[0., 1., 2., 0., 10., 20.]).view((2, -1))),
             true,
             false,
-        )?;
+        ).await?;
 
-        let imported_resources: Vec<Resource> = block_on_store_future(store.list_resources_by_ids(&imported_ids))?;
+        let imported_resources: Vec<Resource> = store.list_resources_by_ids(&imported_ids).await?;
 
         debug!("imported={imported_resources:?}");
         let mut imported_keys = imported_resources
@@ -2259,7 +2249,7 @@ mod cli_tests {
         let tensors_path = ws.read().tensors_path().clone();
         let tensors_path_for_import = ws.read().tensors_path().clone();
 
-        let mut store = Arc::new(block_on_store_future(SqlStore::from_path(ws.read().store_path()))?);
+        let mut store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
 
         debug!("test_run_all: import_hash={import_hash:?}");
 
@@ -2277,9 +2267,9 @@ mod cli_tests {
             },
             true,
             Some(&[(20, true), (10, true)])
-        )?;
+        ).await?;
 
-        let resources = block_on_store_future(store.list_resources_by_ids(&imported_ids))?;
+        let resources = store.list_resources_by_ids(&imported_ids).await?;
 
         let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
             move |key, _| {
@@ -2383,7 +2373,7 @@ mod cli_tests {
         GlobalCtx::init_devices(2);
         let ws = Arc::new(RwLock::new(FsWorkspace::new("/home/bu/tmp/ws_test_hbac", 20, 684400, 200)?));
         let tensors_path = ws.read().tensors_path().clone();
-        let store = Arc::new(block_on_store_future(SqlStore::from_path(ws.read().store_path()))?);
+        let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
         let mut ctx = RunCtxWithPermits::new(0, "run_plot_motif_slices");
 
         let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(

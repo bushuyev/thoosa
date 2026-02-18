@@ -84,9 +84,9 @@ impl SetCond {
         }
     }
 }
-#[async_trait(?Send)]
+#[async_trait]
 pub trait Store: ResourceStore + Debug + Sync + Send {
-    async fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
+    async fn save_import(&self, descr: String) -> Result<u32, ThoError>;
     async fn save_run_config<'a, 'b, 'c>(
         &self,
         input_run_id: Option<&'a [RunId]>,
@@ -109,25 +109,22 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         group_id: Option<usize>,
     ) -> Result<usize, ThoError>;
     async fn save_resource_set_group(&self, descr: String) -> Result<usize, ThoError>;
-    async fn save_resources_labels<'a>(
+    async fn save_resources_labels(
         &self,
-        resource_stats_labels_probs: &'a HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
+        resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
         import_id: u32,
-        t: &'a Transaction<'a>,
     ) -> Result<Vec<ResourceId>, ThoError>;
-    async fn save_pure_sets<'a>(
+    async fn save_pure_sets(
         &self,
         max_len: usize,
         only_unused: bool,
-        t: &'a Transaction<'a>,
     ) -> Result<(), ThoError>;
-    async fn save_pure_balanced_sets<'a>(
+    async fn save_pure_balanced_sets(
         &self,
         prefix: &str,
         limit: Option<usize>,
         train_coeff: f32,
         valid_coeff: f32,
-        t: &'a Transaction<'a>,
     ) -> Result<(), ThoError>;
     async fn save_set_by_labels(
         &self,
@@ -135,10 +132,9 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         only_unused: bool,
         limit: usize,
     ) -> Result<(), ThoError>;
-    async fn save_groups_by_label_cnt<'a>(
+    async fn save_groups_by_label_cnt(
         &self,
         max_resources_in_set: usize,
-        t: &'a Transaction<'a>,
     ) -> Result<(), ThoError>;
     async fn list_resources_by_ids(
         &self,
@@ -150,7 +146,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         limit: u32,
     ) -> Result<Vec<Resource>, ThoError>;
 
-    async fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
+    async fn save_label(&self, label: &str) -> Result<u32, ThoError>;
 
     async fn list_labels(&self) -> Result<Vec<String>, ThoError>;
 
@@ -224,9 +220,9 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 mock! {
     pub Store {}
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl Store for Store {
-        async fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
+        async fn save_import(&self, descr: String) -> Result<u32, ThoError>;
         async fn save_run_config<'a, 'b, 'c>(
             &self,
             input_run_id: Option<&'a [RunId]>,
@@ -246,25 +242,22 @@ mock! {
             group_id: Option<usize>,
         ) -> Result<usize, ThoError>;
         async fn save_resource_set_group(&self, descr: String) -> Result<usize, ThoError>;
-        async fn save_resources_labels<'a>(
+        async fn save_resources_labels(
             &self,
-            resource_stats_labels_probs: &'a HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
+            resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
             import_id: u32,
-            t: &'a Transaction<'a>,
         ) -> Result<Vec<ResourceId>, ThoError>;
-        async fn save_pure_sets<'a>(
+        async fn save_pure_sets(
             &self,
             max_len: usize,
             only_unused: bool,
-            t: &'a Transaction<'a>,
         ) -> Result<(), ThoError>;
-        async fn save_pure_balanced_sets<'a>(
+        async fn save_pure_balanced_sets(
             &self,
             prefix: &str,
             limit: Option<usize>,
             train_coeff: f32,
             valid_coeff: f32,
-            t: &'a Transaction<'a>,
         ) -> Result<(), ThoError>;
         async fn save_set_by_labels(
             &self,
@@ -272,10 +265,9 @@ mock! {
             only_unused: bool,
             limit: usize,
         ) -> Result<(), ThoError>;
-        async fn save_groups_by_label_cnt<'a>(
+        async fn save_groups_by_label_cnt(
             &self,
             max_resources_in_set: usize,
-            t: &'a Transaction<'a>,
         ) -> Result<(), ThoError>;
         async fn list_resources_by_ids(
             &self,
@@ -286,7 +278,7 @@ mock! {
             label: &str,
             limit: u32,
         ) -> Result<Vec<Resource>, ThoError>;
-        async fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
+        async fn save_label(&self, label: &str) -> Result<u32, ThoError>;
         async fn list_labels(&self) -> Result<Vec<String>, ThoError>;
         async fn save_params_value<'a>(
             &self,
@@ -391,7 +383,7 @@ mock! {
         fn conn(&self) -> &parking_lot::Mutex<Connection>;
     }
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl ResourceStore for Store {
         async fn list_resources_by_file_stems<'a>(
             &self,
@@ -447,7 +439,7 @@ pub struct SqlStore {
     conn_2: tokio_rusqlite::Connection,
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl ResourceStore for SqlStore {
     async fn list_resource_set_resources_by_descr(
         &self,
@@ -694,14 +686,17 @@ impl ResourceStore for SqlStore {
 
 
 }
-#[async_trait(?Send)]
+#[async_trait]
 //TODO move out all prepare stmts
 impl Store for SqlStore {
-    async fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError> {
-        t.execute("INSERT INTO imports (descr) VALUES (?)", params![descr])?;
+    async fn save_import(&self, descr: String) -> Result<u32, ThoError> {
+        let mut conn_guard = self.conn.lock();
+        let t = conn_guard.transaction()?;
 
+        t.execute("INSERT INTO imports (descr) VALUES (?)", params![descr])?;
         let import_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
+        t.commit()?;
         Ok(import_id)
     }
 
@@ -870,11 +865,14 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    async fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoError> {
-        t.execute("INSERT INTO labels (label) VALUES (?)", params![label])?;
+    async fn save_label(&self, label: &str) -> Result<u32, ThoError> {
+        let mut conn_guard = self.conn.lock();
+        let t = conn_guard.transaction()?;
 
+        t.execute("INSERT INTO labels (label) VALUES (?)", params![label])?;
         let label_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
+        t.commit()?;
         Ok(label_id)
     }
 
@@ -893,12 +891,14 @@ impl Store for SqlStore {
     }
 
     //TODO folds to util fn
-    async fn save_resources_labels<'a>(
+    async fn save_resources_labels(
         &self,
-        resource_stats_labels_probs: &'a HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
+        resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
         import_id: u32,
-        t: &'a Transaction<'a>,
     ) -> Result<Vec<ResourceId>, ThoError> {
+        let mut conn_guard = self.conn.lock();
+        let t = conn_guard.transaction()?;
+
         debug!(
             "save_resources_labels: resource_labels_probs.len()={}",
             resource_stats_labels_probs.len()
@@ -921,6 +921,8 @@ impl Store for SqlStore {
                 resource_ids.extend(do_insert(reminder, import_id, &t)?);
             }
         }
+
+        t.commit()?;
 
         fn do_insert(
             resource_keys_iter: IntoIter<(&String, &(ResourceStats, Vec<(String, f32)>)), 500>,
@@ -1105,11 +1107,13 @@ impl Store for SqlStore {
         Ok(group_id)
     }
 
-    async fn save_groups_by_label_cnt<'a>(
+    async fn save_groups_by_label_cnt(
         &self,
         max_resources_in_set: usize,
-        t: &'a Transaction<'a>,
     ) -> Result<(), ThoError> {
+        let mut conn_guard = self.conn.lock();
+        let t = conn_guard.transaction()?;
+
         {
             let labels_cnt_labels_resources: HashMap<usize, HashMap<String, Vec<usize>>> = {
                 let mut stmt = t.prepare(
@@ -1176,7 +1180,7 @@ impl Store for SqlStore {
                                         i,
                                         i + *max_r
                                     ),
-                                    t,
+                                    &t,
                                 )
                                 .map(|g| (i, i + *max_r, g))
                             })
@@ -1185,7 +1189,7 @@ impl Store for SqlStore {
                     .collect::<Result<Vec<Vec<(usize, usize, usize)>>, ThoError>>()?;
 
                 let group_all_id =
-                    Self::save_resource_set_group(format!("group {} labels/all", labels_cnt), t)?;
+                    Self::save_resource_set_group(format!("group {} labels/all", labels_cnt), &t)?;
 
                 debug!(
                     "save_groups_by_label_cnt:  num_groups={:?}, groups_max_resources={:?}",
@@ -1213,7 +1217,7 @@ impl Store for SqlStore {
                             for (resources_0, resources_1, group_id) in group_id {
                                 if *resources_0 < resources.len() - 1 {
                                     Self::insert_resource_set_resources(
-                                        t,
+                                        &t,
                                         labels_cnt,
                                         *group_id,
                                         format!("{}/{}", labels_cnt, label),
@@ -1226,7 +1230,7 @@ impl Store for SqlStore {
                         }
                     }
                     Self::insert_resource_set_resources(
-                        t,
+                        &t,
                         labels_cnt,
                         group_all_id,
                         format!("{}/{}", labels_cnt, label),
@@ -1236,63 +1240,71 @@ impl Store for SqlStore {
                 }
             }
         }
+        t.commit()?;
         Ok(())
     }
 
-    async fn save_pure_sets<'a>(
+    async fn save_pure_sets(
         &self,
         max_len: usize,
         only_unused: bool,
-        t: &'a Transaction<'a>,
     ) -> Result<(), ThoError> {
-        let group_id = Self::save_resource_set_group(format!("pure group {}", max_len), t)?;
+        let mut conn_guard = self.conn.lock();
+        let t = conn_guard.transaction()?;
 
-        let mut resource_resources_set_stmt = t.prepare(
-            if only_unused {
-                "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
-                    SELECT lr.resource_id FROM labeled_resources lr LEFT JOIN resource_resources_set rrs ON rrs.resource_id=lr.resource_id \
-                    GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? AND rrs.set_id IS NULL ORDER BY lr.resource_id\
-                ) LIMIT ?"
-            } else {
-                "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
-                    SELECT lr.resource_id FROM labeled_resources lr GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? ORDER BY lr.resource_id\
-                ) LIMIT ?"
-            }
-        )?;
+        let group_id = Self::save_resource_set_group(format!("pure group {}", max_len), &t)?;
 
-        //TODO replace with Self::list_labels
-        let mut stmt = t.prepare("SELECT id, label FROM labels ORDER BY id")?;
-        let mut rows = stmt.query(())?;
-        while let Some(label_row) = rows.next()? {
-            debug!("row={:?}", label_row);
-            let label_id = label_row.get::<usize, usize>(0)?;
-            t.execute(
-                "INSERT INTO resource_set (descr, group_id, label_id) VALUES (?, ?, ?)",
-                params![
-                    format!("{}/{}", label_row.get::<usize, String>(1)?, max_len),
-                    group_id,
-                    label_id
-                ],
+        {
+            let mut resource_resources_set_stmt = t.prepare(
+                if only_unused {
+                    "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
+                        SELECT lr.resource_id FROM labeled_resources lr LEFT JOIN resource_resources_set rrs ON rrs.resource_id=lr.resource_id \
+                        GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? AND rrs.set_id IS NULL ORDER BY lr.resource_id\
+                    ) LIMIT ?"
+                } else {
+                    "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
+                        SELECT lr.resource_id FROM labeled_resources lr GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? ORDER BY lr.resource_id\
+                    ) LIMIT ?"
+                }
             )?;
 
-            let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
-                row.get::<usize, usize>(0)
-            })?;
+            //TODO replace with Self::list_labels
+            let mut stmt = t.prepare("SELECT id, label FROM labels ORDER BY id")?;
+            let mut rows = stmt.query(())?;
+            while let Some(label_row) = rows.next()? {
+                debug!("row={:?}", label_row);
+                let label_id = label_row.get::<usize, usize>(0)?;
+                t.execute(
+                    "INSERT INTO resource_set (descr, group_id, label_id) VALUES (?, ?, ?)",
+                    params![
+                        format!("{}/{}", label_row.get::<usize, String>(1)?, max_len),
+                        group_id,
+                        label_id
+                    ],
+                )?;
 
-            resource_resources_set_stmt.execute(params![resource_set_id, label_id, max_len])?;
+                let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
+                    row.get::<usize, usize>(0)
+                })?;
+
+                resource_resources_set_stmt.execute(params![resource_set_id, label_id, max_len])?;
+            }
         }
 
+        t.commit()?;
         Ok(())
     }
 
-    async fn save_pure_balanced_sets<'a>(
+    async fn save_pure_balanced_sets(
         &self,
         prefix: &str,
         limit: Option<usize>,
         train_coeff: f32,
         valid_coeff: f32,
-        t: &'a Transaction<'a>,
     ) -> Result<(), ThoError> {
+        let mut conn_guard = self.conn.lock();
+        let t = conn_guard.transaction()?;
+
         if train_coeff < 0.0 || valid_coeff < 0.0 {
             return Err(ThoError::new(format!("train_coeff and valid_coeff must be >= 0.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
         }
@@ -1301,7 +1313,7 @@ impl Store for SqlStore {
             return Err(ThoError::new(format!("train_coeff + valid_coeff must be <= 1.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
         }
 
-        let labels = Self::list_labels(t)?;
+        let labels = Self::list_labels(&t)?;
         let mut resources_by_label = labels
             .iter()
             .map(|(label_id, _)| (*label_id, Vec::new()))
@@ -1346,11 +1358,11 @@ impl Store for SqlStore {
 
         debug!("save_pure_balanced_sets: prefix={prefix} target_count={target_count} train_count={train_count} valid_count={valid_count} test_count={test_count}");
 
-        let train_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_train"), t)?;
+        let train_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_train"), &t)?;
 
-        let valid_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_validation"), t)?;
+        let valid_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_validation"), &t)?;
 
-        let test_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_test"), t)?;
+        let test_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_test"), &t)?;
 
         let labels_cnt = labels.len();
         let mut rng = rand::rng();
@@ -1367,7 +1379,7 @@ impl Store for SqlStore {
             let (valid_resources, test_resources) = rest.split_at(min(valid_count, rest.len()));
 
             Self::insert_resource_set_resources(
-                t,
+                &t,
                 labels_cnt,
                 train_group_id,
                 format!("{prefix}_balanced_set_{label}"),
@@ -1375,7 +1387,7 @@ impl Store for SqlStore {
                 train_resources,
             )?;
             Self::insert_resource_set_resources(
-                t,
+                &t,
                 labels_cnt,
                 valid_group_id,
                 format!("{prefix}_balanced_set_{label}"),
@@ -1383,7 +1395,7 @@ impl Store for SqlStore {
                 valid_resources,
             )?;
             Self::insert_resource_set_resources(
-                t,
+                &t,
                 labels_cnt,
                 test_group_id,
                 format!("{prefix}_balanced_set_{label}"),
@@ -1392,6 +1404,7 @@ impl Store for SqlStore {
             )?;
         }
 
+        t.commit()?;
         Ok(())
     }
 
@@ -3054,16 +3067,6 @@ fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
         .collect::<String>()
 }
 
-pub fn block_on_store_future<F>(future: F) -> F::Output
-where
-    F: std::future::Future,
-{
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
-        Err(_) => tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime").block_on(future),
-    }
-}
-
 pub struct SqlMotifTrackerStore {
     run_id: RunId,
     channel: u32,
@@ -3110,9 +3113,10 @@ impl SqlMotifTrackerStore {
 #[derive(Debug, PartialEq, Copy, Clone, Pod, Zeroable)]
 pub struct SlicesMatch(pub TensorIdSliceIdx, pub TensorIdSliceIdx, pub f32);
 
+#[async_trait]
 pub trait MotifTrackerStore: Debug + Send + Sync {
     fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> Result<(), ThoError>;
-    fn load_slices_into_groups(&mut self, store: &Arc<Box<dyn Store>>, max_slices_counts: Option<u32>) -> Result<usize, ThoError>;
+    async fn load_slices_into_groups(&mut self, store: &Arc<Box<dyn Store>>, max_slices_counts: Option<u32>) -> Result<usize, ThoError>;
 
     fn run_id(&self) -> RunId;
     fn channel(&self) -> u32;
@@ -3132,6 +3136,7 @@ pub fn filter_groups_by_slices_count(max_slices_counts: Option<u32>, groups: Has
     }
 }
 
+#[async_trait]
 impl MotifTrackerStore for SqlMotifTrackerStore {
     fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> Result<(), ThoError> {
         debug!("MotifTrackerStore::save_slices: motifs.len()={:?}, self.run_id={:?}",slices.len(),self.run_id);
@@ -3167,20 +3172,20 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         Ok(())
     }
 
-    fn load_slices_into_groups(
+    async fn load_slices_into_groups(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         max_slices_counts: Option<u32>,
     ) -> Result<usize, ThoError> {
-        let mut guard = self.conn.lock();
-        let t = guard.transaction()?;
-
-        debug!(
-            "set_motifs: run_id={:?}, channel={:?}",
-            self.run_id, self.channel
-        );
-
         let groups = {
+            let mut guard = self.conn.lock();
+            let t = guard.transaction()?;
+
+            debug!(
+                "set_motifs: run_id={:?}, channel={:?}",
+                self.run_id, self.channel
+            );
+
             let mut stmt = t.prepare(
                 "SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches",
             )?;
@@ -3198,18 +3203,19 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
                 self.run_id, self.channel, groups
             );
 
+            drop(stmt);
+            t.commit()?;
             groups
         };
-        t.commit()?;
 
         let groups_by_slices_count = filter_groups_by_slices_count(max_slices_counts, groups);
         let groups_len = groups_by_slices_count.len();
-        block_on_store_future(store.save_groups_as_motifs_with_slices_matches(
+        store.save_groups_as_motifs_with_slices_matches(
             self.run_id,
             self.channel as i64,
             groups_by_slices_count,
             self.path.clone(),
-        ))?;
+        ).await?;
 
         Ok(groups_len)
     }
@@ -3234,7 +3240,7 @@ mod store_tests {
     use std::time::Instant;
 
     use log::debug;
-    use rusqlite::{Transaction, params};
+    use rusqlite::params;
     use parking_lot::{Mutex, RawMutex, RwLock};
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
     use thoosa_shared::run_configs::RunId;
@@ -3242,90 +3248,31 @@ mod store_tests {
     use thoosa_shared::{TensorIdSliceIdx, cdt, cdt_for_dir, MotifSlice};
 
     use crate::{
-        MotifTrackerStore, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoError, block_on_store_future,
+        MotifTrackerStore, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoError,
     };
     use std::path::PathBuf;
-
-    trait StoreSyncExt {
-        fn save_import_sync<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
-        fn save_run_config_sync<'a, 'b, 'c>(&self, input_run_id: Option<&'a [RunId]>, run_config_type: &'b str, descr: &'c str, keys: &'c str, properties_vals: HashMap<String, Val>) -> Result<RunId, ThoError>;
-        fn get_input_run_ids_sync<'a>(&self, run_id: RunId, input_type: Option<&'a str>) -> Result<Vec<RunId>, ThoError>;
-        fn save_resources_set_sync(&self, set: String, resource_keys: Vec<String>, group_id: Option<usize>) -> Result<usize, ThoError>;
-        fn save_resource_set_group_sync(&self, descr: String) -> Result<usize, ThoError>;
-        fn save_resources_labels_sync<'a>(&self, resource_stats_labels_probs: &'a HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32, t: &'a Transaction<'a>) -> Result<Vec<ResourceId>, ThoError>;
-        fn save_pure_sets_sync<'a>(&self, max_len: usize, only_unused: bool, t: &'a Transaction<'a>) -> Result<(), ThoError>;
-        fn save_pure_balanced_sets_sync<'a>(&self, prefix: &str, limit: Option<usize>, train_coeff: f32, valid_coeff: f32, t: &'a Transaction<'a>) -> Result<(), ThoError>;
-        fn save_groups_by_label_cnt_sync<'a>(&self, max_resources_in_set: usize, t: &'a Transaction<'a>) -> Result<(), ThoError>;
-        fn list_resources_by_ids_sync(&self, file_stem: &Vec<ResourceId>) -> Result<Vec<Resource>, ThoError>;
-        fn list_resource_random_not_labeled_sync(&self, label: &str, limit: u32) -> Result<Vec<Resource>, ThoError>;
-        fn save_label_sync<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoError>;
-        fn list_labels_sync(&self) -> Result<Vec<String>, ThoError>;
-        fn list_motifs_slices_sync(&self, run_id: RunId, select_motifs_run_id: Option<Vec<RunId>>) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError>;
-        fn list_motif_slices_sync(&self, motif_id: u32, select_motifs_run_id: Option<Vec<RunId>>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>;
-        fn list_random_motif_slices_sync(&self, motif_id: u32, motif_width: u32, min_distance: Option<u32>, input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>;
-        fn list_run_config_values_sync(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
-        fn save_selected_motifs_sync(&self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoError>;
-        fn list_selected_motifs_sync(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
-        fn save_selected_net_sync(&self, run_id: RunId, path: PathBuf, loss: f32) -> Result<(), ThoError>;
-        fn list_selected_nets_sync(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError>;
-        fn list_resource_set_group_sets_sync(&self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoError>;
-        fn list_resource_random_in_group_sync(&self, group_descr: &str) -> Result<Vec<(Resource, Vec<f32>)>, ThoError>;
-        fn list_resources_not_in_group_sync(&self, group_descr: &str, limit: u32) -> Result<Vec<Resource>, ThoError>;
-        fn list_resources_by_file_stems_sync<'a>(&self, file_stems: &'a [&'a str]) -> Result<Vec<Resource>, ThoError>;
-    }
-
-    impl<T: Store + ?Sized> StoreSyncExt for T {
-        fn save_import_sync<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoError> { block_on_store_future(self.save_import(descr, t)) }
-        fn save_run_config_sync<'a, 'b, 'c>(&self, input_run_id: Option<&'a [RunId]>, run_config_type: &'b str, descr: &'c str, keys: &'c str, properties_vals: HashMap<String, Val>) -> Result<RunId, ThoError> { block_on_store_future(self.save_run_config(input_run_id, run_config_type, descr, keys, properties_vals)) }
-        fn get_input_run_ids_sync<'a>(&self, run_id: RunId, input_type: Option<&'a str>) -> Result<Vec<RunId>, ThoError> { block_on_store_future(self.get_input_run_ids(run_id, input_type)) }
-        fn save_resources_set_sync(&self, set: String, resource_keys: Vec<String>, group_id: Option<usize>) -> Result<usize, ThoError> { block_on_store_future(self.save_resources_set(set, resource_keys, group_id)) }
-        fn save_resource_set_group_sync(&self, descr: String) -> Result<usize, ThoError> { block_on_store_future(self.save_resource_set_group(descr)) }
-        fn save_resources_labels_sync<'a>(&self, resource_stats_labels_probs: &'a HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32, t: &'a Transaction<'a>) -> Result<Vec<ResourceId>, ThoError> { block_on_store_future(self.save_resources_labels(resource_stats_labels_probs, import_id, t)) }
-        fn save_pure_sets_sync<'a>(&self, max_len: usize, only_unused: bool, t: &'a Transaction<'a>) -> Result<(), ThoError> { block_on_store_future(self.save_pure_sets(max_len, only_unused, t)) }
-        fn save_pure_balanced_sets_sync<'a>(&self, prefix: &str, limit: Option<usize>, train_coeff: f32, valid_coeff: f32, t: &'a Transaction<'a>) -> Result<(), ThoError> { block_on_store_future(self.save_pure_balanced_sets(prefix, limit, train_coeff, valid_coeff, t)) }
-        fn save_groups_by_label_cnt_sync<'a>(&self, max_resources_in_set: usize, t: &'a Transaction<'a>) -> Result<(), ThoError> { block_on_store_future(self.save_groups_by_label_cnt(max_resources_in_set, t)) }
-        fn list_resources_by_ids_sync(&self, file_stem: &Vec<ResourceId>) -> Result<Vec<Resource>, ThoError> { block_on_store_future(self.list_resources_by_ids(file_stem)) }
-        fn list_resource_random_not_labeled_sync(&self, label: &str, limit: u32) -> Result<Vec<Resource>, ThoError> { block_on_store_future(self.list_resource_random_not_labeled(label, limit)) }
-        fn save_label_sync<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoError> { block_on_store_future(self.save_label(label, t)) }
-        fn list_labels_sync(&self) -> Result<Vec<String>, ThoError> { block_on_store_future(self.list_labels()) }
-        fn list_motifs_slices_sync(&self, run_id: RunId, select_motifs_run_id: Option<Vec<RunId>>) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError> { block_on_store_future(self.list_motifs_slices(run_id, select_motifs_run_id)) }
-        fn list_motif_slices_sync(&self, motif_id: u32, select_motifs_run_id: Option<Vec<RunId>>, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError> { block_on_store_future(self.list_motif_slices(motif_id, select_motifs_run_id, limit, all_but_in_run_id)) }
-        fn list_random_motif_slices_sync(&self, motif_id: u32, motif_width: u32, min_distance: Option<u32>, input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError> { block_on_store_future(self.list_random_motif_slices(motif_id, motif_width, min_distance, input_len_adjuster)) }
-        fn list_run_config_values_sync(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError> { block_on_store_future(self.list_run_config_values(run_id)) }
-        fn save_selected_motifs_sync(&self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoError> { block_on_store_future(self.save_selected_motifs(run_id, selected_motifs)) }
-        fn list_selected_motifs_sync(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError> { block_on_store_future(self.list_selected_motifs(motif_selection_id, channels)) }
-        fn save_selected_net_sync(&self, run_id: RunId, path: PathBuf, loss: f32) -> Result<(), ThoError> { block_on_store_future(self.save_selected_net(run_id, path, loss)) }
-        fn list_selected_nets_sync(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError> { block_on_store_future(self.list_selected_nets(run_id, loss)) }
-        fn list_resource_set_group_sets_sync(&self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoError> { block_on_store_future(self.list_resource_set_group_sets(group_descr)) }
-        fn list_resource_random_in_group_sync(&self, group_descr: &str) -> Result<Vec<(Resource, Vec<f32>)>, ThoError> { block_on_store_future(self.list_resource_random_in_group(group_descr)) }
-        fn list_resources_not_in_group_sync(&self, group_descr: &str, limit: u32) -> Result<Vec<Resource>, ThoError> { block_on_store_future(self.list_resources_not_in_group(group_descr, limit)) }
-        fn list_resources_by_file_stems_sync<'a>(&self, file_stems: &'a [&'a str]) -> Result<Vec<Resource>, ThoError> { block_on_store_future(self.list_resources_by_file_stems(file_stems)) }
-    }
 
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-    #[test]
-    fn test_group_resources() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_group_resources() -> Result<(), ThoError> {
         // fs::remove_file("/tmp/test_db.db3").unwrap_or(());
-        // let mut store = block_on_store_future(SqlStore::from_path("/tmp/test_db.db3"))?;
+        // let mut store = SqlStore::from_path("/tmp/test_db.db3"))?;
 
-        let mut store = block_on_store_future(SqlStore::in_mem())?;
+        let mut store = SqlStore::in_mem().await?;
 
-        let mut mutex_guard = store.conn().lock();
-        let t = mutex_guard.transaction()?;
+        let import_id = store.save_import("test".to_string()).await?;
 
-        let import_id = store.save_import_sync("test".to_string(), &t)?;
-
-        let _aaa_id = store.save_label_sync("aaa", &t);
-        let _bbb_id = store.save_label_sync("bbb", &t);
-        let _ccc_id = store.save_label_sync("ccc", &t);
+        let _aaa_id = store.save_label("aaa").await?;
+        let _bbb_id = store.save_label("bbb").await?;
+        let _ccc_id = store.save_label("ccc").await?;
 
         //pure resources
         let n = 100;
-        store.save_resources_labels_sync(
+        store.save_resources_labels(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3337,10 +3284,9 @@ mod store_tests {
                 },
             ),
             import_id,
-            &t,
-        )?;
+        ).await?;
 
-        store.save_resources_labels_sync(
+        store.save_resources_labels(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3352,10 +3298,9 @@ mod store_tests {
                 },
             ),
             import_id,
-            &t,
-        )?;
+        ).await?;
 
-        store.save_resources_labels_sync(
+        store.save_resources_labels(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3367,11 +3312,10 @@ mod store_tests {
                 },
             ),
             import_id,
-            &t,
-        )?;
+        ).await?;
 
         //two labels resources
-        store.save_resources_labels_sync(
+        store.save_resources_labels(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3386,10 +3330,9 @@ mod store_tests {
                 },
             ),
             import_id,
-            &t,
-        )?;
+        ).await?;
 
-        store.save_resources_labels_sync(
+        store.save_resources_labels(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3404,10 +3347,9 @@ mod store_tests {
                 },
             ),
             import_id,
-            &t,
-        )?;
+        ).await?;
 
-        store.save_resources_labels_sync(
+        store.save_resources_labels(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3422,11 +3364,10 @@ mod store_tests {
                 },
             ),
             import_id,
-            &t,
-        )?;
+        ).await?;
 
         //three labels resources
-        store.save_resources_labels_sync(
+        store.save_resources_labels(
             &(0..n).fold(
                 HashMap::new(),
                 |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
@@ -3445,13 +3386,11 @@ mod store_tests {
                 },
             ),
             import_id,
-            &t,
-        )?;
+        ).await?;
 
         let t1 = Instant::now();
-        store.save_groups_by_label_cnt_sync(10, &t)?;
+        store.save_groups_by_label_cnt(10).await?;
 
-        t.commit()?;
         //TODO asserts
 
         debug!("done in {}", t1.elapsed().as_millis());
@@ -3460,18 +3399,15 @@ mod store_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_list_resources_not_labled() -> Result<(), ThoError> {
-        let mut store = block_on_store_future(SqlStore::in_mem())?;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_resources_not_labled() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
 
-        let mut guard = store.conn().lock();
-        let t = guard.transaction()?;
+        let import_id = store.save_import("test".to_string()).await?;
+        store.save_label("aaa").await?;
+        store.save_label("bbb").await?;
 
-        let import_id = store.save_import_sync("test".to_string(), &t)?;
-        store.save_label_sync("aaa", &t)?;
-        store.save_label_sync("bbb", &t)?;
-
-        store.save_resources_labels_sync(
+        store.save_resources_labels(
             &HashMap::from([
                 (
                     "aaa_only".to_string(),
@@ -3490,34 +3426,29 @@ mod store_tests {
                 ),
             ]),
             import_id,
-            &t,
-        )?;
+        ).await?;
 
-        t.commit()?;
-
-        drop(guard);
-
-        let mut not_aaa = store.list_resource_random_not_labeled_sync("aaa", 10)?;
+        let mut not_aaa = store.list_resource_random_not_labeled("aaa", 10).await?;
         not_aaa.sort_by(|a, b| a.file_stem().cmp(b.file_stem()));
         assert_eq!(vec!["bbb_only"], not_aaa.into_iter().map(|r| r.file_stem().to_string()).collect::<Vec<_>>());
 
-        let mut not_bbb = store.list_resource_random_not_labeled_sync("bbb", 10)?;
+        let mut not_bbb = store.list_resource_random_not_labeled("bbb", 10).await?;
         not_bbb.sort_by(|a, b| a.file_stem().cmp(b.file_stem()));
         assert_eq!(vec!["aaa_only"], not_bbb.into_iter().map(|r| r.file_stem().to_string()).collect::<Vec<_>>());
 
         Ok(())
     }
 
-    #[test]
-    fn test_save_pure_balanced_sets_group_created() -> Result<(), ThoError> {
-        let mut store = Arc::new(block_on_store_future(SqlStore::in_mem())?);
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_save_pure_balanced_sets_group_created() -> Result<(), ThoError> {
+        let mut store = Arc::new(SqlStore::in_mem().await?);
 
-        init_test_store(&store)?;
+        init_test_store(&store).await?;
 
-        let labels_count = store.list_labels_sync()?.len();
-        let train_sets = store.list_resource_set_group_sets_sync("A_balanced_group_train")?;
-        let valid_sets = store.list_resource_set_group_sets_sync("A_balanced_group_validation")?;
-        let test_sets = store.list_resource_set_group_sets_sync("A_balanced_group_test")?;
+        let labels_count = store.list_labels().await?.len();
+        let train_sets = store.list_resource_set_group_sets("A_balanced_group_train").await?;
+        let valid_sets = store.list_resource_set_group_sets("A_balanced_group_validation").await?;
+        let test_sets = store.list_resource_set_group_sets("A_balanced_group_test").await?;
 
         assert_eq!(labels_count, train_sets.len());
         assert_eq!(labels_count, valid_sets.len());
@@ -3529,27 +3460,27 @@ mod store_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_save_slices() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_save_slices() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
-        let mut store = Arc::new(block_on_store_future(SqlStore::from_path(
+        let mut store = Arc::new(SqlStore::from_path(
             test_dir.join("test_db.db3"),
-        ))?);
+        ).await?);
 
-        let resource_ids = init_test_store(&store)?;
+        let resource_ids = init_test_store(&store).await?;
 
-        let all_group_id = store.save_resource_set_group_sync("group 1 labels/100/100-200".into())?;
-        let _set_all_id = store.save_resources_set_sync(
+        let all_group_id = store.save_resource_set_group("group 1 labels/100/100-200".into()).await?;
+        let _set_all_id = store.save_resources_set(
             "All".to_string(),
             vec!["1111".into(), "2222".into(), "3333".into()],
             Some(all_group_id),
-        )?;
+        ).await?;
 
-        let group_sets = store.list_resource_set_group_sets_sync("pure group 10")?;
+        let group_sets = store.list_resource_set_group_sets("pure group 10").await?;
         assert_eq!(3, group_sets.len());
 
-        let mut keys_labels_p = store.list_resource_random_in_group_sync("group 1 labels/100/100-200")?;
+        let mut keys_labels_p = store.list_resource_random_in_group("group 1 labels/100/100-200").await?;
 
         keys_labels_p.sort_by(|a, b| ((a.1[0] * 10.) as u32).cmp(&((b.1[0] * 10.) as u32)));
 
@@ -3596,7 +3527,7 @@ mod store_tests {
             ),
         ];
 
-        let find_motifs_run_id = store.save_run_config_sync(
+        let find_motifs_run_id = store.save_run_config(
             None,
             &"todo",
             "find_motifs",
@@ -3606,7 +3537,7 @@ mod store_tests {
                 ("prop2".into(), Val::Real(2.0)),
                 ("prop3".into(), Val::Str("333".to_string())),
             ]),
-        )?;
+        ).await?;
 
         let slices_store_path = test_dir.join("test_slices_db.db3");
         let mut slices_store = SqlMotifTrackerStore::new(&slices_store_path, find_motifs_run_id, 7)
@@ -3614,7 +3545,7 @@ mod store_tests {
 
         slices_store.save_slices(slices.clone())?;
 
-        let groups = slices_store.load_slices_into_groups(&store, None)?;
+        let groups = slices_store.load_slices_into_groups(&store, None).await?;
 
         {
             let store_guard = Arc::clone(&store);
@@ -3649,7 +3580,7 @@ mod store_tests {
             }
         };
 
-        let motif_slices_map = store.list_motifs_slices_sync(find_motifs_run_id, None)?;
+        let motif_slices_map = store.list_motifs_slices(find_motifs_run_id, None).await?;
         debug!("motif_slices_map={:?}", motif_slices_map);
 
         // assert_eq!(4, map.len());
@@ -3678,7 +3609,7 @@ mod store_tests {
         debug!("motif_slices_1111={motif_slices_1111:?}");
         debug!("motif_slices_444={motif_slices_444:?}");
 
-        let select_motifs_run_id = store.save_run_config_sync(
+        let select_motifs_run_id = store.save_run_config(
             Some(&[find_motifs_run_id]),
             &"todo",
             "find_motifs",
@@ -3688,24 +3619,24 @@ mod store_tests {
                 ("prop2".into(), Val::Real(2.0)),
                 ("prop3".into(), Val::Str("333".to_string())),
             ]),
-        )?;
+        ).await?;
 
-        let _select_motifs_run_id = store.save_selected_motifs_sync(
+        let _select_motifs_run_id = store.save_selected_motifs(
             select_motifs_run_id,
             vec![
                 (motif_slices_444[0].motif_id, 0.1),  //motif_id corr
                 (motif_slices_1111[0].motif_id, 0.2), //motif_id corr
             ],
-        )?;
+        ).await?;
 
-        let input_run_ids = store.get_input_run_ids_sync(select_motifs_run_id, None)?;
+        let input_run_ids = store.get_input_run_ids(select_motifs_run_id, None).await?;
 
         assert_eq!(
             vec![find_motifs_run_id],
             input_run_ids
         );
 
-        let motifs = store.list_selected_motifs_sync(select_motifs_run_id, 20)?;
+        let motifs = store.list_selected_motifs(select_motifs_run_id, 20).await?;
 
         debug!("motifs: {:?}", motifs);
 
@@ -3717,7 +3648,7 @@ mod store_tests {
         assert_eq!(expected_ids, motif_ids);
         //
         // //TODO
-        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices_sync(motif_slices_1111[0].motif_id, None, None, None)?;
+        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, None, None).await?;
         slices.sort();
 
         debug!("slices={slices:?}");
@@ -3734,18 +3665,18 @@ mod store_tests {
         assert_eq!(7, channel);
         assert_eq!(find_motifs_run_id, run_id_);
 
-        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices_sync(motif_slices_1111[0].motif_id, None, Some(1), None)?;
+        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, Some(1), None).await?;
         slices.sort();
 
 
-        let resources = store.list_resources_not_in_group_sync("pure group 10", 10);
+        let resources = store.list_resources_not_in_group("pure group 10", 10).await;
         debug!("resources={resources:?}");
 
-        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices_sync(motif_slices_1111[0].motif_id, None, Some(3), Some((0, 0)))?;
+        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, Some(3), Some((0, 0))).await?;
 
         debug!("random slices={slices:?}");
         //
-        // // let (_channel, _run_id_, mut slices) = store.list_motif_slices_sync(1, Some(10), Some((run_id, channel as usize)))?;
+        // // let (_channel, _run_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_id, channel as usize))).await?;
         // //
         // // slices.sort();
         // //
@@ -3771,22 +3702,22 @@ mod store_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_save_list_selected_nets() -> Result<(), ThoError> {
-        let mut store = block_on_store_future(SqlStore::in_mem())?;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_save_list_selected_nets() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
 
-        let run_id = store.save_run_config_sync(
+        let run_id = store.save_run_config(
             None,
             &"selected_nets",
             "selected_nets",
             "",
             HashMap::new(),
-        )?;
+        ).await?;
 
-        store.save_selected_net_sync(run_id, PathBuf::from("nets/a"), 0.2)?;
-        store.save_selected_net_sync(run_id, PathBuf::from("nets/b"), 0.1)?;
+        store.save_selected_net(run_id, PathBuf::from("nets/a"), 0.2).await?;
+        store.save_selected_net(run_id, PathBuf::from("nets/b"), 0.1).await?;
 
-        let selected = store.list_selected_nets_sync(run_id, None)?;
+        let selected = store.list_selected_nets(run_id, None).await?;
 
         assert_eq!(2, selected.len());
         assert_eq!(PathBuf::from("nets/b"), selected[0].0);
@@ -3794,7 +3725,7 @@ mod store_tests {
         assert_eq!(PathBuf::from("nets/a"), selected[1].0);
         assert!((selected[1].1 - 0.2).abs() < 1e-6);
 
-        let filtered = store.list_selected_nets_sync(run_id, Some(0.15))?;
+        let filtered = store.list_selected_nets(run_id, Some(0.15)).await?;
         assert_eq!(1, filtered.len());
         assert_eq!(PathBuf::from("nets/b"), filtered[0].0);
         assert!((filtered[0].1 - 0.1).abs() < 1e-6);
@@ -3802,39 +3733,33 @@ mod store_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_list_motifs_slices_filters_slice_run_ids() -> Result<(), ThoError> {
-        let mut store = block_on_store_future(SqlStore::in_mem())?;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_motifs_slices_filters_slice_run_ids() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
 
         let resource_ids = {
-            let mut guard = store.conn().lock();
-            let t = guard.transaction()?;
+            let import_id = store.save_import("test".to_string()).await?;
+            store.save_label("aaa").await?;
 
-            let import_id = store.save_import_sync("test".to_string(), &t)?;
-            store.save_label_sync("aaa", &t)?;
-
-            let ids = store.save_resources_labels_sync(
+            let ids = store.save_resources_labels(
                 &HashMap::from([(
                     "res_a".to_string(),
                     (ResourceStats::new(vec![1, 10]), vec![("aaa".into(), 1.0)]),
                 )]),
                 import_id,
-                &t,
-            )?;
-
-            t.commit()?;
+            ).await?;
             ids
         };
 
         let find_run_id =
-            store.save_run_config_sync(None, &"find", "find_motifs", "", HashMap::new())?;
-        let select_run_id = store.save_run_config_sync(
+            store.save_run_config(None, &"find", "find_motifs", "", HashMap::new()).await?;
+        let select_run_id = store.save_run_config(
             Some(&[find_run_id]),
             &"select",
             "select_motifs",
             "",
             HashMap::new(),
-        )?;
+        ).await?;
 
         {
             let mut guard = store.conn().lock();
@@ -3857,12 +3782,12 @@ mod store_tests {
             t.commit()?;
         }
 
-        let resource = store.list_resources_by_ids_sync(&resource_ids)?.remove(0);
+        let resource = store.list_resources_by_ids(&resource_ids).await?.remove(0);
 
-        let find_only = store.list_motifs_slices_sync(find_run_id, Some(vec![]))?;
-        let all_runs = store.list_motifs_slices_sync(find_run_id, None)?;
+        let find_only = store.list_motifs_slices(find_run_id, Some(vec![])).await?;
+        let all_runs = store.list_motifs_slices(find_run_id, None).await?;
         let both_runs =
-            store.list_motifs_slices_sync(find_run_id, Some(vec![select_run_id, select_run_id]))?;
+            store.list_motifs_slices(find_run_id, Some(vec![select_run_id, select_run_id])).await?;
 
         let find_only_slices = find_only.get(&resource).expect("resource slices");
         assert_eq!(1, find_only_slices.len());
@@ -3881,39 +3806,33 @@ mod store_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_list_motif_slices_filters_slice_run_ids() -> Result<(), ThoError> {
-        let mut store = block_on_store_future(SqlStore::in_mem())?;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_motif_slices_filters_slice_run_ids() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
 
         let resource_ids = {
-            let mut guard = store.conn().lock();
-            let t = guard.transaction()?;
+            let import_id = store.save_import("test".to_string()).await?;
+            store.save_label("aaa").await?;
 
-            let import_id = store.save_import_sync("test".to_string(), &t)?;
-            store.save_label_sync("aaa", &t)?;
-
-            let ids = store.save_resources_labels_sync(
+            let ids = store.save_resources_labels(
                 &HashMap::from([(
                     "res_a".to_string(),
                     (ResourceStats::new(vec![1, 10]), vec![("aaa".into(), 1.0)]),
                 )]),
                 import_id,
-                &t,
-            )?;
-
-            t.commit()?;
+            ).await?;
             ids
         };
 
         let find_run_id =
-            store.save_run_config_sync(None, &"find", "find_motifs", "", HashMap::new())?;
-        let select_run_id = store.save_run_config_sync(
+            store.save_run_config(None, &"find", "find_motifs", "", HashMap::new()).await?;
+        let select_run_id = store.save_run_config(
             Some(&[find_run_id]),
             &"select",
             "select_motifs",
             "",
             HashMap::new(),
-        )?;
+        ).await?;
 
         {
             let mut guard = store.conn().lock();
@@ -3936,17 +3855,17 @@ mod store_tests {
             t.commit()?;
         }
 
-        let (_, run_id, all_slices, _) = store.list_motif_slices_sync(2, None, None, None)?;
+        let (_, run_id, all_slices, _) = store.list_motif_slices(2, None, None, None).await?;
         assert_eq!(find_run_id, run_id);
         let mut idxs = all_slices.iter().map(|s| s.1).collect::<Vec<_>>();
         idxs.sort();
         assert_eq!(vec![12, 32], idxs);
 
-        let (_, _, find_only, _) = store.list_motif_slices_sync(2, Some(vec![]), None, None)?;
+        let (_, _, find_only, _) = store.list_motif_slices(2, Some(vec![]), None, None).await?;
         assert_eq!(vec![12], find_only.iter().map(|s| s.1).collect::<Vec<_>>());
 
         let (_, _, filtered, _) =
-            store.list_motif_slices_sync(2, Some(vec![select_run_id, select_run_id]), None, None)?;
+            store.list_motif_slices(2, Some(vec![select_run_id, select_run_id]), None, None).await?;
         let mut idxs = filtered.iter().map(|s| s.1).collect::<Vec<_>>();
         idxs.sort();
         assert_eq!(vec![12, 32], idxs);
@@ -3955,20 +3874,17 @@ mod store_tests {
     }
 
     //TODO merge with init_test_store in cli::main_tests
-    pub fn init_test_store(
+    pub async fn init_test_store(
         store: &Arc<Box<dyn Store>>,
     ) -> Result<Vec<ResourceId>, ThoError> {
         let store_guard = store;
-        let mut mutex_guard = store_guard.conn().lock();
-        let t = mutex_guard.transaction()?;
+        let import_id = store_guard.save_import("test".to_string()).await?;
 
-        let import_id = store_guard.save_import_sync("test".to_string(), &t)?;
+        let _aaa_id = store_guard.save_label("aaa").await?;
+        let _bbb_id = store_guard.save_label("bbb").await?;
+        let _ccc_id = store_guard.save_label("ccc").await?;
 
-        let _aaa_id = store_guard.save_label_sync("aaa", &t)?;
-        let _bbb_id = store_guard.save_label_sync("bbb", &t)?;
-        let _ccc_id = store_guard.save_label_sync("ccc", &t)?;
-
-        let resource_ids = store_guard.save_resources_labels_sync(
+        let resource_ids = store_guard.save_resources_labels(
             &HashMap::from([
                 (
                     "1111".into(),
@@ -3990,26 +3906,24 @@ mod store_tests {
                 ("666".into(), (ResourceStats::new(vec![1, 100]), vec![])),
             ]),
             import_id,
-            &t,
-        )?;
+        ).await?;
 
         debug!("resource_ids={resource_ids:?}");
 
-        store_guard.save_pure_sets_sync(10, false, &t)?;
-        store_guard.save_pure_balanced_sets_sync("A", None, 0.6, 0.2, &t)?;
-        t.commit()?;
+        store_guard.save_pure_sets(10, false).await?;
+        store_guard.save_pure_balanced_sets("A", None, 0.6, 0.2).await?;
         Ok(resource_ids)
     }
 
-    #[test]
-    fn test_save_run_config() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_save_run_config() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
-        let mut store = Arc::new(block_on_store_future(SqlStore::from_path(
+        let mut store = Arc::new(SqlStore::from_path(
             test_dir.join("test_db.db3"),
-        ))?);
+        ).await?);
 
-        let run_id = store.save_run_config_sync(
+        let run_id = store.save_run_config(
             None,
             &"todo",
             "test",
@@ -4021,9 +3935,9 @@ mod store_tests {
                 ("prop4".into(), Val::Bool(false)),
                 ("prop5".into(), Val::Bool(true)),
             ]),
-        )?;
+        ).await?;
 
-        let next_run_id = store.save_run_config_sync(
+        let next_run_id = store.save_run_config(
             Some(&[run_id]),
             &"todo",
             "test next",
@@ -4033,9 +3947,9 @@ mod store_tests {
                 ("next_prop2".into(), Val::Real(2.0)),
                 ("next_prop3".into(), Val::Str("zzz".to_string())),
             ]),
-        )?;
+        ).await?;
 
-        let loaded_params = store.list_run_config_values_sync(run_id)?;
+        let loaded_params = store.list_run_config_values(run_id).await?;
 
         assert_eq!(loaded_params.get("prop1").expect("prop1"), &Val::Int(1));
         assert_eq!(loaded_params.get("prop2").expect("prop2"), &Val::Real(2.0));
@@ -4049,7 +3963,7 @@ mod store_tests {
         );
         assert_eq!(loaded_params.get("prop5").expect("prop5"), &Val::Bool(true));
 
-        let netx_loaded_params = store.list_run_config_values_sync(next_run_id)?;
+        let netx_loaded_params = store.list_run_config_values(next_run_id).await?;
 
         debug!("netx_loaded_params={netx_loaded_params:?}");
 
@@ -4069,8 +3983,8 @@ mod store_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_conv_cond() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_conv_cond() {
         let input = vec![
             ("aaa".into(), SetCond::Lt(0.4)),
             ("bbb".into(), SetCond::Gt(0.1)),
@@ -4080,50 +3994,47 @@ mod store_tests {
         assert_eq!("(l.label='aaa' and p<?) or (l.label='bbb' and p>?)", conds);
     }
 
-    #[test]
-    fn test_get_prev_run_id() -> Result<(), ThoError> {
-        let mut store = block_on_store_future(SqlStore::in_mem())?;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_get_prev_run_id() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
 
-        let input_run_id = store.save_run_config_sync(None, &"aaa", "test 0", "", HashMap::new())?;
+        let input_run_id = store.save_run_config(None, &"aaa", "test 0", "", HashMap::new()).await?;
         let run_id =
-            store.save_run_config_sync(Some(&[input_run_id]), &"aaa", "test 1", "", HashMap::new())?;
+            store.save_run_config(Some(&[input_run_id]), &"aaa", "test 1", "", HashMap::new()).await?;
 
-        assert_eq!(store.get_input_run_ids_sync(run_id, None)?[0], input_run_id);
+        assert_eq!(store.get_input_run_ids(run_id, None).await?[0], input_run_id);
 
-        let input_run_id_0 = store.save_run_config_sync(None, &"aaa", "test 0", "", HashMap::new())?;
-        let input_run_id_1 = store.save_run_config_sync(
+        let input_run_id_0 = store.save_run_config(None, &"aaa", "test 0", "", HashMap::new()).await?;
+        let input_run_id_1 = store.save_run_config(
             Some(&[input_run_id_0]),
             &"bbb",
             "test 1",
             "",
             HashMap::new(),
-        )?;
-        let run_id = store.save_run_config_sync(
+        ).await?;
+        let run_id = store.save_run_config(
             Some(&[input_run_id_1]),
             &"ccc",
             "test 1",
             "",
             HashMap::new(),
-        )?;
+        ).await?;
 
         assert_eq!(
-            store.get_input_run_ids_sync(run_id, Some(&"aaa"))?[0],
+            store.get_input_run_ids(run_id, Some(&"aaa")).await?[0],
             input_run_id_0
         );
 
         Ok(())
     }
 
-    #[test]
-    fn test_list_resources_by_file_stem() -> Result<(), ThoError> {
-        let mut store = block_on_store_future(SqlStore::in_mem())?;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_resources_by_file_stem() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
         {
-            let mut mutex_guard = store.conn().lock();
-            let t = mutex_guard.transaction()?;
+            let import_id = store.save_import("test".to_string()).await?;
 
-            let import_id = store.save_import_sync("test".to_string(), &t)?;
-
-            store.save_resources_labels_sync(
+            store.save_resources_labels(
                 &HashMap::from([
                     (
                         "resource_aaa_0".to_string(),
@@ -4143,16 +4054,13 @@ mod store_tests {
                     ),
                 ]),
                 1,
-                &t,
-            )?;
-
-            t.commit()?;
+            ).await?;
         }
 
         assert_eq!(
             vec!["resource_aaa_0".to_string(), "resource_aaa_1".to_string()],
             store
-                .list_resources_by_file_stems_sync(&vec!["%aaa%"])?
+                .list_resources_by_file_stems(&vec!["%aaa%"]).await?
                 .into_iter()
                 .map(|r| r.file_stem().to_string())
                 .collect::<Vec<String>>()
@@ -4161,7 +4069,7 @@ mod store_tests {
         assert_eq!(
             vec!["resource_bbb_0".to_string(), "resource_bbb_1".to_string()],
             store
-                .list_resources_by_file_stems_sync(&vec!["%bbb%"])?
+                .list_resources_by_file_stems(&vec!["%bbb%"]).await?
                 .into_iter()
                 .map(|r| r.file_stem().to_string())
                 .collect::<Vec<String>>()
@@ -4170,13 +4078,13 @@ mod store_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_list_random_slices_respects_constraints() -> Result<(), ThoError> {
-        let mut store = block_on_store_future(SqlStore::in_mem())?;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_random_slices_respects_constraints() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
 
-        create_resources(&store, &[("res_a", 2048), ("res_b", 2048)])?;
+        create_resources(&store, &[("res_a", 2048), ("res_b", 2048)]).await?;
 
-        let run_id = store.save_run_config_sync(None, &"find_motifs", "random test", "", HashMap::new())?;
+        let run_id = store.save_run_config(None, &"find_motifs", "random test", "", HashMap::new()).await?;
         let channel_id = 3i64;
 
         let res_a = fetch_resource_id(&store, "res_a")?;
@@ -4199,7 +4107,7 @@ mod store_tests {
 
         const WIDTH: u32 = 40;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_motif_slices_sync(motif_id, WIDTH, None, Arc::new(|length: u32| length))?;
+            store.list_random_motif_slices(motif_id, WIDTH, None, Arc::new(|length: u32| length)).await?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4233,14 +4141,14 @@ mod store_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_list_random_slices_respects_min_distance() -> Result<(), ThoError> {
-        let mut store = block_on_store_future(SqlStore::in_mem())?;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_random_slices_respects_min_distance() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
 
-        create_resources(&store, &[("res_main", 4096)])?;
+        create_resources(&store, &[("res_main", 4096)]).await?;
 
         let run_id =
-            store.save_run_config_sync(None, &"find_motifs", "random spacing", "", HashMap::new())?;
+            store.save_run_config(None, &"find_motifs", "random spacing", "", HashMap::new()).await?;
         let channel_id = 5i64;
         let res_main = fetch_resource_id(&store, "res_main")?;
 
@@ -4255,7 +4163,7 @@ mod store_tests {
         const WIDTH: u32 = 50;
         const MIN_DISTANCE: u32 = 300;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_motif_slices_sync(motif_id, WIDTH, Some(MIN_DISTANCE), Arc::new(|length: u32| length))?;
+            store.list_random_motif_slices(motif_id, WIDTH, Some(MIN_DISTANCE), Arc::new(|length: u32| length)).await?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4279,13 +4187,13 @@ mod store_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_list_random_slices_uses_input_len_adjuster() -> Result<(), ThoError> {
-        let mut store = block_on_store_future(SqlStore::in_mem())?;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_random_slices_uses_input_len_adjuster() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
 
-        create_resources(&store, &[("res_main", 2000)])?;
+        create_resources(&store, &[("res_main", 2000)]).await?;
 
-        let run_id = store.save_run_config_sync(None, &"find_motifs", "length adjust", "", HashMap::new())?;
+        let run_id = store.save_run_config(None, &"find_motifs", "length adjust", "", HashMap::new()).await?;
         let channel_id = 6i64;
         let res_main = fetch_resource_id(&store, "res_main")?;
 
@@ -4300,7 +4208,7 @@ mod store_tests {
         const WIDTH: u32 = 40;
         let input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync> = Arc::new(|length: u32| (length - 100) / 5);
         let (channel, _, random_slices, resources_map) =
-            store.list_random_motif_slices_sync(motif_id, WIDTH, None, Arc::clone(&input_len_adjuster))?;
+            store.list_random_motif_slices(motif_id, WIDTH, None, Arc::clone(&input_len_adjuster)).await?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4315,11 +4223,8 @@ mod store_tests {
         Ok(())
     }
 
-    fn create_resources(store: &Box<dyn Store>, specs: &[(&str, u32)]) -> Result<(), ThoError> {
-        let mut guard = store.conn().lock();
-        let t = guard.transaction()?;
-
-        let import_id = store.save_import_sync("test resources".into(), &t)?;
+    async fn create_resources(store: &Box<dyn Store>, specs: &[(&str, u32)]) -> Result<(), ThoError> {
+        let import_id = store.save_import("test resources".into()).await?;
 
         let resources = specs.iter().fold(
             HashMap::new(),
@@ -4332,8 +4237,7 @@ mod store_tests {
             },
         );
 
-        store.save_resources_labels_sync(&resources, import_id, &t)?;
-        t.commit()?;
+        store.save_resources_labels(&resources, import_id).await?;
 
         Ok(())
     }
