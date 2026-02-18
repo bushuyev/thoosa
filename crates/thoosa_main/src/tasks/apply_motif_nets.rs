@@ -35,7 +35,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress_i, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_store::Store;
@@ -89,11 +89,15 @@ where
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));
 
         //gpt Load all selected motif nets for the provided train_motif_nets_run_ids.
-        let futures = train_motif_nets_run_ids
+        let selected_nets = train_motif_nets_run_ids
             .iter()
             .flat_map(|train_motif_nets_run_id| {
                 store.read().list_selected_nets(*train_motif_nets_run_id, max_loss).unwrap()
             })
+            .collect::<Vec<_>>();
+        let selected_nets_len = selected_nets.len();
+        let futures = selected_nets
+            .into_iter()
             .map(|(path, _losss)|{
                 let ws = Arc::clone(&ws);
                 let load_motif_net = Arc::clone(&load_motif_net);
@@ -114,11 +118,11 @@ where
                         }
                     }
                 }
-            })
-            .collect::<Vec<_>>();
+            });
 
-        let loaded_motif_nets = collect_futures_with_progress(
+        let loaded_motif_nets = collect_futures_with_progress_i(
             futures,
+            selected_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT,
             StreamBuffering::Ordered,
             "ApplyMotifNets::new",
@@ -203,6 +207,7 @@ where
 
 
         let apply_motif_nets = self.apply_motif_nets.clone();
+        let apply_motif_nets_len = apply_motif_nets.len();
         let min_split_len = self.motif_width as i64;
         let overlap_len = (self.motif_width  - self.slice_step) as i64;
         let futures = apply_motif_nets
@@ -248,13 +253,13 @@ where
                      ).await;
                     debug!("ApplyMotifNets::run: r={r:?}");
                     Ok::<_, ThoError>(r)
-                 }
+                     }
 
-            })
-            .collect::<Vec<_>>();
+            });
 
-        let matches = collect_futures_with_progress(
+        let matches = collect_futures_with_progress_i(
             futures,
+            apply_motif_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_RUN_BUFFERED_LIMIT,
             StreamBuffering::Ordered,
             "ApplyMotifNets::run",

@@ -30,7 +30,7 @@ use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::distance::MaskMaker::{Le, LeAccumulatedMean, LeAccumulatedQuantile, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress_i, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
@@ -183,6 +183,7 @@ where
 
 
         //gpt Build per-run-config loaders in parallel; each run_config becomes its own CrossLoader pipeline.
+        let run_configs_len = run_configs.len();
         let futures = run_configs
             .into_iter()
             .map( |run_config| {
@@ -360,11 +361,11 @@ where
                     .await;
                     Ok::<_, ThoError>(result)
                 }
-            })
-            .collect::<Vec<_>>();
+            });
 
-        let cross_loaders = collect_futures_with_progress(
+        let cross_loaders = collect_futures_with_progress_i(
             futures,
+            run_configs_len,
             CROSS_LOADERS_LIMIT,//TODO config
             StreamBuffering::Unordered,
             "FindMotifsStage::new",
@@ -414,7 +415,8 @@ where
 
         let mut js: JoinSet<Result<Arc<DevicesWrap<()>>, ThoError>> = JoinSet::new();//TODO to stream + spawn
 
-        debug!("FindMotifsStage::run: run_config_stages.len={}", self.run_config_stages.len());
+        let run_config_stages_len = self.run_config_stages.len();
+        debug!("FindMotifsStage::run: run_config_stages.len={run_config_stages_len}");
         let failed = Arc::new(AtomicU8::new(0));
         //gpt Run each per-config CrossLoader; failures are logged but do not abort the stage.
         let futures = self
@@ -439,11 +441,11 @@ where
                         }
                     }
                 }
-            })
-            .collect::<Vec<_>>();
+            });
 
-        let _ = collect_futures_with_progress(
+        let _ = collect_futures_with_progress_i(
             futures,
+            run_config_stages_len,
             FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT,
             StreamBuffering::Unordered,
             "FindMotifsStage::run",
@@ -451,7 +453,7 @@ where
         .await;
 
 
-        info!("failed {} out of {}",failed.load(Ordering::Relaxed),self.run_config_stages.len());
+        info!("failed {} out of {}",failed.load(Ordering::Relaxed),run_config_stages_len);
 
         //gpt FindMotifsStage output is a placeholder; the real artifacts are persisted by DistsTracker side effects.
         Ok(Arc::new(DevicesWrap::wrap(FindMotifsSavableResult::new(), CacheArea::default())))

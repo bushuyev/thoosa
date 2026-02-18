@@ -23,7 +23,7 @@ use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Named, Select, WithId};
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress_i, mono_key, StreamBuffering, ThoError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
 use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
@@ -470,6 +470,7 @@ impl ClcResourcesMotifsDistOutput {
     }
 
     pub async fn to_cpu(self) -> ClcResourcesMotifsDistOutput {
+        let channel_masks_dists_ids_len = self.channel_masks_dists_ids.len();
         let futures = self
             .channel_masks_dists_ids
             .into_iter()
@@ -481,14 +482,14 @@ impl ClcResourcesMotifsDistOutput {
                     }
                 };
                 Ok::<_, ThoError>(result)
-            })
-            .collect::<Vec<_>>();
+            });
 
         ClcResourcesMotifsDistOutput {
             id: self.id,
             find_motifs_run_id: self.find_motifs_run_id,
-            channel_masks_dists_ids: collect_futures_with_progress(
+            channel_masks_dists_ids: collect_futures_with_progress_i(
                 futures,
+                channel_masks_dists_ids_len,
                 crate::buffer_limits::CLC_RESOURCES_MOTIFS_DIST_OUTPUT_TO_CPU_BUFFERED_LIMIT,
                 StreamBuffering::Ordered,
                 "ClcResourcesMotifsDistOutput::to_cpu",
