@@ -168,13 +168,13 @@ where
             Ok::<(Vec<RunId>, Arc<OptConfig>), ThoError>((input.select_motifs_run_id.clone(), input.opt_config.clone()))
         })?;
 
-        let channels = self.ws.read().channels();
+        let channels = self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels();
 
 
         //gpt Expand selection run ids into individual motif ids for training.
         let select_motifs_run_ids_clone = select_motifs_run_ids.clone();
         let motifs_rates_selected_motifs_run_ids = select_motifs_run_ids_clone.iter().flat_map(|select_motifs_run_id| {
-            let selected_motifs = self.store.read().list_selected_motifs(*select_motifs_run_id, channels).expect("list_selected_motifs failed");
+            let selected_motifs = self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_selected_motifs(*select_motifs_run_id, channels).expect("list_selected_motifs failed");
 
             debug!("TrainMotifNets::run: select_motifs_run_id={select_motifs_run_id} selected_motifs={selected_motifs:?}");
 
@@ -262,7 +262,7 @@ where
 
                 debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", result.min_loss);
 
-                store.read().get_motif_meta(motif_id_rate.0).map(|(channel, find_motifs_run_id)|{
+                store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").get_motif_meta(motif_id_rate.0).map(|(channel, find_motifs_run_id)|{
                     TrainMotifNetResult::new(
                         result.min_loss,
                         channel as u32,
@@ -401,7 +401,7 @@ where
         let num_slices = (self.batch_size / 2) as i64;
 
         with_data!({
-            let mut guard = self.ctx.lock();
+            let mut guard = self.ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
             guard.branch(Some("motifs_batch_make"), false, false)
         }, motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, DataId>|{
 

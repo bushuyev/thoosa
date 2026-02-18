@@ -1485,16 +1485,16 @@ where
         fixed_config: &FixedFindMotifsConfig,
         max_slices_counts: Option<u32>,
     ) -> Self {
-        debug!("DistsTracker:new: fixed_config={fixed_config:?} channels={}", ws.read().channels());
+        debug!("DistsTracker:new: fixed_config={fixed_config:?} channels={}", ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels());
 
-        let channel_trackers = (0..ws.read().channels())
+        let channel_trackers = (0..ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels())
             .map(|channel| {
                 debug!("DistsTracker:new: channel={channel}");
 
                 Arc::new(RwLock::new(SimpleMotifTracker::new(
                     if fixed_config.keep_slice_matches {
                         SqlMotifTrackerStore::new(
-                            ws.read().tmp_run_store_path(
+                            ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").tmp_run_store_path(
                                 run_config.id.expect("id") as u32,
                                 channel,
                             ),
@@ -1504,7 +1504,7 @@ where
                         .expect("can't create tmp store")
                     } else {
                         FileMotifTrackerStore::new(
-                            ws.read().tmp_path(),
+                            ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").tmp_path(),
                             run_config.id.expect("id"),
                             channel,
                         )
@@ -1543,14 +1543,14 @@ where
             rayon_pool().install(|| {
 
                 channel_trackers.par_iter().enumerate().try_for_each(|(channel, mt)| {
-                    let groups_inserted = mt.write().build_groups(&store)?;
-                    channels_groups_for_rayon.write().insert(channel, groups_inserted);
+                    let groups_inserted = mt.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").build_groups(&store)?;
+                    channels_groups_for_rayon.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").insert(channel, groups_inserted);
                     Ok::<_, ThoError>(())
                 })
             })
         }).await??;
 
-        let channels_groups_guard = channels_groups.read();
+        let channels_groups_guard = channels_groups.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
         info!("groups inserted: {:?}", (0..self.channel_trackers.len()).map(|c|channels_groups_guard.get(&c).map(|v|*v).ok_or(0)).collect::<Vec<_>>());
         Ok(())
     }
@@ -1627,7 +1627,7 @@ where
                     if slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1 {
                         trace!("DistsTracker::consume, track: slice_0={slice_0:?} slice_1={slice_1:?}");
 
-                        channel_trackers[channel].write().track(slice_0, slice_1, dist as f32);
+                        channel_trackers[channel].try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").track(slice_0, slice_1, dist as f32);
                     }
                 });
 
@@ -1635,7 +1635,7 @@ where
                     .into_par_iter()
                     .zip(matches_by_channel.into_par_iter())
                     .try_for_each(|(mt, matches)| {
-                        let mut guard = mt.write();
+                        let mut guard = mt.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
                         guard.dump();
                         Ok::<(), ThoError>(())
                     })?;

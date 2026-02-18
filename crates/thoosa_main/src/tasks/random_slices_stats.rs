@@ -109,11 +109,11 @@ where
     }
 
     fn random_motif_stage(&self, find_motifs_run_id: RunId) -> Arc<RandomMotif<L, C>> {
-        if let Some(stage) = self.random_motifs.read().get(&find_motifs_run_id) {
+        if let Some(stage) = self.random_motifs.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").get(&find_motifs_run_id) {
             return Arc::clone(stage);
         }
 
-        let mut random_motifs = self.random_motifs.write();
+        let mut random_motifs = self.random_motifs.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
         Arc::clone(random_motifs.entry(find_motifs_run_id).or_insert_with(|| {
             Arc::new(RandomMotif::new(
                 Arc::clone(&self.store),
@@ -162,7 +162,7 @@ where
             return Err(ThoError::new(format!("RandomStats: max_slices must be >= 2, got {max_slices}")));
         }
 
-        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(find_motifs_run_id, &self.store.read().list_run_config_values(find_motifs_run_id)?)?;
+        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(find_motifs_run_id, &self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_run_config_values(find_motifs_run_id)?)?;
         let motif_width = find_motifs_run_config.window;
         assert_ne!(motif_width, 0, "RandomStats: motif_width must be > 0");
 
@@ -382,9 +382,9 @@ mod tests {
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
         let input = Arc::new(DevicesWrap::wrap(RandomStatsInput::new(4, run_id, Metrics::EucDist, Aggr::Mean(1.0)), CacheArea::default()));
 
-        let output = stage.run(input, ctx.write().branch(Some("random_stats"), false, false)).await?;
+        let output = stage.run(input, ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("random_stats"), false, false)).await?;
 
-        let mut ctx_for_data = ctx.write().branch(Some("random_stats_data"), false, false);
+        let mut ctx_for_data = ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("random_stats_data"), false, false);
         let size = output
             .with_data_ref(0, ctx_for_data, None, |t: &ThoTensor<ChannelsMotifsDists, SynKey>, _ctx| {
                 debug!("t=\n{}", t.as_ref());

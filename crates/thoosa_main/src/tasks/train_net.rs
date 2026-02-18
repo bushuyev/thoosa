@@ -191,14 +191,14 @@ where
     ) -> BoxFuture<'static, Result<(f32, NP), ThoError>> {
         debug!("TrainNet::run_inner: descr={descr}");
         let (node, params) = {
-            let vs_guard = vs.lock();
+            let vs_guard = vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
             match (self.net)(&run_config, &vs_guard) {
                 Ok(v) => v,
                 Err(e) => return Box::pin(async { Err(e) }),
             }
         };
         let optimizer = {
-            let vs_guard = vs.lock();
+            let vs_guard = vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
             match (self.optimizer)(&run_config, &vs_guard) {
                 Ok(v) => v,
                 Err(e) => return Box::pin(async { Err(e) }),
@@ -235,7 +235,7 @@ where
             let batch = (self.batch)(ctx.branch(Some("train_batch"), false, false), &run_config).await?;
             debug!("TrainNet::run_inner: descr={descr} device={:?} cycles={}", train_step.device(), epochs);
             {
-                let opt = train_step.opt.lock();
+                let opt = train_step.opt.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
                 debug!("TrainNet::run_inner: descr={descr}  opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
             }
 
@@ -320,7 +320,7 @@ where
                             best_valid_loss = valid_loss;
                             bad_epochs = 0;
                             {
-                                let mut vs_guard = vs.lock();
+                                let mut vs_guard = vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
                                 vs_guard.save(&best_checkpoint_path)?;
                             }
                             saved_best = true;
@@ -342,7 +342,7 @@ where
                 std::io::stdout().flush()?;
             }
             if saved_best {
-                let mut vs_guard = vs.lock();
+                let mut vs_guard = vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
                 vs_guard.load(&best_checkpoint_path)?;
                 debug!("TrainNet::run_inner: descr={descr}  final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
                 std::fs::remove_file(best_checkpoint_path)?;
@@ -585,7 +585,7 @@ where
     }
 
     fn forward(&self, x_t: &ThoBatch<DI>, lengths: Option<&mut [i64]>, train: bool) -> Result<ThoBatch<DO>, ThoError> {
-        let net = self.net.lock();
+        let net = self.net.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
         net.tho_forward(x_t, lengths, train)
     }
 
@@ -598,7 +598,7 @@ where
     }
 
     fn set_lr(&self, lr: f64) {
-        let mut opt = self.opt.lock();
+        let mut opt = self.opt.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
         opt.set_lr(lr);
     }
 }
@@ -644,7 +644,7 @@ where
         let loss = (self.loss_fn)(predicted_y.as_ref(), &expected_y.as_ref())?;
 
         {
-            let mut opt = self.opt.lock();
+            let mut opt = self.opt.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
 
             debug!("TrainStep::do_run: 2. cuda_mem={:?}",maybe_cuda_mem(&self.device));
             debug!("TrainStep::do_run: loss={loss}");

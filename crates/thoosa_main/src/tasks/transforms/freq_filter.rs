@@ -59,7 +59,7 @@ where
 {
     pub fn new(filter_configs: &[InputFilter], ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Self, ThoError> {
         let (num_channels, sample_rate)  = {
-            let guard = ws.read();
+            let guard = ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout");
             (guard.channels() as i64, guard.sample_rate() as f64)
         };
 

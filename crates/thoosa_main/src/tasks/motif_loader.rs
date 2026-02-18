@@ -191,7 +191,7 @@ where
         //gpt TODO!! select_motifs_run_id from MotifLoaderInput is ignored; list_motif_slices(None, ...) loads slices from all runs.
         let (channel, find_motifs_run_id, slices, resources_map) =
             self.store
-                .read()
+                .try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout")
                 .list_motif_slices(motif_id_value, None, Some(1000), None)?;//TODO config
 
         debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
@@ -295,11 +295,11 @@ where
         })?;
 
 
-        let (channel, find_motifs_run_id) = self.store.read().get_motif_meta(*motif_id)?;
+        let (channel, find_motifs_run_id) = self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").get_motif_meta(*motif_id)?;
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
             find_motifs_run_id,
-            &self.store.read().list_run_config_values(find_motifs_run_id)?,
+            &self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_run_config_values(find_motifs_run_id)?,
         )?;
 
 
@@ -309,7 +309,7 @@ where
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
         let (channel, find_motifs_run_id, slices, resources_map) =
             self.store
-                .read()
+                .try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout")
                 .list_random_motif_slices(
                     motif_id_value,
                     find_motifs_run_config.window,
@@ -359,7 +359,7 @@ where
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
         find_motifs_run_id,
-        &store.read().list_run_config_values(find_motifs_run_id)?,
+        &store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_run_config_values(find_motifs_run_id)?,
     )?;
 
     let resource_ids_slices = slices
@@ -671,14 +671,14 @@ mod tests {
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
 
         let num_devices = GlobalCtx::global().device_count();
-        let cache_area = ctx.read().cache_area();
+        let cache_area = ctx.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").cache_area();
         let input_id = Arc::new(DevicesWrap::wrap(10u32.into(), CacheArea::default()));
 
         let motif = motif_loader
-            .run_cached(Arc::clone(&input_id), ctx.write().branch(Some("motif_loader_test"), false, false))
+            .run_cached(Arc::clone(&input_id), ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("motif_loader_test"), false, false))
             .await?;
 
-        let mut ctx_for_data = ctx.write().branch(Some("motif_loader_test_data"), false, false);
+        let mut ctx_for_data = ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("motif_loader_test_data"), false, false);
         let r = motif.with_data_ref(0,
             ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, _ctx|{
                         let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
@@ -738,14 +738,14 @@ mod tests {
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
 
         let num_devices = GlobalCtx::global().device_count();
-        let cache_area = ctx.read().cache_area();
+        let cache_area = ctx.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").cache_area();
         let input = Arc::new(DevicesWrap::wrap(SlicesLoaderInput{ motif_id: DataId::from(&motif_id), limit: 10 }, CacheArea::default()));
 
         let slices:Arc<DevicesWrap<ThoTensor<MotifSlices, DataId>>> = random_slices_loader
-            .run(Arc::clone(&input), ctx.write().branch(Some("random_slices_loader"), false, false))
+            .run(Arc::clone(&input), ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("random_slices_loader"), false, false))
             .await?;
 
-        let mut ctx_for_data = ctx.write().branch(Some("random_slices_loader_data"), false, false);
+        let mut ctx_for_data = ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("random_slices_loader_data"), false, false);
         let r = slices.with_data_ref(
             0,
             ctx_for_data, None, |t: &ThoTensor<MotifSlices, DataId>, _ctx| {

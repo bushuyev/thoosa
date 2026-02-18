@@ -4,6 +4,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+use crate::LOCK_TIMEOUT;
 
 pub(crate) const COLLECT_ETA_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -131,9 +132,13 @@ impl CollectEtaTracker {
         }
     }
 
+    fn state_guard(&self) -> parking_lot::MutexGuard<'_, CollectEtaState> {
+        self.state.try_lock_for(LOCK_TIMEOUT).expect("CollectEtaTracker::state_guard: timed out waiting for tracker lock")
+    }
+
     fn register(&self, descr: &str, total: usize, concurrency: usize) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.state.lock().invocations.insert(id, CollectEtaInvocation::new(descr, total, concurrency));
+        self.state_guard().invocations.insert(id, CollectEtaInvocation::new(descr, total, concurrency));
         id
     }
 
@@ -146,13 +151,13 @@ impl CollectEtaTracker {
     }
 
     fn record_completion_at(&self, id: u64, now: Instant) {
-        if let Some(invocation) = self.state.lock().invocations.get_mut(&id) {
+        if let Some(invocation) = self.state_guard().invocations.get_mut(&id) {
             invocation.record_completion(now);
         }
     }
 
     fn unregister_at(&self, id: u64, now: Instant) {
-        let mut state = self.state.lock();
+        let mut state = self.state_guard();
         if let Some(invocation) = state.invocations.remove(&id) {
             if invocation.completed > 0 {
                 if let Some(interval_s) = invocation.historical_interval_s(now) {
@@ -209,6 +214,7 @@ impl CollectEtaTracker {
                     snapshot.slowest_total = invocation.total;
                 }
             }
+            info!("invocation: {invocation:?}");//TODO format
         }
         snapshot
     }
@@ -219,7 +225,7 @@ impl CollectEtaTracker {
 
     fn maybe_log_at(&self, force: bool, now: Instant) -> bool {
         let snapshot = {
-            let mut state = self.state.lock();
+            let mut state = self.state_guard();
             if state.invocations.is_empty() {
                 return false;
             }
@@ -333,13 +339,13 @@ mod tests {
         let now = Instant::now();
         tracker.record_completion_at(id, now + Duration::from_secs(1));
         tracker.record_completion_at(id, now + Duration::from_secs(2));
-        let state = tracker.state.lock();
+        let state = tracker.state_guard();
         let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(2));
         assert_eq!(snapshot.max_eta, None);
         drop(state);
 
         tracker.record_completion_at(id, now + Duration::from_secs(3));
-        let state = tracker.state.lock();
+        let state = tracker.state_guard();
         let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(3));
         assert_eq!(snapshot.total_completed, 3);
         assert_eq!(snapshot.total_remaining, 3);
@@ -357,7 +363,7 @@ mod tests {
         tracker.record_completion_at(fast, now + Duration::from_secs(2));
         tracker.record_completion_at(slow, now + Duration::from_secs(1));
         tracker.record_completion_at(slow, now + Duration::from_secs(5));
-        let state = tracker.state.lock();
+        let state = tracker.state_guard();
         let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(5));
         assert_eq!(snapshot.total_completed, 4);
         assert_eq!(snapshot.total_remaining, 6);
@@ -388,7 +394,7 @@ mod tests {
         tracker.record_completion_at(id, now + Duration::from_millis(1400));
         tracker.record_completion_at(id, now + Duration::from_millis(1600));
         tracker.record_completion_at(id, now + Duration::from_millis(1800));
-        let state = tracker.state.lock();
+        let state = tracker.state_guard();
         let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_millis(1800));
         assert_eq!(snapshot.total_completed, 5);
         assert_eq!(snapshot.total_remaining, 15);
@@ -407,7 +413,7 @@ mod tests {
         tracker.unregister_at(done, now + Duration::from_secs(2));
 
         let _pending = tracker.register("pending", 3, 3);
-        let state = tracker.state.lock();
+        let state = tracker.state_guard();
         let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(2));
         assert_eq!(snapshot.total_completed, 0);
         assert_eq!(snapshot.total_remaining, 3);
