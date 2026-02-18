@@ -228,6 +228,31 @@ pub const LOCK_TIMEOUT: Duration = Duration::from_mins(10);
 pub const FUTURES_TIMEOUT: Duration = Duration::from_mins(30);
 
 
+struct AggPerf<'a>(&'a str, &'a str);
+impl std::fmt::Display for AggPerf<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.0, self.1)
+    }
+}
+
+
+#[tracing::instrument(level="debug", skip_all, fields(agg_perf = %AggPerf("sync_lock", descr)))]
+pub fn with_perf_log<F, R>(f:F, descr:&str) -> R
+where
+    F:FnOnce()->R {
+
+
+    f()
+}
+
+#[tracing::instrument(level="debug", skip_all, fields(agg_perf = %AggPerf("async_lock", descr)))]
+pub async fn with_async_perf_log<F, R>(f:F, descr:&str) -> R
+where
+    F:AsyncFnOnce()->R {
+
+    f().await
+}
+
 pub async fn collect_futures_with_progress_i<T, F>(
     futures: impl Iterator<Item=F>,
     len:usize,

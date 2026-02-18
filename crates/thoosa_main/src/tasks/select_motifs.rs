@@ -40,7 +40,7 @@ use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{collect_futures_with_progress_i, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{with_async_perf_log, collect_futures_with_progress_i, mono_key, with_perf_log, StreamBuffering, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::comp_id::SynKey;
@@ -1166,13 +1166,21 @@ where
                                     })
                                 }).await??;
 
-                                let mut motif_added_slices_guard = tokio::time::timeout(
-                                    thoosa_shared::LOCK_TIMEOUT,
-                                    channels_motifs_added_slices[channel].write(),
-                                )
-                                .await
-                                .map_err(|_| ThoError::new("SelectMotifsStage::run: timed out waiting for channels_motifs_added_slices write lock"))?;
+
+                                let mut motif_added_slices_guard = with_async_perf_log(
+                                    async ||{
+                                        tokio::time::timeout(
+                                            thoosa_shared::LOCK_TIMEOUT,
+                                            channels_motifs_added_slices[channel].write(),
+                                        )
+                                            .await
+                                            .map_err(|_| ThoError::new("SelectMotifsStage::run: timed out waiting for channels_motifs_added_slices write lock"))
+                                    },
+                                    "SelectMotifs/extend_with_one_find_run"
+                                ).await?;
+
                                 for (motif_id, matched_slices) in mask_dists_ids.1.into_iter().zip(matches_by_motif.into_iter()) {
+
                                     let slices = motif_added_slices_guard.entry(motif_id.clone()).or_insert(HashSet::new());
                                     let mut added_slices = 0;
                                     let mut skipped_slices = 0;
@@ -1354,7 +1362,10 @@ where
                 for (channel, motif_slices) in channels_motifs_added_slices.into_iter().enumerate() {
                     for (motif_id, slices) in motif_slices {
                         debug!("SelectMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
-                        self.store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices)?;
+
+                        with_perf_log(||{
+                            self.store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices)
+                        }, "SelectMotifsStage::run/add_slices_to_motif")?
                     }
                 }
             }
