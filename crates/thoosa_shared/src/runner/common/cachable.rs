@@ -28,6 +28,27 @@ use crate::runner::common::runnable::{AsyncStage, Stage};
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::ThoError;
 use crate::traits::WithId;
+use crate::LOCK_TIMEOUT;
+
+async fn timed_tokio_read<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockReadGuard<'a, T> {
+    tokio::time::timeout(LOCK_TIMEOUT, lock.read()).await.unwrap_or_else(|_| panic!("{ctx}: timed out waiting for tokio::sync::RwLock read lock"))
+}
+
+async fn timed_tokio_write<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockWriteGuard<'a, T> {
+    tokio::time::timeout(LOCK_TIMEOUT, lock.write()).await.unwrap_or_else(|_| panic!("{ctx}: timed out waiting for tokio::sync::RwLock write lock"))
+}
+
+fn timed_parking_mutex_lock<'a, T>(lock: &'a Mutex<T>, ctx: &'static str) -> parking_lot::MutexGuard<'a, T> {
+    lock.try_lock_for(LOCK_TIMEOUT).unwrap_or_else(|| panic!("{ctx}: timed out waiting for parking_lot::Mutex lock"))
+}
+
+fn timed_parking_rw_read<'a, T>(lock: &'a parking_lot::RwLock<T>, ctx: &'static str) -> parking_lot::RwLockReadGuard<'a, T> {
+    lock.try_read_for(LOCK_TIMEOUT).unwrap_or_else(|| panic!("{ctx}: timed out waiting for parking_lot::RwLock read lock"))
+}
+
+fn timed_parking_rw_write<'a, T>(lock: &'a parking_lot::RwLock<T>, ctx: &'static str) -> parking_lot::RwLockWriteGuard<'a, T> {
+    lock.try_write_for(LOCK_TIMEOUT).unwrap_or_else(|| panic!("{ctx}: timed out waiting for parking_lot::RwLock write lock"))
+}
 
 #[async_trait]
 pub trait Cached: AsyncStage + Named
@@ -229,7 +250,7 @@ where
     where
         Self: Sized
     {
-        let read_guard = wrap.cached_data[0].read().await;
+        let read_guard = timed_tokio_read(&wrap.cached_data[0], "CpuOnly::load_from_any_device_").await;
 
         if read_guard.is_some() {
             Ok(tokio::sync::RwLockReadGuard::map(
@@ -321,7 +342,7 @@ where
     where
         Self: Sized
     {
-        Ok(wrap.cached_data[0].write().await.take().expect(&format!("no cpu data {:?}", wrap.id)))
+        Ok(timed_tokio_write(&wrap.cached_data[0], "CpuOnly::take_data").await.take().expect(&format!("no cpu data {:?}", wrap.id)))
     }
 
     async fn is_all_on_cpu(_wrap: &DevicesWrap<O>) -> bool {
@@ -394,10 +415,10 @@ where
         assert!(wrap.cached_data.len() > to_device_idx, "Device index {to_device_idx}(cache len is {}) too big {:?}",wrap.cached_data.len(), wrap.id);
 
         if to_device_idx != 0 {
-            *wrap.on_cpu_since.write() = None;
+            *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::load_from_any_device_ on_cpu_since.write") = None;
         }
 
-        let read_guard = wrap.cached_data[to_device_idx].read().await;
+        let read_guard = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::load_from_any_device_ target read").await;
 
         if read_guard.is_some() {
             Ok(tokio::sync::RwLockReadGuard::map(
@@ -408,7 +429,7 @@ where
             drop(read_guard);
 
             for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
-                let source_read_guard = op.read().await;
+                let source_read_guard = timed_tokio_read(op, "CpuOrGpu::load_from_any_device_ source read").await;
 
                 if source_device_idx != to_device_idx && source_read_guard.is_some() {
                     drop(source_read_guard);
@@ -455,7 +476,7 @@ where
         //     permits_ctx.add_permit(permit);
         // }
 
-        let read_guard: RwLockReadGuard<'_, Option<O>> = wrap.cached_data[to_device_idx].read().await;
+        let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::with_selected_data_ref target read").await;
 
         if read_guard.is_some() {
             let base: &O = read_guard
@@ -475,7 +496,7 @@ where
                 continue;
             }
 
-            let source_read_guard: RwLockReadGuard<'_, Option<O>> = op.read().await;
+            let source_read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(op, "CpuOrGpu::with_selected_data_ref source read").await;
 
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t: O = src.subview(selector.clone())?;
@@ -504,7 +525,7 @@ where
         //     let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
         //     permits_ctx.add_permit(permit);
         // }
-        let read_guard: RwLockReadGuard<'_, Option<O>> = wrap.cached_data[to_device_idx].read().await;
+        let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::with_selected_data target read").await;
 
         if read_guard.is_some() {
             let data = read_guard
@@ -522,7 +543,7 @@ where
                 continue;
             }
 
-            let source_read_guard: RwLockReadGuard<'_, Option<O>> = op.read().await;
+            let source_read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(op, "CpuOrGpu::with_selected_data source read").await;
 
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t = src.subview(selector.clone())?;
@@ -555,13 +576,13 @@ where
             debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx}",wrap.id);
 
             if let Some(Ok(mut lock)) = wrap.cached_data.get(device_idx).map(|v| v.try_write()) {
-                if wrap.cached_data[0].read().await.is_none() {
+                if timed_tokio_read(&wrap.cached_data[0], "CpuOrGpu::dump_to_cpu cpu read check").await.is_none() {
                     let data = lock.take();
-                    debug!("DataCacheWrapper::dump_to_cpu: 1.0. id={:?} copied to cpu done cached_data[0].device={:?}", wrap.id, wrap.cached_data[0].read().await.as_ref().map(|v|v.device()));
+                    debug!("DataCacheWrapper::dump_to_cpu: 1.0. id={:?} copied to cpu done cached_data[0].device={:?}", wrap.id, timed_tokio_read(&wrap.cached_data[0], "CpuOrGpu::dump_to_cpu debug read 1.0").await.as_ref().map(|v|v.device()));
 
                     wrap.ensure_copied(device_idx, 0, data.as_ref(), false).await?;
 
-                    debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done cached_data[0].device={:?}", wrap.id, wrap.cached_data[0].read().await.as_ref().map(|v|v.device()));
+                    debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done cached_data[0].device={:?}", wrap.id, timed_tokio_read(&wrap.cached_data[0], "CpuOrGpu::dump_to_cpu debug read 1.1").await.as_ref().map(|v|v.device()));
                 }
                 drop(lock.take());
             } else {
@@ -577,7 +598,7 @@ where
                 #[cfg(test)]
                 let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-                *wrap.on_cpu_since.write() = Some(GlobalCtx::global().cache_age());
+                *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(GlobalCtx::global().cache_age());
             }
 
             debug!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}",wrap.id);
@@ -594,11 +615,8 @@ where
     }
 
     fn is_on_cpu_since(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool {
-        let r = wrap
-            .on_cpu_since
-            .read()
-            .map(|v| threshold_age < v)
-            .unwrap_or(false);
+        let on_cpu_since = timed_parking_rw_read(&wrap.on_cpu_since, "CpuOrGpu::is_on_cpu_since on_cpu_since.read");
+        let r = on_cpu_since.as_ref().map(|age| threshold_age < *age).unwrap_or(false);
 
         debug!("DataCacheWrapper::is_on_cpu_since: self.id={:?} self.on_cpu_since={:?} r={r} cache_age={threshold_age}",wrap.id, wrap.on_cpu_since);
 
@@ -621,7 +639,7 @@ where
         debug!("DataCacheWrapper::is_all_on_cpu: self.id={:?}", wrap.id);
 
         for (device_idx, data) in wrap.cached_data.iter().skip(1).enumerate() {
-            if data.read().await.is_some() {
+            if timed_tokio_read(data, "CpuOrGpu::is_all_on_cpu read").await.is_some() {
                 debug!("DataCacheWrapper::is_all_on_cpu: device_idx={device_idx}");
                 return false;
             }
@@ -814,7 +832,7 @@ where
 
     pub async fn clone_from_cpu(&self) -> Result<O, ThoError>
     where O: Clone {
-        Ok(self.cached_data[0].read().await.clone().expect("no data in cpu"))
+        Ok(timed_tokio_read(&self.cached_data[0], "DevicesWrap::clone_from_cpu read").await.clone().expect("no data in cpu"))
     }
 
 
@@ -875,7 +893,7 @@ where
                     return;
                 }
                 self.cleared = true;
-                let mut g = self.inflight.lock();
+                let mut g = timed_parking_mutex_lock(self.inflight, "DevicesWrap::ensure_copied inflight lock");
                 if g
                     .as_ref()
                     .map(|n| Arc::ptr_eq(n, &self.notify))
@@ -897,7 +915,7 @@ where
         debug!("DevicesWrap::ensure_copied: self.id={:?} src_idx={src_idx} dst_idx={dst_idx} do_return={do_return} src={src:?}", self.id);
 
         loop {
-            let dst_read = self.cached_data[dst_idx].read().await;
+            let dst_read = timed_tokio_read(&self.cached_data[dst_idx], "DevicesWrap::ensure_copied dst read").await;
             // ---- Fast path
             if dst_read.is_some() {
                 debug!("DevicesWrap::ensure_copied: self.id={:?} fast path", self.id);
@@ -915,7 +933,7 @@ where
             // ---- Try to join or become the leader
             // (Do not hold this lock while awaiting other locks, except briefly to set or read the notify)
             let (maybe_notify, leader_notify) = {
-                let mut g = self.inflights[dst_idx].lock();
+                let mut g = timed_parking_mutex_lock(&self.inflights[dst_idx], "DevicesWrap::ensure_copied inflights lock");
                 if let Some(n) = &*g {
                     // someone is already copying → wait on their notify
                     (Some(n.clone()), None)
@@ -940,7 +958,7 @@ where
             );
 
             // Double-check: maybe dst was filled after we dropped the read lock
-            if self.cached_data[dst_idx].read().await.is_some() {
+            if timed_tokio_read(&self.cached_data[dst_idx], "DevicesWrap::ensure_copied dst read double-check").await.is_some() {
                 inflight_guard.clear();
                 continue;
             }
@@ -949,14 +967,8 @@ where
             let produced = match src {
                 None => {
                     debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from cached_data", self.id);
-
-                    self.cached_data[src_idx]
-                        .read()
-                        .await
-                        .as_ref()
-                        .expect("src missing unexpectedly")
-                        .copy_to_device(dst_idx)
-                        .await
+                    let src_read_guard = timed_tokio_read(&self.cached_data[src_idx], "DevicesWrap::ensure_copied src read").await;
+                    src_read_guard.as_ref().expect("src missing unexpectedly").copy_to_device(dst_idx).await
                 }
                 Some(v) => {
                     debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from src", self.id);
@@ -977,7 +989,7 @@ where
             {
                 debug!("DevicesWrap::ensure_copied: self.id={:?} install copied to dst_idx={dst_idx} produced.device={:?}", self.id, produced.device());
 
-                let mut w = self.cached_data[dst_idx].write().await;
+                let mut w = timed_tokio_write(&self.cached_data[dst_idx], "DevicesWrap::ensure_copied dst write").await;
                 if w.is_none() {
                     *w = Some(produced);
                 }
@@ -1121,7 +1133,7 @@ mod tests {
 
         let data = MockDataWithId::whatever();
         let tested = super::DevicesWrap::wrap(data, CacheArea::default());
-        assert!(tested.cached_data[1].read().await.is_none());
+        assert!(super::timed_tokio_read(&tested.cached_data[1], "test_dump_to_cpu read 1").await.is_none());
 
         let mut ctx_for_data = mock_run_ctx::default(1);
         tested
@@ -1133,10 +1145,10 @@ mod tests {
                })
             .await?;
 
-        assert!(tested.cached_data[1].read().await.is_some());
+        assert!(super::timed_tokio_read(&tested.cached_data[1], "test_dump_to_cpu read 2").await.is_some());
 
         tested.dump_to_cpu(1).await?;
-        assert!(tested.cached_data[1].read().await.is_none());
+        assert!(super::timed_tokio_read(&tested.cached_data[1], "test_dump_to_cpu read 3").await.is_none());
 
         Ok(())
     }

@@ -123,7 +123,7 @@ where
         let input = input.load_from_any_device_(0).await?;//TODO clone_from_cpu
         let (params, module) = self
             .ws
-            .read()
+            .try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout")
             .load_motif_net(&input.net_id, &ThoDevice::from(device_idx).into())?;
 
         let (channel, motif_id) = FsWorkspace::parse_motif_path(&input.net_id)?;

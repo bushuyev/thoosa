@@ -92,7 +92,7 @@ where
         let selected_nets = train_motif_nets_run_ids
             .iter()
             .flat_map(|train_motif_nets_run_id| {
-                store.read().list_selected_nets(*train_motif_nets_run_id, max_loss).unwrap()
+                store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").list_selected_nets(*train_motif_nets_run_id, max_loss).unwrap()
             })
             .collect::<Vec<_>>();
         let selected_nets_len = selected_nets.len();
@@ -951,7 +951,7 @@ pub(crate) mod tests {
 
         let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
-        let run_ctx_branch = run_ctx.write().branch(Some("apply_motif_nets_run"), false, false);
+        let run_ctx_branch = run_ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("apply_motif_nets_run"), false, false);
         let out = apply_motif_nets.run(
             Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test_batch", "test_batch")]), resource_a_t)?, CacheArea::default())),
             run_ctx_branch
@@ -967,7 +967,7 @@ pub(crate) mod tests {
 
         let motif_width = motif_0_0.t_ref().size()[1] as i64;
         let slices = ((input_n_0 as i64 - motif_width) / step as i64) + 1;
-        let ctx_for_data = run_ctx.write().branch(Some("apply_motif_nets_assert"), false, false);
+        let ctx_for_data = run_ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("apply_motif_nets_assert"), false, false);
         with_data!(ctx_for_data, out; |_ctx, r:&ThoTensor<MotifProbability, SynKey>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
 
