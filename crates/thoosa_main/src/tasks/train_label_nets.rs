@@ -34,7 +34,7 @@ use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, self
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, CopyToDevice, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress_i, mono_key, shuffle_and_chunk_with_rng, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::copy_mode::CpuOnly;
@@ -301,7 +301,7 @@ where
             debug!("TrainLabelNets::run: labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
             debug!("TrainLabelNets::run: labels_tain_and_valid_sets={labels_tain_and_valid_sets:?}");
 
-
+            let labels_tain_and_valid_sets_len = labels_tain_and_valid_sets.len();
             let futures = labels_tain_and_valid_sets.iter()
             // .filter(|v|{
             //     v.0.eq("seizure")
@@ -445,11 +445,11 @@ where
 
                 }
 
-            })
-            .collect::<Vec<_>>();
+            });
 
-            let results = collect_futures_with_progress(
+            let results = collect_futures_with_progress_i(
                 futures,
+                labels_tain_and_valid_sets_len,
                 crate::buffer_limits::TRAIN_LABEL_NETS_RUN_BUFFER_UNORDERED_LIMIT,
                 StreamBuffering::Unordered,
                 "train label failed",
@@ -685,6 +685,7 @@ where
                 };
                 async move {
                     debug!("ResourcesBatch::build_batch_stream: ctx={ctx:?}");
+                    let batch_len = batch_keys.len();
 
                     // load samples for this batch concurrently
                     let futures = batch_keys
@@ -710,11 +711,11 @@ where
                                 .await;
                                 Ok::<_, ThoError>(result)
                             }
-                        })
-                        .collect::<Vec<_>>();
+                        });
 
-                    let (x_1_wrapped, x_0_wrapped) = collect_futures_with_progress(
+                    let (x_1_wrapped, x_0_wrapped) = collect_futures_with_progress_i(
                         futures,
+                        batch_len,
                         crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
                         StreamBuffering::Ordered,
                         "ResourcesBatch::build_batch_stream",

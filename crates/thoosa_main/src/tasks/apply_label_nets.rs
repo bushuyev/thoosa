@@ -19,7 +19,7 @@ use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress_i, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
@@ -202,6 +202,7 @@ where
             .await?;
 
         let label_nets = self.apply_label_nets.clone();
+        let label_nets_len = label_nets.len();
 
         debug!("ApplyLabelNets::run: label_nets={label_nets:?}");
 
@@ -216,11 +217,11 @@ where
                     let result = apply_label_net.run(motif_probs, apply_label_net_ctx).await;
                     Ok::<_, ThoError>(result)
                 }
-            })
-            .collect::<Vec<_>>();
+            });
 
-        let label_outputs = collect_futures_with_progress(
+        let label_outputs = collect_futures_with_progress_i(
             futures,
+            label_nets_len,
             crate::buffer_limits::APPLY_LABEL_NETS_RUN_BUFFERED_LIMIT,
             StreamBuffering::Ordered,
             "ApplyLabelNets::run",
