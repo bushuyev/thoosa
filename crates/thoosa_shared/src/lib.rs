@@ -225,7 +225,7 @@ async fn collect_stream_with_progress<T, S>(
 }
 
 pub const LOCK_TIMEOUT: Duration = Duration::from_mins(10);
-pub const FUTURES_TIMEOUT: Duration = Duration::from_mins(30);
+pub const FUTURES_TIMEOUT: Duration = Duration::from_hours(24);
 
 
 struct AggPerf<'a>(&'a str, &'a str);
