@@ -21,7 +21,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::{collect_futures_with_progress, mono_key, sample_n_owned, CopyToDevice, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress_i, mono_key, sample_n_owned, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, WithId};
 use thoosa_store::Store;
@@ -206,6 +206,7 @@ where
             return Err(ThoError::new(format!("no motif_ids found in find_motifs_run_config_id={find_motifs_run_config_id:?}")))
         }
 
+        let motif_ids_len = motif_ids.len();
         let futures = motif_ids
             .into_iter()
             .map( |motif_id| {
@@ -230,11 +231,11 @@ where
                         }
                     }
                 }
-            })
-            .collect::<Vec<_>>();
+            });
 
-        let loaded_motifs = collect_futures_with_progress(
+        let loaded_motifs = collect_futures_with_progress_i(
             futures,
+            motif_ids_len,
             STACKED_MOTIFS_LOADER_RUN,
             StreamBuffering::Ordered,
             "StackedMotifsLoader::run",

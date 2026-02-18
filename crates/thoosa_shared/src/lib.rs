@@ -227,24 +227,6 @@ async fn collect_stream_with_progress<T, S>(
 const TIMEOUT:Duration = Duration::from_mins(10);
 
 
-
-
-
-
-pub async fn collect_futures_with_progress<T, F>(
-    futures: Vec<F>,
-    buffer_limit: usize,
-    buffering: StreamBuffering,
-    descr: &str,
-) -> Vec<T>
-where
-    F: std::future::Future<Output = Result<T, ThoError>>,
-{
-    let size = futures.len();
-    collect_futures_with_progress_i(futures.into_iter(), size, buffer_limit, buffering, descr).await
-}
-
-
 pub async fn collect_futures_with_progress_i<T, F>(
     futures: impl Iterator<Item=F>,
     len:usize,

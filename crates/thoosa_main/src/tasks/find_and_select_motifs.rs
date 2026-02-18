@@ -25,7 +25,7 @@ use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources, ResourceType, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress_i, mono_key, panic_to_err_async, parse_resources, ResourceType, StreamBuffering, ThoError};
 use thoosa_store::Store;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::find_motifs::FindMotifsStage;
@@ -321,6 +321,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
         let opt_num_init = self.opt_config.opt_num_init;
         let mut find_and_select_run_find_ctx = ctx.branch("find_and_select_run_find".into(), true, false);
         let device_idx = ctx.device_idx();
+        let grid_vals_sets_len = grid_vals_sets.len();
         let futures = grid_vals_sets
             .into_iter()
             .enumerate()
@@ -396,10 +397,10 @@ impl AsyncStage for FindAndSelectMotifsStage {
                         Ok::<_, ThoError>((grid_idx, None))
                     }
                 }
-            })
-            .collect::<Vec<_>>();
-        let mut indexed_best_configs = collect_futures_with_progress(
+            });
+        let mut indexed_best_configs = collect_futures_with_progress_i(
             futures,
+            grid_vals_sets_len,
             crate::buffer_limits::FIND_AND_SELECT_MOTIFS_RUN_BUFFER_ORDERED_LIMIT,
             StreamBuffering::Unordered,
             "FindAndSelectMotifsStage::run",

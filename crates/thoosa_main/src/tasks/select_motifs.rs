@@ -40,7 +40,7 @@ use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress_i, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::comp_id::SynKey;
@@ -758,6 +758,7 @@ where
                 )?))
             })
             .collect::<Result<Vec<_>, ThoError>>()?;
+            let find_motifs_run_configs_len = find_motifs_run_configs.len();
 
             //for each FindMotifsRunConfigs X SelectMotifsRunConfig
             let futures = find_motifs_run_configs
@@ -781,11 +782,11 @@ where
                             }
                         }
                     }
-                })
-                .collect::<Vec<_>>();
+                });
 
-            let run_configs__stacked_motifs = collect_futures_with_progress(
+            let run_configs__stacked_motifs = collect_futures_with_progress_i(
                 futures,
+                find_motifs_run_configs_len,
                 LOAD_STACKED_MOTIFS_LIMIT,
                 StreamBuffering::Ordered,
                 "SelectMotifsStage::load_stacked_motifs",
@@ -835,6 +836,7 @@ where
             Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
 
         let run_configs__stacked_motifs_dbg = &run_configs__stacked_motifs;
+        let run_configs__stacked_motifs_len = run_configs__stacked_motifs.len();
         let futures = run_configs__stacked_motifs
             .iter()
             .cloned()
@@ -887,11 +889,11 @@ where
                         }
                     }
                 }
-            })
-            .collect::<Vec<_>>();
+            });
 
-        let _ = collect_futures_with_progress(
+        let _ = collect_futures_with_progress_i(
             futures,
+            run_configs__stacked_motifs_len,
             crate::buffer_limits::SELECT_MOTIFS_STAGE_FIND_MOTIFS_BUFFER_UNORDERED_LIMIT,
             StreamBuffering::Unordered,
             "SelectMotifsStage::extend_motifs_for_run_config",
@@ -930,6 +932,7 @@ where
             .collect::<HashSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
+        let motif_ids_len = motif_ids.len();
 
         let futures = motif_ids
             .into_iter()
@@ -954,11 +957,11 @@ where
                     .await;
                     Ok::<_, ThoError>(result)
                 }
-            })
-            .collect::<Vec<_>>();
+            });
 
-        let motif_stats = collect_futures_with_progress(
+        let motif_stats = collect_futures_with_progress_i(
             futures,
+            motif_ids_len,
             crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN,
             StreamBuffering::Unordered,
             "SelectMotifsStage::clc_stacked_motifs_statistics",
@@ -1121,6 +1124,7 @@ where
 
             debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?} find_motifs_run_id={find_motifs_run_id}");
             let resources_slices = Arc::new(resources_iter.clone().collect::<Vec<_>>());
+            let channel_masks_dists_ids_len = channel_masks_dists_ids.len();
             let futures = channel_masks_dists_ids
                 .into_iter()
                 .enumerate()
@@ -1185,11 +1189,11 @@ where
                         }).await;
                         Ok::<_, ThoError>(result)
                     }
-                })
-                .collect::<Vec<_>>();
+                });
 
-            collect_futures_with_progress(
+            collect_futures_with_progress_i(
                 futures,
+                channel_masks_dists_ids_len,
                 crate::buffer_limits::SELECT_MOTIFS_STAGE_FIND_MOTIFS_BUFFER_UNORDERED_LIMIT,
                 StreamBuffering::Unordered,
                 "SelectMotifsStage::extend_with_one_find_run_channel_masks",

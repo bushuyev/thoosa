@@ -38,7 +38,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::{collect_futures_with_progress, collect_futures_with_progress_i, mono_key, CopyToDevice, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress_i, mono_key, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, Data, DataId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;

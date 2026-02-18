@@ -36,7 +36,7 @@ use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress_i, mono_key, shuffle_and_chunk_with_rng, StreamBuffering, ThoError};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
@@ -308,6 +308,7 @@ where
                 let loader = Arc::clone(&loader);
                 let resources = Arc::clone(&resources);
                 async move {
+                    let batch_len = batch_keys.len();
                     let futures = batch_keys
                         .into_iter()
                         .map(|index| {
@@ -326,11 +327,11 @@ where
                                 .await;
                                 Ok::<_, ThoError>(result)
                             }
-                        })
-                        .collect::<Vec<_>>();
+                        });
 
-                    let (outputs, labels) = collect_futures_with_progress(
+                    let (outputs, labels) = collect_futures_with_progress_i(
                         futures,
+                        batch_len,
                         crate::buffer_limits::LOGITS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
                         StreamBuffering::Ordered,
                         "LogitsResourcesBatch::build_batch_stream",
