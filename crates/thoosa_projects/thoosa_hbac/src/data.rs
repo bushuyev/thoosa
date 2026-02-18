@@ -1004,8 +1004,8 @@ mod tests {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 1000, 1000)));
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        // let store = Arc::new(RwLock::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
-        let store = Arc::new(RwLock::new(SqlStore::in_mem()?));
+        // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
+        let store = Arc::new(SqlStore::in_mem()?);
 
         let _resources = import_resources(
             &ws,
@@ -1021,7 +1021,7 @@ mod tests {
             false,
         )?;
 
-        let labels = store.read().list_labels()?;
+        let labels = store.list_labels()?;
 
         assert_eq!(
             vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"],

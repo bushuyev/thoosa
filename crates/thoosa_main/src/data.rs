@@ -129,10 +129,9 @@ where
 
 pub fn load_to_logits_tensors(
     group: &str,
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
 ) -> Vec<(Resource, Vec<f32>)> {
     store
-        .read()
         .list_resource_random_in_group(group)
         .expect("list_resource_random_in_group")
         .into_iter()
@@ -227,14 +226,14 @@ pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) {
 pub fn labeled_tensors_by_descr<'a>(
     label: &String,
     resource_set_descr: &String,
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
 ) -> Vec<(i64, Vec<Resource>)> {
     debug!(
         "labeled_tensors_by_descr: label={:?} resource_set_descr={:?}",
         label, resource_set_descr
     );
 
-    let store_lock = store.read();
+    let store_lock = store;
 
     vec![
         (

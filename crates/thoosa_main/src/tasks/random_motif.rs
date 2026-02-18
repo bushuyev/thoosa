@@ -122,7 +122,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     find_motifs_run_id: RunId,
@@ -134,7 +134,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(store: Arc<RwLock<Box<dyn Store>>>, loader: Arc<L>, ws: Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_id: RunId) -> Self {
+    pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_id: RunId) -> Self {
         Self {
             id: SynKey::new([
                 mono_key!("RandomMotif", "stage"),
@@ -197,19 +197,11 @@ where
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
             self.find_motifs_run_id,
-            &thoosa_shared::with_perf_log(
-                || self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "RandomMotif/run/read_store",
-            )
-            .list_run_config_values(self.find_motifs_run_id)?,
+            &self.store.list_run_config_values(self.find_motifs_run_id)?,
         )?;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
 
-        let resources = thoosa_shared::with_perf_log(
-            || self.store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "RandomMotif/run/read_store",
-        )
-        .list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices * 100/*TODO this is to compensate for filter, add proper coefficient */)?;
+        let resources = self.store.list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices * 100/*TODO this is to compensate for filter, add proper coefficient */)?;
         let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, motif_width, input_len_adjuster)?;
 
         let channels = thoosa_shared::with_perf_log(

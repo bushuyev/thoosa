@@ -3,7 +3,6 @@ use crate::applicables_runner::Input;
 use crate::traits::WithId;
 use log::trace;
 use mockall::automock;
-use parking_lot::RwLock;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
@@ -173,10 +172,10 @@ pub trait ResourcesConfig {
     type R;
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
-        store: &Arc<RwLock<Box<S>>>,
+        store: &Arc<Box<S>>,
     ) -> Result<Self::R, ThoError>;
 
-    fn check<S: ResourceStore + ?Sized>(&self, _store: &Arc<RwLock<Box<S>>>) -> Result<(), ThoError> {
+    fn check<S: ResourceStore + ?Sized>(&self, _store: &Arc<Box<S>>) -> Result<(), ThoError> {
         Err(ThoError::new("resource config check is not implemented"))
     }
 }

@@ -144,7 +144,7 @@ impl SavableResult for FindMotifsSavableResult {
 
     fn save(
         &mut self,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
         //gpt TODO!! placeholder save: no persistence and always returns 0; callers rely on presaved run ids.
@@ -219,7 +219,7 @@ impl<'a> SimpleMotifTracker<'a> {
         }
     }
 
-    pub fn build_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<usize, ThoError> {
+    pub fn build_groups(&mut self, store: &Arc<Box<dyn Store>>) -> Result<usize, ThoError> {
         self.dumper.load_slices_into_groups(store, self.max_slices_counts)
     }
 
@@ -299,13 +299,11 @@ impl SavableResult for SelectMotifsSavableResult {
 
     fn save(
         &mut self,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
         for (run_config, good_motif_ids_rates) in &self.run_config {
-            store
-                .write()
-                .save_selected_motifs(run_config.id.expect("should be pre set in run_grid"), good_motif_ids_rates.clone())?; //TODO mem::replace?
+            store.save_selected_motifs(run_config.id.expect("should be pre set in run_grid"), good_motif_ids_rates.clone())?; //TODO mem::replace?
 
         }
         //gpt TODO!! save returns a dummy run_id; run_grid currently ignores it and uses presaved ids.
@@ -497,7 +495,7 @@ mod motif_find_tests {
 
         fn load_slices_into_groups(
             &mut self,
-            store: &Arc<RwLock<Box<dyn Store>>>,
+            store: &Arc<Box<dyn Store>>,
             max_slices_counts: Option<u32>,
         ) -> Result<usize, ThoError> {
             todo!()
@@ -723,7 +721,7 @@ mod motif_find_tests {
 pub fn plot_resource(
     resource_config: Simple,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
+    store: &Arc<Box<dyn Store>>,
 ) -> Result<(), ThoError> {
     let tensors_path = ws.read().tensors_path().clone();
     let channel = 0; //TODO

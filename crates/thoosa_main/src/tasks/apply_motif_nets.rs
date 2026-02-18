@@ -62,7 +62,7 @@ where
 {
     id: SynKey,
     ws:Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
-    store:Arc<parking_lot::RwLock<Box<dyn Store>>>,
+    store:Arc<Box<dyn Store>>,
     pd:PhantomData<C>,
     apply_motif_nets: Vec<Arc<ApplyMotifNet<C>>>,
     pub slice_step: u32,//should be in the input
@@ -75,7 +75,7 @@ where
 {
     pub async fn new<R>(
         ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
-        store: &Arc<parking_lot::RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         train_motif_nets_run_ids: Vec<RunId>,
         mut stage_ctx:R,
         max_loss: Option<f32>,
@@ -92,12 +92,7 @@ where
         let selected_nets = train_motif_nets_run_ids
             .iter()
             .flat_map(|train_motif_nets_run_id| {
-                thoosa_shared::with_perf_log(
-                    || store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "ApplyMotifNets/new/read_store",
-                )
-                .list_selected_nets(*train_motif_nets_run_id, max_loss)
-                .unwrap()
+                store.list_selected_nets(*train_motif_nets_run_id, max_loss).unwrap()
             })
             .collect::<Vec<_>>();
         let selected_nets_len = selected_nets.len();
@@ -782,7 +777,7 @@ pub(crate) mod tests {
                 .build(),
         ));
 
-        let mut store = Arc::new(RwLock::new(
+        let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     find_motifs_run_id,
@@ -811,7 +806,7 @@ pub(crate) mod tests {
                     ]))
                 ])
                 .build()
-        ));
+        );
 
 
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
@@ -908,7 +903,7 @@ pub(crate) mod tests {
                 .build(),
         ));
 
-        let mut store = Arc::new(RwLock::new(
+        let mut store = Arc::new(
             MockStoreBuilder::new()
             .with_list_run_config_values(
                 find_motifs_run_id,
@@ -933,7 +928,7 @@ pub(crate) mod tests {
                 ]))
             ])
             .build()
-        ));
+        );
 
 
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(

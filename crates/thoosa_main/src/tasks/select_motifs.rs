@@ -98,7 +98,7 @@ where
 {
 
     id: SynKey,
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     ws:Arc<RwLock<Box<dyn Workspace>>>,
     loader:Arc<L>,
     stacked_motifs_loader:Arc<StackedMotifsLoader<ML, C>>,
@@ -676,7 +676,7 @@ where
 
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         loader:Arc<L>,
         motif_loader:Arc<ML>,
         run_configs:Vec<SelectMotifsRunConfig>,
@@ -697,10 +697,7 @@ where
         let find_motif_run_ids_motif_ids = find_motifs_run_ids
             .iter()
             .map(|find_motifs_run_id| {
-                with_perf_log(
-                    || store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "SelectMotifsStage/new/read_store",
-                )
+                store
                     .list_motifs(*find_motifs_run_id)
                     .map(|motif_ids| (*find_motifs_run_id, motif_ids))
             })
@@ -754,17 +751,13 @@ where
 
     #[inline]
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::load_stacked_motifs"))]
-    async fn load_stacked_motifs(store:&Arc<RwLock<Box<dyn Store>>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_ids: &Vec<RunId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
+    async fn load_stacked_motifs(store:&Arc<Box<dyn Store>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_ids: &Vec<RunId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
         let find_motifs_run_configs = find_motifs_run_ids
             .iter()
             .map(|find_motifs_run_id| -> Result<_, ThoError> {
                 Ok(Arc::new(FindMotifsRunConfig::from_properties_map_with_id(
                     *find_motifs_run_id,
-                    &with_perf_log(
-                        || store.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                        "SelectMotifsStage/load_stacked_motifs/read_store",
-                    )
-                    .list_run_config_values(*find_motifs_run_id)?,
+                    &store.list_run_config_values(*find_motifs_run_id)?,
                 )?))
             })
             .collect::<Result<Vec<_>, ThoError>>()?;
@@ -1382,9 +1375,7 @@ where
                     for (motif_id, slices) in motif_slices {
                         debug!("SelectMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
 
-                        with_perf_log(||{
-                            self.store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices)
-                        }, "SelectMotifsStage::run/write_store/add_slices_to_motif")?
+                        self.store.add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices)?
                     }
                 }
             }
@@ -1500,7 +1491,7 @@ pub mod tests {
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(30, 100, MotifKind::Pulse)]], 100, 10.0f32)?;
         let resources_channels_intervals = [(&resource_a, &[channel_0_motifs_ids.as_slice()][..], &resource_a_intervals)];
 
-        let mut store = Arc::new(RwLock::new(
+        let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     find_motifs_run_id,
@@ -1513,7 +1504,7 @@ pub mod tests {
                     (resources_group, Ok(vec![resource_a.clone()])),
                 ])
                 .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(select_motifs_run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
-                .build()));
+                .build());
 
         debug!("test_single_label_one_motif: resource_a_t={resource_a_t:?} resource_a_intervals={resource_a_intervals:?}");
 
@@ -1577,7 +1568,7 @@ pub mod tests {
         let (resource_b_t, resource_b_intervals) = tch_test_utils::resource_tensor(resource_b.length() as usize, &[vec![(2, 100, MotifKind::Pulse)]], 200, 10.0f32)?;
         let resources_channels_intervals = [(&resource_a, &[channel_0_motifs_ids.as_slice()][..], &resource_a_intervals), (&resource_b, &[channel_0_motifs_ids.as_slice()][..],  &resource_b_intervals)];
 
-        let mut store = Arc::new(RwLock::new(
+        let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     find_motifs_run_id,
@@ -1590,7 +1581,7 @@ pub mod tests {
                     (resources_group, Ok(vec![resource_a.clone(), resource_b.clone()])),
                 ])
                 .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(select_motifs_run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
-                .build()));
+                .build());
 
 
         let loader = Arc::new(
@@ -1658,7 +1649,7 @@ pub mod tests {
 
         let resources_channels_intervals = [(&resource_a, &[motifs_ids.as_slice()][..], &resource_a_intervals)];
 
-        let mut store = Arc::new(RwLock::new(
+        let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     find_motifs_run_id,
@@ -1671,7 +1662,7 @@ pub mod tests {
                     (resources_group, Ok(vec![resource_a.clone()])),
                 ])
                 .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(select_motifs_run_id, &motifs_ids, &resources_channels_intervals))//<-- assert
-                .build()));
+                .build());
 
 
         debug!("test_single_label_one_motif: resource_a_t={resource_a_t:?} resource_a_intervals={resource_a_intervals:?}");
@@ -1793,7 +1784,7 @@ pub mod tests {
         let expected_add_slices_to_motif_calls = resources_add_slices_to_motif_expectations(select_motifs_run_id, &channel_0_motifs_ids, &resources_channels_intervals);
         debug!("test_3_resources_2_labels_3_channels_3_motifs: expected_add_slices_to_motif_calls={expected_add_slices_to_motif_calls:?}");
 
-        let mut store = Arc::new(RwLock::new(
+        let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     find_motifs_run_id,
@@ -1810,7 +1801,7 @@ pub mod tests {
                     (resources_group, Ok(vec![resource_a.clone(), resource_b.clone(), resource_c.clone()])),
                 ])
                 .with_add_slices_to_motif(expected_add_slices_to_motif_calls)//<-- assert
-                .build()));
+                .build());
 
 
         let loader = Arc::new(
@@ -2016,7 +2007,7 @@ pub mod tests {
         store_mock.expect_list_run_config_values().times(0);
         store_mock.expect_add_slices_to_motif().times(0);
 
-        let store: Arc<RwLock<Box<dyn Store>>> = Arc::new(RwLock::new(Box::new(store_mock)));
+        let store: Arc<Box<dyn Store>> = Arc::new(Box::new(store_mock) as Box<dyn Store>);
 
         let loader = Arc::new(mock_tensor_loader::build().with_out_id().finish());
 
@@ -2099,7 +2090,7 @@ pub mod tests {
         store_mock.expect_list_run_config_values().times(0);
         store_mock.expect_add_slices_to_motif().times(0);
 
-        let store: Arc<RwLock<Box<dyn Store>>> = Arc::new(RwLock::new(Box::new(store_mock)));
+        let store: Arc<Box<dyn Store>> = Arc::new(Box::new(store_mock) as Box<dyn Store>);
         let loader = Arc::new(mock_tensor_loader::build().with_out_id().finish());
 
         let motif_21_t = Tensor::from_slice(&[
@@ -2364,7 +2355,7 @@ pub mod tests {
         let resources_group = "group";
 
 
-        let mut store = Arc::new(RwLock::new(
+        let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_run_config_values(
                     run_id,
@@ -2388,7 +2379,7 @@ pub mod tests {
                 ])
 
                 .with_add_slices_to_motif_at_least_once()//fails because builder is not implemented
-                .build()));
+                .build());
 
 
         let loader = Arc::new(

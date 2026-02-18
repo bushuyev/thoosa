@@ -71,7 +71,7 @@ where
     applied_motif_loader: Arc<LM>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     num_nets:u32,
-    store: Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<Box<dyn Store>>,
     opt_config:Arc<OptConfig>,
 
 }
@@ -81,7 +81,7 @@ pub async fn new_train_label_nets_with_ml<L, C, R>(
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
+    store: &Arc<Box<dyn Store>>,
     stage_ctx:R,
     opt_config:Arc<OptConfig>,
     max_loss: Option<f32>,
@@ -142,7 +142,7 @@ where
         num_nets:u32,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<Box<dyn Store>>,
         opt_config:Arc<OptConfig>
     ) -> Result<Self, ThoError>
     {
@@ -237,10 +237,10 @@ impl SavableResult for TrainLabelNetsOutput {
         0.0
     }
 
-    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
+    fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
         let run_id = thoosa_shared::with_perf_log(
             || {
-                store.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").save_run_config(
+                store.save_run_config(
                     Some(&self.train_motif_nets_run_ids),
                     &TrainLabelNetsRunConfig::type_name(),
                     "TrainLabelNetsResult",
@@ -915,7 +915,7 @@ mod tests {
                 .finish(),
         );
 
-        let mut store = Arc::new(RwLock::new(
+        let mut store = Arc::new(
             MockStoreBuilder::new()
             .with_list_selected_motifs([
                 (select_motifs_run_id, Ok(
@@ -954,7 +954,7 @@ mod tests {
                 (train_group, Ok(resources_x.clone())),
                 (valid_group, Ok(resources_x.clone())),
             ])
-            .build()));
+            .build());
 
 
         let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(
