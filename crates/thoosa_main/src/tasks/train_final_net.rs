@@ -152,13 +152,14 @@ impl WithId for TrainFinalNetOutput {
 
 impl Output for TrainFinalNetOutput {}
 
+#[async_trait]
 impl SavableResult for TrainFinalNetOutput {
     fn value(&self) -> f32 {
         self.result.value()
     }
 
-    fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
-        self.result.save(store, ws)
+    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
+        self.result.save(store, ws).await
     }
 }
 
@@ -192,9 +193,11 @@ where
 
         async move {
             //gpt Load train/valid logits resources and validate label vector sizes.
-            let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) = with_data!(ctx.branch(Some("train_final_resources"), false, false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Logits>>|{
-                Ok::<_, ThoError>(input.resources_config().to_resources(&store)?)
+            let resources_config = with_data!(ctx.branch(Some("train_final_resources"), false, false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Logits>>|{
+                Ok::<_, ThoError>(input.resources_config().clone())
             })?;
+            let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) =
+                resources_config.to_resources(&store).await?;
 
             let labels_len = train_resources.first().ok_or_else(|| ThoError::new("TrainFinalNet::run: no train resources"))?.1.len();
             if labels_len == 0 {

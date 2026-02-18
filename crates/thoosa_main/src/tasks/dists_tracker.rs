@@ -5,7 +5,6 @@ use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
 use tch::{Kind, Tensor};
 use futures::{future::BoxFuture, FutureExt};
 use tch::Device;
@@ -1543,43 +1542,19 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="DistsTracker::build_groups"))]
     pub async fn build_groups(&self) -> Result<(), ThoError>{
-
-
-        let mut trackers_done = AtomicU32::new(0);
-        let store = Arc::clone(&self.store);
-        let channel_trackers = self.channel_trackers.clone();//TODO clone
-
-        let channels_groups = Arc::new(RwLock::new(HashMap::new()));
-
-        debug!("DistsTracker::build_groups: channel_trackers={channel_trackers:?}");
-
-        let channels_groups_for_rayon = Arc::clone(&channels_groups);
-
-        tokio::task::spawn_blocking(move || {
-            use rayon::prelude::*;
-            rayon_pool().install(|| {
-
-                channel_trackers.par_iter().enumerate().try_for_each(|(channel, mt)| {
-                    let groups_inserted = thoosa_shared::with_perf_log(
-                        || mt.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                        "DistsTracker/new/write_tracker",
-                    )
-                    .build_groups(&store)?;
-                    thoosa_shared::with_perf_log(
-                        || channels_groups_for_rayon.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                        "DistsTracker/new/write_groups",
-                    )
-                    .insert(channel, groups_inserted);
-                    Ok::<_, ThoError>(())
-                })
-            })
-        }).await??;
-
-        let channels_groups_guard = thoosa_shared::with_perf_log(
-            || channels_groups.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "DistsTracker/build_output/read_groups",
-        );
-        info!("groups inserted: {:?}", (0..self.channel_trackers.len()).map(|c|channels_groups_guard.get(&c).map(|v|*v).ok_or(0)).collect::<Vec<_>>());
+        let mut channels_groups = Vec::with_capacity(self.channel_trackers.len());
+        for (channel, mt) in self.channel_trackers.iter().enumerate() {
+            let (mut dumper, max_slices_counts) = {
+                let mut tracker = thoosa_shared::with_perf_log(
+                    || mt.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                    "DistsTracker/new/write_tracker",
+                );
+                (tracker.take_dumper()?, tracker.max_slices_counts())
+            };
+            let groups_inserted = dumper.load_slices_into_groups(&self.store, max_slices_counts).await?;
+            channels_groups.push((channel, groups_inserted));
+        }
+        info!("groups inserted: {:?}", channels_groups.into_iter().map(|(_, v)| v).collect::<Vec<_>>());
         Ok(())
     }
 }

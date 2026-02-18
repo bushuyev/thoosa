@@ -61,7 +61,7 @@ pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>
 #[derive(Debug)]
 struct FindMotifsStages<RC, L, C>
 where
-    RC: ResourcesConfig<R = Vec<Resource>> + Debug,
+    RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -78,7 +78,7 @@ where
 
 impl<RC, L, C> FindMotifsStages<RC, L, C>
 where
-    RC: ResourcesConfig<R = Vec<Resource>> + Debug,
+    RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -153,7 +153,7 @@ fn to_stats_aggr(aggr: FilterAggr) -> StatsAggr {
 #[derive(Debug, Named)]
 pub struct FindMotifsStage<RC, L, C>
 where
-    RC: ResourcesConfig<R = Vec<Resource>> + Debug,
+    RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -163,7 +163,7 @@ where
 
 impl<RC, L, C> FindMotifsStage<RC, L, C>
 where
-    RC: ResourcesConfig<R = Vec<Resource>> + Debug,
+    RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -387,7 +387,7 @@ where
 
 impl<RC, L, C> Stage for FindMotifsStage<RC, L, C>
 where
-    RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
+    RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -403,7 +403,7 @@ where
 // #[async_trait]
 impl<RC, L, C> AsyncStage for FindMotifsStage<RC, L, C>
 where
-    RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
+    RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> +  'static,
     C: RunCtx + Adjustable + 'static,

@@ -20,7 +20,7 @@ use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::{mono_key, CopyToDevice, TensorIdSliceIdx, ThoError};
-use thoosa_store::{Store, block_on_store_future};
+use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
@@ -197,11 +197,14 @@ where
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
             self.find_motifs_run_id,
-            &block_on_store_future(self.store.list_run_config_values(self.find_motifs_run_id))?,
+            &self.store.list_run_config_values(self.find_motifs_run_id).await?,
         )?;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
 
-        let resources = block_on_store_future(self.store.list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices * 100/*TODO this is to compensate for filter, add proper coefficient */))?;
+        let resources = self
+            .store
+            .list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices * 100/*TODO this is to compensate for filter, add proper coefficient */)
+            .await?;
         let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, motif_width, input_len_adjuster)?;
 
         let channels = thoosa_shared::with_perf_log(

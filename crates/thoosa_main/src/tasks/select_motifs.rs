@@ -44,7 +44,7 @@ use thoosa_shared::{with_async_perf_log, collect_futures_with_progress_i, mono_k
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_store::{IdSlice, Store, block_on_store_future};
+use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::applicables_runner::Output;
@@ -674,7 +674,7 @@ where
     C: RunCtx + Adjustable + 'static
 {
 
-    pub fn new(
+    pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         loader:Arc<L>,
@@ -684,7 +684,7 @@ where
         max_batch: i64,
         #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>
-    ) -> Self {
+    ) -> Result<Self, ThoError> {
 
 
 
@@ -694,15 +694,10 @@ where
         ));
 
         //gpt Snapshot motif ids for each find_motifs_run_id; used later for criteria filtering.
-        let find_motif_run_ids_motif_ids = find_motifs_run_ids
-            .iter()
-            .map(|find_motifs_run_id| {
-                block_on_store_future(store.list_motifs(*find_motifs_run_id))
-                    .map(|motif_ids| (*find_motifs_run_id, motif_ids))
-            })
-            .collect::<Result<HashMap<_, _>, ThoError>>()
-            //gpt TODO!! panics on missing motifs; consider propagating a typed error instead.
-            .expect(&format!("can't load motifs for find_motifs_run_ids={find_motifs_run_ids:?}"));
+        let mut find_motif_run_ids_motif_ids = HashMap::new();
+        for find_motifs_run_id in &find_motifs_run_ids {
+            find_motif_run_ids_motif_ids.insert(*find_motifs_run_id, store.list_motifs(*find_motifs_run_id).await?);
+        }
 
         let channels = with_perf_log(
             || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
@@ -711,7 +706,7 @@ where
         .channels() as usize;
 
 
-        Self {
+        Ok(Self {
             id: SynKey::new([mono_key!("SelectMotifsStage", "stage")]),
             store: Arc::clone(store),
             ws: Arc::clone(ws),
@@ -727,7 +722,7 @@ where
             max_batch,
             clc_dist,
             find_motif_run_ids_motif_ids,
-        }
+        })
     }
 
     #[inline]
@@ -751,15 +746,13 @@ where
     #[inline]
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::load_stacked_motifs"))]
     async fn load_stacked_motifs(store:&Arc<Box<dyn Store>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_ids: &Vec<RunId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
-        let find_motifs_run_configs = find_motifs_run_ids
-            .iter()
-            .map(|find_motifs_run_id| -> Result<_, ThoError> {
-                Ok(Arc::new(FindMotifsRunConfig::from_properties_map_with_id(
-                    *find_motifs_run_id,
-                    &block_on_store_future(store.list_run_config_values(*find_motifs_run_id))?,
-                )?))
-            })
-            .collect::<Result<Vec<_>, ThoError>>()?;
+        let mut find_motifs_run_configs = Vec::with_capacity(find_motifs_run_ids.len());
+        for find_motifs_run_id in find_motifs_run_ids {
+            find_motifs_run_configs.push(Arc::new(FindMotifsRunConfig::from_properties_map_with_id(
+                *find_motifs_run_id,
+                &store.list_run_config_values(*find_motifs_run_id).await?,
+            )?));
+        }
             let find_motifs_run_configs_len = find_motifs_run_configs.len();
 
             //for each FindMotifsRunConfigs X SelectMotifsRunConfig
@@ -802,13 +795,10 @@ where
     }
 
     async fn load_resources_for_selection(&self, input: &Arc<DevicesWrap<ResourcesConfigInput<Simple>>>, mut ctx: C) -> Result<Arc<Vec<Resource>>, ThoError> {
-        with_data!(ctx, input; |_ctx, input: &ResourcesConfigInput<Simple>|{
-            Ok::<Arc<Vec<Resource>>, ThoError>(Arc::new(input
-                .resources_config()
-                .to_resources(&self.store)?
-                .into_iter()
-                .collect::<Vec<_>>()))
-        })
+        let resources_config = with_data!(ctx, input; |_ctx, input: &ResourcesConfigInput<Simple>| {
+            Ok::<Simple, ThoError>(input.resources_config().clone())
+        })?;
+        Ok(Arc::new(resources_config.to_resources(&self.store).await?.into_iter().collect::<Vec<_>>()))
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::extend_motifs_for_run_config"))]
@@ -1374,7 +1364,7 @@ where
                     for (motif_id, slices) in motif_slices {
                         debug!("SelectMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
 
-                        block_on_store_future(self.store.add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices))?
+                        self.store.add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices).await?
                     }
                 }
             }
@@ -1533,7 +1523,7 @@ pub mod tests {
             vec![find_motifs_run_id],
             1000,
             None,
-        ));
+        ).await?);
 
         let result = select_motifs_stage.run(
             Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))), CacheArea::default())), mock_run_ctx::default(1),
@@ -1611,7 +1601,7 @@ pub mod tests {
             vec![find_motifs_run_id],
             1000,
             None
-        ));
+        ).await?);
 
         let result = select_motifs_stage.run(
             Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))), CacheArea::default())), mock_run_ctx::default(0),
@@ -1695,7 +1685,7 @@ pub mod tests {
             vec![find_motifs_run_id],
             1000,
             None
-        ));
+        ).await?);
 
 
         let result = select_motifs_stage.run(
@@ -1838,7 +1828,7 @@ pub mod tests {
             vec![find_motifs_run_id],
             10000, //TODO fails with max_batch 1000
             Some(801) //TODO check if ran through OOMHandler
-        ));
+        ).await?);
 
 
         let result = select_motifs_stage.run(
@@ -2037,7 +2027,7 @@ pub mod tests {
             vec![find_motifs_run_id],
             1000,
             None,
-        ));
+        ).await?);
 
         let result:Arc<DevicesWrap<SelectMotifsSavableResult>> = select_motifs_stage
             .run(
@@ -2124,7 +2114,7 @@ pub mod tests {
             vec![find_motifs_run_id],
             1000,
             None,
-        ));
+        ).await?);
 
         let result:Arc<DevicesWrap<SelectMotifsSavableResult>> = select_motifs_stage
             .run(
@@ -2412,7 +2402,7 @@ pub mod tests {
             vec![find_motifs_run_id],
             30_000_000, //slices
             None
-        ));
+        ).await?);
 
         let ctx =  mock_run_ctx::default(1);
 
