@@ -23,6 +23,8 @@ use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, StreamExt};
@@ -32,7 +34,7 @@ use mockall::predicate::eq;
 use rand::{Rng, RngExt};
 use rand::seq::SliceRandom;
 use rusqlite::types::Value;
-use rusqlite::{Connection, Error, Transaction, params};
+use rusqlite::{Connection, Error, OpenFlags, Transaction, params};
 
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore};
 use thoosa_shared::run_configs::RunId;
@@ -436,8 +438,13 @@ impl Debug for SqlMotifTrackerStore {
 #[derive(Debug)]
 pub struct SqlStore {
     conn: Mutex<Connection>,
-    conn_2: tokio_rusqlite::Connection,
+    writer: tokio_rusqlite::Connection,
+    readers: Arc<Vec<tokio_rusqlite::Connection>>,
+    rr: AtomicUsize,
 }
+
+const SQL_STORE_READERS_CNT: usize = 4;
+static IN_MEM_DB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[async_trait]
 impl ResourceStore for SqlStore {
@@ -1704,20 +1711,21 @@ impl Store for SqlStore {
     }
 
     async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError> {
-
-        self.conn_2.call(move |conn|{
-
-            let t = conn.transaction()?;
-
-            let (channel, run_id) = Self::_motif_meta(motif_id, &t)?;
-
-            t.commit()?;
-
-            info!("get_motif_meta invoked");
-
-            Ok::<_, ThoError>((channel as usize, run_id))
-
-        }).await.map_err(|e|ThoError::new("zzz"))
+        self.reader()
+            .call(move |conn| {
+                let t = conn.transaction()?;
+                let (channel, run_id) = Self::_motif_meta(motif_id, &t)?;
+                t.commit()?;
+                info!("get_motif_meta invoked");
+                Ok::<_, ThoError>((channel as usize, run_id))
+            })
+            .await
+            .map_err(|e| match e {
+                tokio_rusqlite::Error::Error(inner) => inner,
+                tokio_rusqlite::Error::ConnectionClosed => ThoError::new("get_motif_meta: reader connection closed"),
+                tokio_rusqlite::Error::Close((_, err)) => ThoError::from(err),
+                _ => ThoError::new("get_motif_meta: unexpected tokio_rusqlite error"),
+            })
 
     }
 
@@ -2544,40 +2552,60 @@ impl Store for SqlStore {
     }
 }
 
+fn init_sqlite(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    Ok(())
+}
+
 //TODO move all prepare to init
 impl SqlStore {
+    fn reader(&self) -> &tokio_rusqlite::Connection {
+        let idx = self.rr.fetch_add(1, Ordering::Relaxed) % self.readers.len();
+        &self.readers[idx]
+    }
+
     pub async fn from_path<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
-        let conn_2 = tokio_rusqlite::Connection::open(path.as_ref()).await?;
-        conn_2
-            .call(|conn| {
-                conn.pragma_update(None, "journal_mode", "WAL")?;
-                conn.pragma_update(None, "synchronous", "NORMAL")?;
-                conn.pragma_update(None, "foreign_keys", "ON")?;
-                Ok::<(), rusqlite::Error>(())
-            })
-            .await?;
-        Self::create_tables(Connection::open(path.as_ref())?, conn_2)
+        let path_buf = path.as_ref().to_path_buf();
+        let writer = tokio_rusqlite::Connection::open(&path_buf).await?;
+        writer.call(init_sqlite).await?;
+
+        let mut readers = Vec::with_capacity(SQL_STORE_READERS_CNT.max(1));
+        for _ in 0..SQL_STORE_READERS_CNT.max(1) {
+            let reader = tokio_rusqlite::Connection::open(&path_buf).await?;
+            reader.call(init_sqlite).await?;
+            readers.push(reader);
+        }
+
+        let conn = Connection::open(path_buf)?;
+        Self::create_tables(conn, writer, readers)
     }
     // #[cfg(test)]
     pub async fn in_mem() -> Result<Box<dyn Store>, ThoError> {
-        let conn_2 = tokio_rusqlite::Connection::open_in_memory().await?;
-        conn_2
-            .call(|conn| {
-                conn.pragma_update(None, "journal_mode", "WAL")?;
-                conn.pragma_update(None, "synchronous", "NORMAL")?;
-                conn.pragma_update(None, "foreign_keys", "ON")?;
-                Ok::<(), rusqlite::Error>(())
-            })
-            .await?;
-        Self::create_tables(Connection::open_in_memory()?, conn_2)
+        let db_idx = IN_MEM_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let uri = format!("file:thoosa_store_{db_idx}?mode=memory&cache=shared");
+        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI;
+
+        let writer = tokio_rusqlite::Connection::open_with_flags(&uri, flags).await?;
+        writer.call(init_sqlite).await?;
+
+        let mut readers = Vec::with_capacity(SQL_STORE_READERS_CNT.max(1));
+        for _ in 0..SQL_STORE_READERS_CNT.max(1) {
+            let reader = tokio_rusqlite::Connection::open_with_flags(&uri, flags).await?;
+            reader.call(init_sqlite).await?;
+            readers.push(reader);
+        }
+
+        let conn = Connection::open_with_flags(&uri, flags)?;
+        Self::create_tables(conn, writer, readers)
     }
 
     //TODO rename channel_id to channel - not a pk
-    fn create_tables(mut conn: Connection, conn_2:tokio_rusqlite::Connection) -> Result<Box<dyn Store>, ThoError> {
+    fn create_tables(mut conn: Connection, writer: tokio_rusqlite::Connection, readers: Vec<tokio_rusqlite::Connection>) -> Result<Box<dyn Store>, ThoError> {
         {
-            conn.pragma_update(None, "journal_mode", "WAL")?;
-            conn.pragma_update(None, "synchronous", "NORMAL")?;
-            conn.pragma_update(None, "foreign_keys", "ON")?;
+            init_sqlite(&mut conn)?;
 
             let t = conn.transaction()?;
 
@@ -2761,10 +2789,17 @@ impl SqlStore {
             t.execute("commit", ())?;
         }
 
+        let readers = if readers.is_empty() {
+            vec![writer.clone()]
+        } else {
+            readers
+        };
+
         Ok(Box::new(Self {
-            //TODO https://sqlite.org/cgi/src/doc/begin-concurrent/doc/begin_concurrent.md + pool
             conn: Mutex::new(conn),
-            conn_2,
+            writer,
+            readers: Arc::new(readers),
+            rr: AtomicUsize::new(0),
         }))
     }
 
