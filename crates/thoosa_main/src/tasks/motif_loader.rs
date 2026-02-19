@@ -488,16 +488,21 @@ where
 
     assert!(!tensors.is_empty(), "no slice tensors loaded for motif_id={motif_id} ");
 
-    let motif = ThoTensor::new(
-        motif_id.clone(),
-        Tensor::f_cat(tensors.as_slice(), 0)?,
-    )?;
+
+    let motif = cat_slices(&motif_id, tensors)?;
 
     debug!("load_motif_slices: motif of size {:?} is built for motif_id={motif_id} descr={descr} device={:?}", motif.size(), motif.t.device());
 
     Ok((window, motif))
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_slices/cat_slices"))]
+fn cat_slices(motif_id: &DataId, tensors: Vec<Tensor>) -> Result<ThoTensor<MotifSlices, DataId>, ThoError> {
+    ThoTensor::new(
+        motif_id.clone(),
+        Tensor::f_cat(tensors.as_slice(), 0)?,
+    )
+}
 
 #[cfg(test)]
 pub mod mock_motif_loader {

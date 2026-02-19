@@ -331,6 +331,8 @@ impl AsyncStage for FindAndSelectMotifsStage {
             .enumerate()
             .map(|(grid_idx, grid_vals)| {
                 let min_loss = Arc::new(RwLock::new((f32::MAX, None::<FindAndSelectMotifsRunConfig>)));
+                let min_loss_ref = Arc::clone(&min_loss);
+
                 let const_vals = const_vals.clone();
                 let opt_params = opt_params.clone();
                 let ws = Arc::clone(&self.ws);
@@ -338,7 +340,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                 let loader = Arc::clone(&self.loader);
                 let find_resources = find_resources.clone();
                 let select_resources = select_resources.clone();
-                let min_loss_ref = Arc::clone(&min_loss);
+
                 let fixed_find_motifs_config = self.fixed_find_motifs_config.clone();
                 let max_chunk_size = self.max_chunk_size;
                 let mut find_and_select_run_find_ctx = find_and_select_run_find_ctx.branch(Some(format!("grid_idx_{grid_idx}").as_str()), false, false);
@@ -370,25 +372,16 @@ impl AsyncStage for FindAndSelectMotifsStage {
                                     find_and_select_run_find_ctx.branch(Some(format!("{grid_idx}_in_opt").as_str()), false, false)
                                 ).await
                             })
-                                .unwrap_or_else(|e| {
-                                    warn!("FindAndSelectMotifsStage::run: failed run_config={run_config:?}: {e:?}");
-                                    0usize
-                                });
+                            .unwrap_or_else(|e| {
+                                warn!("FindAndSelectMotifsStage::run: failed run_config={run_config:?}: {e:?}");
+                                0usize
+                            });
 
                             let loss = if selected_count == 0 { f32::MAX } else { 1.0 / selected_count as f32 };
                             debug!("FindAndSelectMotifsStage::run: run_config={run_config:?} selected_count={selected_count} loss={loss}");
 
-                            if loss
-                                < thoosa_shared::with_perf_log(
-                                    || min_loss_ref.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                                    "FindAndSelectMotifs/run/read_min_loss",
-                                )
-                                .0
-                            {
-                                *thoosa_shared::with_perf_log(
-                                    || min_loss_ref.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                                    "FindAndSelectMotifs/run/write_min_loss",
-                                ) = (loss, Some(run_config.clone()));
+                            if loss < thoosa_shared::with_perf_log(|| min_loss_ref.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/read_min_loss").0 {
+                                *thoosa_shared::with_perf_log(|| min_loss_ref.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/write_min_loss") = (loss, Some(run_config.clone()));
                             }
 
                             loss

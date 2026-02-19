@@ -413,7 +413,7 @@ where
 
         let run_config_stages_len = self.run_config_stages.len();
         debug!("FindMotifsStage::run: run_config_stages.len={run_config_stages_len}");
-        let failed = Arc::new(AtomicU8::new(0));
+
         //gpt Run each per-config CrossLoader; failures are logged but do not abort the stage.
         let futures = self
             .run_config_stages
@@ -425,21 +425,10 @@ where
                 let input_arc = Arc::clone(&input);
                 let cross_loader_arc = Arc::clone(&stage.cross_loader);
 
-                let failed = Arc::clone(&failed);
-                async move {
-                    match cross_loader_arc.run(input_arc, ctx_for_stage).await {
-                        Ok(v) => Ok::<_, ThoError>(Some(v)),
-                        Err(e) => {
-                            failed.fetch_add(1, Ordering::Relaxed);
-                            warn!("Find motifs failed: {e:?}");
-                            //gpt TODO!! errors are swallowed; downstream stages still run using pre-saved run ids.
-                            Ok::<_, ThoError>(None)
-                        }
-                    }
-                }
+                cross_loader_arc.run(input_arc, ctx_for_stage)
             });
 
-        let _ = collect_futures_with_progress(
+        let _/*corss loader's out is ()*/ = collect_futures_with_progress(
             futures,
             run_config_stages_len,
             FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT,
@@ -449,14 +438,12 @@ where
         .await;
 
 
-        info!("failed {} out of {}",failed.load(Ordering::Relaxed),run_config_stages_len);
-
         //gpt FindMotifsStage output is a placeholder; the real artifacts are persisted by DistsTracker side effects.
         Ok(Arc::new(DevicesWrap::wrap(FindMotifsSavableResult::new(), CacheArea::default())))
     }
 }
 
-
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="config_to_stage"))]
 pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
     C: 'static + RunCtx,

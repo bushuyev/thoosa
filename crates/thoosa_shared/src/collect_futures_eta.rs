@@ -217,7 +217,7 @@ impl CollectEtaTracker {
                     snapshot.slowest_total = invocation.total;
                 }
             }
-            info!("invocation: {invocation:?}");//TODO format
+            info!("invocation: {} elapsed from start {} total={} completed={}", invocation.descr, invocation.started_at.elapsed().as_millis(), invocation.total, invocation.completed);
         }
         snapshot
     }
