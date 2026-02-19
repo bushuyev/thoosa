@@ -40,7 +40,7 @@ use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{with_async_perf_log, collect_futures_with_progress_i, mono_key, with_perf_log, StreamBuffering, ThoError};
+use thoosa_shared::{with_async_perf_log, collect_futures_with_progress, mono_key, with_perf_log, StreamBuffering, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::comp_id::SynKey;
@@ -779,7 +779,7 @@ where
                     }
                 });
 
-            let run_configs__stacked_motifs = collect_futures_with_progress_i(
+            let run_configs__stacked_motifs = collect_futures_with_progress(
                 futures,
                 find_motifs_run_configs_len,
                 LOAD_STACKED_MOTIFS_LIMIT,
@@ -883,7 +883,7 @@ where
                 }
             });
 
-        let _ = collect_futures_with_progress_i(
+        let _ = collect_futures_with_progress(
             futures,
             run_configs__stacked_motifs_len,
             crate::buffer_limits::SELECT_MOTIFS_STAGE_FIND_MOTIFS_BUFFER_UNORDERED_LIMIT,
@@ -951,7 +951,7 @@ where
                 }
             });
 
-        let motif_stats = collect_futures_with_progress_i(
+        let motif_stats = collect_futures_with_progress(
             futures,
             motif_ids_len,
             crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN,
@@ -1201,7 +1201,7 @@ where
                     }
                 });
 
-            collect_futures_with_progress_i(
+            collect_futures_with_progress(
                 futures,
                 channel_masks_dists_ids_len,
                 crate::buffer_limits::SELECT_MOTIFS_STAGE_FIND_MOTIFS_BUFFER_UNORDERED_LIMIT,

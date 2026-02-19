@@ -114,7 +114,7 @@ impl GlobalCtx {
 
         assert!(
             with_async_perf_log(
-                async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.write()).await.expect("GlobalCtx::remove_cache: timed out waiting for caches write lock"),
+                async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.write()).await.expect(&format!("GlobalCtx::remove_cache, key={key}: timed out waiting for caches write lock")),
                 "GlobalCtx/remove_cache/write_caches",
             )
             .await

@@ -57,7 +57,7 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Adjustable, Data, DataId, SimpleId, WithId};
-use thoosa_shared::{collect_futures_with_progress_i, mono_key, parse_resources, simple_id, CopyToDevice, RangeOrValue, StreamBuffering};
+use thoosa_shared::{collect_futures_with_progress, mono_key, parse_resources, simple_id, CopyToDevice, RangeOrValue, StreamBuffering};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
@@ -986,7 +986,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 eps: RangeOrValue::Value(1e-8),
             }),
         },
-        threshold: RangeOrValue::Value(0.9),
+        threshold: RangeOrValue::Value(0.8),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
     let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(10, 3));
@@ -1448,7 +1448,7 @@ pub async fn run_plot_motif_slices(
                     }
                 });
 
-            let _ = collect_futures_with_progress_i(
+            let _ = collect_futures_with_progress(
                 futures,
                 motifs_len,
                 crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
@@ -1506,7 +1506,7 @@ pub async fn run_plot_motif_slices(
                     }
                 });
 
-            let _ = collect_futures_with_progress_i(
+            let _ = collect_futures_with_progress(
                 futures,
                 motifs_len,
                 crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,

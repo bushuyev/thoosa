@@ -253,7 +253,7 @@ where
     f().await
 }
 
-pub async fn collect_futures_with_progress_i<T, F>(
+pub async fn collect_futures_with_progress<T, F>(
     futures: impl Iterator<Item=F>,
     len:usize,
     buffer_limit: usize,
