@@ -34,7 +34,7 @@ use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, self
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::{collect_futures_with_progress_i, mono_key, shuffle_and_chunk_with_rng, CopyToDevice, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::copy_mode::CpuOnly;
@@ -460,7 +460,7 @@ where
 
             });
 
-            let results = collect_futures_with_progress_i(
+            let results = collect_futures_with_progress(
                 futures,
                 labels_tain_and_valid_sets_len,
                 crate::buffer_limits::TRAIN_LABEL_NETS_RUN_BUFFER_UNORDERED_LIMIT,
@@ -718,18 +718,17 @@ where
                                 (ctx_for_build_fn.branch(Some("x_1_batch_loader"), false, false), ctx_for_build_fn.branch(Some("x_0_batch_loader"), false, false))
                             };
                             async move {
-                                let result = (async {
+                                (async {
                                     try_join!(
                                         Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_1[index].clone(), CacheArea::default())), ctx_x1),
                                         Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_0[index].clone(), CacheArea::default())), ctx_x0)
                                     )
                                 })
-                                .await;
-                                Ok::<_, ThoError>(result)
+                                .await
                             }
                         });
 
-                    let (x_1_wrapped, x_0_wrapped) = collect_futures_with_progress_i(
+                    let (x_1_wrapped, x_0_wrapped) = collect_futures_with_progress(
                         futures,
                         batch_len,
                         crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
@@ -738,7 +737,7 @@ where
                     )
                     .await
                     .into_iter()
-                    .collect::<Result<Vec<_>, ThoError>>()?
+                    .collect::<Vec<_>>()
                     .into_iter()
                     .fold((vec![], vec![]), |mut a, v| {
                         a.0.push(v.0); //1

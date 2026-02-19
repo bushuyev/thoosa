@@ -38,7 +38,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::{collect_futures_with_progress_i, mono_key, CopyToDevice, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, Data, DataId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
@@ -283,7 +283,7 @@ where
         debug!("TrainMotifNets::run: futures.len={}", futures.len());
 
 
-        let results = collect_futures_with_progress_i(
+        let results = collect_futures_with_progress(
             futures,
             motifs_rates_selected_motifs_run_ids_len,
             crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT,

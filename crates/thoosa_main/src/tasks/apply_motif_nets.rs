@@ -35,7 +35,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{collect_futures_with_progress_i, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_store::Store;
@@ -118,7 +118,7 @@ where
                 }
             });
 
-        let loaded_motif_nets = collect_futures_with_progress_i(
+        let loaded_motif_nets = collect_futures_with_progress(
             futures,
             selected_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT,
@@ -227,35 +227,35 @@ where
                 async move {
                     let map = HashMap::new();
 
-                     let r= OOMHandler::new(
-                         vec![
-                             Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
-                             Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                             Adjusters::Input(Box::new(SplitsAdjuster::<ChannelsData2Selector, MonoMetrics<1,2>>::new_with_overlap(
-                                 [-1, min_split_len].into(),
-                                 [-1, overlap_len].into()
-                             ))),
-                         ], None)
-                     .run(
-                         &apply_motif_net,
-                         Arc::clone(&apply_motif_net_input),
-                         apply_motif_net_ctx,
-                         Contexts::new(
-                             SplitsAdjusterContextImpl::new(input._size(), SingleDimTensorOutputBuilder::new(out_id.clone(), 0, &[slices+1/*TODO +1 for padded slice, ApplyMotifNet::run   */,1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
-                             NoopRunnableContext {},
-                             PermitsAndDumpToCpuAdjustableContex::new(
-                                 PermitsAdjustContextImpl::new(),
-                                 DumpToCpuContextImpl::new(&map),
-                             ),
-                         ),
-                     ).await;
+                    let r = OOMHandler::new(
+                        vec![
+                            Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
+                            Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                            Adjusters::Input(Box::new(SplitsAdjuster::<ChannelsData2Selector, MonoMetrics<1, 2>>::new_with_overlap(
+                                [-1, min_split_len].into(),
+                                [-1, overlap_len].into()
+                            ))),
+                        ], None)
+                        .run(
+                            &apply_motif_net,
+                            Arc::clone(&apply_motif_net_input),
+                            apply_motif_net_ctx,
+                            Contexts::new(
+                                SplitsAdjusterContextImpl::new(input._size(), SingleDimTensorOutputBuilder::new(out_id.clone(), 0, &[slices + 1/*TODO +1 for padded slice, ApplyMotifNet::run   */, 1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
+                                NoopRunnableContext {},
+                                PermitsAndDumpToCpuAdjustableContex::new(
+                                    PermitsAdjustContextImpl::new(),
+                                    DumpToCpuContextImpl::new(&map),
+                                ),
+                            ),
+                        ).await;
                     debug!("ApplyMotifNets::run: r={r:?}");
-                    Ok::<_, ThoError>(r)
-                     }
+                    r
+                }
 
             });
 
-        let matches = collect_futures_with_progress_i(
+        let matches = collect_futures_with_progress(
             futures,
             apply_motif_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_RUN_BUFFERED_LIMIT,
@@ -264,7 +264,7 @@ where
         )
         .await
         .into_iter()
-        .collect::<Result<Vec<_>, ThoError>>()?;
+        .collect::<Vec<_>>();
 
         debug!("ApplyMotifNets::run: matches={matches:?}");
 

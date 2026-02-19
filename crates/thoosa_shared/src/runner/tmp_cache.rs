@@ -29,7 +29,7 @@ pub struct TmpCached<D: Data + CopyToDevice + WithId + Output + Debug + Send + S
 where
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
-    name: &'static str,
+    pub name: &'static str,
     cache_area:u64,
     map: Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>
 
@@ -64,8 +64,6 @@ where
                     error!("can't take {key:?} from cache: count={count}");
                 }
                 Some(val) => {
-                    //TODO check: load_from_any_device_ is called from take_data so load_from_any_device should not be needed here
-                    // val.load_from_any_device(device).await?;
 
                     res.push(
                         val.take_data(device).await.expect(&format!("can't take from cache for {key:?}"))
@@ -75,30 +73,6 @@ where
         }
 
         Ok(res)
-    }
-    pub fn clone_to_arcs_vec(&self) -> Vec<Arc<DevicesWrap<D>>> {
-        self
-            .map
-            .iter()
-            .map(|entry| Arc::clone(entry.value()))
-            .collect()
-    }
-
-    pub async fn for_each<F, R, FR>(self, mut f: F) -> Result<Vec<R>, ThoError>
-    where
-        F: FnMut(<D as WithId>::ID, Arc<DevicesWrap<D>>) -> FR,
-        FR: Future<Output = Result<R, ThoError>> + Send + 'static,
-    {
-        let items: Vec<_> = self
-            .map
-            .iter()
-            .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
-            .collect();
-
-        stream::iter(items.into_iter().map(|(key, value)| f(key, value)))
-            .buffer_unordered(10)
-            .try_collect::<Vec<R>>()
-            .await
     }
 
 
@@ -182,14 +156,14 @@ where
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
     fn drop(&mut self) {
-        tokio::task::block_in_place(move || {
-            Handle::current().block_on(async move {
-                #[cfg(any(test, feature = "mock_global_ctx"))]
-                let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-
-                GlobalCtx::global().remove_cache(self.name).await
-            });
-        });
+        // tokio::task::block_in_place(move || {
+        //     Handle::current().block_on(async move {
+        //         #[cfg(any(test, feature = "mock_global_ctx"))]
+        //         let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        //
+        //         GlobalCtx::global().remove_cache(self.name).await
+        //     });
+        // });
 
     }
 }
