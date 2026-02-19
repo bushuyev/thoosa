@@ -184,6 +184,7 @@ where
                 ctx.branch(Some("random_stats_random_motif"), false, false),
             )
             .await?;
+
         let motifs = with_data!(
             ctx.branch(Some("random_stats_random_motif_with_data"), false, false),
             random_motif;

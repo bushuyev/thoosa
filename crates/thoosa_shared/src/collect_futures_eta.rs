@@ -336,7 +336,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
-    fn snapshot_waits_for_warmup_before_estimating() {
+    fn test_snapshot_waits_for_warmup_before_estimating() {
         let tracker = CollectEtaTracker::new();
         let id = tracker.register("warmup", 6, 3);
         let now = Instant::now();
@@ -357,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_uses_max_eta_across_collectors() {
+    fn test_snapshot_uses_max_eta_across_collectors() {
         let tracker = CollectEtaTracker::new();
         let now = Instant::now();
         let fast = tracker.register("fast", 5, 2);
@@ -376,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn maybe_log_respects_interval_and_force() {
+    fn test_maybe_log_respects_interval_and_force() {
         let tracker = CollectEtaTracker::new();
         let now = Instant::now();
         let _ = tracker.register("gated", 2, 1);
@@ -388,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_estimates_from_completion_rate_without_zero_ms() {
+    fn test_snapshot_estimates_from_completion_rate_without_zero_ms() {
         let tracker = CollectEtaTracker::new();
         let id = tracker.register("parallelish", 20, 5);
         let now = Instant::now();
@@ -406,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_uses_historical_interval_for_collectors_without_completions() {
+    fn test_snapshot_uses_historical_interval_for_collectors_without_completions() {
         let tracker = CollectEtaTracker::new();
         let now = Instant::now();
 

@@ -21,7 +21,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::{collect_futures_with_progress_i, mono_key, sample_n_owned, CopyToDevice, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, sample_n_owned, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, WithId};
 use thoosa_store::Store;
@@ -240,7 +240,7 @@ where
                 }
             });
 
-        let loaded_motifs = collect_futures_with_progress_i(
+        let loaded_motifs = collect_futures_with_progress(
             futures,
             motif_ids_len,
             STACKED_MOTIFS_LOADER_RUN,

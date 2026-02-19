@@ -36,7 +36,7 @@ use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{collect_futures_with_progress_i, mono_key, shuffle_and_chunk_with_rng, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, StreamBuffering, ThoError};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
@@ -326,16 +326,15 @@ where
                             };
 
                             async move {
-                                let result = (async {
+                                (async {
                                     let out = Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(resource, CacheArea::default())), ctx_for_loader).await?;
                                     Ok::<_, ThoError>((out, labels))
                                 })
-                                .await;
-                                Ok::<_, ThoError>(result)
+                                .await
                             }
                         });
 
-                    let (outputs, labels) = collect_futures_with_progress_i(
+                    let (outputs, labels) = collect_futures_with_progress(
                         futures,
                         batch_len,
                         crate::buffer_limits::LOGITS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
@@ -344,7 +343,7 @@ where
                     )
                     .await
                     .into_iter()
-                    .collect::<Result<Vec<_>, ThoError>>()?
+                    .collect::<Vec<_>>()
                     .into_iter()
                     .fold((vec![], vec![]), |mut a, v| {
                         a.0.push(v.0);

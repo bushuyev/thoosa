@@ -464,10 +464,9 @@ where
                                 error!("Can't load for resource_id={resource_id} resource_id={resource_id}  for motif_id={motif_id} e={e:?}");
                                 break
                             }
-                    }
+                        }
                 };
             }
-
         } else {
             warn!("Empty selector for resource_id={resource_id}  got empty motif for motif_id={motif_id}  in {descr}");
         }
@@ -475,12 +474,15 @@ where
 
     debug!("load_motif_slices: motif_id={motif_id} taking tmp_cache");
 
+    let cache_name = tmp_cache.name;
     let tensors: Vec<Tensor> = tmp_cache
         .take_all(device_idx)
         .await?
         .into_iter()
         .map(|tt| tt.t())
         .collect();
+
+    GlobalCtx::global().remove_cache(cache_name).await;//TODO add oneshot when cache is registered in GlobCtx and send when dropped?
 
     debug!("load_motif_slices: loaded {} tensors for motif_id={motif_id} descr={descr}", tensors.len());
 

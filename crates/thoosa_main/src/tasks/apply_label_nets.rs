@@ -19,7 +19,7 @@ use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{collect_futures_with_progress_i, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
@@ -220,7 +220,7 @@ where
                 }
             });
 
-        let label_outputs = collect_futures_with_progress_i(
+        let label_outputs = collect_futures_with_progress(
             futures,
             label_nets_len,
             crate::buffer_limits::APPLY_LABEL_NETS_RUN_BUFFERED_LIMIT,
