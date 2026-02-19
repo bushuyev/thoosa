@@ -11,7 +11,7 @@ use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
 use futures_util::{StreamExt, TryStreamExt};
-use log::{debug, info};
+use log::{debug, info, warn};
 use parking_lot::RwLock;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -169,7 +169,7 @@ where
     find_motifs_run_config_id: RunId,
     loader: Arc<L>,
     store: Arc<Box<dyn Store>>,
-    batch_clc: Arc<CLC>,
+    cross_unfold_clc: Arc<CLC>,
     receiver_factory: Box<dyn Fn(&[Arc<Resource>]) -> Arc<RSV> + Send + Sync>,
     chunk_size: usize,
     on_batch_done: Box<dyn Fn(R) -> BoxFuture<'static, R> + Sync + Send>,
@@ -203,10 +203,10 @@ where
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
 {
     pub fn new<ReceiverFactory, OnAllDone, OnBatchDone>(
-        find_motifs_run_config_id: RunId,//fod logging
+        find_motifs_run_config_id: RunId, //fod logging
         loader: Arc<L>,
         store: &Arc<Box<dyn Store>>,
-        batch_clc: Arc<CLC>,
+        cross_unfold_clc: Arc<CLC>,
         receiver_factory: ReceiverFactory,
         chunk_size: usize,
         on_batch_done:OnBatchDone,
@@ -223,7 +223,7 @@ where
             find_motifs_run_config_id,
             loader,
             store: Arc::clone(store),
-            batch_clc,
+            cross_unfold_clc,
             receiver_factory: Box::new(receiver_factory),
             chunk_size,
             on_batch_done: Box::new(on_batch_done),
@@ -382,7 +382,7 @@ where
 
                 debug!("CrossLoader::run: t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}");
                 let batches_concated = [t_0_batch.clone(), t_1_batch.clone()].concat();
-                let batch_clc = Arc::clone(&self.batch_clc);
+                let cross_unfold_clc = Arc::clone(&self.cross_unfold_clc);
 
 
                 let t_0_batch_resources_cloned = t_0_batch_resources.clone();
@@ -406,7 +406,7 @@ where
                     CacheArea::default()
                 );
                 let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-                let mut cross_clc_output = OOMHandler::new(
+                match OOMHandler::new(
                     vec![
                         Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                             MAX_PERMITS,
@@ -419,7 +419,7 @@ where
                     None,
                 )
                     .run(
-                        &batch_clc,
+                        &cross_unfold_clc,
                         Arc::new(input),
                         ctx.branch("batch_clc_ctx".into(), false, false),
                         Contexts::new(
@@ -431,14 +431,19 @@ where
                             ),
                         ),
                     )
-                    .await?;
+                    .await {
+                    Ok( mut cross_clc_output  ) => {
+                        let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await;
 
-                let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await;
+                        let receiver_arc = Arc::clone(&receiver);
 
-                let receiver_arc = Arc::clone(&receiver);
+                        receiver_arc.consume(cross_clc_output, ctx.branch(Some("cross_loader_receiver"), false, false)).await?;
 
-                receiver_arc.consume(cross_clc_output, ctx.branch(Some("cross_loader_receiver"), false, false)).await?;
-
+                    }
+                    Err(e) => {
+                        warn!("CrossLoader::run: got error {e:?}");
+                    }
+                };
 
                 t_1_batch = vec![];
                 t_1_batch_resources = vec![];
