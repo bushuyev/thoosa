@@ -277,8 +277,7 @@ where
             .map(|fut| async move {
                 tokio::time::timeout(FUTURES_TIMEOUT, fut).await?
             })
-                .buffer_unordered(buffer_limit);
-                // .filter_map(|r| async move { r.ok() }.boxed());
+            .buffer_unordered(buffer_limit);
 
             collect_stream_with_progress(
                 &mut stream,

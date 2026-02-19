@@ -2,6 +2,7 @@ use std::cmp::min;
 use std::ops::Range;
 use log::{debug, trace};
 use tch::{IndexOp, Tensor};
+use tch::kind::FLOAT_CPU;
 use thoosa_common::dims::{AnyMetrics, Batch, Dims};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{Adjustable, DataId, Select};
@@ -26,6 +27,7 @@ pub struct ChannelsDataVec {
 impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey> {
     type Output = ThoTensor<ChannelsData2, SynKey>;
 
+    //TODO switch to index_select if lots of ranges
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey>::subview"))]
     fn subview(&self, selector: ChannelsDataVec) -> Result<Self::Output, ThoError> {
         let ChannelsDataVec { ranges } = selector;
@@ -34,22 +36,19 @@ impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey> {
             .try_into()
             .expect("ChannelsData2::select unable to convert size");
 
-
-
         let mut subs = Vec::with_capacity(ranges.len());
         for range in &ranges {
             subs.push(ChannelsData2::sub_single(self, range, &size));
         }
 
-        //TODO the size then should be checked to decide if tensor is valid. Should be a better solution
         let stacked = if subs.is_empty() {
+            //TODO the size then should be checked to decide if tensor is valid. Should be a better solution
             Tensor::empty(&[0], (self.t_ref().kind(), self.t_ref().device()))
         } else {
             Tensor::f_vstack(subs.as_slice())?
         };
 
-        let ranges_key = SynKey::new([mono_key!(format!("{ranges:?}"), "ranges")]);
-        let sub = ThoTensor::new(self.id() + &ranges_key, stacked)?;
+        let sub = ThoTensor::new(self.id() + &mono_key!(0, format!("{ranges:?}")), stacked)?;
 
         trace!("ChannelsData2::select: Vec sub.t=\n{}", sub.t_ref());
 

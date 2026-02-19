@@ -53,6 +53,7 @@ where
         self.map.get(id).map(|reff| Arc::clone(reff.value()))
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all"))]
     pub async fn take_all(mut self, device:usize) -> Result<Vec<D>, ThoError> {
         let mut res = vec![];
         for (key, val) in mem::take(&mut self.map).into_iter() {

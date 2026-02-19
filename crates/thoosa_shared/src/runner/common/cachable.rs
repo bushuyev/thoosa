@@ -518,7 +518,7 @@ where
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t: O = src.subview(selector.clone())?;
 
-                debug!("DataCacheWrapper::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
+                debug!("CpuOrGpu::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
 
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
@@ -529,6 +529,7 @@ where
         Err(Cause::NotFound.into())
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CpuOrGpu::with_selected_data"))]
     async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>) -> Result<R, ThoError>
     where
         O: Select<S>,
