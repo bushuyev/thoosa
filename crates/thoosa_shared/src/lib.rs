@@ -1426,6 +1426,16 @@ pub fn avg_hist(values: &[f64], n_bins: usize) -> Vec<(f64, u32)> {
         .collect()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct F64BitsKey(u64);
+
+impl From<f64> for F64BitsKey {
+    #[inline]
+    fn from(x: f64) -> Self {
+        Self(x.to_bits())
+    }
+}
+
 #[cfg(test)]
 mod shared_tests {
     #![allow(unused_imports, redundant_semicolons, dead_code)]

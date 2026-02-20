@@ -1,16 +1,17 @@
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 use cached_derive::Cached;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use parking_lot::RwLock;
 use rand::prelude::StdRng;
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::Rng;
 use rand::rngs::ThreadRng;
 use tch::Tensor;
-use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, StatsKey, StatsKeys};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
@@ -87,7 +88,7 @@ where
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     clc_stats: Arc<SlicesStats<C>>,
-    random_motifs: RwLock<HashMap<RunId, Arc<RandomMotif<L, C>>>>,
+    random_motif: Arc<RandomMotif<L, C>>,
     pd: PhantomData<C>,
 }
 
@@ -97,40 +98,24 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
-        
+
+        let random_motif = Arc::new(RandomMotif::new(
+            Arc::clone(&store),
+            Arc::clone(&loader),
+            Arc::clone(&ws),
+        ));
+
+
         Self {
             store,
             loader,
             ws: Arc::clone(ws),
             clc_stats: Arc::new(SlicesStats::<C>::new()),
-            random_motifs: RwLock::new(HashMap::new()),
+            random_motif,
             pd: PhantomData,
         }
     }
 
-    fn random_motif_stage(&self, find_motifs_run_id: RunId) -> Arc<RandomMotif<L, C>> {
-        if let Some(stage) = thoosa_shared::with_perf_log(
-            || self.random_motifs.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "RandomStats/random_motif_stage/read_cache",
-        )
-        .get(&find_motifs_run_id)
-        {
-            return Arc::clone(stage);
-        }
-
-        let mut random_motifs = thoosa_shared::with_perf_log(
-            || self.random_motifs.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "RandomStats/random_motif_stage/write_cache",
-        );
-        Arc::clone(random_motifs.entry(find_motifs_run_id).or_insert_with(|| {
-            Arc::new(RandomMotif::new(
-                Arc::clone(&self.store),
-                Arc::clone(&self.loader),
-                Arc::clone(&self.ws),
-                find_motifs_run_id,
-            ))
-        }))
-    }
 }
 
 impl<L, C> Stage for RandomStats<L, C>
@@ -177,10 +162,9 @@ where
         let motif_width = find_motifs_run_config.window;
         assert_ne!(motif_width, 0, "RandomStats: motif_width must be > 0");
 
-        let random_motif = self
-            .random_motif_stage(find_motifs_run_id)
+        let random_motif = Arc::clone(&self.random_motif)
             .run_cached(
-                Arc::new(DevicesWrap::wrap(RandomMotifInput::new(max_slices, motif_width), cache_area.into())),
+                Arc::new(DevicesWrap::wrap(RandomMotifInput::new(find_motifs_run_id, max_slices, find_motifs_run_config.to_stats_keys()), cache_area.into())),
                 ctx.branch(Some("random_stats_random_motif"), false, false),
             )
             .await?;
@@ -396,7 +380,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
         let input = Arc::new(DevicesWrap::wrap(RandomStatsInput::new(4, run_id, Metrics::EucDist, Aggr::Mean(1.0)), CacheArea::default()));
 
-        let output = stage
+        let output = Arc::clone(&stage)
             .run(
                 input,
                 thoosa_shared::with_perf_log(
