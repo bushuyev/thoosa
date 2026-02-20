@@ -88,3 +88,12 @@ distance::clc_dist_d2_and_mask                                        |      1 5
 load_motif_slices                                                     |        142 834 |        56 613 460 |       3 600 |        39 |
 random_non_overlapping_slices                                         |          6 247 |             6 248 |         180 |        34 |
 
+
+
+(gdb) bt
+#0  0x000057c7115ac89f in <dashmap::iter::Iter<K,V,S,M> as core::iter::traits::iterator::Iterator>::next ()
+Backtrace stopped: Cannot access memory at address 0x7ffc165e4338
+
+
+* 1    LWP 1830778       0x000057c7115ac89f in <dashmap::iter::Iter<K,V,S,M> as core::iter::traits::iterator::Iterator>::next ()
+  2    LWP 1831073       0x000057c711cb510b in <tracing_subscriber::registry::sharded::CloseGuard as core::ops::drop::Drop>::drop ()
