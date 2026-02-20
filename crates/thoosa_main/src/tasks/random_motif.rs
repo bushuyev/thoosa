@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cached_derive::Cached;
 use parking_lot::RwLock;
-use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, StatsKey, StatsKeys};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -29,20 +29,17 @@ use crate::tasks::random_slices_stats::{random_non_overlapping_slices, RANDOM_ST
 
 #[derive(Debug, Clone, DummyData)]
 pub struct RandomMotifInput {
-    id: SynKey,
+    find_motifs_run_id: RunId,
+    id: StatsKeys,
     max_slices: u32,
-    motif_width: u32,
 }
 
 impl RandomMotifInput {
-    pub fn new(max_slices: u32, motif_width: u32) -> Self {
+    pub fn new(find_motifs_run_id: RunId, max_slices: u32, key: StatsKeys) -> Self {
         Self {
-            id: SynKey::new([
-                mono_key!(max_slices, format!("max_slices={max_slices}")),
-                mono_key!(motif_width, format!("motif_width={motif_width}")),
-            ]),
+            id: key,
             max_slices,
-            motif_width,
+            find_motifs_run_id
         }
     }
 
@@ -50,15 +47,12 @@ impl RandomMotifInput {
         self.max_slices
     }
 
-    pub fn motif_width(&self) -> u32 {
-        self.motif_width
-    }
 }
 
 impl Input for RandomMotifInput {}
 
 impl WithId for RandomMotifInput {
-    type ID = SynKey;
+    type ID = StatsKeys;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -67,12 +61,12 @@ impl WithId for RandomMotifInput {
 
 #[derive(Debug)]
 pub struct RandomMotifOutput {
-    id: SynKey,
+    id: StatsKeys,
     motifs: Vec<ThoTensor<MotifSlices, DataId>>,
 }
 
 impl RandomMotifOutput {
-    pub fn new(id: SynKey, motifs: Vec<ThoTensor<MotifSlices, DataId>>) -> Self {
+    pub fn new(id: StatsKeys, motifs: Vec<ThoTensor<MotifSlices, DataId>>) -> Self {
         Self { id, motifs }
     }
 
@@ -95,7 +89,7 @@ impl Data for RandomMotifOutput {
 }
 
 impl WithId for RandomMotifOutput {
-    type ID = SynKey;
+    type ID = StatsKeys;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -125,7 +119,7 @@ where
     store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    find_motifs_run_id: RunId,
+
     pd: PhantomData<C>,
 }
 
@@ -134,16 +128,14 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_id: RunId) -> Self {
+    pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: Arc<RwLock<Box<dyn Workspace>>>) -> Self {
         Self {
             id: SynKey::new([
-                mono_key!("RandomMotif", "stage"),
-                mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
+                mono_key!(0, "RandomMotif"),//TODO stage Id
             ]),
             store,
             loader,
             ws,
-            find_motifs_run_id,
             pd: PhantomData,
         }
     }
@@ -155,7 +147,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        &self.id + input_id
+        input_id.clone()
     }
 }
 
@@ -180,24 +172,22 @@ where
         for<'a> Self::In<'a>: Send + Sync,
     {
         let cache_area = ctx.cache_area();
-        let (max_slices, motif_width) = with_data!(
+        let (max_slices, find_motifs_run_id) = with_data!(
             ctx.branch(Some("random_motif_input"), false, false),
             input;
             |_ctx, input: &RandomMotifInput| {
-                Ok::<_, ThoError>((input.max_slices(), input.motif_width()))
+                Ok::<_, ThoError>((input.max_slices(), input.find_motifs_run_id))
             }
         )?;
 
         if max_slices < 2 {
             return Err(ThoError::new(format!("RandomMotif: max_slices must be >= 2, got {max_slices}")));
         }
-        if motif_width == 0 {
-            return Err(ThoError::new("RandomMotif: motif_width must be > 0"));
-        }
+
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-            self.find_motifs_run_id,
-            &self.store.list_run_config_values(self.find_motifs_run_id).await?,
+            find_motifs_run_id,
+            &self.store.list_run_config_values(find_motifs_run_id).await?,
         )?;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
 
@@ -205,7 +195,7 @@ where
             .store
             .list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices * 100/*TODO this is to compensate for filter, add proper coefficient */)
             .await?;
-        let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, motif_width, input_len_adjuster)?;
+        let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, find_motifs_run_config.window, input_len_adjuster)?;
 
         let channels = thoosa_shared::with_perf_log(
             || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
@@ -218,7 +208,7 @@ where
         for channel in 0..channels {
             let (_window, motif) = load_motif_slices(
                 DataId(0),
-                self.find_motifs_run_id,
+                find_motifs_run_id,
                 channel as i64,
                 resources_map.clone(),
                 slices.clone(),
@@ -238,6 +228,6 @@ where
             motifs.push(motif);
         }
 
-        Ok(Arc::new(DevicesWrap::wrap(RandomMotifOutput::new(self.out_id(input.id()), motifs), cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(RandomMotifOutput::new(find_motifs_run_config.to_stats_keys(), motifs), cache_area.into())))
     }
 }

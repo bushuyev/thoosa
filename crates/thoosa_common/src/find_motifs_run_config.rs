@@ -1,14 +1,18 @@
 #![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
 
+use std::any::Any;
 use crate::transforms::filters::*;
 use log::debug;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
+use thoosa_shared::F64BitsKey;
 use thoosa_shared::run_configs::{RunConfig, RunId};
+use thoosa_shared::traits::{CachableIdTr, Named};
 use thoosa_shared::val::Val;
 
 //TODO move to find, + nets move out of common
@@ -39,6 +43,57 @@ pub struct FindMotifsRunConfig {
     pub max_slices: Option<MaxSlices>
 }
 
+//keys which affect motif statistics - avg distance etc - used to cache random motifs
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+pub struct StatsKeys {
+    keys:Vec<StatsKey>
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+pub enum StatsKey {
+    Window(u32),
+    NotchBandFilterKey{low_hz:F64BitsKey, high_hz:F64BitsKey},
+    BandPassFilter{
+        low_hz: F64BitsKey,
+
+
+        band_hz: F64BitsKey,
+
+        kernel_size: i64,
+    }
+}
+
+impl Named for StatsKeys {
+
+}
+
+impl From<&NotchBandFilterParams> for StatsKey {
+    fn from(value: &NotchBandFilterParams) -> Self {
+        StatsKey::NotchBandFilterKey {
+            low_hz: value.low_hz.into(), high_hz: value.high_hz.into()
+        }
+    }
+}
+
+impl From<&BandPassFilterParams> for StatsKey {
+    fn from(value: &BandPassFilterParams) -> Self {
+        StatsKey::BandPassFilter {
+            low_hz: value.low_hz.into(),
+            band_hz: value.band_hz.into(),
+            kernel_size: value.kernel_size,
+        }
+    }
+}
+
+impl From<&InputFilter> for StatsKey {
+    fn from(value: &InputFilter) -> Self {
+        match value {
+            v =>  v.into(),
+        }
+    }
+}
+
+
 impl FindMotifsRunConfig {
 
     pub fn from_properties_map_with_id(
@@ -54,6 +109,19 @@ impl FindMotifsRunConfig {
         Ok(find_motifs_run_config)
     }
 
+    pub fn to_stats_keys(&self) -> StatsKeys {
+
+        StatsKeys {
+            keys: std::iter::once(StatsKey::Window(self.window)).chain(
+                self.freq_filter
+                    .as_ref()
+                    .into_iter()
+                    .flatten()
+                    .map(Into::into),
+
+            ).collect(),
+        }
+    }
 }
 
 impl FindMotifsRunConfig {
