@@ -23,7 +23,7 @@ use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Named, Select, WithId};
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{mono_key, ThoError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
 use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
@@ -181,8 +181,11 @@ where
                     if ids.is_empty() {
                         Ok(None) //no motifs in channel c
                     } else {
-                        let mask = fold_mask(mask.i((c as i64, .., ..)), ids, 0);
-                        let dists = dists.as_ref().map(|d| fold_dists(d.i((c as i64, .., ..)), ids, 0));
+                        let mask = fold_mask(mask.i((c as i64, .., ..)), ids, 0)?;
+                        let dists = match dists.as_ref() {
+                            Some(d) => Some(fold_dists(d.i((c as i64, .., ..)), ids, 0)?),
+                            None => None,
+                        };
                         let mask_type = if mask.device().eq(&Cpu) {
                             DistsMaskType::AsIs
                         } else {
@@ -195,7 +198,7 @@ where
                         };
                         Ok(Some((
                             //unsqueeze is to put back dimension for channel removed before folding
-                            DistsMask::new(mask.unsqueeze(0), dists.map(|t|t.unsqueeze(0)), mask_type, stream)?,
+                            DistsMask::new(mask.f_unsqueeze(0)?, dists.map(|t| t.f_unsqueeze(0)).transpose()?, mask_type, stream)?,
                             ids.iter()
                                 .fold((vec![], HashSet::new()), |mut acc, d| {
                                     if !acc.1.contains(d) {
@@ -211,14 +214,16 @@ where
                 .collect::<Result<Vec<_>, ThoError>>()?
         };
 
+        let select_motifs_run_config_id = input
+            .stacked_motifs_output
+            .motifs
+            .extra()
+            .1
+            .id
+            .ok_or_else(|| ThoError::new("no select_motifs_run_config_id"))?;
+
         Ok(ClcResourcesMotifsDistOutput::new(
-            input
-                .stacked_motifs_output
-                .motifs
-                .extra()
-                .1
-                .id
-                .expect("no select_motifs_run_config_id"),
+            select_motifs_run_config_id,
             channel_masks_dists_ids,
             resources_iter,
         ))
@@ -469,34 +474,23 @@ impl ClcResourcesMotifsDistOutput {
         }
     }
 
-    pub async fn to_cpu(self) -> ClcResourcesMotifsDistOutput {
-        let channel_masks_dists_ids_len = self.channel_masks_dists_ids.len();
-        let futures = self
-            .channel_masks_dists_ids
-            .into_iter()
-            .map(|op| async move {
-                let result = match op {
-                    None => None,
-                    Some((dists_mask, data_ids)) => {
-                        Some((dists_mask.to_cpu().await.unwrap(), data_ids))//TODO unwrap
-                    }
-                };
-                Ok::<_, ThoError>(result)
-            });
+    pub async fn to_cpu(self) -> Result<ClcResourcesMotifsDistOutput, ThoError> {
+        let channel_masks_dists_ids = futures::future::try_join_all(
+            self.channel_masks_dists_ids.into_iter().map(|op| async move {
+                match op {
+                    None => Ok::<_, ThoError>(None),
+                    Some((dists_mask, data_ids)) => Ok(Some((dists_mask.to_cpu().await?, data_ids))),
+                }
+            }),
+        )
+        .await?;
 
-        ClcResourcesMotifsDistOutput {
+        Ok(ClcResourcesMotifsDistOutput {
             id: self.id,
             find_motifs_run_id: self.find_motifs_run_id,
-            channel_masks_dists_ids: collect_futures_with_progress(
-                futures,
-                channel_masks_dists_ids_len,
-                crate::buffer_limits::CLC_RESOURCES_MOTIFS_DIST_OUTPUT_TO_CPU_BUFFERED_LIMIT,
-                StreamBuffering::Ordered,
-                "ClcResourcesMotifsDistOutput::to_cpu",
-            )
-            .await,
+            channel_masks_dists_ids,
             resources_iter: self.resources_iter,
-        }
+        })
     }
 }
 
@@ -524,7 +518,7 @@ impl WithId for ClcResourcesMotifsDistOutput {
 impl Output for ClcResourcesMotifsDistOutput {}
 
 ///returns true if any motif slices x resource slice contains true (close enough)
-pub fn fold_mask<I>(mask: Tensor, ids: &Vec<I>, dim: usize) -> Tensor
+pub fn fold_mask<I>(mask: Tensor, ids: &Vec<I>, dim: usize) -> Result<Tensor, ThoError>
 where
     I: PartialEq + Debug,
 {
@@ -532,7 +526,7 @@ where
 }
 
 ///returns mean dist between all motif slices x resource slice
-pub fn fold_dists<I>(mask: Tensor, ids: &Vec<I>, dim: usize) -> Tensor
+pub fn fold_dists<I>(mask: Tensor, ids: &Vec<I>, dim: usize) -> Result<Tensor, ThoError>
 where
     I: PartialEq + Debug,
 {
@@ -549,7 +543,7 @@ pub fn reduce_by_groups<I, F>(
     reduce: F,
     ids: &Vec<I>,
     dim: usize,
-) -> Tensor
+) -> Result<Tensor, ThoError>
 where
     I: PartialEq + Debug,
     F: Fn(Tensor) -> Tensor,
@@ -568,21 +562,22 @@ where
         let s = start as i64;
         let l = len as i64;
         debug!("fold_mask: s={s} l={l:?}");
-        let chunk = full.narrow(dim as i64, s, l);
+        let chunk = full.f_narrow(dim as i64, s, l)?;
         let reduced = reduce(chunk);
         out.push(reduced);
+        Ok::<(), ThoError>(())
     };
 
     let mut start = 0usize;
     let mut prev = &ids[0];
     for (i, id) in ids.iter().enumerate().skip(1) {
         if id != prev {
-            push_group(start, i - start);
+            push_group(start, i - start)?;
             start = i;
             prev = id;
         }
     }
-    push_group(start, ids.len() - start);
+    push_group(start, ids.len() - start)?;
 
-    Tensor::cat(&out, dim as i64)
+    Ok(Tensor::f_cat(&out, dim as i64)?)
 }

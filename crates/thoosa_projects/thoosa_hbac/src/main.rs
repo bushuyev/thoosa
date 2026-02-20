@@ -6,9 +6,10 @@ use tch::Device::Cpu;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_main::cli::run_cli;
 use thoosa_shims::context::ThoCudaContext;
+use thoosa_shared::ThoError;
 
 
-fn main() {
+fn main() -> Result<(), ThoError> {
     kick_register_cuda_hooks();
 
     let t1 = Instant::now();
@@ -27,17 +28,19 @@ fn main() {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
             //runs cuCtxSetCurrent
-            ThoCudaContext::new(0).expect("Failed to create context"); //TODO device
+            if let Err(err) = ThoCudaContext::new(0) {
+                panic!("Failed to create context: {err:?}"); //TODO device
+            }
         })
         .worker_threads(cpu_num/2) //std::thread::available_parallelism().expect("available_parallelism failed").into()) // async workers
         .max_blocking_threads(cpu_num/2)        // more threads for spawn_blocking jobs
         .enable_all()
         .build()
-        .unwrap();
+        .map_err(|err| ThoError::from_error("tokio runtime build failed", err))?;
 
 
-    rt.block_on(async move {
-        match run_cli(
+    let run_result = rt.block_on(async move {
+        run_cli(
             |source_path| data::labeled_resourses(source_path, "train.csv"),
             |source_path, key| {
                 thoosa_main::data::parquet_to_tensor_by_path(
@@ -53,18 +56,18 @@ fn main() {
             684400,
             200,
         )
-            .await
-        {
-            Ok(_) => {
-                info!("All done in {} mls", t1.elapsed().as_millis());
-                std::process::exit(0);
-            }
-
-            Err(e) => {
-                error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
-                std::process::exit(1);
-            }
-        }
+        .await
     });
+
+    match run_result {
+        Ok(_) => {
+            info!("All done in {} mls", t1.elapsed().as_millis());
+            Ok(())
+        }
+        Err(e) => {
+            error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
+            Err(e)
+        }
+    }
 
 }
