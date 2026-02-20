@@ -1556,10 +1556,19 @@ async fn plot_motif(
             let all_slices = motif.data().t_ref().unbind(0);
             let slices_len = all_slices.len();
             let mut color_iter = DistinctColorIter::new();
+            let plot_data = all_slices
+                .into_iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    Ok::<_, ThoError>((
+                        format!("{i}"),
+                        color_iter.next().unwrap_or(BLACK),
+                        t.iter::<f64>()?.enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, ThoError>>()?;
             plot_series(
-                all_slices.into_iter().enumerate().map(|(i, t)| {
-                    (format!("{i}"), color_iter.next().unwrap_or(BLACK), t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
-                }).collect(),
+                plot_data,
                 format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={dist}").as_str(),
                 (2000, 1000),
                 &ws.read().plots_path().join(format!("{run_id}{select_motif_run_ids_sfx}")).join(format!("motif_{}.png", motif_id))
@@ -1821,14 +1830,14 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
         for i in 0..num_tensors {
 
 
-            let t = Tensor::stack(&[
+            let t = Tensor::f_stack(&[
                 make_t(&dim_1, &(i as i64), 0.1, ctx, cuda_first).await?,
                 make_t(&dim_1, &(i as i64), 0.2, ctx, cuda_first).await?,
                 make_t(&dim_1, &(i as i64), 0.3, ctx, cuda_first).await?,
                 make_t(&dim_1, &(i as i64), 0.4, ctx, cuda_first).await?,
                 make_t(&dim_1, &(i as i64), 0.5, ctx, cuda_first).await?,
-            ], 0)
-                .unfold(1, 1000, 100);
+            ], 0)?
+                .f_unfold(1, 1000, 100)?;
 
             tensors.push(t);
         }
@@ -1846,7 +1855,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
     }
 
     async fn make_t(dim_1: &i64, i: &i64, x: f64, copy_ctx: &CopyCtx, cuda_first:bool) -> Result<Tensor, ThoError> {
-        let t = x + Tensor::arange_start(i * dim_1, (i + 1) * dim_1, FLOAT_CPU);
+        let t = x + Tensor::f_arange_start(i * dim_1, (i + 1) * dim_1, FLOAT_CPU)?;
 
         if cuda_first {
             copy_ctx.copy(&t, 1, Float).await

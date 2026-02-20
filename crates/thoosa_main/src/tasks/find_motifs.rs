@@ -112,14 +112,14 @@ pub struct MeanDistsCtx {
 }
 
 impl MeanDistsCtx {
-    pub fn new(channels: u32, device: Device) -> Self {
-        let means_acc = Mutex::new(Tensor::zeros([channels as i64, 1], (Kind::Float, device)));
-        let total_samples = Mutex::new(Tensor::zeros([channels as i64, 1], (Kind::Int64, device)));
+    pub fn new(channels: u32, device: Device) -> Result<Self, ThoError> {
+        let means_acc = Mutex::new(Tensor::f_zeros([channels as i64, 1], (Kind::Float, device))?);
+        let total_samples = Mutex::new(Tensor::f_zeros([channels as i64, 1], (Kind::Int64, device))?);
 
-        Self {
+        Ok(Self {
             means_acc,
             total_samples,
-        }
+        })
     }
 }
 
@@ -129,14 +129,14 @@ pub struct QuantileDistsCtx {
 }
 
 impl QuantileDistsCtx {
-    pub fn new(channels: u32, device: Device) -> Self {
-        let quantiles_acc = Mutex::new(Tensor::zeros([channels as i64, 1], (Kind::Float, device)));
-        let total_samples = Mutex::new(Tensor::zeros([channels as i64, 1], (Kind::Int64, device)));
+    pub fn new(channels: u32, device: Device) -> Result<Self, ThoError> {
+        let quantiles_acc = Mutex::new(Tensor::f_zeros([channels as i64, 1], (Kind::Float, device))?);
+        let total_samples = Mutex::new(Tensor::f_zeros([channels as i64, 1], (Kind::Int64, device))?);
 
-        Self {
+        Ok(Self {
             quantiles_acc,
             total_samples,
-        }
+        })
     }
 }
 
@@ -205,10 +205,10 @@ where
                     let masks_ctx = match &filter {
                         SlicesFilter::AccumulateStats(v) => {
                             match v.aggr {
-                                FilterAggr::Mean(aggr) => MasksCtx::AccumulatedMeanDist { k: aggr.k, ctx: MeanDistsCtx::new(channels, device.into()) },
+                                FilterAggr::Mean(aggr) => MasksCtx::AccumulatedMeanDist { k: aggr.k, ctx: MeanDistsCtx::new(channels, device.into())? },
                                 FilterAggr::Min(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Min is not supported for SlicesFilter::AccumulateStats")),
                                 FilterAggr::Max(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Max is not supported for SlicesFilter::AccumulateStats")),
-                                FilterAggr::Quantile(aggr) => MasksCtx::AccumulatedQuantileDist { q: aggr.q, ctx: QuantileDistsCtx::new(channels, device.into()) },
+                                FilterAggr::Quantile(aggr) => MasksCtx::AccumulatedQuantileDist { q: aggr.q, ctx: QuantileDistsCtx::new(channels, device.into())? },
                             }
                         }
                         SlicesFilter::PrecalculateStats(v) => {
@@ -217,12 +217,14 @@ where
 
                                     debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: dists=\n{}", t.t);
 
-                                    ThoTensor::new(t.id().clone(), t.t.view((-1, 1, 1)))
+                                    ThoTensor::new(t.id().clone(), t.t.f_view((-1, 1, 1))?)
                                 })?;
                             MasksCtx::PrecalculatedDist { dists }
                         }
                         SlicesFilter::ExactStats(v) => {
-                            let exact_stats_t = Tensor::from_slice(&[v.euc_dist]).to_device(ThoDevice::from(ctx.device_idx()).into()).broadcast_to(&[channels as i64, 1]);
+                            let exact_stats_t = Tensor::f_from_slice(&[v.euc_dist])?
+                                .f_to_device(ThoDevice::from(ctx.device_idx()).into())?
+                                .f_broadcast_to([channels as i64, 1])?;
                             debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: exact_stats_t=\n{}", exact_stats_t);
                             MasksCtx::PrecalculatedDist { //rename to PreSet
                                 dists: ThoTensor::new("ExactStats".into(), exact_stats_t)?
@@ -343,7 +345,7 @@ where
                             },
                             fixed_config.max_chunk_size as usize,
                             |batch| {
-                                async { batch.to_cpu().await.unwrap() }.boxed() //TODO unwrap
+                                async { batch.to_cpu().await }.boxed() //TODO unwrap
                             },
                             |receiver| {
                                 let dists_tracker = Arc::clone(receiver);

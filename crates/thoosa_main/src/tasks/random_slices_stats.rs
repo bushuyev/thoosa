@@ -232,7 +232,9 @@ where
             stats_values.push(stats.value());
         }
 
-        let stats_t = Tensor::from_slice(stats_values.as_slice()).view([channels as i64, 1]).to_device(ThoDevice::from(device_idx).into());
+        let stats_t = Tensor::f_from_slice(stats_values.as_slice())?
+            .f_view([channels as i64, 1])?
+            .f_to_device(ThoDevice::from(device_idx).into())?;
 
         Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(&input_id + &SynKey::new(["random_stats".into()]), stats_t)?, cache_area.into())))
     }

@@ -165,7 +165,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         debug!("SelectMotifsSavableResultBuilder::add_partial_output: o={o:?}");
 
        self.output.push (tokio::spawn(async {
-           Ok(o.to_cpu().await)
+           o.to_cpu().await
        }));
     }
 
@@ -764,7 +764,7 @@ where
 
                     async move {
                         let stacked_motifs_input = Arc::new(DevicesWrap::wrap(
-                            StackedMotifsInput::new(Arc::clone(&find_motifs_run_config)),
+                            StackedMotifsInput::new(Arc::clone(&find_motifs_run_config))?,
                             CacheArea::default()
                         ));
 
@@ -969,7 +969,7 @@ where
             .enumerate()
             .map(|(channel, channel_motif_ids)| {
                 if channel_motif_ids.is_empty() {
-                    return Ok(Tensor::zeros(&[max_motif_slices as i64], (Float, ThoDevice::from(device_idx).into())));
+                    return Ok(Tensor::f_zeros([max_motif_slices as i64], (Float, ThoDevice::from(device_idx).into()))?);
                 }
                 let channel_stats = channel_motif_ids
                     .iter()
@@ -980,22 +980,22 @@ where
                             .ok_or_else(|| ThoError::new(format!("no motif stat found for motif_id={motif_id} channel={channel}")))
                     })
                     .collect::<Result<Vec<_>, ThoError>>()?;
-                let channel_stats_t = Tensor::from_slice(channel_stats.as_slice()).to_device(ThoDevice::from(device_idx).into());
+                let channel_stats_t = Tensor::f_from_slice(channel_stats.as_slice())?.f_to_device(ThoDevice::from(device_idx).into())?;
                 if channel_stats_t.size()[0] < max_motif_slices as i64 {
                     //same padding as in StackedMotifsLoader::run
                     Ok(pad_to(
                         &channel_stats_t, &[max_motif_slices as i64],
                         //this is to avoid selecting resource slices by MaskMaker::Le in ClcResourcesMotifsDist::do_run when cross-calculated with zero-padded motif slices giving 0 distance which would below any motif statistic; use f32::MIN because motifs_stats tensors are Float.
                         f32::MIN as f64
-                    ).expect("pad to failed"))
+                    )?)
                 } else {
                     Ok(channel_stats_t)
                 }
             })
             .collect::<Result<Vec<_>, ThoError>>()?;
 
-        let channels_motifs_stats_t = Tensor::stack(&channels_motifs_stats_tensors, 0);
-        let find_motifs_run_id = find_motifs_run_config.id.expect("no id in find_motifs_run_config");
+        let channels_motifs_stats_t = Tensor::f_stack(&channels_motifs_stats_tensors, 0)?;
+        let find_motifs_run_id = find_motifs_run_config.id.ok_or_else(|| ThoError::new("SelectMotifsStage::clc_stacked_motifs_statistics: no id in find_motifs_run_config"))?;
         let motifs_stats = ThoTensor::new(
             SynKey::new([
                 mono_key!("motifs_stats", "motifs_stats"),
@@ -2154,7 +2154,7 @@ pub mod tests {
 
         let ids = vec![1, 1, 1, 2, 2];
 
-        let folded_mask = fold_mask(mask, &ids, 1);
+        let folded_mask = fold_mask(mask, &ids, 1).unwrap();
 
         assert_eq!(
             Tensor::from_slice(&[
@@ -2190,7 +2190,7 @@ pub mod tests {
 
         let ids = vec![1, 1, 1, 2, 2];
 
-        let folded_mask = fold_mask(mask, &ids, 1);
+        let folded_mask = fold_mask(mask, &ids, 1).unwrap();
 
         assert_eq!(
             Tensor::from_slice(&[
@@ -2216,7 +2216,7 @@ pub mod tests {
     fn test_fold_mask_all_false() {
         let mask = Tensor::zeros([1, 4, 3], (Kind::Bool, tch::Device::Cpu));
         let ids = vec![7, 7, 8, 8];
-        let folded = fold_mask(mask, &ids, 1);
+        let folded = fold_mask(mask, &ids, 1).unwrap();
         let expected = Tensor::zeros([1, 2, 3], (Kind::Bool, tch::Device::Cpu));
         assert_eq!(folded, expected);
     }
@@ -2242,7 +2242,7 @@ pub mod tests {
 
         let ids = vec![1, 1, 1, 2, 2];
 
-        let folded = fold_dists(x, &ids, 1);
+        let folded = fold_dists(x, &ids, 1).unwrap();
         let expected = Tensor::from_slice(&[
             // group 1 avg:
             3.0f32, 3.0, 3.0,
@@ -2273,7 +2273,7 @@ pub mod tests {
 
         let ids = vec![10, 10, 20, 20];
 
-        let folded = fold_dists(x, &ids, 2);
+        let folded = fold_dists(x, &ids, 2).unwrap();
 
         // For batch 0:
         // row0: [1,3,5,7] -> A=(1+3)/2=2, B=(5+7)/2=6
@@ -2309,7 +2309,7 @@ pub mod tests {
 
         let ids = vec![1, 1, 1, 2, 2];
 
-        let folded_mask = fold_mask(mask, &ids, 1);
+        let folded_mask = fold_mask(mask, &ids, 1).unwrap();
 
         let expected = Tensor::from_slice(&[
             false, true,  false, false, false, // group 1 (OR of first 3)

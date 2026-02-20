@@ -31,19 +31,16 @@ impl Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey> {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey>::subview"))]
     fn subview(&self, selector: ChannelsDataVec) -> Result<Self::Output, ThoError> {
         let ChannelsDataVec { ranges } = selector;
-        let size: MonoMetrics<1, 2> = self
-            .size()
-            .try_into()
-            .expect("ChannelsData2::select unable to convert size");
+        let size: MonoMetrics<1, 2> = self.size().try_into()?;
 
         let mut subs = Vec::with_capacity(ranges.len());
         for range in &ranges {
-            subs.push(ChannelsData2::sub_single(self, range, &size));
+            subs.push(ChannelsData2::sub_single(self, range, &size)?);
         }
 
         let stacked = if subs.is_empty() {
             //TODO the size then should be checked to decide if tensor is valid. Should be a better solution
-            Tensor::empty(&[0], (self.t_ref().kind(), self.t_ref().device()))
+            Tensor::f_empty([0], (self.t_ref().kind(), self.t_ref().device()))?
         } else {
             Tensor::f_vstack(subs.as_slice())?
         };
@@ -91,17 +88,17 @@ impl From<Range<MonoMetrics<1, 2>>> for ChannelsData2Selector {
 
 
 impl ChannelsData2 {
-    fn sub_single(t: &ThoTensor<ChannelsData2, SynKey>, range: &Range<MonoMetrics<1, 2>>, size: &MonoMetrics<1, 2>) -> Tensor {
+    fn sub_single(t: &ThoTensor<ChannelsData2, SynKey>, range: &Range<MonoMetrics<1, 2>>, size: &MonoMetrics<1, 2>) -> Result<Tensor, ThoError> {
         let channel_range = range.start.dim_0()..min(size.dim_0(), range.end.dim_0());
         let data_range = range.start.dim_1()..min(size.dim_1(), range.end.dim_1());
 
         debug!("ChannelsData2::subview: channel_range={channel_range:?} data_range={data_range:?} size={size:?}");
         trace!("ChannelsData2::subview: t=\n{}", t.t_ref());
 
-        let sub_t = t.t_ref().i((channel_range.clone(), data_range.clone()));
+        let sub_t = t.t_ref().f_i((channel_range.clone(), data_range.clone()))?;
 
         // assert_eq!(sub_t.size(), [])
-        sub_t
+        Ok(sub_t)
     }
 }
 
