@@ -1269,11 +1269,11 @@ where
                 )
                 .await?;
 
-            let kee_score = with_data!(ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
+            let keep_score = with_data!(ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
                 let motif_slices = motif_data.data().t_ref();
                 debug!("SelectMotifsStage::run: motif_id={motif_id} motif_criteria={motif_criteria:?} threshold={threshold:.6} motif_slices={motif_slices:?}");
 
-                if motif_slices.size()[0] < 3 {
+                if motif_slices.size()[0] < 10 || motif_slices.size()[0] > 100 {//TODO conf min slices
                     return Ok::<(bool, f64), ThoError>((false, 0.0));
                 }
                 let mut score_sum = 0.0f64;
@@ -1293,8 +1293,8 @@ where
                 Ok::<(bool, f64), ThoError>((true, avg_score))
             })?;
 
-            if kee_score.0 {
-                extended_motif_ids_filtered.push((*motif_id, kee_score.1));
+            if keep_score.0 {
+                extended_motif_ids_filtered.push((*motif_id, keep_score.1));
             }
         }
 

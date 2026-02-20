@@ -98,3 +98,8 @@ opt-level = 0
 opt-level = 0
 debug = 2
 overflow-checks = true
+[profile.release]
+debug = 2
+strip = "none"
+lto = false
+panic = "unwind"

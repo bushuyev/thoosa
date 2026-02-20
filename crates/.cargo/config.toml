@@ -3,6 +3,9 @@ target = "x86_64-unknown-linux-gnu"
 target-dir = "target"
 rustflags = [
     "-C", "link-arg=-Wl,--no-as-needed", "--cfg", "tokio_unstable",
+    "-C", "force-frame-pointers=yes",
+    "-Z", "sanitizer=address",
+#    "-C", "debuginfo=2", //set in Cargo.toml profile.release
 #    "-C", "link-arg=-Wl,-rpath,$LIBTORCH",
 #    "--cfg", "tho_debug_plots",
     "-Zhigher-ranked-assumptions"
