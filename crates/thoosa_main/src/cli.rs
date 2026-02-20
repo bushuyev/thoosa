@@ -939,22 +939,22 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         freq_filter: Some(vec![
             BandPassFilter(BandPassFilterParamsRangeOrValue {
                 // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-                low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 200. }, step: Some((40., 1)) },//
+                low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 200. }, step: Some((10., 1)) },//
                 // band_hz: RangeOrValue::Value(10.),
                 band_hz:  RangeOrValue::Value(2.0),
-                // kernel_size: RangeOrValue::Value(1000),
-                kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 1000 }, step: None },
+                kernel_size: RangeOrValue::Value(10),
+                // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 1000 }, step: None },
                 stride: RangeOrValue::Value(10),
-                padding: RangeOrValue::Value(500),
+                padding: RangeOrValue::Value(50),
             }),
             NotchBandFilter(NotchBandFilterParamsRangeOrValue {
                 low_hz: RangeOrValue::Value(59.0),
                 high_hz: RangeOrValue::Value(62.0),
             })
         ]),
-        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
+        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.005..0.03, step: Some((0.005, 3))}  }), slices: RangeOrValue::Value(1000) }),
+        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 3))
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.05..0.5, step: Some((0.05, 2))}  }) }),
         // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.02)  }) }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
@@ -986,10 +986,10 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 eps: RangeOrValue::Value(1e-8),
             }),
         },
-        threshold: RangeOrValue::Value(0.8),
+        threshold: RangeOrValue::Range{range: 0.6..0.95, step: None}, //RangeOrValue::Value(0.8),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
-    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(10, 3));
+    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(100, 10));
 
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
@@ -1036,7 +1036,8 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
         // }),
         net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
-            d_model: RangeOrValue::Value(64),
+            // d_model: RangeOrValue::Value(64),
+            d_model: RangeOrValue::Range { range: Range { start: 32, end: 64 }, step: None },
             n_heads: RangeOrValue::Value(4),
             ff_mult: RangeOrValue::Value(4),
             dropout: RangeOrValue::Value(0.1),

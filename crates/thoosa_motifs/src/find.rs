@@ -294,8 +294,11 @@ impl SelectMotifsSavableResult {
         }
     }
 
-    pub fn total_selected_motifs(&self) -> usize {
-        self.run_config.iter().map(|(_, good_motif_ids_rates)| good_motif_ids_rates.len()).sum()
+    //to be used from opt FindAndSelectMotifsStage
+    pub fn total_selected_motifs(&self) -> f64 {
+        //always one - from run_find_and_select
+        assert_eq!(self.run_config.len(), 1, "expected one run config");
+        self.run_config[0].1.iter().map(|v|v.1).sum::<f64>()
     }
 }
 

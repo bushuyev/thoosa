@@ -58,16 +58,6 @@ pub struct MotifLoaderInput {
     motif_id:DataId
 }
 
-/*
-#[automatically_derived]
-impl ::thoosa_shared::traits::Data for MotifLoaderInput
-where
-    Self: ::core::clone::Clone,
-{
-    type Metrics = ();
-    fn size(&self) -> Self::Metrics { () }
-    fn device(&self) -> usize { 0 }
-}*/
 
 #[cfg(test)]
 impl From<u32> for MotifLoaderInput{
@@ -165,7 +155,6 @@ where
     type Ctx = C;
 }
 
-// #[async_trait]
 impl<L, C> AsyncStage for MotifLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
@@ -382,8 +371,6 @@ where
     debug!("load_motif_slices: find_motifs_run_id={find_motifs_run_id} window={window:?} device_idx={device_idx}");
 
     let motif_t = Arc::new(DevicesWrap::wrap(ThoTensor::<MotifSlices, DataId>::zeros(motif_id.clone(), [resource_ids_slices.values().map(|slices|slices.len()).sum::<usize>() as i64, window as i64], (Float, ThoDevice::from(ctx.device_idx()).into())), CacheArea::default()));
-    // let mut slices_vec = vec![];
-    let tmp_cache: TmpCached<ThoTensor<ChannelsData2, SynKey>> = TmpCached::new("motifs", ctx.cache_area()).await;
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
     let mut slice_i = 0;
@@ -402,21 +389,7 @@ where
 
         let size = raw_tensor.size();
 
-        // let selector = ChannelsDataVec {
-        //     ranges: slices
-        //         .into_iter()
-        //         .filter(|slice| {
-        //             let r = MonoMetrics::<1,2>::from([channel + 1, (slice + window) as i64]) <= *size;
-        //             if !r {
-        //                 warn!("load_motif_slices: motif_id={motif_id} slice={slice:?} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id}  in {descr}");
-        //             }
-        //             r
-        //         })
-        //         .map(|slice| {
-        //             MonoMetrics::from([channel, slice as i64])..MonoMetrics::from([channel + 1, (slice + window) as i64])
-        //         })
-        //         .collect(),
-        // };
+
         with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false, false), raw_tensor, motif_t; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>, motif_tt:&ThoTensor::<MotifSlices, DataId>|{
             for slice in slices {
                 let r = MonoMetrics::<1,2>::from([channel + 1, (slice + window) as i64]) <= *size;
@@ -433,88 +406,8 @@ where
             Ok::<_, ThoError>(())
         })?;
 
-        // if !selector.ranges.is_empty() {
-        //     let mut ctx_for_data = ctx.branch(Some("motif_loader_selected_data"), false, false);
-        //     let mut try_count = 0;
-        //     // loop {
-        //
-        //         // let out_key = out_key.clone();
-        //         let out_key = Arc::new(ctx_for_data.id().clone()); //out_key.clone();
-        //
-        //         //TODO async OOM: move into OOMHandler as util fn
-        //         // match raw_tensor.with_selected_data(
-        //         //     device_idx,
-        //         //     ctx_for_data.branch(Some("motif_loader_selected_data_with_selected_data"), false, false),
-        //         //     selector.clone(),
-        //         //     |tt, _ctx| {
-        //         //         debug!("load_motif_slices:  motif_id={motif_id} resource_id={resource_id} try_count={try_count} resource_id={resource_id}  tt.size={:?}", tt.size());
-        //         //         trace!("load_motif_slices:  motif_id={motif_id} resource_id={resource_id}  try_count={try_count} resource_id={resource_id}  t={}", tt.t_ref());
-        //         //         if tt.size() == &[0] {
-        //         //             warn!("load_motif_slices: motif_id={motif_id} resource_id={resource_id}  got empty motif in {descr}");
-        //         //         } else {
-        //         //             // tmp_cache.insert(tt);
-        //         //             motif_t.t.narrow(0, slice_i, tt.size()[1]).copy_(&tt.t);
-        //         //             debug!("load_motif_slices: motif_id={motif_id} resource_id={resource_id} added to tmp_cache");
-        //         //             slice_i+=tt.size()[1];
-        //         //         }
-        //         //
-        //         //         Ok(())
-        //         //     }).await {
-        //         //         Ok(_) => {
-        //         //             break
-        //         //         }
-        //         //         Err(e) => {
-        //         //             warn!("load_motif_slices: motif_id={motif_id} error while loading raw tensor: {e:?}");
-        //         //
-        //         //             // TODO
-        //         //             // if try_count < 1 {
-        //         //             //     let acquired_permits = ctx_for_data.acquired_permits();
-        //         //             //     if acquired_permits < MAX_PERMITS {
-        //         //             //         let result = GlobalCtx::global()
-        //         //             //             .acquire_many(device_idx, MAX_PERMITS - acquired_permits, out_key)
-        //         //             //             .await?;
-        //         //             //         ctx_for_data.add_permit(result); //permits can be dropped only from OOM handler or when context is dropped
-        //         //             //     }
-        //         //             //     debug!("load_motif_slices:  motif_id={motif_id} resource_id={resource_id}  try_count={try_count} got {e:?}, acquired MAX_PERMITS, purging gpu({device_idx})");
-        //         //             //     tmp_cache.purge_gpu(device_idx).await?;
-        //         //             //
-        //         //             //     ctx_for_data.drop_permits(DropIf::Always);
-        //         //             //
-        //         //             //     debug!("load_motif_slices:  motif_id={motif_id} resource_id={resource_id} purge gpu done");
-        //         //             //
-        //         //             //     try_count += 1;
-        //         //             // } else {
-        //         //             //     error!("Can't load for resource_id={resource_id} resource_id={resource_id}  for motif_id={motif_id} e={e:?}");
-        //         //             //     break
-        //         //             // }
-        //         //         }
-        //         // };
-        //     // }
-        // } else {
-        //     warn!("Empty selector for resource_id={resource_id}  got empty motif for motif_id={motif_id}  in {descr}");
-        // }
-    }
 
-    // debug!("load_motif_slices: motif_id={motif_id} taking tmp_cache");
-    //
-    // let cache_name = tmp_cache.name;
-    // let tensors: Vec<Tensor> = tmp_cache
-    //     .take_all(device_idx)
-    //     .await?
-    //     .into_iter()
-    //     .map(|tt| tt.t())
-    //     .collect();
-    //
-    // GlobalCtx::global().remove_cache(cache_name).await;//TODO add oneshot when cache is registered in GlobCtx and send when dropped?
-    //
-    // debug!("load_motif_slices: loaded {} tensors for motif_id={motif_id} descr={descr}", tensors.len());
-    //
-    // assert!(!tensors.is_empty(), "no slice tensors loaded for motif_id={motif_id} ");
-    //
-    //
-    // let motif = cat_slices(&motif_id, tensors)?;
-    //
-    // debug!("load_motif_slices: motif of size {:?} is built for motif_id={motif_id} descr={descr} device={:?}", motif.size(), motif.t.device());
+    }
 
     with_data!(ctx.branch(Some(&format!("motif")), false, false), motif_t; |_ctx, motif_tt:&ThoTensor::<MotifSlices, DataId>|{
         ThoTensor::new(motif_tt.id().clone(), motif_tt.t.i((0..slice_i, ..)))

@@ -212,7 +212,7 @@ impl FindAndSelectMotifsStage {
         max_chunk_size: i64,
         device_idx: usize,
         mut ctx: C
-    ) -> Result<usize, ThoError> {
+    ) -> Result<f64, ThoError> {
         let find_input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store).await?,
             CacheArea::default(),
@@ -358,7 +358,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                             let fixed_find_motifs_config = fixed_find_motifs_config.clone();
                             let min_loss_ref = Arc::clone(&min_loss_ref);
 
-                            let selected_count = panic_to_err_async!({
+                            let selected_score_sum = panic_to_err_async!({
                                 Self::run_find_and_select(
                                     &ws,
                                     &store,
@@ -374,11 +374,11 @@ impl AsyncStage for FindAndSelectMotifsStage {
                             })
                             .unwrap_or_else(|e| {
                                 warn!("FindAndSelectMotifsStage::run: failed run_config={run_config:?}: {e:?}");
-                                0usize
+                                0f64
                             });
 
-                            let loss = if selected_count == 0 { f32::MAX } else { 1.0 / selected_count as f32 };
-                            debug!("FindAndSelectMotifsStage::run: run_config={run_config:?} selected_count={selected_count} loss={loss}");
+                            let loss = if selected_score_sum == 0.0 { f32::MAX } else { 1.0 / selected_score_sum as f32 };
+                            debug!("FindAndSelectMotifsStage::run: run_config={run_config:?} selected_count={selected_score_sum} loss={loss}");
 
                             if loss < thoosa_shared::with_perf_log(|| min_loss_ref.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/read_min_loss").0 {
                                 *thoosa_shared::with_perf_log(|| min_loss_ref.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/write_min_loss") = (loss, Some(run_config.clone()));
