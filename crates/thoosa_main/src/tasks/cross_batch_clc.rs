@@ -365,10 +365,10 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
         self.iter_1.clone()
     }
 
-    pub async fn replace_clc_result<OnBatchDone>(mut self, f: &OnBatchDone) -> Self
-    where OnBatchDone: Fn(R) -> BoxFuture<'static, R> + Sync + Send + 'static,{
-        self.clc_result = f(self.clc_result).await;
-        self
+    pub async fn replace_clc_result<OnBatchDone>(mut self, f: &OnBatchDone) -> Result<Self, ThoError>
+    where OnBatchDone: Fn(R) -> BoxFuture<'static, Result<R, ThoError>> + Sync + Send + 'static,{
+        self.clc_result = f(self.clc_result).await?;
+        Ok(self)
     }
 }
 
@@ -579,7 +579,7 @@ mod tests {
                 };
                 Ok(DistsMask::new(mask, Some(dists), mask_type, None)?)
             },
-            MasksCtx::AccumulatedMeanDist {k:1.0, ctx: MeanDistsCtx::new(3, Cuda(0))},
+            MasksCtx::AccumulatedMeanDist {k:1.0, ctx: MeanDistsCtx::new(3, Cuda(0))?},
             UnfoldParams::new(1, 2, 1),
         ));
 

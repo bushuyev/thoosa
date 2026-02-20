@@ -172,7 +172,7 @@ where
     cross_unfold_clc: Arc<CLC>,
     receiver_factory: Box<dyn Fn(&[Arc<Resource>]) -> Arc<RSV> + Send + Sync>,
     chunk_size: usize,
-    on_batch_done: Box<dyn Fn(R) -> BoxFuture<'static, R> + Sync + Send>,
+    on_batch_done: Box<dyn Fn(R) -> BoxFuture<'static, Result<R, ThoError>> + Sync + Send>,
     on_all_done: Box<dyn Fn(&Arc<RSV>) -> BoxFuture<'static, Result<(), ThoError>> + Sync + Send>,
     output_merge_mode: CrossUnfoldClcOutputMergeMode,
     step:u32,
@@ -216,7 +216,7 @@ where
     ) -> Self
     where
         ReceiverFactory: Fn(&[Arc<Resource>]) -> Arc<RSV> + Sync + Send + 'static,
-        OnBatchDone: Fn(R) -> BoxFuture<'static, R> + Sync + Send + 'static,
+        OnBatchDone: Fn(R) -> BoxFuture<'static, Result<R, ThoError>> + Sync + Send + 'static,
         OnAllDone: Fn(&Arc<RSV>) -> BoxFuture<'static, Result<(), ThoError>> + Sync + Send + 'static,
     {
         Self {
@@ -433,7 +433,7 @@ where
                     )
                     .await {
                     Ok( mut cross_clc_output  ) => {
-                        let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await;
+                        let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await?;
 
                         let receiver_arc = Arc::clone(&receiver);
 
@@ -1709,7 +1709,7 @@ mod tests {
                 }
             },
             chunk_size, //TODO config
-            |batch| async { batch.to_cpu().await.unwrap() }.boxed(),
+            |batch| async { batch.to_cpu().await }.boxed(),
             |_receiver| async {
                 Ok(())
             }.boxed(),
@@ -1880,7 +1880,7 @@ mod tests {
             },
             2,
             |batch|{
-                async {batch}.boxed()
+                async {Ok(batch)}.boxed()
             },
             |p| {
                 async {
@@ -2051,7 +2051,7 @@ mod tests {
             batch_clc,
             move |_resources: &[Arc<Resource>]| Arc::clone(&receiver),
             chunk_size,
-            |batch| async { batch }.boxed(),
+            |batch| async { Ok(batch) }.boxed(),
             |_receiver| async {
                 Ok(())
             }.boxed(),

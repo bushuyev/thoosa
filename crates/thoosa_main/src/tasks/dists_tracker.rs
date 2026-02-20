@@ -29,7 +29,7 @@ use thoosa_shims::stream::ThoStreamGuard;
 use thoosa_store::fs_store::FileMotifTrackerStore;
 use thoosa_store::{SlicesMatch, SqlMotifTrackerStore, Store};
 
-// DistsMask is meant for one-way GPU->CPU copies.
+// DistsMask is meant for one-way GPU->CPU copies. Don't impl Clone!
 #[derive(Debug)]
 pub struct DistsMask {
     mask: Tensor,
@@ -538,11 +538,11 @@ impl DistsMask {
                 debug!("DistsMask::new, MaskIndexes: indices={indices}");
 
                 let indices = indices.f_to_kind(Kind::Int64)?;
-                let weights = Tensor::from_slice(&[
+                let weights = Tensor::f_from_slice(&[
                     mask_size[1].saturating_mul(mask_size[2]),
                     mask_size[2],
                     1i64,
-                ])
+                ])?
                 .f_to_device(mask.device())?
                 .f_to_kind(Kind::Int64)?;
 
@@ -806,11 +806,11 @@ fn rebase_flat_indices_last_dim(
     let dim_2 = size[2];
     let d1d2 = dim_1.saturating_mul(dim_2);
 
-    let d1d2_t = Tensor::from(d1d2).f_to_device(device)?;
-    let dim_2_t = Tensor::from(dim_2).f_to_device(device)?;
-    let dim_1_t = Tensor::from(dim_1).f_to_device(device)?;
-    let new_last_t = Tensor::from(new_last).f_to_device(device)?;
-    let offset_t = Tensor::from(last_offset).f_to_device(device)?;
+    let d1d2_t = Tensor::f_from_slice(&[d1d2])?.f_to_device(device)?;
+    let dim_2_t = Tensor::f_from_slice(&[dim_2])?.f_to_device(device)?;
+    let dim_1_t = Tensor::f_from_slice(&[dim_1])?.f_to_device(device)?;
+    let new_last_t = Tensor::f_from_slice(&[new_last])?.f_to_device(device)?;
+    let offset_t = Tensor::f_from_slice(&[last_offset])?.f_to_device(device)?;
 
     let i_0 = flat.f_floor_divide(&d1d2_t)?;
     let rem = &flat - &i_0 * &d1d2_t;
@@ -846,7 +846,7 @@ fn gather_dists_for_indices(
     assert!(indices_size.len() == 2 && indices_size[1] == 3, "DistsMask::gather_dists_for_indices: expected Nx3 indices, got {indices_size:?}");
 
     if indices_size[0] == 0 {
-        return Ok(Tensor::zeros([0], (dists.kind(), dists.device())));
+        return Ok(Tensor::f_zeros([0], (dists.kind(), dists.device()))?);
     }
 
     let indices = indices.f_contiguous()?.f_to_kind(Kind::Int64)?;
@@ -859,8 +859,8 @@ fn gather_dists_for_indices(
     let i_0 = indices.f_select(1, 1)?;
     let i_1 = indices.f_select(1, 2)?;
 
-    let stride_0_t = Tensor::from(stride_0).f_to_device(dists.device())?;
-    let stride_1_t = Tensor::from(stride_1).f_to_device(dists.device())?;
+    let stride_0_t = Tensor::f_from_slice(&[stride_0])?.f_to_device(dists.device())?;
+    let stride_1_t = Tensor::f_from_slice(&[stride_1])?.f_to_device(dists.device())?;
 
     let lin = (&c * stride_0_t + &i_0 * stride_1_t + &i_1).f_to_kind(Kind::Int64)?;
     Ok(dists_flat.f_gather(0, &lin, false)?)
@@ -1023,7 +1023,7 @@ impl CrossClcResultMerge for DistsMask {
                 } else {
                     let mut right_indices = right_mask;
                     if right_count > 0 {
-                        let offset = Tensor::from(left_size[last_dim])
+                        let offset = Tensor::f_from_slice(&[left_size[last_dim]])?
                             .f_to_device(right_indices.device())?;
                         let _ = right_indices.narrow(1, 2, 1).f_add_(&offset)?;
                     }
@@ -1108,7 +1108,7 @@ impl CrossClcResultMerge for DistsMask {
 
                 let mut merged_mask_sizes = first_size;
                 merged_mask_sizes[last_dim] = total_last;
-                let mut mask_out = Tensor::zeros(merged_mask_sizes.as_slice(), (Bool, device));
+                let mut mask_out = Tensor::f_zeros(merged_mask_sizes.as_slice(), (Bool, device))?;
 
                 let mut offset = 0;
                 for part in parts.iter() {
@@ -1146,8 +1146,7 @@ impl CrossClcResultMerge for DistsMask {
 
                     let mut merged_dists_sizes = dists_size;
                     merged_dists_sizes[dists_last_dim] = total_dists_last;
-                    let mut dists_out =
-                        Tensor::zeros(merged_dists_sizes.as_slice(), (dists_kind, dists_device));
+                    let mut dists_out = Tensor::f_zeros(merged_dists_sizes.as_slice(), (dists_kind, dists_device))?;
 
                     let mut offset = 0;
                     for part in parts.iter() {
@@ -1207,7 +1206,7 @@ impl CrossClcResultMerge for DistsMask {
 
                 let packed_mask = if all_aligned {
                     let total_bytes = total_last / 8;
-                    let mut out = Tensor::zeros([rows, total_bytes], (Uint8, device));
+                    let mut out = Tensor::f_zeros([rows, total_bytes], (Uint8, device))?;
                     let mut byte_offset = 0;
                     for part in parts.iter() {
                         let sizes = match &part.mask_type {
@@ -1221,7 +1220,7 @@ impl CrossClcResultMerge for DistsMask {
                     }
                     out.f_reshape([-1])?
                 } else {
-                    let mut out_bits = Tensor::zeros([rows, total_last], (Bool, device));
+                    let mut out_bits = Tensor::f_zeros([rows, total_last], (Bool, device))?;
                     let mut offset = 0;
                     for part in parts.iter() {
                         let sizes = match &part.mask_type {
@@ -1287,8 +1286,7 @@ impl CrossClcResultMerge for DistsMask {
                     merged_dists_sizes[dists_last_dim] = total_dists_last;
                     let device = dists_device.unwrap();
                     let kind = dists_kind.unwrap();
-                    let mut dists_out =
-                        Tensor::zeros(merged_dists_sizes.as_slice(), (kind, device));
+                    let mut dists_out = Tensor::f_zeros(merged_dists_sizes.as_slice(), (kind, device))?;
 
                     let mut offset = 0;
                     for part in parts.iter() {
@@ -1405,7 +1403,7 @@ impl CrossClcResultMerge for DistsMask {
                         mask
                     };
                     if indices_count > 0 && indices_rank == 2 {
-                        let offset_t = Tensor::from(offset).f_to_device(device)?;
+                        let offset_t = Tensor::f_from_slice(&[offset])?.f_to_device(device)?;
                         let _ = indices.narrow(1, 2, 1).f_add_(&offset_t)?;
                     }
 

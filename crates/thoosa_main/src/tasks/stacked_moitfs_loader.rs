@@ -40,15 +40,15 @@ pub struct StackedMotifsInput {
 }
 
 impl StackedMotifsInput {
-    pub fn new(find_config: Arc<FindMotifsRunConfig>) -> Self {
+    pub fn new(find_config: Arc<FindMotifsRunConfig>) -> Result<Self, ThoError> {
         debug!("StackedMotifsInput: find_config={find_config:?}");
-        let find_motifs_run_id = find_config.id.unwrap();
-        Self {
+        let find_motifs_run_id = find_config.id.ok_or_else(|| ThoError::new("StackedMotifsInput::new: no id in find_config"))?;
+        Ok(Self {
             id: SynKey::new([
                 mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
             ]),
             find_motifs_run_config: find_config,
-        }
+        })
     }
 }
 impl Input for StackedMotifsInput {}
@@ -202,9 +202,10 @@ where
         })?;
 
         let find_motifs_run_config_id = find_motifs_run_config.id;
+        let find_motifs_run_config_id = find_motifs_run_config_id.ok_or_else(|| ThoError::new("StackedMotifsLoader::run: no id in find_motifs_run_config"))?;
         let motif_ids = self
             .store
-            .list_motifs(find_motifs_run_config_id.expect("no id in find_motifs_run_config"))
+            .list_motifs(find_motifs_run_config_id)
             .await?;
         debug!("StackedMotifsLoader::run: motif_ids={motif_ids:?}");
 
@@ -281,13 +282,15 @@ where
                 .max().unwrap_or(0);
 
             assert!(max_motif_slices > 0, "no motif slices for {data:?}");
-
+            //no more awaits - DeviceWrapper is not needed
 
             let mut channels_motif_ids = vec![Vec::<DataId>::new(); num_channels as usize];//contains channels x motif ids * number of slices in the motif
             let mut channels_motifs_tensors_vec = vec![];
             for c in 0..num_channels {
 
-                let channel_motifs = &channels_motifs.get(c as usize).expect(&format!("not enough channels: len={} c={}", channels_motifs.len(), c));
+                let channel_motifs = channels_motifs
+                    .get(c as usize)
+                    .ok_or_else(|| ThoError::new(format!("StackedMotifsLoader::run: not enough channels: len={} c={}", channels_motifs.len(), c)))?;
 
                 debug!("StackedMotifsLoader::run: channel {c} max_motif_slices={max_motif_slices} channel_motifs={channel_motifs:?}");
 
@@ -303,13 +306,13 @@ where
                 debug!("StackedMotifsLoader::run: c={c}, channel_motifs_tensors={:?}", channel_motifs_tensors);
 
                 let motifs_t = if channel_motifs_tensors.is_empty() {
-                    Tensor::zeros(&[max_motif_slices as i64, find_motifs_run_config.window  as i64], (Float, ThoDevice::from(device_idx).into()))
+                    Tensor::f_zeros([max_motif_slices as i64, find_motifs_run_config.window as i64], (Float, ThoDevice::from(device_idx).into()))?
                 } else {
-                    let channel_t = Tensor::cat(&channel_motifs_tensors, 0);
+                    let channel_t = Tensor::f_cat(&channel_motifs_tensors, 0)?;
 
                     if channel_t.size()[0] < max_motif_slices as i64 {
                         debug!("StackedMotifsLoader::run: c={c}, channel_t.size={:?} padding to {:?}", channel_t.size(), [max_motif_slices as i64, find_motifs_run_config.window  as i64]);
-                        pad_to(&channel_t, &[max_motif_slices as i64, find_motifs_run_config.window  as i64], 0.0).expect("pad to failed")
+                        pad_to(&channel_t, &[max_motif_slices as i64, find_motifs_run_config.window  as i64], 0.0)?
                     } else {
                         debug!("StackedMotifsLoader::run: c={c}, channel_t.size={:?}", channel_t.size());
                         channel_t
@@ -322,12 +325,12 @@ where
 
             debug!("StackedMotifsLoader::run: channels_motifs_tensors_vec={channels_motifs_tensors_vec:?}");
 
-            let channels_motifs_t = Tensor::stack(&channels_motifs_tensors_vec, 0);
+            let channels_motifs_t = Tensor::f_stack(&channels_motifs_tensors_vec, 0)?;
 
             debug!("StackedMotifsLoader::run: num_channels={num_channels}, channels_motif_ids={channels_motif_ids:?} channels_motifs_t.size={:?}", channels_motifs_t.size());
             trace!("StackedMotifsLoader::run: channels_motifs_t=\n{channels_motifs_t}");
 
-            let find_motifs_run_id = find_motifs_run_config.id.expect("no id in find_motifs_run_config");
+            let find_motifs_run_id = find_motifs_run_config.id.ok_or_else(|| ThoError::new("StackedMotifsLoader::run: no id in find_motifs_run_config"))?;
 
 
             let motifs = ThoTensor::new(
