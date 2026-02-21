@@ -203,7 +203,7 @@ where
                     let filter = run_config.slices_filter.clone();
 
                     let masks_ctx = match &filter {
-                        SlicesFilter::AccumulateStats(v) => {
+                        SlicesFilter::Accumulate(v) => {
                             match v.aggr {
                                 FilterAggr::Mean(aggr) => MasksCtx::AccumulatedMeanDist { k: aggr.k, ctx: MeanDistsCtx::new(channels, device.into())? },
                                 FilterAggr::Min(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Min is not supported for SlicesFilter::AccumulateStats")),
@@ -211,7 +211,7 @@ where
                                 FilterAggr::Quantile(aggr) => MasksCtx::AccumulatedQuantileDist { q: aggr.q, ctx: QuantileDistsCtx::new(channels, device.into())? },
                             }
                         }
-                        SlicesFilter::PrecalculateStats(v) => {
+                        SlicesFilter::Precalculate(v) => {
                             let dists: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>> = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_id, Metrics::EucDist, to_stats_aggr(v.aggr)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), true, false)).await?;
                             let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
@@ -221,7 +221,7 @@ where
                                 })?;
                             MasksCtx::PrecalculatedDist { dists }
                         }
-                        SlicesFilter::ExactStats(v) => {
+                        SlicesFilter::ExactS(v) => {
                             let exact_stats_t = Tensor::f_from_slice(&[v.euc_dist])?
                                 .f_to_device(ThoDevice::from(ctx.device_idx()).into())?
                                 .f_broadcast_to([channels as i64, 1])?;

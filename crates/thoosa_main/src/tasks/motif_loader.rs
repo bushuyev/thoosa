@@ -299,15 +299,8 @@ where
 
         let motif_id_value = motif_id.clone().0;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
-        let (channel, find_motifs_run_id, slices, resources_map) = thoosa_shared::with_async_perf_log(
-            || async {
-                self.store
-                    .list_random_motif_slices(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster)
-                    .await
-            },
-            "RandomSlicesLoader::run/store_read_list_random_motif_slices",
-        )
-        .await?;
+        let (channel, find_motifs_run_id, slices, resources_map) =                 self.store.list_random_motif_slices(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster).await?;
+        
         let cache_area = ctx.cache_area().into();
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "random loader").await?;
 
@@ -370,11 +363,13 @@ where
 
     debug!("load_motif_slices: find_motifs_run_id={find_motifs_run_id} window={window:?} device_idx={device_idx}");
 
+    //it won't be dumped to cpu - add to TmpCache
     let motif_t = Arc::new(DevicesWrap::wrap(ThoTensor::<MotifSlices, DataId>::zeros(motif_id.clone(), [resource_ids_slices.values().map(|slices|slices.len()).sum::<usize>() as i64, window as i64], (Float, ThoDevice::from(ctx.device_idx()).into())), CacheArea::default()));
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
     let mut slice_i = 0;
     for (resource_id, slices) in resource_ids_slices {
+        debug!("load_motif_slices: resource_id={resource_id} slices={slices:?}");
 
         let resource = resources_map
             .get(&resource_id)

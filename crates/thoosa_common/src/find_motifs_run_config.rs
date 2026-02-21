@@ -63,7 +63,7 @@ pub enum StatsKey {
     }
 }
 
-impl Named for StatsKeys {
+impl Named for StatsKeys {//for  CachableIdTr
 
 }
 
@@ -88,7 +88,8 @@ impl From<&BandPassFilterParams> for StatsKey {
 impl From<&InputFilter> for StatsKey {
     fn from(value: &InputFilter) -> Self {
         match value {
-            v =>  v.into(),
+            InputFilter::NotchBandFilter(filter) =>filter.into(),
+            InputFilter::BandPassFilter(filter) => filter.into()
         }
     }
 }
@@ -114,7 +115,7 @@ impl FindMotifsRunConfig {
         StatsKeys {
             keys: std::iter::once(StatsKey::Window(self.window)).chain(
                 self.freq_filter
-                    .as_ref()
+                    .as_deref()
                     .into_iter()
                     .flatten()
                     .map(Into::into),
@@ -138,7 +139,7 @@ impl FindMotifsRunConfig {
             step,
             window,
             freq_filter,
-            slices_filter: SlicesFilter::AccumulateStats(AccumulateStats {
+            slices_filter: SlicesFilter::Accumulate(AccumulateStats {
                 aggr: Aggr::Mean(MeanAggr { k: mean_k.unwrap_or(0.5) }),
             }),
             max_slices: None,
@@ -159,7 +160,7 @@ impl FindMotifsRunConfig {
             step,
             window,
             freq_filter,
-            slices_filter: SlicesFilter::PrecalculateStats(PrecalculateStats { aggr: Aggr::Mean(MeanAggr { k }), slices}),
+            slices_filter: SlicesFilter::Precalculate(PrecalculateStats { aggr: Aggr::Mean(MeanAggr { k }), slices}),
             max_slices: None,
         }
     }
@@ -287,9 +288,9 @@ pub enum MaxSlices{//discard motifs which slices counts bigger than
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub enum SlicesFilter {
-    AccumulateStats(AccumulateStats),
-    PrecalculateStats(PrecalculateStats),
-    ExactStats(ExactStats)//same for all motifs
+    Accumulate(AccumulateStats),
+    Precalculate(PrecalculateStats),
+    ExactS(ExactStats)//same for all motifs
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
@@ -324,14 +325,18 @@ pub struct ExactStats {
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+    use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
     use crate::find_motifs_run_config::InputFilter::{BandPassFilter, NotchBandFilter};
     use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParams};
     use log::debug;
     use tch::Tensor;
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::GridRunConfigSource;
-    use thoosa_shared::RangeOrValue;
+    use thoosa_shared::{F64BitsKey, RangeOrValue};
+    use crate::find_motifs_run_config::Aggr::Mean;
+    use crate::find_motifs_run_config::MaxSlices::Abs;
+    use crate::find_motifs_run_config::SlicesFilter::Precalculate;
+    use crate::find_motifs_run_config::StatsKey::Window;
 
     #[ctor::ctor]
     fn test_init() {
@@ -353,7 +358,7 @@ mod tests {
                     padding: 1i64.into(),
                 },
             )]),
-            slices_filter: SlicesFilterRangeOrValue::AccumulateStats(
+            slices_filter: SlicesFilterRangeOrValue::Accumulate(
                 AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: 0.5.into() }) },
             ),
             max_slices: None,
@@ -430,6 +435,23 @@ mod tests {
         assert!((run_configs[0].threshold - 0.4).abs() < 1e-6, "unexpected threshold: {}", run_configs[0].threshold);
         assert!((run_configs[1].threshold - 0.5).abs() < 1e-6, "unexpected threshold: {}", run_configs[1].threshold);
         assert!((run_configs[2].threshold - 0.6).abs() < 1e-6, "unexpected threshold: {}", run_configs[2].threshold);
+    }
+
+    #[test]
+    fn test_to_stats_keys(){
+        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: 50 }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })) };
+
+        let keys = run_config.to_stats_keys();
+        
+        assert_eq!(
+            keys,
+            StatsKeys { keys: vec![
+                StatsKey::Window(1000),
+                StatsKey::BandPassFilter { low_hz: F64BitsKey(4626322717216342016), band_hz: F64BitsKey(4611686018427387904), kernel_size: 10 },
+                StatsKey::NotchBandFilterKey { low_hz: F64BitsKey(4633500329122463744), high_hz: F64BitsKey(4633922541587529728) }
+            ] }
+        );
+
     }
 }
 

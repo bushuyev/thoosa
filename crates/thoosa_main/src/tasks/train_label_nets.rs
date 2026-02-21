@@ -239,21 +239,15 @@ impl SavableResult for TrainLabelNetsOutput {
     }
 
     async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
-        let run_id = thoosa_shared::with_async_perf_log(
-            || async {
-                store
-                    .save_run_config(
-                    Some(&self.train_motif_nets_run_ids),
-                    TrainLabelNetsRunConfig::type_name(),
-                    "TrainLabelNetsResult",
-                    "todo",
-                    HashMap::new(),
-                )
-                .await
-            },
-            "TrainLabelNetsOutput::save/store_write_save_run_config",
-        )
-        .await?;
+        let run_id = store
+            .save_run_config(
+                Some(&self.train_motif_nets_run_ids),
+                TrainLabelNetsRunConfig::type_name(),
+                "TrainLabelNetsResult",
+                "todo",
+                HashMap::new(),
+            )
+            .await?;
 
         self.id = run_id;
 

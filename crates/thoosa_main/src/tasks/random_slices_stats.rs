@@ -139,6 +139,8 @@ where
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
+        debug!("RandomStats::run: input={input:?}");
+
         let device_idx = ctx.device_idx();
         let cache_area = ctx.cache_area();
         let input_id = input.id().clone();
@@ -151,6 +153,8 @@ where
             }
         )?;
 
+        debug!("RandomStats::run: max_slices={max_slices:?} find_motifs_run_id={find_motifs_run_id}");
+
         if max_slices < 2 {
             return Err(ThoError::new(format!("RandomStats: max_slices must be >= 2, got {max_slices}")));
         }
@@ -159,15 +163,24 @@ where
             find_motifs_run_id,
             &self.store.list_run_config_values(find_motifs_run_id).await?,
         )?;
+        debug!("RandomStats::run: find_motifs_run_config={find_motifs_run_config:?}");
+
         let motif_width = find_motifs_run_config.window;
         assert_ne!(motif_width, 0, "RandomStats: motif_width must be > 0");
 
+        let stats_keys = find_motifs_run_config.to_stats_keys();
+
+        debug!("RandomStats::run: stats_keys={stats_keys:?}");
+
         let random_motif = Arc::clone(&self.random_motif)
             .run_cached(
-                Arc::new(DevicesWrap::wrap(RandomMotifInput::new(find_motifs_run_id, max_slices, find_motifs_run_config.to_stats_keys()), cache_area.into())),
+                Arc::new(DevicesWrap::wrap(RandomMotifInput::new(find_motifs_run_id, max_slices, stats_keys), cache_area.into())),
                 ctx.branch(Some("random_stats_random_motif"), false, false),
             )
             .await?;
+
+        debug!("RandomStats::run: random_motif={random_motif:?}");
+
 
         let motifs = with_data!(
             ctx.branch(Some("random_stats_random_motif_with_data"), false, false),
@@ -201,6 +214,9 @@ where
             let stats_input = Arc::new(DevicesWrap::wrap(stats_input, cache_area.into()));
             let stats_input_size = stats_input.size().clone();
             let stats_out_id = self.clc_stats.out_id(stats_input.id());
+
+            debug!("RandomStats::run: stats_input={stats_input:?}");
+
             let stats = OOMHandler::new(vec![Adjusters::Input(Box::new(SplitsAdjuster::<MotifSlicesSelector, MonoMetrics<0, 2>>::new([2, -1].into())))], None)
                 .run(
                     &self.clc_stats,
@@ -213,6 +229,9 @@ where
                     ),
                 )
                 .await?;
+
+            debug!("RandomStats::run: stats={stats:?}");
+
             stats_values.push(stats.value());
         }
 

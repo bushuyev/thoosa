@@ -1427,7 +1427,7 @@ pub fn avg_hist(values: &[f64], n_bins: usize) -> Vec<(f64, u32)> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct F64BitsKey(u64);
+pub struct F64BitsKey(pub u64);
 
 impl From<f64> for F64BitsKey {
     #[inline]
