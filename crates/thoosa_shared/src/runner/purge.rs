@@ -44,11 +44,11 @@ where
     O: Data + CopyToDevice + Output + Send + Sync + 'static,
     <O as Data>::M: DevicesWrapCopyMode<O>,
 {
-    async fn purge_cpu(&self, purge_since: u64) {
+    async fn purge_cpu(&self, on_cpu_before: u64) {
         self.retain(|k, v| {
             debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?}");
             if v.peek()
-                .and_then(|v| v.as_ref().map(|r| r.is_on_cpu_since(purge_since)).ok())
+                .and_then(|v| v.as_ref().map(|r| r.is_on_cpu_before(on_cpu_before)).ok())
                 .unwrap_or(false)
             {
                 debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?} removed");

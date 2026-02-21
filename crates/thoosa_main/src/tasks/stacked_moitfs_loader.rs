@@ -12,7 +12,6 @@ use thoosa_named_derive::Named;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
-use thoosa_shared::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRunConfig};
 use thoosa_common::utils::pad_to;

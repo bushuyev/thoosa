@@ -64,6 +64,7 @@ use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{cdt, cdt_for_dir, ResourceType, ThoError};
 use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Runtime;
+use tokio::{select, sync::watch, time::{self, Duration}};
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CopyCtx;
@@ -309,6 +310,27 @@ where
     let tensors_path_for_loader = tensors_path.clone();
 
     GlobalCtx::init_devices(2);
+
+    let (stop_cpu_purge_tx, mut rx) = watch::channel(false);
+
+    let worker = tokio::spawn(async move {
+        let mut ticker = time::interval(Duration::from_secs(180));
+        loop {
+            select! {
+                _ = ticker.tick() => {
+                    debug!("run_cli: purge_cpu tick");
+                    GlobalCtx::global().purge_cpu(100).await;
+                }
+                _ = rx.changed() => {
+                    if *rx.borrow() {
+                        debug!("stopping cpu purger");
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
 
     let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
         move |key, _| {
@@ -630,6 +652,9 @@ where
     info!("\n{}", format_perf_map(&PERF));
 
     GlobalCtx::global().shutdown().await;
+
+    let _ = stop_cpu_purge_tx.send(true);
+    let _ = worker.await;
 
     Ok(())
 }
@@ -1993,7 +2018,7 @@ mod cli_tests {
     use crate::tasks::transforms::freq_filter::FreqFilter;
 
     #[ctor::ctor]
-    fn init() {
+    pub fn init() {
         thoosa_shared::test_utils::init_test_logging();
     }
 
