@@ -1285,12 +1285,9 @@ where
                     score_sum += criterion_score;
                     avg_score = score_sum / (idx + 1) as f64;
                     debug!("SelectMotifsStage::run: motif_id={motif_id} criterion={criterion:?} criterion_score={criterion_score:.6} avg_score={avg_score:.6}");
-                    if avg_score < threshold {
-                        return Ok::<(bool, f64), ThoError>((false, avg_score));
-                    }
                 }
 
-                Ok::<(bool, f64), ThoError>((true, avg_score))
+                Ok::<(bool, f64), ThoError>((avg_score < threshold, avg_score))
             })?;
 
             if keep_score.0 {

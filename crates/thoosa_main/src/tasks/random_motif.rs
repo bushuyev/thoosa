@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use log::debug;
 use cached_derive::Cached;
 use parking_lot::RwLock;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, StatsKey, StatsKeys};
@@ -171,6 +172,8 @@ where
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
+        debug!("RandomMotif::run: input={input:?}");
+
         let cache_area = ctx.cache_area();
         let (max_slices, find_motifs_run_id) = with_data!(
             ctx.branch(Some("random_motif_input"), false, false),
@@ -195,7 +198,12 @@ where
             .store
             .list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices * 100/*TODO this is to compensate for filter, add proper coefficient */)
             .await?;
+
+        debug!("RandomMotif::run: resources={resources:?}");
+
         let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, find_motifs_run_config.window, input_len_adjuster)?;
+
+        debug!("RandomMotif::run: slices={slices:?} resources_map={resources_map:?}");
 
         let channels = thoosa_shared::with_perf_log(
             || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
@@ -206,6 +214,8 @@ where
 
         let mut motifs = Vec::with_capacity(channels as usize);
         for channel in 0..channels {
+            debug!("RandomMotif::run: channel={channel:?}");
+
             let (_window, motif) = load_motif_slices(
                 DataId(0),
                 find_motifs_run_id,

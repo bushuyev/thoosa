@@ -313,7 +313,7 @@ where
 
     let (stop_cpu_purge_tx, mut rx) = watch::channel(false);
 
-    let worker = tokio::spawn(async move {
+    let purge_cpu_worker = tokio::spawn(async move {
         let mut ticker = time::interval(Duration::from_secs(180));
         loop {
             select! {
@@ -654,7 +654,7 @@ where
     GlobalCtx::global().shutdown().await;
 
     let _ = stop_cpu_purge_tx.send(true);
-    let _ = worker.await;
+    let _ = purge_cpu_worker.await;
 
     Ok(())
 }
@@ -964,7 +964,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         freq_filter: Some(vec![
             BandPassFilter(BandPassFilterParamsRangeOrValue {
                 // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-                low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 200. }, step: Some((20., 1)) },//
+                low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 200. }, step: Some((10., 1)) },//
                 // band_hz: RangeOrValue::Value(10.),
                 band_hz:  RangeOrValue::Value(2.0),
                 kernel_size: RangeOrValue::Value(10),
@@ -977,11 +977,12 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 high_hz: RangeOrValue::Value(62.0),
             })
         ]),
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
-        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 3))
-        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.05..0.5, step: Some((0.05, 2))}  }) }),
-        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.02)  }) }),
+        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
+        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
+        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 3))
+        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }) }),//Some((0.05, 2))
+        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.02)  }) }),
+        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }) }),//Some((0.05, 2))
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
@@ -1011,14 +1012,14 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 eps: RangeOrValue::Value(1e-8),
             }),
         },
-        threshold: RangeOrValue::Range{range: 0.6..0.95, step: None}, //RangeOrValue::Value(0.8),
+        threshold: RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
     let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(100, 10));
 
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(50),
+        cycles: RangeOrValue::Value(150),
         batch_size: RangeOrValue::Value(10),
         // lr: RangeOrValue::Value(0.0001),
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
@@ -1097,18 +1098,18 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
             stride: RangeOrValue::Value(1),
             padding: RangeOrValue::Value(50),
         })]),
-        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.025) }) }),
-        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))} }) }),
-        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.01) })}),
-        // slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))}})}),
-        slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.05..1.0, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(1000) }),
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.5) }), slices: RangeOrValue::Value(1000) }),
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.005..0.05, step: Some((0.005, 4))} }), slices: RangeOrValue::Value(100)}),
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
-        // slices_filter: SlicesFilterRangeOrValue::PrecalculateStats(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
-        // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.1, step: Some((0.001, 3))}  }),//Some((0.01, 2))
-        // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.2, step: None}  }),//Some((0.01, 2))
-        // slices_filter: SlicesFilterRangeOrValue::ExactStats(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Value(0.01)  }),
+        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.025) }) }),
+        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))} }) }),
+        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.01) })}),
+        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))}})}),
+        slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.05..1.0, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(1000) }),
+        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.5) }), slices: RangeOrValue::Value(1000) }),
+        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.005..0.05, step: Some((0.005, 4))} }), slices: RangeOrValue::Value(100)}),
+        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
+        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
+        // slices_filter: SlicesFilterRangeOrValue::Exact(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.1, step: Some((0.001, 3))}  }),//Some((0.01, 2))
+        // slices_filter: SlicesFilterRangeOrValue::Exact(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.2, step: None}  }),//Some((0.01, 2))
+        // slices_filter: SlicesFilterRangeOrValue::Exact(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Value(0.01)  }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
@@ -1213,7 +1214,7 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
             }),
         ]),
         // freq_filter: None,
-        slices_filter: SlicesFilterRangeOrValue::AccumulateStats(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.02) }) }),
+        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.02) }) }),
         max_slices: None,
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
@@ -1829,7 +1830,7 @@ where
     CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {
     let opt_run_configs = rcrv.opt_run_configs()?;
-    debug!("run_all_grid_step: grid_run_configs={opt_run_configs:?}");
+    debug!("run_all_grid_step: run_opt={opt_run_configs:?}");
 
     // let mut run_configs: Vec<RC> = opt_run_configs.to_run_configs();
     //gpt TODO!! presave flag is currently unused in run_opt; run_ids always come from the stage output.

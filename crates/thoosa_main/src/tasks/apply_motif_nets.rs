@@ -807,12 +807,13 @@ pub(crate) mod tests {
         );
 
 
+        let slice_step = 10;
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
             &ws,
             &store,
             vec![select_motifs_run_id],
             mock_run_ctx::default(1), Some(0.3),
-            10,
+            slice_step,
             trigger_oom_len
         ).await?);
 
