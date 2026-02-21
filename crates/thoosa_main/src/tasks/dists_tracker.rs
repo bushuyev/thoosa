@@ -1625,7 +1625,7 @@ where
 
                     trace!("DistsTracker::consume: channel={channel:?} i_0={i_0} i_1={i_1} slice_0={slice_0:?}  slice_1={slice_1:?} dist={dist}");
 
-                    if slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1 {
+                    if slice_0.0 != slice_1.0 || slice_0.1 != slice_1.1 {
                         trace!("DistsTracker::consume, track: slice_0={slice_0:?} slice_1={slice_1:?}");
 
                         thoosa_shared::with_perf_log(
