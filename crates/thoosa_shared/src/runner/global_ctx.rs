@@ -53,6 +53,7 @@ impl GlobalCtx {
 
         debug!("GlobalCtx::new: semaphores={semaphores:?}");
 
+
         Self {
             semaphores,
 
@@ -255,7 +256,7 @@ impl GlobalCtx {
         Ok(())
     }
 
-    pub async fn purge_cpu(&self, purge_since: u64) {
+    pub async fn purge_cpu(&self, purge_last: u64) {
         //should be ok to read lock - see dump_all_to_cpu
         let maps = with_async_perf_log(
             async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::purge_cpu: timed out waiting for caches read lock"),
@@ -263,10 +264,13 @@ impl GlobalCtx {
         )
         .await;
 
-        debug!("GlobalCtx::purge_cpu: maps.len={}", maps.len());
+        let purge_since = self.cache_age.load(Relaxed).saturating_sub(purge_last);
 
-        for e in maps.iter() {
-            e.1.purge_cpu(purge_since).await;
+        debug!("GlobalCtx::purge_cpu: purge_since={purge_since} maps.len={}", maps.len());
+        if purge_since > 0 {
+            for e in maps.iter() {
+                e.1.purge_cpu(purge_since).await;
+            }
         }
     }
 
@@ -286,7 +290,6 @@ impl GlobalCtx {
         .dispose_cache_area(cache_area)
     }
 
-    #[allow(dead_code)]
     pub fn do_age(&self) {
         self.cache_age.fetch_add(1, Relaxed);
     }

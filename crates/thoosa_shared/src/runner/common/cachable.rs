@@ -231,7 +231,7 @@ where
 
     fn size(wrap: &DevicesWrap<O>) -> &<O as Data>::Metrics
         where Self:Sized;
-    fn is_on_cpu_since(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool
+    fn is_on_cpu_before(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool
         where Self:Sized;
     async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoError>
         where Self:Sized;
@@ -348,7 +348,7 @@ where
         &wrap.size //TODO move to DevicesWrap?
     }
 
-    fn is_on_cpu_since(_wrap: &DevicesWrap<O>, _threshold_age: u64) -> bool
+    fn is_on_cpu_before(_wrap: &DevicesWrap<O>, _threshold_age: u64) -> bool
     where
         Self: Sized
     {
@@ -632,7 +632,7 @@ where
         &wrap.size
     }
 
-    fn is_on_cpu_since(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool {
+    fn is_on_cpu_before(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool {
         let on_cpu_since = timed_parking_rw_read(&wrap.on_cpu_since, "CpuOrGpu::is_on_cpu_since on_cpu_since.read");
         let r = on_cpu_since.as_ref().map(|age| threshold_age < *age).unwrap_or(false);
 
@@ -808,8 +808,8 @@ where
         O::M::with_selected_data(self, to_device_idx, permits_ctx, selector, do_run).await
     }
 
-    pub fn is_on_cpu_since(&self, threshold_age: u64) -> bool {
-        O::M::is_on_cpu_since(self, threshold_age)
+    pub fn is_on_cpu_before(&self, threshold_age: u64) -> bool {
+        O::M::is_on_cpu_before(self, threshold_age)
     }
 
     pub async fn take_data(

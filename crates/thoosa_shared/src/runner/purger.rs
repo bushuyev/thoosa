@@ -66,7 +66,6 @@ impl Purger {
         Self { tx, _worker: Some(worker),  }
     }
 
-    //TODO rename to send_purge_gpu_rq
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>, cache_area: u64) -> Result<(), ThoError>{
         debug!("Purger::run_purge_gpu: closures.len={}", closures.len());
         if GlobalCtx::global().is_shutting_down() {

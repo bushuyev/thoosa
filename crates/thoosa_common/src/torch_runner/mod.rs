@@ -55,7 +55,6 @@ mod tests {
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::{fmt, EnvFilter};
     use thoosa_shared::comp_id::{MonoKey, SynKey};
-    use thoosa_shared::runner::tmp_cache::TmpCached;
     use thoosa_shared::copy_mode::CpuOnly;
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -73,6 +72,7 @@ mod tests {
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use crate::utils::lin_for_size;
     use std::ops::Add;
+    use thoosa_shared::runner::tmp_cache::TmpCached;
 
     #[ctor::ctor]
     fn init() {

@@ -104,6 +104,7 @@ where
     }
 }
 
+///for TmpCache
 #[async_trait]
 impl <D> FuturesRunnerMapPurger for DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>
 where
@@ -142,7 +143,7 @@ where
     async fn purge_cpu(&self, i: u64) {
         debug!("TmpCached::purge_cpu: purge_since={i}");
         self.retain(|key, value| {
-            let keep = !value.is_on_cpu_since(i);
+            let keep = !value.is_on_cpu_before(i);
             if !keep {
                 debug!("TmpCached::purge_cpu: key={key:?} removed");
             }
