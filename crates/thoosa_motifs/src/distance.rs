@@ -520,13 +520,13 @@ fn accumulating_quantile_mask(
                     .f_i((channel, .., ..))?
                     .f_masked_select(&pm.f_i((channel, .., ..))?)?;
             if channel_dists_t.numel() == 0 {
-                let prev_quantile = prev_quantiles.f_i((channel, 0))?;
+                let prev_quantile = prev_quantiles.f_i((channel, 0))?.f_view([1])?;
                 trace!("running_quantile_mask: channel={channel} has no samples, reusing prev_quantile={prev_quantile}");
                 quantiles.push(prev_quantile);
                 counts.push(0);
                 continue;
             }
-            let quantile = channel_dists_t.f_quantile_scalar(q, 0, true, "lower")?;
+            let quantile = channel_dists_t.f_quantile_scalar(q, 0, true, "lower")?.f_view([1])?;
             trace!("running_quantile_mask: channel={channel} channel_dists_t=\n{channel_dists_t} quantile={quantile}");
             quantiles.push(quantile);
             counts.push(channel_dists_t.size()[0])
