@@ -401,8 +401,6 @@ where
                     t_1_batch.clone(),
                     t_0_batch_resources_cloned.clone(),
                     t_1_batch_resources_cloned.clone(),
-                    t_0_batch_offsets.clone(),
-                    t_1_batch_offsets.clone(),
                     CacheArea::default()
                 );
                 let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
@@ -473,8 +471,6 @@ struct CrossInputSelectorWrap {
     batch_1:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
     resources_0: Vec<Arc<Resource>>,
     resources_1: Vec<Arc<Resource>>,
-    batch_0_offsets: Vec<u32>,
-    batch_1_offsets: Vec<u32>,
     cache_area: CacheArea,
 }
 
@@ -508,11 +504,9 @@ impl CrossInputSelectorWrap {
         batch_1: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
         resources_0: Vec<Arc<Resource>>,
         resources_1: Vec<Arc<Resource>>,
-        batch_0_offsets: Vec<u32>,
-        batch_1_offsets: Vec<u32>,
         cache_area: CacheArea,
     ) -> Self {
-        Self {id, batch_0, batch_1, resources_0, resources_1, batch_0_offsets, batch_1_offsets, cache_area }
+        Self {id, batch_0, batch_1, resources_0, resources_1,  cache_area }
     }
 }
 
@@ -865,12 +859,10 @@ impl WithDataRef for CrossInputSelectorWrap
              batch_1:&[&ThoTensor<ChannelsData2, SynKey>],
             |{
 
-                do_run(&CrossInput::new_with_offsets(
+                do_run(&CrossInput::new(
                     [batch_0,batch_1].concat().as_slice(),
                     self.resources_0.as_slice(),
                     self.resources_1.as_slice(),
-                    self.batch_0_offsets.clone(),
-                    self.batch_1_offsets.clone(),
                 ), &ctx)
 
         })
@@ -902,27 +894,25 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
         let t_1_batch = selector.batch_1_selector.select(self.batch_1.clone(), run_ctx.branch(Some("cross_loader_batch_1_select"), false, false)).await?;
 
         //TODO move to RangeOrSlice::select
-        let (resources_0, offsets_0) = match &selector.batch_0_selector {
-            RangeOrSlice::Full => (self.resources_0.as_slice(), self.batch_0_offsets.clone()),
+        let resources_0 = match &selector.batch_0_selector {
+            RangeOrSlice::Full => (self.resources_0.as_slice()),
             RangeOrSlice::Range(range) => {
                 let range = range.start as usize..range.end as usize;
-                (&self.resources_0[range.clone()], self.batch_0_offsets[range].to_vec())
+                (&self.resources_0[range.clone()])
             }
             RangeOrSlice::Slice((i, range)) => {
-                let offset = self.batch_0_offsets[*i] + u32::try_from(range.start).map_err(|_| ThoError::new(format!("invalid batch_0 slice start: {}", range.start)))?;
-                (std::slice::from_ref(&self.resources_0[*i]), vec![offset])
+                std::slice::from_ref(&self.resources_0[*i])
             }
         };
 
-        let (resources_1, offsets_1) = match &selector.batch_1_selector {
-            RangeOrSlice::Full => (self.resources_1.as_slice(), self.batch_1_offsets.clone()),
+        let resources_1 = match &selector.batch_1_selector {
+            RangeOrSlice::Full => (self.resources_1.as_slice()),
             RangeOrSlice::Range(range) => {
                 let range = range.start as usize..range.end as usize;
-                (&self.resources_1[range.clone()], self.batch_1_offsets[range].to_vec())
+                (&self.resources_1[range.clone()])
             }
             RangeOrSlice::Slice((i, range)) => {
-                let offset = self.batch_1_offsets[*i] + u32::try_from(range.start).map_err(|_| ThoError::new(format!("invalid batch_1 slice start: {}", range.start)))?;
-                (std::slice::from_ref(&self.resources_1[*i]), vec![offset])
+                std::slice::from_ref(&self.resources_1[*i])
             }
         };
 
@@ -935,12 +925,10 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
 
                 debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: batch_0={batch_0:?} batch_1={batch_1:?}");
 
-                do_run(&CrossInput::new_with_offsets(
+                do_run(&CrossInput::new(
                     [batch_0,batch_1].concat().as_slice(),
                     resources_0,
                     resources_1,
-                    offsets_0.clone(),
-                    offsets_1.clone(),
                 ), &ctx)
 
         })
@@ -1245,8 +1233,6 @@ mod tests {
     struct SplitObservation {
         batch_0_ids: Vec<u32>,
         batch_1_ids: Vec<u32>,
-        batch_0_offsets: Vec<u32>,
-        batch_1_offsets: Vec<u32>,
         tensor_lens: Vec<i64>,
     }
 
@@ -1357,8 +1343,6 @@ mod tests {
             batch_1,
             resources_0.clone(),
             resources_1.clone(),
-            vec![0; resources_0.len()],
-            vec![0; resources_1.len()],
             ca.clone()
         );
         let mut cross_loader_adjuster = CrossLoaderAdjuster::new();
@@ -1414,8 +1398,6 @@ mod tests {
             batch_1,
             resources_0.clone(),
             resources_1.clone(),
-            vec![0],
-            vec![0],
             ca.clone(),
         );
 
@@ -1435,7 +1417,6 @@ mod tests {
         let mut run_ctx = RunCtxWithPermits::new(1, "test_adjuster_slice");
         input
             .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_degrades_0"), false, false), selector.clone(), None, |data, _ctx| {
-                assert_eq!(data.batch_1_offsets()[0], 0);
                 assert_eq!(data.tensors()[1].t.size()[1], 4);
                 Ok(())
             })
@@ -1452,7 +1433,6 @@ mod tests {
 
         input
             .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_degrades_1"), false, false), selector.clone(), None, |data, _ctx| {
-                assert_eq!(data.batch_1_offsets()[0], 4);
                 assert_eq!(data.tensors()[1].t.size()[1], 4);
                 Ok(())
             })
@@ -1503,8 +1483,6 @@ mod tests {
             batch_1,
             resources_0.clone(),
             resources_1.clone(),
-            vec![0],
-            vec![0, 0],
             ca.clone(),
         );
 
@@ -1526,7 +1504,6 @@ mod tests {
         input
             .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_0"), false, false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
-                assert_eq!(data.batch_1_offsets()[0], 0);
                 assert_eq!(data.tensors()[1].t.size()[1], 3);
                 Ok(())
             })
@@ -1544,7 +1521,6 @@ mod tests {
         input
             .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_1"), false, false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
-                assert_eq!(data.batch_1_offsets()[0], 3);
                 assert_eq!(data.tensors()[1].t.size()[1], 3);
                 Ok(())
             })
@@ -1562,7 +1538,6 @@ mod tests {
         input
             .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_2"), false, false), selector, None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[1].id());
-                assert_eq!(data.batch_1_offsets()[0], 0);
                 assert_eq!(data.tensors()[1].t.size()[1], 3);
                 Ok(())
             })
@@ -2011,8 +1986,6 @@ mod tests {
                     let observation = SplitObservation {
                         batch_0_ids: input.batch_0().iter().map(|r| r.as_ref().id()).collect(),
                         batch_1_ids: input.batch_1().iter().map(|r| r.as_ref().id()).collect(),
-                        batch_0_offsets: input.batch_0_offsets().to_vec(),
-                        batch_1_offsets: input.batch_1_offsets().to_vec(),
                         tensor_lens,
                     };
 
@@ -2078,15 +2051,11 @@ mod tests {
                 SplitObservation {
                     batch_0_ids: vec![resource_a.id()],
                     batch_1_ids: vec![resource_a.id()],
-                    batch_0_offsets: vec![0],
-                    batch_1_offsets: vec![0],
                     tensor_lens: vec![tensor_len as i64, slice_len],
                 },
                 SplitObservation {
                     batch_0_ids: vec![resource_a.id()],
                     batch_1_ids: vec![resource_a.id()],
-                    batch_0_offsets: vec![0],
-                    batch_1_offsets: vec![slice_len as u32],
                     tensor_lens: vec![tensor_len as i64, second_slice_len],
                 },
             ]

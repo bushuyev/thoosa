@@ -33,58 +33,22 @@ pub struct CrossInput<'a, R: AsRef<Resource>> {
     tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
     resources_0: &'a [R],
     resources_1: &'a [R],
-    resources_0_offsets: Vec<u32>,
-    resources_1_offsets: Vec<u32>,
     cache_area: CacheArea,
 }
 
 impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
+
     pub fn new(
         tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
         b_0: &'a [R],
         b_1: &'a [R],
     ) -> Self {
-        Self::new_with_offsets(
-            tensors,
-            b_0,
-            b_1,
-            vec![0; b_0.len()],
-            vec![0; b_1.len()],
-        )
-    }
 
-    pub fn new_with_offsets(
-        tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
-        b_0: &'a [R],
-        b_1: &'a [R],
-        resources_0_offsets: Vec<u32>,
-        resources_1_offsets: Vec<u32>,
-    ) -> Self {
-        assert_eq!(b_0.len(), resources_0_offsets.len());
-        assert_eq!(b_1.len(), resources_1_offsets.len());
 
-        let has_offsets = resources_0_offsets.iter().any(|v| *v != 0)
-            || resources_1_offsets.iter().any(|v| *v != 0);
-
-        let id = if has_offsets {
-            let batch_0_ids = b_0
-                .iter()
-                .zip(resources_0_offsets.iter())
-                .map(|(r, offset)| (r.as_ref().id(), *offset))
-                .collect::<Vec<_>>();
-            let batch_1_ids = b_1
-                .iter()
-                .zip(resources_1_offsets.iter())
-                .map(|(r, offset)| (r.as_ref().id(), *offset))
-                .collect::<Vec<_>>();
-            mono_key!(
-                format!("cross_input_b0={batch_0_ids:?}_b1={batch_1_ids:?}"),
-                "CrossInput"
-            )
-        } else {
+        let id = {
             let batch_0_ids = b_0.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
             let batch_1_ids = b_1.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
-            mono_key!(
+            mono_key!(//TODO
                 format!("cross_input_b0={batch_0_ids:?}_b1={batch_1_ids:?}"),
                 "CrossInput"
             )
@@ -95,8 +59,6 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
             tensors,
             resources_0: b_0,
             resources_1: b_1,
-            resources_0_offsets,
-            resources_1_offsets,
             cache_area: CacheArea::default(),
         }
     }
@@ -113,13 +75,7 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
         self.resources_1
     }
 
-    pub fn batch_0_offsets(&self) -> &[u32] {
-        &self.resources_0_offsets
-    }
 
-    pub fn batch_1_offsets(&self) -> &[u32] {
-        &self.resources_1_offsets
-    }
 }
 
 impl<'a, R: AsRef<Resource> + Debug + Send + Sync> WithId for CrossInput<'a, R> {
@@ -209,12 +165,10 @@ where
         selected_tensors.extend_from_slice(&self.tensors[..batch_0_len]);
         selected_tensors.extend_from_slice(&self.tensors[batch_1_offset..batch_1_end]);
 
-        let input = CrossInput::new_with_offsets(
+        let input = CrossInput::new(
             selected_tensors.as_slice(),
             self.resources_0,
             &self.resources_1[range.clone()],
-            self.resources_0_offsets.clone(),
-            self.resources_1_offsets[range].to_vec(),
         );
 
         do_run(&input, &permits_ctx)
@@ -441,9 +395,8 @@ where
             .resources_0
             .into_iter()
             .zip(batch_0_sizes.into_iter())
-            .zip(input.batch_0_offsets().iter().copied())
-            .map(|((resource, size), offset)| {
-                ResourceSlices::new(resource.as_ref().id(), size as usize, offset)
+            .map(|(resource, size)| {
+                ResourceSlices::new(resource.as_ref().id(), size as usize)
             })
             .collect();
 
@@ -457,9 +410,8 @@ where
             .resources_1
             .into_iter()
             .zip(batch_1_sizes.into_iter())
-            .zip(input.batch_1_offsets().iter().copied())
-            .map(|((resource, size), offset)| {
-                ResourceSlices::new(resource.as_ref().id(), size as usize, offset)
+            .map(|(resource, size)| {
+                ResourceSlices::new(resource.as_ref().id(), size as usize)
             })
             .collect();
 
