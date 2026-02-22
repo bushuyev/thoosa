@@ -132,7 +132,7 @@ where
             .iter()
             .zip(batch_1_sizes.into_iter())
             .zip(input.resource_offsets.iter().copied())
-            .map(|((resource_id, size), offset)| ResourceSlices::new(*resource_id, size as usize, offset))
+            .map(|((resource_id, size), offset)| ResourceSlices::new(*resource_id, size as usize))
             .collect::<Vec<_>>();
 
         let resources_iter = SlicesIter::new_with_offsets(unfold_params.step() as usize, resource_ids_sizes);
