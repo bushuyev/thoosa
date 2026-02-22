@@ -314,7 +314,7 @@ where
     let (stop_cpu_purge_tx, mut rx) = watch::channel(false);
 
     let purge_cpu_worker = tokio::spawn(async move {
-        let mut ticker = time::interval(Duration::from_secs(180));
+        let mut ticker = time::interval(Duration::from_secs(60));
         loop {
             select! {
                 _ = ticker.tick() => {
@@ -959,7 +959,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        window: RangeOrValue::Value(1000),
+        window: RangeOrValue::Range { range: Range { start: 100, end: 1000 }, step: None }, //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -967,10 +967,10 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 200. }, step: Some((10., 1)) },//
                 // band_hz: RangeOrValue::Value(10.),
                 band_hz:  RangeOrValue::Value(2.0),
-                kernel_size: RangeOrValue::Value(10),
-                // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 1000 }, step: None },
+                // kernel_size: RangeOrValue::Value(10),
+                kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 1000 }, step: None },
                 stride: RangeOrValue::Value(10),
-                padding: RangeOrValue::Value(50),
+                padding: RangeOrValue::Value(0),
             }),
             NotchBandFilter(NotchBandFilterParamsRangeOrValue {
                 low_hz: RangeOrValue::Value(59.0),
@@ -993,14 +993,14 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue {  }),
         //     slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
         // }),
-        extend_config: Some(ExtendMotifsConfigRangeOrValue {
-            slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue {  }),
-            // slices_selector_metric: ComparisonMethodRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue {  }),
-            // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.5) }),
-            slices_selector_aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.01) }),
-            // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.8..1.2, step: Some((0.1, 1))} }),
-        }),
-        // extend_config: None,
+        // extend_config: Some(ExtendMotifsConfigRangeOrValue {
+        //     slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue {  }),
+        //     // slices_selector_metric: ComparisonMethodRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue {  }),
+        //     // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.5) }),
+        //     slices_selector_aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.01) }),
+        //     // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.8..1.2, step: Some((0.1, 1))} }),
+        // }),
+        extend_config: None,
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
             inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {
@@ -1015,7 +1015,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         threshold: RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
-    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(100, 10));
+    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(200, 10));
 
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {

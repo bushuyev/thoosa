@@ -140,7 +140,7 @@ where
         Ok(())
     }
 
-    async fn purge_cpu(&self, i: u64) {
+    async fn purge_cpu(&self, i: u64) -> usize{
         debug!("TmpCached::purge_cpu: purge_since={i}");
         self.retain(|key, value| {
             let keep = !value.is_on_cpu_before(i);
@@ -149,6 +149,8 @@ where
             }
             keep
         });
+
+        0
     }
 }
 

@@ -167,7 +167,7 @@ where
     > + Stage<Ctx=C> + Send + Sync + 'static,
 {
     find_motifs_run_config_id: RunId,
-    loader: Arc<L>,
+    configured_loader: Arc<L>,
     store: Arc<Box<dyn Store>>,
     cross_unfold_clc: Arc<CLC>,
     receiver_factory: Box<dyn Fn(&[Arc<Resource>]) -> Arc<RSV> + Send + Sync>,
@@ -204,7 +204,7 @@ where
 {
     pub fn new<ReceiverFactory, OnAllDone, OnBatchDone>(
         find_motifs_run_config_id: RunId, //fod logging
-        loader: Arc<L>,
+        configured_loader: Arc<L>,
         store: &Arc<Box<dyn Store>>,
         cross_unfold_clc: Arc<CLC>,
         receiver_factory: ReceiverFactory,
@@ -221,7 +221,7 @@ where
     {
         Self {
             find_motifs_run_config_id,
-            loader,
+            configured_loader,
             store: Arc::clone(store),
             cross_unfold_clc,
             receiver_factory: Box::new(receiver_factory),
@@ -344,7 +344,7 @@ where
         for (i_0, resource_0) in resources.iter().enumerate() {
             debug!("CrossLoader::run:  find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
 
-            let t_0 = Arc::clone(&self.loader)
+            let t_0 = Arc::clone(&self.configured_loader)
                 .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone(), CacheArea::default())), ctx.branch(Some("cross_loader_t_0"), false, false))
                 .await?;
 
@@ -367,7 +367,7 @@ where
                 .enumerate()
                 .skip(skip_0_i)//skipping lower triangle
             {
-                let t_1 = Arc::clone(&self.loader)
+                let t_1 = Arc::clone(&self.configured_loader)
                     .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone(), CacheArea::default())), ctx.branch(Some("cross_loader_t_1"), false, false))
                     .await?;
 
