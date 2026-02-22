@@ -1587,7 +1587,7 @@ where
         let slices_1: Vec<_> = iter_1.collect();
 
         debug!("DistsTracker::consume: slices_0={slices_0:?} slices_1={slices_1:?}");
-
+        let input_id = input.id().clone();
         let clc_result = input.clc_result();
         let mask_size = clc_result.mask_size_hint()?;
 
@@ -1610,8 +1610,6 @@ where
 
                 match_indices.par_bridge().for_each(|(channel, i_0, i_1, dist) | {
 
-
-
                     let channel = channel as usize;
                     let i_0 = i_0 as usize;
                     let i_1 = i_1 as usize;
@@ -1626,7 +1624,7 @@ where
                     trace!("DistsTracker::consume: channel={channel:?} i_0={i_0} i_1={i_1} slice_0={slice_0:?}  slice_1={slice_1:?} dist={dist}");
 
                     if slice_0.0 != slice_1.0 || slice_0.1 != slice_1.1 {
-                        trace!("DistsTracker::consume, track: slice_0={slice_0:?} slice_1={slice_1:?}");
+                        trace!("DistsTracker::consume, track: input.id={input_id:?} slice_0={slice_0:?} slice_1={slice_1:?}", );
 
                         thoosa_shared::with_perf_log(
                             || channel_trackers[channel].try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),

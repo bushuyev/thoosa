@@ -97,7 +97,7 @@ where
                 match clc_result.to_cpu().await {
                     Ok(clc_result) => {
                         self.partials
-                            .push(CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1));
+                            .push(CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, mono_key!("CrossUnfoldClcOutput", "stage").into()));
                     }
                     Err(err) => {
                         self.error = Some(err);
@@ -137,7 +137,7 @@ where
         Ok(CrossUnfoldClcOutput::new(
             clc_result,
             SlicesIter::new_with_offsets(iter_0_step, iter_0_resources),
-            SlicesIter::new_with_offsets(iter_1_step, iter_1_resources),
+            SlicesIter::new_with_offsets(iter_1_step, iter_1_resources), mono_key!("CrossUnfoldClcOutput", "stage").into(),
         ))
     }
 }
@@ -342,7 +342,7 @@ where
         let mut skip_0_i = 0;
 
         for (i_0, resource_0) in resources.iter().enumerate() {
-            debug!("CrossLoader::run:  find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
+            debug!("CrossLoader::run: find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
 
             let t_0 = Arc::clone(&self.configured_loader)
                 .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone(), CacheArea::default())), ctx.branch(Some("cross_loader_t_0"), false, false))
@@ -380,7 +380,7 @@ where
                     continue;
                 }
 
-                debug!("CrossLoader::run: t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}");
+                debug!("CrossLoader::run: find_motifs_run_config_id={} t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}", self.find_motifs_run_config_id);
                 let batches_concated = [t_0_batch.clone(), t_1_batch.clone()].concat();
                 let cross_unfold_clc = Arc::clone(&self.cross_unfold_clc);
 
@@ -396,7 +396,7 @@ where
                     .collect::<Vec<_>>();
 
                 let input = CrossInputSelectorWrap::new(
-                    "".into(),
+                    mono_key!(self.find_motifs_run_config_id, "find_motifs_run_config_id").into(),//TODO
                     t_0_batch.clone(),
                     t_1_batch.clone(),
                     t_0_batch_resources_cloned.clone(),
@@ -466,7 +466,7 @@ where
 
 #[derive(Debug)]
 struct CrossInputSelectorWrap {
-    id: MonoKey,
+    id: SynKey,
     batch_0:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
     batch_1:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
     resources_0: Vec<Arc<Resource>>,
@@ -490,7 +490,7 @@ impl Data for CrossInputSelectorWrap {
 
 
 impl WithId for CrossInputSelectorWrap {
-    type ID = MonoKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -499,7 +499,7 @@ impl WithId for CrossInputSelectorWrap {
 
 impl CrossInputSelectorWrap {
     pub fn new(
-        id:MonoKey,
+        id:SynKey,
         batch_0: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
         batch_1: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
         resources_0: Vec<Arc<Resource>>,
@@ -863,6 +863,7 @@ impl WithDataRef for CrossInputSelectorWrap
                     [batch_0,batch_1].concat().as_slice(),
                     self.resources_0.as_slice(),
                     self.resources_1.as_slice(),
+                    self.id.clone()
                 ), &ctx)
 
         })
@@ -929,6 +930,7 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
                     [batch_0,batch_1].concat().as_slice(),
                     resources_0,
                     resources_1,
+                    self.id.clone()
                 ), &ctx)
 
         })
@@ -1422,7 +1424,7 @@ mod tests {
             })
             .await?;
 
-        let dummy_output = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]));
+        let dummy_output = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
         context.add_partial_output(dummy_output).await;
 
         selector = cross_loader_adjuster
@@ -1509,7 +1511,7 @@ mod tests {
             })
             .await?;
 
-        let dummy_output_0 = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]));
+        let dummy_output_0 = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
         context.add_partial_output(dummy_output_0).await;
 
         selector = cross_loader_adjuster
@@ -1526,7 +1528,7 @@ mod tests {
             })
             .await?;
 
-        let dummy_output_1 = CrossUnfoldClcOutput::new(TestBatchOutput::new(1), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]));
+        let dummy_output_1 = CrossUnfoldClcOutput::new(TestBatchOutput::new(1), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
         context.add_partial_output(dummy_output_1).await;
 
         selector = cross_loader_adjuster
@@ -1811,7 +1813,7 @@ mod tests {
                     Ok(CrossUnfoldClcOutput::new(
                         output,
                         SlicesIter::new(1, vec![]),
-                        SlicesIter::new(1, vec![]),
+                        SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
                     ))
                 })
                 .finish(),
@@ -1994,7 +1996,7 @@ mod tests {
                     Ok(CrossUnfoldClcOutput::new(
                         TestBatchOutput::new(0),
                         SlicesIter::new(1, vec![]),
-                        SlicesIter::new(1, vec![]),
+                        SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
                     ))
                 })
                 .finish(),
@@ -2070,12 +2072,12 @@ mod tests {
         let output_0 = CrossUnfoldClcOutput::new(
             CpuMergeOutput::new(Arc::clone(&to_cpu_calls), 0),
             SlicesIter::new(1, vec![]),
-            SlicesIter::new(1, vec![]),
+            SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
         );
         let output_1 = CrossUnfoldClcOutput::new(
             CpuMergeOutput::new(Arc::clone(&to_cpu_calls), 1),
             SlicesIter::new(1, vec![]),
-            SlicesIter::new(1, vec![]),
+            SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
         );
 
         let mut builder = CrossUnfoldClcOutputBuilder::new(CrossUnfoldClcOutputMergeMode::CpuMerge);
@@ -2095,12 +2097,12 @@ mod tests {
         let output_0 = CrossUnfoldClcOutput::new(
             CpuMergeOutput::new(Arc::clone(&to_cpu_calls), 0),
             SlicesIter::new(1, vec![]),
-            SlicesIter::new(1, vec![]),
+            SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
         );
         let output_1 = CrossUnfoldClcOutput::new(
             CpuMergeOutput::new(Arc::clone(&to_cpu_calls), 1),
             SlicesIter::new(1, vec![]),
-            SlicesIter::new(1, vec![]),
+            SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
         );
 
         let mut builder = CrossUnfoldClcOutputBuilder::new(CrossUnfoldClcOutputMergeMode::GpuMerge);

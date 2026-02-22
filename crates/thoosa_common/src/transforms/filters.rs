@@ -175,7 +175,7 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use crate::transforms::filters::{band_pass_filter, clc_frequencies};
+    use crate::transforms::filters::{band_pass_filter, clc_frequencies, hann_window};
     use crate::transforms::utils::sin_t;
     use crate::utils::{from, plot_series, to_vec_f32};
     use log::debug;
@@ -211,6 +211,8 @@ mod tests {
         let input = input_signal.view((1, 1, -1)).expand(&[1, 2, -1], true); // batch x channel for conv1d
 
         let kernel = band_pass_filter(low_hz, high_hz, kernel_size, sample_rate, 1e-6)?;
+
+        // debug!("kernel.size={:?}", kernel.size());
         // let kernel = kernel.unsqueeze(0).unsqueeze(0).expand(&[1, 2, -1], true); // [out_channels, in_channels/groups, kernel_size]
         let kernel = kernel.repeat([2, 1, 1]); // [out_channels, in_channels/groups, kernel_size]
 
@@ -284,5 +286,19 @@ mod tests {
         ));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_0(){
+
+        // let input_t = Tensor::rand(&[1, 20, 12800], FLOAT_CPU);
+
+        // let output_t = hann_window(20).unwrap();
+        //
+        // debug!("output_t.size={:?}", output_t.size())
+
+        let kernel = band_pass_filter(10., 20., 100, 200., 1e-6).unwrap();
+
+        debug!("kernel.size={:?}", kernel.size());
     }
 }
