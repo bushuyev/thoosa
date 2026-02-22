@@ -112,6 +112,47 @@ where
             sample_rate
         })
     }
+
+    pub fn apply_tho_tensor(&self, input_tensor: &ThoTensor<ChannelsData2, SynKey>) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoError> {
+        let mut filtered_t = input_tensor.t_ref().shallow_clone();
+        for filter in self.filters.iter() {
+            match filter {
+                PreparedFilter::NotchBand { low_hz, high_hz } => {
+                    let filtered_t_out = notch_band_rfft(&filtered_t, self.sample_rate, *low_hz, *high_hz)?;
+
+                    debug!("FreqFilter::apply_tho_tensor, NotchBand: id={} filtered_t.size={:?} filtered_t_out.size={:?}", input_tensor.id(), filtered_t.size(), filtered_t_out.size());
+
+                    filtered_t = filtered_t_out;
+                    #[allow(unexpected_cfgs)]
+                    #[cfg(tho_debug_plots)]
+                    {
+                        plot_t(&filtered_t, &format!("{}_NotchBand", input_tensor.id()), true);
+                    }
+                }
+                PreparedFilter::BandPass { kernel, stride, padding } => {
+                    filtered_t = kernel.run_inner(|band_filter_inner| {
+                        let kernel_t = if band_filter_inner.device() == filtered_t.device() {
+                            band_filter_inner.shallow_clone()
+                        } else {
+                            band_filter_inner.f_to_device(filtered_t.device())?
+                        };
+                        let input_t = filtered_t.unsqueeze(0);
+                        let output = input_t.conv1d(&kernel_t, None::<Tensor>, *stride, *padding, 1, self.num_channels).view((self.num_channels, -1));
+                        debug!("FreqFilter::apply_tho_tensor, BandPass: id={} band_filter.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), kernel_t.size(), input_t.size(), output.size());
+                        Ok(output)
+                    })?;
+
+                    #[allow(unexpected_cfgs)]
+                    #[cfg(tho_debug_plots)]
+                    {
+                        plot_t(&filtered_t, &format!("{}_BandPass", input_tensor.id()), true);
+                    }
+                }
+            }
+        }
+
+        Ok(ThoTensor::new(self.out_id(input_tensor.id()), filtered_t)?)
+    }
 }
 
 impl<C> OutId for FreqFilter<C>
@@ -159,39 +200,7 @@ where
                 device_idx,
                ctx_for_data, None, |input_tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
 
-               let mut filtered_t = input_tensor.t_ref().shallow_clone();
-               for filter in self.filters.iter() {
-                   match filter {
-                       PreparedFilter::NotchBand { low_hz, high_hz } => {
-                           let filtered_t_out = notch_band_rfft(&filtered_t, self.sample_rate, *low_hz, *high_hz)?;
-
-                           debug!("FreqFilter::run, NotchBand: id={} filtered_t.size={:?} filtered_t_out.size={:?}", input.id(), filtered_t.size(), filtered_t_out.size());
-
-                           filtered_t = filtered_t_out;
-                           #[allow(unexpected_cfgs)]
-                           #[cfg(tho_debug_plots)]
-                           {
-                               plot_t(&filtered_t, &format!("{}_NotchBand", input.id()), true);
-                           }
-                       }
-                       PreparedFilter::BandPass { kernel, stride, padding } => {
-                           filtered_t = kernel.run_inner(|band_filter_inner| {
-                               let input_t = filtered_t.unsqueeze(0);
-                               let output = input_t.conv1d(band_filter_inner, None::<Tensor>, *stride, *padding, 1, self.num_channels).view((self.num_channels, -1));
-                               debug!("FreqFilter::run, BandPass: id={} band_filter.size={:?} input.size={:?} output.size={:?}", input.id(), band_filter_inner.size(), input_t.size(), output.size());
-                               Ok(output)
-                           })?;
-
-                           #[allow(unexpected_cfgs)]
-                           #[cfg(tho_debug_plots)]
-                           {
-                               plot_t(&filtered_t, &format!("{}_BandPass", input.id()), true);
-                           }
-                       }
-                   }
-               }
-
-               Ok(ThoTensor::new(self.out_id(input_tensor.id()), filtered_t)?)
+               self.apply_tho_tensor(input_tensor)
            })
             .await?;
 
