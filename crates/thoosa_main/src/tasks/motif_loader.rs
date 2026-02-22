@@ -300,7 +300,7 @@ where
         let motif_id_value = motif_id.clone().0;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
         let (channel, find_motifs_run_id, slices, resources_map) =                 self.store.list_random_motif_slices(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster).await?;
-        
+
         let cache_area = ctx.cache_area().into();
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "random loader").await?;
 
@@ -389,7 +389,7 @@ where
             for slice in slices {
                 let r = MonoMetrics::<1,2>::from([channel + 1, (slice + window) as i64]) <= *size;
                 if !r {
-                    warn!("load_motif_slices: motif_id={motif_id} slice={slice:?} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id}  in {descr}");
+                    warn!("load_motif_slices: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id}  in {descr}");
                 } else {
                     debug!("load_motif_slices: motif_id={motif_id} slice_i={slice_i} slice={slice:?} size={size:?}");
 

@@ -269,7 +269,7 @@ impl GlobalCtx {
         debug!("GlobalCtx::purge_cpu: purge_since={purge_since} maps.len={}", maps.len());
         if purge_since > 0 {
             for e in maps.iter() {
-                e.1.purge_cpu(purge_since).await;
+                info!("GlobalCtx::purge_cpu: purged {} from {}", e.1.purge_cpu(purge_since).await, e.0);
             }
         }
     }
