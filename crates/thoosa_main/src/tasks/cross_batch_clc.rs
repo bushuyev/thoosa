@@ -7,7 +7,7 @@ use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef, WithSele
 use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
 use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -15,7 +15,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
-use tch::Tensor;
+use tch::{TchError, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::utils::tensor_mem_size;
 use thoosa_motifs::distance::{clc_dist_d2, clc_dist_d2_and_mask};
@@ -29,7 +29,7 @@ use thoosa_shared::comp_id::{MonoKey, SynKey};
 
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
-    id: MonoKey,
+    id: SynKey,
     tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
     resources_0: &'a [R],
     resources_1: &'a [R],
@@ -42,10 +42,11 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
         tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
         b_0: &'a [R],
         b_1: &'a [R],
+        id: SynKey,
     ) -> Self {
 
 
-        let id = {
+        let batch_id = {
             let batch_0_ids = b_0.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
             let batch_1_ids = b_1.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
             mono_key!(//TODO
@@ -55,7 +56,7 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
         };
 
         Self {
-            id,
+            id: &id + batch_id,
             tensors,
             resources_0: b_0,
             resources_1: b_1,
@@ -79,7 +80,7 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
 }
 
 impl<'a, R: AsRef<Resource> + Debug + Send + Sync> WithId for CrossInput<'a, R> {
-    type ID = MonoKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -169,6 +170,7 @@ where
             selected_tensors.as_slice(),
             self.resources_0,
             &self.resources_1[range.clone()],
+            self.id.clone(), // + &mono_key!(0, "todo"),
         );
 
         do_run(&input, &permits_ctx)
@@ -287,23 +289,23 @@ where
 
 #[derive(Debug)]
 pub struct CrossUnfoldClcOutput<R: Debug> {
-    id: MonoKey,
+    id: SynKey,
     clc_result: R,
     iter_0: SlicesIter,
     iter_1: SlicesIter,
 }
 
 impl<R: Debug> CrossUnfoldClcOutput<R> {
-    pub fn new(clc_result: R, iter_0: SlicesIter, iter_1: SlicesIter) -> Self {
+    pub fn new(clc_result: R, iter_0: SlicesIter, iter_1: SlicesIter, id: SynKey) -> Self {
         Self {
-            id: mono_key!("CrossUnfoldClcOutput", "stage"),
+            id,
             clc_result,
             iter_0,
             iter_1,
         }
     }
 
-    pub fn id(&self) -> &MonoKey {
+    pub fn id(&self) -> &SynKey {
         &self.id
     }
 
@@ -327,7 +329,7 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
 }
 
 impl<R: Debug> WithId for CrossUnfoldClcOutput<R> {
-    type ID = MonoKey;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -380,13 +382,13 @@ where
         assert!(!input.resources_0.is_empty(), "CrossUnfoldClc::do_run: no input resources");
         let unfold_params = &self.unfold_params;
 
-        debug!("CrossUnfoldClc::do_run: input={input:?} unfold_params={unfold_params:?}");
-        debug!("CrossUnfoldClc::do_run: input.tensors.len={} input.resources_0.len={} input.resources_1.len={}", input.tensors.len(), input.resources_0.len(), input.resources_1.len());
+        debug!("CrossUnfoldClc::do_run: input.id={:?} input={input:?} unfold_params={unfold_params:?}", input.id);
+        debug!("CrossUnfoldClc::do_run: input.id={:?} input.tensors.len={} input.resources_0.len={} input.resources_1.len={}", input.id, input.tensors.len(), input.resources_0.len(), input.resources_1.len());
 
 
         let (batch_0_t, batch_0_sizes) =  unfold_and_cat(&input.tensors[0..input.resources_0.len()], &unfold_params)?;
 
-        debug!("CrossUnfoldClc::do_run: batch_0_sizes={batch_0_sizes:?}");
+        debug!("CrossUnfoldClc::do_run: input.id={:?} batch_0_sizes={batch_0_sizes:?}", input.id);
 
 
         //TODO if tensor is filtered because it's less than window
@@ -395,6 +397,7 @@ where
             .resources_0
             .into_iter()
             .zip(batch_0_sizes.into_iter())
+            .filter(|v|v.1 != 0)
             .map(|(resource, size)| {
                 ResourceSlices::new(resource.as_ref().id(), size as usize)
             })
@@ -404,27 +407,29 @@ where
         let (batch_1_t, batch_1_sizes) =  unfold_and_cat(&input.tensors[input.resources_0.len()..], &unfold_params)?;
 
         // assert_eq!(batch_1_sizes.len(), input.resources_1.len());
-        debug!("CrossUnfoldClc::do_run: batch_1_sizes={batch_1_sizes:?}");
+        debug!("CrossUnfoldClc::do_run: input.id={:?} batch_1_sizes={batch_1_sizes:?}", input.id);
 
         let resource_ids_sizes_1: Vec<_> = input
             .resources_1
             .into_iter()
             .zip(batch_1_sizes.into_iter())
+            .filter(|v|v.1 != 0)
             .map(|(resource, size)| {
                 ResourceSlices::new(resource.as_ref().id(), size as usize)
             })
             .collect();
 
-        debug!("CrossUnfoldClc::do_run: resource_ids_sizes_0={resource_ids_sizes_0:?}");
-        debug!("CrossUnfoldClc::do_run: resource_ids_sizes_1={resource_ids_sizes_1:?}");
+        debug!("CrossUnfoldClc::do_run: input.id={:?} resource_ids_sizes_0={resource_ids_sizes_0:?}", input.id);
+        debug!("CrossUnfoldClc::do_run: input.id={:?} resource_ids_sizes_1={resource_ids_sizes_1:?}", input.id);
 
-        debug!("CrossUnfoldClc::do_run:  batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?} mem_0={} mem_1={}", tensor_mem_size(&batch_0_t), tensor_mem_size(&batch_1_t));
+        debug!("CrossUnfoldClc::do_run: input.id={:?} batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?} mem_0={} mem_1={}", input.id, tensor_mem_size(&batch_0_t), tensor_mem_size(&batch_1_t));
 
-        (self.batch_clc_fn)(batch_0_t, batch_1_t, &input, &self.cross_batch_ctx, ctx).map(|v| {
+        (self.batch_clc_fn)(batch_0_t, batch_1_t, &input/*TODO it's only used to check if we're on diagonal*/, &self.cross_batch_ctx, ctx).map(|v| {
             CrossUnfoldClcOutput::new(
                 v,
                 SlicesIter::new_with_offsets(unfold_params.step as usize, resource_ids_sizes_0),
                 SlicesIter::new_with_offsets(unfold_params.step as usize, resource_ids_sizes_1),
+                input.id.clone(),
             )
         })
     }
@@ -438,31 +443,41 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params
 
     let mut batch_0_sizes = vec![];
 
-    let batch_0_tensors = input
-        .iter()
-        //filter tensors smaller than motif window
-        .filter(|t| t.size().dim_1() >= unfold_params.size) //TODO use metrics's size
-        .map(|t| {
-
-            let unfolded = t.t_ref().f_unfold(
+    let (tensors, sizes):(Vec<Tensor>, Vec<i64>) = input.into_iter().fold((vec![], vec![]), |mut a, t|{
+        if t.size().dim_1() >= unfold_params.size  {
+            match  t.t_ref().f_unfold(
                 unfold_params.dimension,
                 unfold_params.size,
                 unfold_params.step,
-            )?;
-            debug!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?} unfolded.size={:?}", t.id(), t.size(), unfold_params, unfolded.size());
+            ) {
+                Ok(unfolded) => {
 
-            batch_0_sizes.push(unfolded.size()[1]); //number of blocks
-            Ok(unfolded)
-        })
-        .collect::<Result<Vec<_>, ThoError>>()?;
+                    debug!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?} unfolded.size={:?}", t.id(), t.size(), unfold_params, unfolded.size());
 
-    if batch_0_tensors.is_empty() {
+                    a.1.push(unfolded.size()[1]); //number of blocks
+
+                    a.0.push(unfolded);
+                }
+                Err(e) => {
+                    warn!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?} got e={e:?}", t.id(), t.size(), unfold_params);
+                    batch_0_sizes.push(0);
+                }
+            }
+
+        } else {
+            debug!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?}  skipped", t.id(), t.size(), unfold_params);
+            batch_0_sizes.push(0);
+        }
+        a
+    });
+
+    if tensors.is_empty() {
         return Err(ThoError::new("batch 0 is empty"));
     }
 
 
-    let batch_0_t = Tensor::f_concat(batch_0_tensors.as_slice(), 1)?;
-    Ok((batch_0_t, batch_0_sizes))
+    let batch_0_t = Tensor::f_concat(tensors.as_slice(), 1)?;
+    Ok((batch_0_t, sizes))
 }
 
 
@@ -565,6 +580,7 @@ mod tests {
             &tensors,
             chunk_0_resources.as_slice(),
             chunk_1_resources.as_slice(),
+            "test".into()
         );
         let ctx = RunCtxWithPermits::new(1, "test");
         let out = cross_batch_clc.do_run(
@@ -586,5 +602,21 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_0(){
+        let t = Tensor::rand(&[20, 1122], FLOAT_CPU);
+        let u = t.unfold(1, 914, 100);
+
+        debug!("u={:?}", u.size());
+
+        let t = Tensor::arange(11, FLOAT_CPU);
+
+        let u = t.unfold(0, 3, 3);
+
+        debug!("u=\n{u}");
+
+    }
+
 
 }
