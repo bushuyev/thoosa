@@ -866,8 +866,13 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_apply_motif_single_net_1_channel_1_motif_without_oom() -> Result<(), ThoError> {
+    async fn test_apply_motif_single_net_1_channel_1_motif_without_oom_step_3() -> Result<(), ThoError> {
         test_apply_motif_single_net_1_channel_1_motif(None, 4000, 3).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_apply_motif_single_net_1_channel_1_motif_without_oom_step_1() -> Result<(), ThoError> {
+        test_apply_motif_single_net_1_channel_1_motif(None, 4000, 1).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -882,7 +887,6 @@ pub(crate) mod tests {
         reset_print_options();
         GlobalCtx::init_devices(2);
 
-        let step = step;
         let find_motifs_run_id:RunId = 1;
         let select_motifs_run_id:RunId = 2;
 
@@ -950,11 +954,8 @@ pub(crate) mod tests {
 
         let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
-        let run_ctx_branch = thoosa_shared::with_perf_log(
-            || run_ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "ApplyMotifNets/test/write_ctx",
-        )
-        .branch(Some("apply_motif_nets_run"), false, false);
+        let run_ctx_branch = run_ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("apply_motif_nets_run"), false, false);
+
         let out = apply_motif_nets.run(
             Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test_batch", "test_batch")]), resource_a_t)?, CacheArea::default())),
             run_ctx_branch
@@ -970,11 +971,9 @@ pub(crate) mod tests {
 
         let motif_width = motif_0_0.t_ref().size()[1] as i64;
         let slices = ((input_n_0 as i64 - motif_width) / step as i64) + 1;
-        let ctx_for_data = thoosa_shared::with_perf_log(
-            || run_ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "ApplyMotifNets/test/write_ctx",
-        )
-        .branch(Some("apply_motif_nets_assert"), false, false);
+
+        let ctx_for_data = run_ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("apply_motif_nets_assert"), false, false);
+
         with_data!(ctx_for_data, out; |_ctx, r:&ThoTensor<MotifProbability, SynKey>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
 
