@@ -5,12 +5,11 @@ use thoosa_shared::resource::ResourceId;
 pub struct ResourceSlices {
     pub id: ResourceId,
     pub size: usize,
-    pub offset: u32,
 }
 
 impl ResourceSlices {
-    pub fn new(id: ResourceId, size: usize, offset: u32) -> Self {
-        Self { id, size, offset }
+    pub fn new(id: ResourceId, size: usize) -> Self {
+        Self { id, size }
     }
 }
 
@@ -19,7 +18,6 @@ impl From<(ResourceId, usize)> for ResourceSlices {
         Self {
             id: value.0,
             size: value.1,
-            offset: 0,
         }
     }
 }
@@ -57,8 +55,8 @@ impl Iterator for SlicesIter {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             // Are we out of (id, size) pairs?
-            let (rid, size, offset) = match self.resource_ids_sizes.get(self.outer_idx) {
-                Some(entry) => (entry.id, entry.size, entry.offset),
+            let (rid, size) = match self.resource_ids_sizes.get(self.outer_idx) {
+                Some(entry) => (entry.id, entry.size),
                 None => return None,
             };
 
@@ -66,7 +64,7 @@ impl Iterator for SlicesIter {
             if self.inner_idx < size {
                 let out = TensorIdSliceIdx(
                     rid,
-                    offset + (self.inner_idx * self.step) as u32,
+                    (self.inner_idx * self.step) as u32,
                 );
                 self.inner_idx += 1;
                 return Some(out);
@@ -139,8 +137,8 @@ mod tests {
         let it = SlicesIter::new_with_offsets(
             2,
             vec![
-                ResourceSlices::new(1, 2, 5),
-                ResourceSlices::new(2, 1, 3),
+                ResourceSlices::new(1, 2),
+                ResourceSlices::new(2, 1),
             ],
         );
         let got: Vec<_> = it.collect();
