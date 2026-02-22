@@ -160,7 +160,8 @@ where
                 freq_filter
             };
 
-            loaded_motif_nets_with_filters.push((v, freq_filter));
+            let freq_filter_find_motifs_run_id = if freq_filter.is_some() { Some(find_motifs_run_id) } else { None };
+            loaded_motif_nets_with_filters.push((v, freq_filter_find_motifs_run_id, freq_filter));
         }
 
         if motif_width.len() != 1 {//TODO  group motif nets by width. all motifs should be of same width so that tensors can be batched for label training
@@ -184,8 +185,9 @@ where
             pd: PhantomData,
             apply_motif_nets: loaded_motif_nets_with_filters
                 .into_iter()
-                .map(|(net, freq_filter)| Arc::new(ApplyMotifNet::new(
+                .map(|(net, freq_filter_find_motifs_run_id, freq_filter)| Arc::new(ApplyMotifNet::new(
                     net,
+                    freq_filter_find_motifs_run_id,
                     freq_filter,
                     slice_step,//TODO shouldn't be same as one used when training motif net
                     #[cfg(test)]
@@ -230,18 +232,61 @@ where
         let apply_motif_nets_len = apply_motif_nets.len();
         let min_split_len = self.motif_width as i64;
         let overlap_len = (self.motif_width  - self.slice_step) as i64;
+        let mut inputs_by_filter_group: HashMap<Option<RunId>, Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>> = HashMap::new();
+        inputs_by_filter_group.insert(None, Arc::clone(&input));
+
+        for apply_motif_net in &apply_motif_nets {
+            let group_key = apply_motif_net.freq_filter_find_motifs_run_id;
+            if inputs_by_filter_group.contains_key(&group_key) {
+                continue;
+            }
+            let filtered_input = match &apply_motif_net.freq_filter {
+                Some(freq_filter) => {
+                    let freq_filter_ctx = ctx.branch(Some(&format!("apply_motif_nets_prefilter_{group_key:?}")), true, false);
+                    freq_filter.clone().run_cached(Arc::clone(&input), freq_filter_ctx).await?
+                }
+                None => Arc::clone(&input),
+            };
+            inputs_by_filter_group.insert(group_key, filtered_input);
+        }
+
+        let motif_width_i64 = self.motif_width as i64;
+        let slice_step_i64 = self.slice_step as i64;
+        let mut slices_by_filter_group: HashMap<Option<RunId>, i64> = HashMap::new();
+        let mut groups_debug = Vec::with_capacity(inputs_by_filter_group.len());
+        for (group_key, group_input) in &inputs_by_filter_group {
+            let input_len = group_input.size().dim::<1>() as i64;
+            let slices = if input_len >= motif_width_i64 {
+                ((input_len - motif_width_i64) / slice_step_i64) + 1
+            } else {
+                1
+            };
+            groups_debug.push((*group_key, input_len, slices));
+            slices_by_filter_group.insert(*group_key, slices);
+        }
+        let unique_slices = groups_debug.iter().map(|(_, _, slices)| *slices).collect::<HashSet<_>>();
+        if unique_slices.len() > 1 {
+            return Err(ThoError::new(format!(
+                "ApplyMotifNets failed: mixed freq filters produce different slice counts for input.id={:?}; groups={groups_debug:?}",
+                input.id(),
+            )));
+        }
+
+        let inputs_by_filter_group = Arc::new(inputs_by_filter_group);
+        let slices_by_filter_group = Arc::new(slices_by_filter_group);
         let futures = apply_motif_nets
             .into_iter()
             .map(|apply_motif_net|{
-                let input = Arc::clone(&input);
+                let inputs_by_filter_group = Arc::clone(&inputs_by_filter_group);
+                let slices_by_filter_group = Arc::clone(&slices_by_filter_group);
+                let group_key = apply_motif_net.freq_filter_find_motifs_run_id;
+                let input = inputs_by_filter_group.get(&group_key).cloned().expect("filtered input for group must exist");
+                let slices = *slices_by_filter_group.get(&group_key).expect("slices for group must exist");
                 let out_id = apply_motif_net.out_id(&input.id());
                 let apply_motif_net_ctx = ctx.branch(Some(&format!("apply_motif_nets_{out_id:?}")), true, false);
                 let apply_motif_net_input = Arc::new(ApplyMotifNetInputWrapper::new(Arc::clone(&input), Arc::clone(&apply_motif_net.net_wrapper)));
 
                 let slice_step = self.slice_step;
-
-                //gpt TODO!! if input length < motif_width, the subtraction underflows (u32) and slices becomes huge.
-                let slices = ((input.size().dim::<1>() as u32 - self.motif_width)/slice_step) as i64 + 1;
 
                 debug!("ApplyMotifNets::run: input.size={:?} self.motif_width={:?} slice_step={slice_step} slices={slices} min_split_len={min_split_len} overlap_len={overlap_len}", input.size(), self.motif_width);
 
@@ -468,6 +513,7 @@ where
 {
     id: SynKey,
     net_wrapper:Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
+    freq_filter_find_motifs_run_id: Option<RunId>,
     freq_filter: Option<Arc<FreqFilter<C>>>,
     slice_step:u32,
     pd:PhantomData<C>,
@@ -480,6 +526,7 @@ where
 {
     pub fn new(
         net_wrapper:Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
+        freq_filter_find_motifs_run_id: Option<RunId>,
         freq_filter: Option<Arc<FreqFilter<C>>>,
         slice_step:u32,
         #[cfg(test)]
@@ -489,6 +536,7 @@ where
         Self {
             id: mono_key!("ApplyMotifNet", "ApplyMotifNet") + net_wrapper.id(),
             net_wrapper,
+            freq_filter_find_motifs_run_id,
             freq_filter,
             slice_step,
             pd: PhantomData ,
@@ -540,17 +588,11 @@ impl <C> SyncStage for ApplyMotifNet<C> where
             return Err(ThoError::oom());
         }
 
-        let filtered_batch = self.freq_filter.as_ref().map(|freq_filter| {
-            debug!("ApplyMotifNet::do_run: applying freq filter before motif net, motif_id={motif_id}");
-            freq_filter.apply_tho_tensor(input.batch)
-        }).transpose()?;
-        let batch = filtered_batch.as_ref().unwrap_or(input.batch);
-
         let c = input.motif_net.extra().channel() as i64;
         let motif_width = input.motif_net.extra().motif_net_params.num_features() as i64;
 
-        debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={:?} input.t.size={:?} self.slice_step={}", batch.id(), batch.t.size(), self.slice_step);
-        let t = batch.t.f_i((c, ..))?;
+        debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={:?} input.t.size={:?} self.slice_step={}", input.batch.id(), input.batch.t.size(), self.slice_step);
+        let t = input.batch.t.f_i((c, ..))?;
         let t = if t.size()[0] >= motif_width {
             t
         } else {
