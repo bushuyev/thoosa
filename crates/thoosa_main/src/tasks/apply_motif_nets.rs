@@ -24,6 +24,7 @@ use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopRunnableContex
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::builder::SeqBuilder;
 use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
+use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore, TrainMotifsNetsResult};
@@ -53,6 +54,7 @@ use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
 use crate::tasks::load_motif_and_clc_dist::MotifSlicesSelector;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
+use crate::tasks::transforms::freq_filter::FreqFilter;
 
 
 #[derive(Debug, Cached, Named)]
@@ -132,15 +134,34 @@ where
 
         //TODO all motif nets should have same width/step, handle different ones?
         let mut motif_width = HashSet::new();
-        // let mut slice_step = HashSet::new();
-        for v in &loaded_motif_nets {
-            with_data!(stage_ctx.branch(Some("apply_motif_nets_meta"), false, false), v; |_ctx, v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+        let mut freq_filters_by_find_motifs_run_id: HashMap<RunId, Option<Arc<FreqFilter<C>>>> = HashMap::new();
+        let mut loaded_motif_nets_with_filters = Vec::with_capacity(loaded_motif_nets.len());
+        for v in loaded_motif_nets {
+            let motif_id = with_data!(stage_ctx.branch(Some("apply_motif_nets_meta"), false, false), v; |_ctx, v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
                 motif_width.insert(v.extra().motif_net_params.num_features());
-                // slice_step.insert(v.extra().motif_net_params.stride());
-
-                Ok::<_, ThoError>(())
+                Ok::<_, ThoError>(v.extra().motif_id())
             })?;
-        };
+
+            let (_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?;
+            let freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_id.get(&find_motifs_run_id) {
+                freq_filter.clone()
+            } else {
+                let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
+                    find_motifs_run_id,
+                    &store.list_run_config_values(find_motifs_run_id).await?,
+                )?;
+                let freq_filter = find_motifs_run_config
+                    .freq_filter
+                    .as_ref()
+                    .map(|freq_filter| FreqFilter::<C>::new(freq_filter.as_slice(), ws, find_motifs_run_id))
+                    .transpose()?
+                    .map(Arc::new);
+                freq_filters_by_find_motifs_run_id.insert(find_motifs_run_id, freq_filter.clone());
+                freq_filter
+            };
+
+            loaded_motif_nets_with_filters.push((v, freq_filter));
+        }
 
         if motif_width.len() != 1 {//TODO  group motif nets by width. all motifs should be of same width so that tensors can be batched for label training
             return Err(ThoError::new(format!("ApplyMotifNets failed, motif_width={motif_width:?} should haven len=1 in train_motif_nets_run_ids={train_motif_nets_run_ids:?}, motif_width.len={}", motif_width.len())));
@@ -152,7 +173,7 @@ where
         //gpt TODO!! if no motif nets load, these expects will panic; consider returning a structured error.
         let motif_width = motif_width.into_iter().next().expect("no motif_width");
         // let slice_step = slice_step.into_iter().next().expect("no slice_step");//TODO shouldn't necessarily be what was used during motif training
-        debug!("ApplyMotifNets::new: motif_width={motif_width:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets.len());
+        debug!("ApplyMotifNets::new: motif_width={motif_width:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets_with_filters.len());
 
         let mut select_motifs_run_id_sorted = train_motif_nets_run_ids.clone();//TODO move to util CompKey::from Vec
         select_motifs_run_id_sorted.sort();
@@ -161,10 +182,11 @@ where
             ws: Arc::clone(&ws),
             store:Arc::clone(&store),
             pd: PhantomData,
-            apply_motif_nets: loaded_motif_nets
+            apply_motif_nets: loaded_motif_nets_with_filters
                 .into_iter()
-                .map(|net| Arc::new(ApplyMotifNet::new(
+                .map(|(net, freq_filter)| Arc::new(ApplyMotifNet::new(
                     net,
+                    freq_filter,
                     slice_step,//TODO shouldn't be same as one used when training motif net
                     #[cfg(test)]
                     fail_if_size_bigger_than
@@ -442,10 +464,11 @@ impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
 #[derive(Debug)]
 struct ApplyMotifNet<C>
 where
-    C: RunCtx + Adjustable
+    C: RunCtx + Adjustable + 'static
 {
     id: SynKey,
     net_wrapper:Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
+    freq_filter: Option<Arc<FreqFilter<C>>>,
     slice_step:u32,
     pd:PhantomData<C>,
     #[cfg(test)]
@@ -453,10 +476,11 @@ where
 }
 impl <C> ApplyMotifNet<C>
 where
-    C: RunCtx + Adjustable
+    C: RunCtx + Adjustable + 'static
 {
     pub fn new(
         net_wrapper:Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
+        freq_filter: Option<Arc<FreqFilter<C>>>,
         slice_step:u32,
         #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>
@@ -465,6 +489,7 @@ where
         Self {
             id: mono_key!("ApplyMotifNet", "ApplyMotifNet") + net_wrapper.id(),
             net_wrapper,
+            freq_filter,
             slice_step,
             pd: PhantomData ,
             #[cfg(test)]
@@ -475,14 +500,14 @@ where
 
 impl <C> Adjustable for ApplyMotifNet<C>
 where
-    C: RunCtx + Adjustable
+    C: RunCtx + Adjustable + 'static
 {
 
 }
 
 impl <C> OutId for ApplyMotifNet<C>
 where
-    C: RunCtx + Adjustable
+    C: RunCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -492,7 +517,7 @@ where
 
 impl <C>  Stage for ApplyMotifNet<C>
 where
-    C: RunCtx + Adjustable{
+    C: RunCtx + Adjustable + 'static{
     type Ctx = C;
     type In<'a> = ApplyMotifNetInput<'a>;
     type Out = ThoTensor<MotifProbability, SynKey>;
@@ -515,11 +540,17 @@ impl <C> SyncStage for ApplyMotifNet<C> where
             return Err(ThoError::oom());
         }
 
+        let filtered_batch = self.freq_filter.as_ref().map(|freq_filter| {
+            debug!("ApplyMotifNet::do_run: applying freq filter before motif net, motif_id={motif_id}");
+            freq_filter.apply_tho_tensor(input.batch)
+        }).transpose()?;
+        let batch = filtered_batch.as_ref().unwrap_or(input.batch);
+
         let c = input.motif_net.extra().channel() as i64;
         let motif_width = input.motif_net.extra().motif_net_params.num_features() as i64;
 
-        debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={:?} input.t.size={:?} self.slice_step={}", input.batch.id(), input.batch.t.size(), self.slice_step);
-        let t = input.batch.t.f_i((c, ..))?;
+        debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={:?} input.t.size={:?} self.slice_step={}", batch.id(), batch.t.size(), self.slice_step);
+        let t = batch.t.f_i((c, ..))?;
         let t = if t.size()[0] >= motif_width {
             t
         } else {
@@ -786,7 +817,11 @@ pub(crate) mod tests {
                     (train_motifs_run_id, Ok(vec![select_motifs_run_id])),
                     (select_motifs_run_id, Ok(vec![find_motifs_run_id]))
                 ])
-                .with_get_motif_meta( [(motif_0_0_id, Ok((0usize, find_motifs_run_id)))])
+                .with_get_motif_meta([
+                    (motif_0_0_id, Ok((0usize, find_motifs_run_id))),
+                    (motif_0_1_id, Ok((0usize, find_motifs_run_id))),
+                    (motif_1_0_id, Ok((1usize, find_motifs_run_id))),
+                ])
                 .with_list_selected_motifs([
                     (select_motifs_run_id, Ok(
                         vec![
