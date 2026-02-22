@@ -158,7 +158,7 @@ impl Hash for MonoKey {
 /// ✅ Dynamic-length key, stored as a boxed slice (one allocation, no capacity slack).
 #[derive(Eq, PartialEq, Hash, Clone, Ord, PartialOrd, Named)]
 pub struct SynKey {
-    vals: Box<[MonoKey]>,
+    pub vals: Box<[MonoKey]>,
 }
 
 impl Display for SynKey{

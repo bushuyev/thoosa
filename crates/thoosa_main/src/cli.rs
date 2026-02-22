@@ -2122,14 +2122,15 @@ mod cli_tests {
 
         for freq in 0..100 {
             let freq_filter = Arc::new(FreqFilter::<MockRunCtx>::new(&[
-                InputFilter::BandPassFilter(BandPassFilterParams {
-                    low_hz: freq as f64,
-                    band_hz: 1.0,
-                    kernel_size: 100,
-                    stride: 1,
-                    padding: 50,
-                })
-            ], &ws)?);
+                            InputFilter::BandPassFilter(BandPassFilterParams {
+                                low_hz: freq as f64,
+                                band_hz: 1.0,
+                                kernel_size: 100,
+                                stride: 1,
+                                padding: 50,
+                            })
+                        ], &ws,
+                                                                     0)?);
 
             let mut ctx = mock_run_ctx::default(1);
 

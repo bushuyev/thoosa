@@ -21,6 +21,7 @@ use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::plot_t;
 use thoosa_common::ws::Workspace;
+use thoosa_shared::run_configs::RunId;
 use crate::tasks::cross_dims::ChannelsData2;
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 
@@ -57,7 +58,7 @@ impl<C> FreqFilter<C>
 where
     C: RunCtx + 'static,
 {
-    pub fn new(filter_configs: &[InputFilter], ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Self, ThoError> {
+    pub fn new(filter_configs: &[InputFilter], ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_config_id: RunId) -> Result<Self, ThoError> {
         let (num_channels, sample_rate)  = {
             let guard = thoosa_shared::with_perf_log(
                 || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
@@ -84,7 +85,9 @@ where
                         band_pass_config.kernel_size,
                         sample_rate,
                         1e-6
-                    )?.repeat([num_channels, 1, 1]).to_device(Cuda(0));
+                    )?.repeat([num_channels, 1, 1]).to_device(Cuda(0));//TODO device
+
+                    debug!("FreqFilter::new: band_pass_config={band_pass_config:?} kernel.size={:?}", kernel.size());
 
                     filters.push(PreparedFilter::BandPass {
                         kernel: ThoTensor::new(
@@ -102,7 +105,7 @@ where
         }
 
         Ok(Self {
-            id: mono_key!("FreqFilter", "FreqFilter"),
+            id: mono_key!(find_motifs_run_config_id, "FreqFilter"),
             filters,
             _ctx: PhantomData,
             num_channels,
@@ -160,8 +163,11 @@ where
                for filter in self.filters.iter() {
                    match filter {
                        PreparedFilter::NotchBand { low_hz, high_hz } => {
-                           filtered_t = notch_band_rfft(&filtered_t, self.sample_rate, *low_hz, *high_hz)?;
+                           let filtered_t_out = notch_band_rfft(&filtered_t, self.sample_rate, *low_hz, *high_hz)?;
 
+                           debug!("FreqFilter::run, NotchBand: id={} filtered_t.size={:?} filtered_t_out.size={:?}", input.id(), filtered_t.size(), filtered_t_out.size());
+
+                           filtered_t = filtered_t_out;
                            #[allow(unexpected_cfgs)]
                            #[cfg(tho_debug_plots)]
                            {
@@ -170,9 +176,9 @@ where
                        }
                        PreparedFilter::BandPass { kernel, stride, padding } => {
                            filtered_t = kernel.run_inner(|band_filter_inner| {
-                               let input = filtered_t.unsqueeze(0);
-                               let output = input.conv1d(band_filter_inner, None::<Tensor>, *stride, *padding, 1, self.num_channels).view((self.num_channels, -1));
-                               debug!("FreqFilter::run: band_filter.size={:?} input.size={:?} output.size={:?}", band_filter_inner.size(), input.size(), output.size());
+                               let input_t = filtered_t.unsqueeze(0);
+                               let output = input_t.conv1d(band_filter_inner, None::<Tensor>, *stride, *padding, 1, self.num_channels).view((self.num_channels, -1));
+                               debug!("FreqFilter::run, BandPass: id={} band_filter.size={:?} input.size={:?} output.size={:?}", input.id(), band_filter_inner.size(), input_t.size(), output.size());
                                Ok(output)
                            })?;
 
@@ -204,7 +210,7 @@ mod tests {
     use thoosa_shared::runner::cache_areas::CacheArea;
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
-    use thoosa_common::find_motifs_run_config::InputFilter;
+    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
     use thoosa_common::transforms::filters::BandPassFilterParams;
     use thoosa_shared::ThoError;
     use thoosa_common::tho_tensor::ThoTensor;
@@ -226,23 +232,30 @@ mod tests {
             InputFilter::BandPassFilter(BandPassFilterParams{
                 low_hz: 0.0,
                 band_hz: 100.0,
-                kernel_size: 100,
-                stride: 1,
+                kernel_size: 859,
+                stride: 10,
                 padding: 0,
             }),
         ];
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 20, 100, 10000)));
 
-        let bf = FreqFilter::new(&filter_configs, &ws)?;
+        let bf = FreqFilter::new(&filter_configs, &ws, 0)?;
 
         let mut ctx = RunCtxWithPermits::new(1, "test");
 
+        let size = [20, 12800];
         let r = Arc::new(bf).run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&[20, 100], FLOAT_CPU))?, CacheArea::default())),
+            Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&size, FLOAT_CPU))?, CacheArea::default())),
             ctx.branch(Some("freq_filter_test"), false, false)
         ).await?;
 
+        let find_motifs_run_config = FindMotifsRunConfig::new_with_running_mean(None, 10, 100, Some(filter_configs), None);
+
+        let adjuster = find_motifs_run_config.input_len_adjuster();
+
         println!("r={r:?}");
+
+        assert_eq!(adjuster(size[1] as u32), r.size().dim_1() as u32);
         //TODO asserts
 
         Ok(())

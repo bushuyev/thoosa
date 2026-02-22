@@ -460,9 +460,9 @@ where
             debug!("MotifLoader::run: find_motifs_run_id={:?} freq_filter={freq_filter:?}", find_motifs_run_config.id);
 
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
-                SynKey::new([mono_key!("ab", "stage")]),
+                SynKey::new([mono_key!(find_motifs_run_config.id.expect("find_motifs_run_config"), "ab_stage")]),
                 Arc::clone(loader),
-                Arc::new(FreqFilter::<C>::new(freq_filter, ws)?),
+                Arc::new(FreqFilter::<C>::new(freq_filter, ws, find_motifs_run_config.id.expect("find_motifs_run_config"))?),
             ))))
         },
     };
