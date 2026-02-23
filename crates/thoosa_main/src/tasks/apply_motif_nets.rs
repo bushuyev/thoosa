@@ -5,8 +5,6 @@ use std::fmt::{format, Debug};
 use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering::Relaxed;
 use std::time::Instant;
 use async_trait::async_trait;
 use log::{debug, error, info, trace};
@@ -21,6 +19,7 @@ use thoosa_named_derive::Named;
 
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopRunnableContext, OOMHandler};
+use thoosa_common::debug_plot;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::builder::SeqBuilder;
 use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
@@ -28,7 +27,7 @@ use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore, TrainMotifsNetsResult};
-use thoosa_common::utils::{pad_to, plot_t};
+use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -612,15 +611,8 @@ impl <C> SyncStage for ApplyMotifNet<C> where
         let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
         let out = input.motif_net.data().tho_forward(&slices_tensor, None, false)?;
 
-        #[allow(unexpected_cfgs)]
-        #[cfg(tho_debug_plots)]
-        {
-            static COUNT:AtomicU64 = AtomicU64::new(0);
-
-            plot_t(&t.view((1, -1)), &format!("{COUNT:?}_input_{}", input.id()), false)?;
-            plot_t(&out.as_ref().transpose(0, 1), &format!("{COUNT:?}_input_{}_motif_applied_{motif_id}_", input.id()), false)?;
-            COUNT.fetch_add(1, Relaxed);
-        }
+        debug_plot!(&t.view((1, -1)), "input_{}", input.id())?;
+        debug_plot!(&out.as_ref().transpose(0, 1), "input_{}_motif_applied_{motif_id}", input.id())?;
 
         let out = ThoTensor::new(out_id, out.t())?;//TODO .f_sigmoid()?
 
@@ -772,7 +764,8 @@ pub(crate) mod tests {
     use thoosa_common::tch_test_utils;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
-    use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, plot_t, reset_print_options, test_net, to_vec_f32};
+    use thoosa_common::debug_plot;
+    use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, reset_print_options, test_net, to_vec_f32};
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_common::tch_test_utils::Interval;
     use thoosa_properties_map::ToHashmap;
@@ -1025,7 +1018,7 @@ pub(crate) mod tests {
             trigger_oom_len
         ).await?);
 
-        plot_t(motif_0_0.t_ref(), "motif_test", false)?;
+        debug_plot!(motif_0_0.t_ref(), "motif_test")?;
 
         let channels_patterns = vec![vec![motif_0_0.t_ref().i((0, ..))]];
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 200, step as usize)?;

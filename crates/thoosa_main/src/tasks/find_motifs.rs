@@ -500,7 +500,7 @@ mod tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::tch_test_utils;
-    use thoosa_common::utils::{lin_t, plot_series, plot_t, reset_print_options, three_sigs_tensor, to_vec_f32};
+    use thoosa_common::utils::{lin_t, plot_series, reset_print_options, three_sigs_tensor, to_vec_f32};
     use thoosa_common::ws::{mock_ws_simp, FsWorkspace};
     use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
     use thoosa_shared::applicables_runner::Input;
