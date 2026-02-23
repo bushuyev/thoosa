@@ -831,7 +831,7 @@ mod tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::train_nets::{MotifCosineNetParams, MotifNetParams, MotifNetTypeParams};
-    use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, plot_t, skewness_kurtosis_1_dim, to_vec_f32};
+    use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
     use thoosa_common::ws::Workspace;
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
