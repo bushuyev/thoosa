@@ -792,32 +792,32 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_without_oom() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(None, 4000, 2).await?;
+        test_apply_motif_nets_3_channels_2_motifs(None, 4000, 10, 10).await?;
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_without_oom_uneven() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(None, 4321, 2).await
+        test_apply_motif_nets_3_channels_2_motifs(None, 4321, 10, 10).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_step_1_with_oom() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 1).await
+        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, 10).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_step_2_with_oom() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 2).await
+        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, 10).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_with_oom_uneven() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 2).await
+        test_apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 10, 10).await
     }
 
-    async fn test_apply_motif_nets_3_channels_2_motifs(trigger_oom_len: Option<usize>, input_n_0: usize, step: u32) -> Result<(), ThoError> {
+    async fn test_apply_motif_nets_3_channels_2_motifs(trigger_oom_len: Option<usize>, input_n_0: usize, step: u32, slice_step: u32) -> Result<(), ThoError> {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         log::set_max_level(Debug);
         reset_print_options();
@@ -888,7 +888,7 @@ pub(crate) mod tests {
         );
 
 
-        let slice_step = 10;
+
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
             &ws,
             &store,
@@ -927,7 +927,7 @@ pub(crate) mod tests {
         let sin_interval_starts_in_resources_a = resource_a_intervals[1][0][0].start;
 
         let motif_width = motif_0_0.t_ref().size()[1] as i64;
-        let slices = ((input_n_0 as i64 - motif_width) / step as i64) + 1;
+        let slices = ((input_n_0 as i64 - motif_width) / slice_step as i64) + 1;
         let ctx_for_data = mock_run_ctx::default(1);
         with_data!(ctx_for_data, out; |_ctx, r:&ThoTensor<MotifProbability, SynKey>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
@@ -1021,7 +1021,7 @@ pub(crate) mod tests {
             vec![select_motifs_run_id],
             mock_run_ctx::default(1), Some(0.3) //Some(1000)
             ,
-            10,
+            step,
             trigger_oom_len
         ).await?);
 

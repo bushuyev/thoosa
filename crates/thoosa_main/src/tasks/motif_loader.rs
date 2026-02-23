@@ -178,7 +178,6 @@ where
         })?;
 
         let motif_id_value = motif_id.clone().0;
-        //gpt TODO!! select_motifs_run_id from MotifLoaderInput is ignored; list_motif_slices(None, ...) loads slices from all runs.
         let (channel, find_motifs_run_id, slices, resources_map) = self
             .store
             .list_motif_slices(motif_id_value, select_motifs_run_id, Some(1000), None)//TODO config max_slices
