@@ -254,7 +254,7 @@ impl FindAndSelectMotifsStage {
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId{ find_motifs_run_id: run_config.find_motifs_run_config.id.unwrap(), select_motifs_run_ids: None }), &Cpu).await?;
+        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId{ find_motifs_run_id: run_config.find_motifs_run_config.id.unwrap(), select_motifs_run_ids: None }), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
 
         let select_stage = Arc::new(
             SelectMotifsStage::<
@@ -289,7 +289,7 @@ impl FindAndSelectMotifsStage {
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (select_run_id)), &Cpu).await?;
+        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (select_run_id)), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
 
         Ok(selected_count)
     }

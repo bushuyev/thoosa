@@ -293,6 +293,7 @@ pub(crate) fn random_non_overlapping_slices(
     let available_total: usize = states.iter().map(|s| s.starts.len()).sum();
     if available_total < number_of_slices as usize {
         return Err(ThoError::new(format!("random_non_overlapping_slices: not enough resources ({available_total}) available for {number_of_slices} random slices")));
+        // warn!("random_non_overlapping_slices: not enough resources ({available_total}) available for {number_of_slices} random slices");
     }
 
     let mut chosen: Vec<TensorIdSliceIdx> = Vec::with_capacity(number_of_slices as usize);
