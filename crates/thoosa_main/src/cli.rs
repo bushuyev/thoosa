@@ -1986,7 +1986,8 @@ mod cli_tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
     use thoosa_common::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue};
-    use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, plot_t, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
+    use thoosa_common::debug_plot;
+    use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
     use thoosa_common::ws::{mock_ws_simp, FsWorkspace, Workspace};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
@@ -2108,7 +2109,7 @@ mod cli_tests {
             None
         )?;
 
-        plot_t(&pulse_triangle_t, "pulse_triangle", true)?;
+        debug_plot!(&pulse_triangle_t, "pulse_triangle")?;
 
         let (pulse_sin_t, intervals, _) = resource_tensor_two_easy_motifs(
             1000,
@@ -2123,7 +2124,7 @@ mod cli_tests {
             0.2,
             None
         )?;
-        plot_t(&pulse_sin_t, "pulse_sin", true)?;
+        debug_plot!(&pulse_sin_t, "pulse_sin")?;
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
 
@@ -2146,8 +2147,8 @@ mod cli_tests {
 
             with_data!(ctx.branch(Some("filter"), false, false), pulse_triangle_filtered_t, pulse_sin_filtered_t; |ctx, pulse_triangle_t:&ThoTensor<ChannelsData2, SynKey>, pulse_sin_t:&ThoTensor<ChannelsData2, SynKey> |{
 
-                plot_t(pulse_triangle_t.as_ref(), &format!("pulse_triangle_{freq}_filtered_t"), true)?;
-                plot_t(pulse_sin_t.as_ref(), &format!("pulse_sin_{freq}_filtered_t"), true)?;
+                debug_plot!(pulse_triangle_t.as_ref(), "pulse_triangle_{freq}_filtered_t")?;
+                debug_plot!(pulse_sin_t.as_ref(), "pulse_sin_{freq}_filtered_t")?;
 
                 Ok::<_, ThoError>(())
             })?;
@@ -2271,7 +2272,7 @@ mod cli_tests {
 
             let stem = format!("t_0_{i}");
 
-            plot_t(&t, &stem, true)?;
+            debug_plot!(&t, &stem)?;
             let tensors_path = ws.read().tensors_path().clone();
             t.save(tensors_path.join(&format!("{stem}.pt")))?;
             t.save(tensors_path.join(&stem))?;
@@ -2282,7 +2283,7 @@ mod cli_tests {
 
             let stem = format!("t_1_{i}");
 
-            plot_t(&t, &stem, true)?;
+            debug_plot!(&t, &stem)?;
 
             t.save(tensors_path.join(&format!("{stem}.pt")))?;
             import_hash.insert(stem, vec![("label_1".to_string(), 1.0)]);
@@ -2464,9 +2465,9 @@ mod cli_tests {
 
 
         let channel_t = t.i((channel, ..));
-        plot_t(&channel_t.view((1, -1)), &format!("resource_1_{resource}_{channel}"), false)?;
+        debug_plot!(&channel_t.view((1, -1)), "resource_1_{resource}_{channel}")?;
         debug!("motif_t.data.size={:?}", motif_t.data().size());
-        plot_t(&motif_t.data().as_ref().view((1, -1)), &format!("motif_{motif_id}"), false)?;
+        debug_plot!(&motif_t.data().as_ref().view((1, -1)), "motif_{motif_id}")?;
 
 
 
@@ -2496,7 +2497,7 @@ mod cli_tests {
                 debug!("out.size={:?}", out.size());
 
                 // plot_t(&out.t.softmax(0, Float).view((1, -1)), &format!("{motif_id}_applied_to_{resource}"))?;
-                plot_t(&out.t.view((1, -1)), &format!("{motif_id}_applied_to_{resource}"), false)?;
+                debug_plot!(&out.t.view((1, -1)), "{motif_id}_applied_to_{resource}")?;
             }
         }
 

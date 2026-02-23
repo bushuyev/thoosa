@@ -3,8 +3,6 @@
 use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering::Relaxed;
 use async_trait::async_trait;
 use futures_util::{FutureExt, StreamExt};
 use futures_util::stream::BoxStream;
@@ -22,13 +20,14 @@ use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
+use thoosa_common::debug_plot;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
 use thoosa_common::train_nets::{opt_train, MotifNetParams, MotifNetTypeArgs, OptConfig, TensorsDataBatch, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields};
-use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, plot_t, to_vec_f32, DataBatch, DummyListener};
+use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, to_vec_f32, DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_run_config_args::OptRunConfigSource;
@@ -414,14 +413,8 @@ where
             let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;//TODO config
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
 
-            #[allow(unexpected_cfgs)]
-            #[cfg(tho_debug_plots)]
-            {
-                static COUNTER:AtomicU32 = AtomicU32::new(0);
-
-                plot_t(&motifs.as_ref(), &format!("batch_motif_{motif_id}__{}", COUNTER.fetch_add(1, Relaxed)), false)?;
-                plot_t(&motifs.as_ref(), &format!("batch_random_motif_in_batch_{motif_id}__{}", COUNTER.fetch_add(1, Relaxed)), false)?;
-            }
+            debug_plot!(&motifs.as_ref(), "batch_motif_{motif_id}")?;
+            debug_plot!(&motifs.as_ref(), "batch_random_motif_in_batch_{motif_id}")?;
 
 
             let (x, _lengths, y) = mix_x_binary_with_labels(&motifs, None, &random, None)?;
@@ -483,7 +476,8 @@ mod tests {
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::tch_test_utils;
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, OptConfig, ThoModuleWithStore, TrainMotifsNetsResult, TrainMotifsNetsRunConfigFields};
-    use thoosa_common::utils::{plot_t, reset_print_options, test_net};
+    use thoosa_common::debug_plot;
+    use thoosa_common::utils::{reset_print_options, test_net};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
@@ -593,13 +587,13 @@ mod tests {
             ], 100, 10.0)?;
 
             debug!("intervals={intervals:?} t.size={:?}", t.size());
-            plot_t(&t, "channel_0", true)?;
+            debug_plot!(&t, "channel_0")?;
 
             let output = net.tho_forward(&t.to_device(Cuda(0)).i((0, ..)).unfold(0, 100, 1).into(), None, false)?;
 
             debug!("output.t=\n{}", output.t.view((1,-1)));
 
-            plot_t(&output.t.view((1,-1)), "applied 0", true)?;
+            debug_plot!(&output.t.view((1,-1)), "applied 0")?;
 
             Ok(())
         }
