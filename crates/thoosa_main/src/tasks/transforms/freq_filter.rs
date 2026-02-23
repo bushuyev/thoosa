@@ -7,6 +7,7 @@ use tch::{IndexOp, Tensor};
 use tch::Device::Cuda;
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
+use thoosa_common::debug_plot;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_shared::runner::common::OutId;
 use thoosa_shared::runner::common::RunCtx;
@@ -19,7 +20,6 @@ use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{CachableIdTr, WithId};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::utils::plot_t;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::RunId;
 use crate::tasks::cross_dims::ChannelsData2;
@@ -123,11 +123,7 @@ where
                     debug!("FreqFilter::apply_tho_tensor, NotchBand: id={} filtered_t.size={:?} filtered_t_out.size={:?}", input_tensor.id(), filtered_t.size(), filtered_t_out.size());
 
                     filtered_t = filtered_t_out;
-                    #[allow(unexpected_cfgs)]
-                    #[cfg(tho_debug_plots)]
-                    {
-                        plot_t(&filtered_t, &format!("{}_NotchBand", input_tensor.id()), true);
-                    }
+                    debug_plot!(&filtered_t, "{}_NotchBand", input_tensor.id())?;
                 }
                 PreparedFilter::BandPass { kernel, stride, padding } => {
                     filtered_t = kernel.run_inner(|band_filter_inner| {
@@ -142,11 +138,7 @@ where
                         Ok(output)
                     })?;
 
-                    #[allow(unexpected_cfgs)]
-                    #[cfg(tho_debug_plots)]
-                    {
-                        plot_t(&filtered_t, &format!("{}_BandPass", input_tensor.id()), true);
-                    }
+                    debug_plot!(&filtered_t, "{}_BandPass", input_tensor.id())?;
                 }
             }
         }

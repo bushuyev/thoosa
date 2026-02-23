@@ -1,9 +1,12 @@
 #![allow(non_camel_case_types)]
 
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::iter::Map;
 
 use std::ops::Range;
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::{fs, ptr};
 use log::{debug, error, trace};
 use plotters::backend::BitMapBackend;
@@ -29,6 +32,46 @@ use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use lazy_static::lazy_static;
 use thoosa_shared::colors_iter::DistinctColorIter;
+
+#[macro_export]
+macro_rules! debug_plot {
+    ($tensor:expr, $fmt:literal, $($arg:expr),+ $(,)?) => {{
+        #[allow(unexpected_cfgs)]
+        #[cfg(tho_debug_plots)]
+        {
+            $crate::utils::debug_plot_impl($tensor, &format!($fmt, $($arg),+))
+        }
+        #[allow(unexpected_cfgs)]
+        #[cfg(not(tho_debug_plots))]
+        {
+            Ok::<(), thoosa_shared::ThoError>(())
+        }
+    }};
+    ($tensor:expr, $fmt:literal $(,)?) => {{
+        #[allow(unexpected_cfgs)]
+        #[cfg(tho_debug_plots)]
+        {
+            $crate::utils::debug_plot_impl($tensor, &format!($fmt))
+        }
+        #[allow(unexpected_cfgs)]
+        #[cfg(not(tho_debug_plots))]
+        {
+            Ok::<(), thoosa_shared::ThoError>(())
+        }
+    }};
+    ($tensor:expr, $label:expr $(,)?) => {{
+        #[allow(unexpected_cfgs)]
+        #[cfg(tho_debug_plots)]
+        {
+            $crate::utils::debug_plot_impl($tensor, &format!("{}", $label))
+        }
+        #[allow(unexpected_cfgs)]
+        #[cfg(not(tho_debug_plots))]
+        {
+            Ok::<(), thoosa_shared::ThoError>(())
+        }
+    }};
+}
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -83,11 +126,53 @@ pub fn list_devices() -> Vec<Device> {
     }
 }
 
-pub fn plot_t(t_0: &Tensor, label: &str, replace: bool) -> Result<(), ThoError> {
+lazy_static! {
+    static ref DEBUG_PLOT_LABEL_COUNTS: Mutex<HashMap<String, u64>> = Mutex::new(HashMap::new());
+}
 
-    lazy_static! {
-        static ref path: String = format!("/tmp/plots/{:?}", cdt_for_dir());
+static DEBUG_PLOT_DIR: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+
+fn debug_plot_dir() -> Result<&'static PathBuf, ThoError> {
+    let path = DEBUG_PLOT_DIR.get_or_init(|| {
+        let path = std::env::temp_dir().join("plots").join(cdt_for_dir());
+        fs::create_dir_all(&path).map_err(|e| format!("debug_plot: create_dir_all({path:?}) failed: {e}"))?;
+        Ok(path)
+    });
+    match path {
+        Ok(path) => Ok(path),
+        Err(e) => Err(ThoError::new(e.clone())),
     }
+}
+
+fn sanitize_debug_plot_label(label: &str) -> String {
+    let sanitized = label
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' | '.' => c,
+            _ => '_',
+        })
+        .collect::<String>();
+    if sanitized.is_empty() { "plot".to_string() } else { sanitized }
+}
+
+#[doc(hidden)]
+pub fn debug_plot_impl(t_0: &Tensor, label: &str) -> Result<(), ThoError> {
+    let file_stem = sanitize_debug_plot_label(label);
+    let file_name = {
+        let mut counts = DEBUG_PLOT_LABEL_COUNTS
+            .lock()
+            .map_err(|e| ThoError::new(format!("debug_plot: lock failed: {e}")))?;
+        let seen = counts.entry(file_stem.clone()).or_insert(0);
+        let file_name = if *seen == 0 {
+            format!("{file_stem}.png")
+        } else {
+            format!("{file_stem}_{}.png", *seen - 1)
+        };
+        *seen += 1;
+        file_name
+    };
+    let path = debug_plot_dir()?.join(file_name);
+
     plot_series(
         (0..t_0.size()[0])
             .into_iter()
@@ -107,13 +192,7 @@ pub fn plot_t(t_0: &Tensor, label: &str, replace: bool) -> Result<(), ThoError> 
             .collect(),
         label,
         (2000, 1000),
-        &if !replace {
-
-            fs::create_dir_all(path.as_str())?;
-            format!("{}/{label}.png", path.as_str())
-        } else {
-            format!("/tmp/plots/{label}.png")
-        },
+        &path,
     )?;
     Ok(())
 }

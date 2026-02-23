@@ -5,8 +5,6 @@ use std::fmt::{format, Debug, Formatter};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering::Relaxed;
 use async_trait::async_trait;
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
@@ -19,6 +17,7 @@ use thoosa_shared::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::tmp_cache::TmpCached;
+use thoosa_common::debug_plot;
 use thoosa_common::dims::{AnyDims, Dims};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -37,7 +36,6 @@ use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
 use tch::Kind::Float;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::utils::plot_t;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_shared::runner::permits::MAX_PERMITS;
@@ -188,15 +186,7 @@ where
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "motif_loader").await?;
 
 
-        #[allow(unexpected_cfgs)]
-        #[cfg(tho_debug_plots)]
-        {
-            static COUNT: AtomicU64 = AtomicU64::new(0);
-
-            plot_t(&motif.as_ref(), &format!("motif_{motif_id}__{COUNT:?}"), false)?; //.f_mul_scalar(100.)?
-
-            COUNT.fetch_add(1, Relaxed);
-        }
+        debug_plot!(&motif.as_ref(), "motif_{motif_id}")?; //.f_mul_scalar(100.)?
 
         Ok(Arc::new(DevicesWrap::wrap(
             DataWithExtra::new(
@@ -301,15 +291,7 @@ where
         let cache_area = ctx.cache_area().into();
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "random loader").await?;
 
-        #[allow(unexpected_cfgs)]
-        #[cfg(tho_debug_plots)]
-        {
-            static COUNT: AtomicU64 = AtomicU64::new(0);
-
-            plot_t(&motif.as_ref(), &format!("random_motif_{motif_id}__{COUNT:?}"), false)?; //.f_mul_scalar(100.)?
-
-            COUNT.fetch_add(1, Relaxed);
-        }
+        debug_plot!(&motif.as_ref(), "random_motif_{motif_id}")?; //.f_mul_scalar(100.)?
 
 
         Ok(Arc::new(DevicesWrap::wrap(
