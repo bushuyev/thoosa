@@ -1586,8 +1586,8 @@ where
         let slices_0: Vec<_> = iter_0.collect();
         let slices_1: Vec<_> = iter_1.collect();
 
-        debug!("DistsTracker::consume: slices_0={slices_0:?} slices_1={slices_1:?}");
         let input_id = input.id().clone();
+        debug!("DistsTracker::consume:  input.id={input_id:?} slices_0={slices_0:?} slices_1={slices_1:?}");
         let clc_result = input.clc_result();
         let mask_size = clc_result.mask_size_hint()?;
 
@@ -1606,7 +1606,7 @@ where
                 let mut match_indices = clc_result.into_indices_iter()?;
                 let mut matches_by_channel = vec![Vec::<SlicesMatch>::new(); self.channel_trackers.len()];
 
-                debug!("DistsTracker::consume: match_indices={match_indices:?}");
+                debug!("DistsTracker::consume: input.id={input_id:?}  match_indices={match_indices:?}");
 
                 match_indices.par_bridge().for_each(|(channel, i_0, i_1, dist) | {
 
