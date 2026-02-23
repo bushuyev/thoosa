@@ -39,3 +39,6 @@ approx = "0.5.1"
 
 chrono.workspace = true
 [build-dependencies]
+
+[lints]
+workspace = true

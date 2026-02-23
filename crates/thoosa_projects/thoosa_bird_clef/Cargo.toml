@@ -42,3 +42,6 @@ tempfile = "3.10"
 
 [build-dependencies]
 chrono.workspace = true
+
+[lints]
+workspace = true

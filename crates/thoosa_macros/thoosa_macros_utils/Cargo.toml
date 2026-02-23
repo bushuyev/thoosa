@@ -15,3 +15,5 @@ syn.workspace = true
 thoosa_shared = {path = "../../thoosa_shared" }
 log.workspace = true
 ctor.workspace = true
+[lints]
+workspace = true

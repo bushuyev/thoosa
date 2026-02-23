@@ -5,9 +5,9 @@ edition.workspace = true
 
 [lib]
 path = "src/lib.rs"
-#
-#[features]
-#mock_global_ctx = [] 
+
+[features]
+mock_global_ctx = []
 
 [dependencies]
 thoosa_with_data = {path  = "../thoosa_macros/thoosa_with_data"}
@@ -48,3 +48,6 @@ tracing-appender.workspace = true
 tracing-log.workspace = true
 libc.workspace = true
 console-subscriber.workspace = true
+
+[lints]
+workspace = true
