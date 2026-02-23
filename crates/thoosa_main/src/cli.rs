@@ -608,7 +608,7 @@ where
         }
 
         Some(PlotMotifSlices(plot_motif_slices_params)) => {
-            run_plot_motif_slices(&ws, &store, &loader, &plot_motif_slices_params, &devices[0]).await?;
+            run_plot_motif_slices(&ws, &store, &loader, &plot_motif_slices_params, &devices[0], root_ctx).await?;
         }
 
         Some(MotifsToTensor(choose_fragments_params)) => {
@@ -720,7 +720,8 @@ async fn run_all(
         select_motifs_run_config: select_motifs_run_config_for_opt,
     };
 
-    check_opt_run_config::<_, FindAndSelectMotifsRunConfig>(&find_and_select_run_config)?;
+    //TODO check if it's opt or grid and then check
+    // check_opt_run_config::<_, FindAndSelectMotifsRunConfig>(&find_and_select_run_config)?;
 
     let select_motifs_run_ids = match run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
         None,
@@ -826,12 +827,6 @@ async fn run_all(
                 || root_ctx.branch(Some("select_motifs"), true, false),
             ).await?;
 
-            // for select_motifs_run_id in &select_motifs_run_ids {
-            //     run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs(*select_motifs_run_id)), &Cpu).await?;
-            // }
-
-            //gpt Plot "good motifs" from each selection run (CPU plotting; large runs can be slow).
-
             info!("select motifs done: find_motifs_run_ids={find_motifs_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
 
             select_motifs_run_ids
@@ -839,8 +834,11 @@ async fn run_all(
         Err(e) => return Err(e),
     };
 
-    for select_motifs_run_id in &select_motifs_run_ids {
-        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (*select_motifs_run_id)), &Cpu).await?;
+    #[cfg(tho_debug_plots)]
+    {
+        for select_motifs_run_id in &select_motifs_run_ids {
+            run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs(*select_motifs_run_id)), &Cpu, root_ctx.branch("plot".into(), false, false)).await?;
+        }
     }
 
     debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
@@ -1102,7 +1100,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))} }) }),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.01) })}),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))}})}),
-        slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.05..1.0, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(1000) }),
+        slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.05..1.0, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(100) }),
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.5) }), slices: RangeOrValue::Value(1000) }),
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.005..0.05, step: Some((0.005, 4))} }), slices: RangeOrValue::Value(100)}),
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
@@ -1423,23 +1421,25 @@ where
     Ok(resource_ids) //for tests
 }
 
-pub async fn run_plot_motif_slices(
+pub async fn run_plot_motif_slices<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
-    loader: &Arc<RawTensorLoader<RunCtxWithPermits>>,
+    loader: &Arc<RawTensorLoader<C>>,
     plot_motif_slices_params: &PlotMotifSlicesArgs,
     device: &Device,
-) -> Result<(), ThoError> {
-    let mut ctx = RunCtxWithPermits::new(1, "run_plot_motif_slices");
+    mut ctx:C
+) -> Result<(), ThoError>
+where
+    C:RunCtx + Adjustable{
 
-    let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::new(
+    let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<C>, C>::new(
         Arc::clone(store),
         Arc::clone(loader),
         ws
     ));
     let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
         Arc::clone(&motif_loader_impl), // as Arc<dyn MotifLoaderStage<Output = <SlicesStats as Stage>::In<'static>>>,
-        Arc::new(SlicesStats::<RunCtxWithPermits>::new()),
+        Arc::new(SlicesStats::<C>::new()),
     ));
 
     match plot_motif_slices_params.motifs_by() {
@@ -1554,14 +1554,16 @@ pub async fn run_plot_motif_slices(
     Ok(())
 }
 
-async fn plot_motif(
+async fn plot_motif<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    mut ctx: RunCtxWithPermits,
+    mut ctx: C,
     motif_id: usize,
-    motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>>,
-    clc_dist: Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, SlicesStats<RunCtxWithPermits>, RunCtxWithPermits>>,
+    motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
+    clc_dist: Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<C>, C>, SlicesStats<C>, C>>,
     select_motif_run_ids: Option<Vec<RunId>>,
-) -> Result<(), ThoError> {
+) -> Result<(), ThoError>
+where
+    C:RunCtx + Adjustable{
     let select_motif_run_ids_sfx = select_motif_run_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
     let motif_loader_input = MotifLoaderInput::new(DataId(motif_id as u32), select_motif_run_ids);
     let motif_id_arc = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), CacheArea::default()));
