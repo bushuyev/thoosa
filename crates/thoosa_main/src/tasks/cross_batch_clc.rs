@@ -385,7 +385,7 @@ where
         debug!("CrossUnfoldClc::do_run: input.id={:?} input={input:?} unfold_params={unfold_params:?}", input.id);
         debug!("CrossUnfoldClc::do_run: input.id={:?} input.tensors.len={} input.resources_0.len={} input.resources_1.len={}", input.id, input.tensors.len(), input.resources_0.len(), input.resources_1.len());
 
-
+        //FIXME tensors which are too small (because of freq_filter) are already removed from batch_0_t and batch_1_t but still present in sizes (as 0) so that resources_0/1 can be filtered. Do it all in unfold_and_cat
         let (batch_0_t, batch_0_sizes) =  unfold_and_cat(&input.tensors[0..input.resources_0.len()], &unfold_params)?;
 
         debug!("CrossUnfoldClc::do_run: input.id={:?} batch_0_sizes={batch_0_sizes:?}", input.id);
@@ -441,9 +441,8 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params
 
     assert!(!input.is_empty(), "cross_batch_clc/unfold_and_cat: input is empty");
 
-    let mut batch_0_sizes = vec![];
 
-    let (tensors, sizes):(Vec<Tensor>, Vec<i64>) = input.into_iter().fold((vec![], vec![]), |mut a, t|{
+    let (tensors, sizes):(Vec<Tensor>, Vec<i64>) = input.into_iter().fold((vec![], vec![]), |(mut unfolded_tensors, mut sizes), t|{
         if t.size().dim_1() >= unfold_params.size  {
             match  t.t_ref().f_unfold(
                 unfold_params.dimension,
@@ -454,21 +453,21 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params
 
                     debug!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?} unfolded.size={:?}", t.id(), t.size(), unfold_params, unfolded.size());
 
-                    a.1.push(unfolded.size()[1]); //number of blocks
+                    sizes.push(unfolded.size()[1]); //number of blocks
 
-                    a.0.push(unfolded);
+                    unfolded_tensors.push(unfolded);
                 }
                 Err(e) => {
                     warn!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?} got e={e:?}", t.id(), t.size(), unfold_params);
-                    batch_0_sizes.push(0);
+                    sizes.push(0);
                 }
             }
 
         } else {
             debug!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?}  skipped", t.id(), t.size(), unfold_params);
-            batch_0_sizes.push(0);
+            sizes.push(0);
         }
-        a
+        (unfolded_tensors, sizes)
     });
 
     if tensors.is_empty() {
