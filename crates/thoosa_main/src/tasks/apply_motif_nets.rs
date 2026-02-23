@@ -133,13 +133,14 @@ where
         .collect::<Vec<_>>();
 
         //TODO all motif nets should have same width/step, handle different ones?
-        let mut motif_width = HashSet::new();
+        let mut motif_widths = HashSet::new();
         let mut freq_filters_by_find_motifs_run_id: HashMap<RunId, Option<Arc<FreqFilter<C>>>> = HashMap::new();
         let mut loaded_motif_nets_with_filters = Vec::with_capacity(loaded_motif_nets.len());
         for v in loaded_motif_nets {
-            let motif_id = with_data!(stage_ctx.branch(Some("apply_motif_nets_meta"), false, false), v; |_ctx, v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
-                motif_width.insert(v.extra().motif_net_params.num_features());
-                Ok::<_, ThoError>(v.extra().motif_id())
+            let (motif_id, motif_width) = with_data!(stage_ctx.branch(Some("apply_motif_nets_meta"), false, false), v; |_ctx, v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+                let motif_width = v.extra().motif_net_params.num_features();
+                motif_widths.insert(motif_width);
+                Ok::<_, ThoError>((v.extra().motif_id(), motif_width))
             })?;
 
             let (_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?;
@@ -161,20 +162,17 @@ where
             };
 
             let freq_filter_find_motifs_run_id = if freq_filter.is_some() { Some(find_motifs_run_id) } else { None };
-            loaded_motif_nets_with_filters.push((v, freq_filter_find_motifs_run_id, freq_filter));
+            loaded_motif_nets_with_filters.push((v, motif_width, freq_filter_find_motifs_run_id, freq_filter));
         }
 
-        if motif_width.len() != 1 {//TODO  group motif nets by width. all motifs should be of same width so that tensors can be batched for label training
-            return Err(ThoError::new(format!("ApplyMotifNets failed, motif_width={motif_width:?} should haven len=1 in train_motif_nets_run_ids={train_motif_nets_run_ids:?}, motif_width.len={}", motif_width.len())));
+        if motif_widths.len() > 1 {
+            warn!("ApplyMotifNets::new: mixed motif widths in selected nets; widths={motif_widths:?} run_ids={train_motif_nets_run_ids:?}. Will run per-net and pad outputs for concat.");
         }
-        // if slice_step.len() != 1 {
-        //     return Err(ThoError::new(format!("ApplyMotifNets failed, slice_step={slice_step:?} should haven len=1 in train_motif_nets_run_ids={train_motif_nets_run_ids:?}, slice_step.len={}", slice_step.len())));
-        // }
 
         //gpt TODO!! if no motif nets load, these expects will panic; consider returning a structured error.
-        let motif_width = motif_width.into_iter().next().expect("no motif_width");
+        let motif_width = motif_widths.iter().copied().max().expect("no motif_width");
         // let slice_step = slice_step.into_iter().next().expect("no slice_step");//TODO shouldn't necessarily be what was used during motif training
-        debug!("ApplyMotifNets::new: motif_width={motif_width:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets_with_filters.len());
+        debug!("ApplyMotifNets::new: motif_width(max)={motif_width:?} motif_widths={motif_widths:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets_with_filters.len());
 
         let mut select_motifs_run_id_sorted = train_motif_nets_run_ids.clone();//TODO move to util CompKey::from Vec
         select_motifs_run_id_sorted.sort();
@@ -185,8 +183,9 @@ where
             pd: PhantomData,
             apply_motif_nets: loaded_motif_nets_with_filters
                 .into_iter()
-                .map(|(net, freq_filter_find_motifs_run_id, freq_filter)| Arc::new(ApplyMotifNet::new(
+                .map(|(net, motif_width, freq_filter_find_motifs_run_id, freq_filter)| Arc::new(ApplyMotifNet::new(
                     net,
+                    motif_width,
                     freq_filter_find_motifs_run_id,
                     freq_filter,
                     slice_step,//TODO shouldn't be same as one used when training motif net
@@ -230,8 +229,6 @@ where
 
         let apply_motif_nets = self.apply_motif_nets.clone();
         let apply_motif_nets_len = apply_motif_nets.len();
-        let min_split_len = self.motif_width as i64;
-        let overlap_len = (self.motif_width  - self.slice_step) as i64;
         let mut inputs_by_filter_group: HashMap<Option<RunId>, Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>> = HashMap::new();
         inputs_by_filter_group.insert(None, Arc::clone(&input));
 
@@ -250,45 +247,30 @@ where
             inputs_by_filter_group.insert(group_key, filtered_input);
         }
 
-        let motif_width_i64 = self.motif_width as i64;
-        let slice_step_i64 = self.slice_step as i64;
-        let mut slices_by_filter_group: HashMap<Option<RunId>, i64> = HashMap::new();
-        let mut groups_debug = Vec::with_capacity(inputs_by_filter_group.len());
-        for (group_key, group_input) in &inputs_by_filter_group {
-            let input_len = group_input.size().dim::<1>() as i64;
-            let slices = if input_len >= motif_width_i64 {
-                ((input_len - motif_width_i64) / slice_step_i64) + 1
-            } else {
-                1
-            };
-            groups_debug.push((*group_key, input_len, slices));
-            slices_by_filter_group.insert(*group_key, slices);
-        }
-        let unique_slices = groups_debug.iter().map(|(_, _, slices)| *slices).collect::<HashSet<_>>();
-        if unique_slices.len() > 1 {
-            return Err(ThoError::new(format!(
-                "ApplyMotifNets failed: mixed freq filters produce different slice counts for input.id={:?}; groups={groups_debug:?}",
-                input.id(),
-            )));
-        }
-
         let inputs_by_filter_group = Arc::new(inputs_by_filter_group);
-        let slices_by_filter_group = Arc::new(slices_by_filter_group);
         let futures = apply_motif_nets
             .into_iter()
             .map(|apply_motif_net|{
                 let inputs_by_filter_group = Arc::clone(&inputs_by_filter_group);
-                let slices_by_filter_group = Arc::clone(&slices_by_filter_group);
                 let group_key = apply_motif_net.freq_filter_find_motifs_run_id;
                 let input = inputs_by_filter_group.get(&group_key).cloned().expect("filtered input for group must exist");
-                let slices = *slices_by_filter_group.get(&group_key).expect("slices for group must exist");
+                let motif_width = apply_motif_net.motif_width;
+                let motif_width_i64 = motif_width as i64;
+                let min_split_len = motif_width_i64;
+                let overlap_len = motif_width.saturating_sub(self.slice_step) as i64;
+                let input_len = input.size().dim::<1>() as i64;
+                let slices = if input_len >= motif_width_i64 {
+                    ((input_len - motif_width_i64) / self.slice_step as i64) + 1
+                } else {
+                    1
+                };
                 let out_id = apply_motif_net.out_id(&input.id());
                 let apply_motif_net_ctx = ctx.branch(Some(&format!("apply_motif_nets_{out_id:?}")), true, false);
                 let apply_motif_net_input = Arc::new(ApplyMotifNetInputWrapper::new(Arc::clone(&input), Arc::clone(&apply_motif_net.net_wrapper)));
 
                 let slice_step = self.slice_step;
 
-                debug!("ApplyMotifNets::run: input.size={:?} self.motif_width={:?} slice_step={slice_step} slices={slices} min_split_len={min_split_len} overlap_len={overlap_len}", input.size(), self.motif_width);
+                debug!("ApplyMotifNets::run: input.size={:?} motif_width={motif_width:?} self.motif_width(max)={:?} slice_step={slice_step} slices={slices} min_split_len={min_split_len} overlap_len={overlap_len}", input.size(), self.motif_width);
 
                 let out_id_arc = Arc::new(out_id.clone()) as Arc<dyn CachableIdTr>;
                 async move {
@@ -334,6 +316,25 @@ where
         .collect::<Vec<_>>();
 
         debug!("ApplyMotifNets::run: matches={matches:?}");
+
+        let match_lens = matches.iter().map(|v| v.t.size()[0]).collect::<Vec<_>>();
+        let unique_match_lens = match_lens.iter().copied().collect::<HashSet<_>>();
+        let max_match_len = match_lens.iter().copied().max().unwrap_or(0);
+        let matches = if unique_match_lens.len() > 1 {
+            warn!("ApplyMotifNets::run: mixed motif widths/filters produced different output lengths; lengths={match_lens:?}. Padding to max len={max_match_len} for concat.");
+            matches.into_iter().map(|v| {
+                let size = v.t.size();
+                if size[0] == max_match_len {
+                    return Ok(v);
+                }
+                let mut to_size = size.clone();
+                to_size[0] = max_match_len;
+                let t = pad_to(&v.t, to_size.as_slice(), 0.0)?;
+                ThoTensor::new(v.id().clone(), t)
+            }).collect::<Result<Vec<_>, ThoError>>()?
+        } else {
+            matches
+        };
 
 
         let motif_nets_applied = ThoTensor::new(
@@ -513,6 +514,7 @@ where
 {
     id: SynKey,
     net_wrapper:Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
+    motif_width: u32,
     freq_filter_find_motifs_run_id: Option<RunId>,
     freq_filter: Option<Arc<FreqFilter<C>>>,
     slice_step:u32,
@@ -526,6 +528,7 @@ where
 {
     pub fn new(
         net_wrapper:Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
+        motif_width: u32,
         freq_filter_find_motifs_run_id: Option<RunId>,
         freq_filter: Option<Arc<FreqFilter<C>>>,
         slice_step:u32,
@@ -536,6 +539,7 @@ where
         Self {
             id: mono_key!("ApplyMotifNet", "ApplyMotifNet") + net_wrapper.id(),
             net_wrapper,
+            motif_width,
             freq_filter_find_motifs_run_id,
             freq_filter,
             slice_step,
