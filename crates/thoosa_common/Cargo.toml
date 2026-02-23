@@ -74,3 +74,6 @@ tracing-subscriber = "0.3.22"
 with-id = "1.0.2"
 [build-dependencies]
 chrono.workspace = true
+
+[lints]
+workspace = true

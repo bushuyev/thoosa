@@ -33,6 +33,8 @@ edition = "2024"
 level = "warn"
 check-cfg = [
     "cfg(thoosa_release_extra)",
+    "cfg(tho_debug)",
+    "cfg(tho_debug_plots)",
 ]
 
 [workspace.dependencies]

@@ -51,3 +51,6 @@ approx = "0.5.1"
 
 [build-dependencies]
 chrono = { version = "0.4.32" }
+
+[lints]
+workspace = true

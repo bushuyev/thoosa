@@ -16,3 +16,5 @@ thoosa_properties_map_derive = {path = "../thoosa_properties_map_derive" }
 
 [dev-dependencies]
 macrotest = "1"
+[lints]
+workspace = true
