@@ -970,15 +970,15 @@ pub struct ConvNetParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelfAttentionNetParams {
-    d_model: u32,
+    d_model_heads: u32, //d_model- times n_heads
     n_heads: u32,
     ff_mult: u32,
     dropout: f64,
 }
 
 impl SelfAttentionNetParams {
-    pub fn new(d_model: u32, n_heads: u32, ff_mult: u32, dropout: f64) -> Self {
-        Self { d_model, n_heads, ff_mult, dropout }
+    pub fn new(d_model_heads: u32, n_heads: u32, ff_mult: u32, dropout: f64) -> Self {
+        Self { d_model_heads, n_heads, ff_mult, dropout }
     }
 }
 
@@ -1240,13 +1240,13 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
             .linear_feats(
                 "self_attention_in_proj",
                 params.motif_nets,
-                sa_params.d_model,
+                sa_params.d_model_heads * sa_params.d_model_heads,
                 #[cfg(debug_assertions)]
                 "self_attention_in_proj".to_string(),
             )?
             .self_attention(
                 "self_attention_block",
-                sa_params.d_model,
+                sa_params.d_model_heads * sa_params.d_model_heads,
                 sa_params.n_heads,
                 sa_params.ff_mult,
                 sa_params.dropout,
@@ -2145,7 +2145,7 @@ pub struct LinNetArgs {
 pub struct SelfAttentionNetArgs {
     #[in_map]
     #[run_config]
-    pub d_model: u32,
+    pub d_model_heads: u32,
     #[in_map]
     #[run_config]
     pub n_heads: u32,
@@ -2170,7 +2170,7 @@ impl LinNetArgs {
 
 impl SelfAttentionNetArgs {
     pub fn new(d_model: u32, n_heads: u32, ff_mult: u32, dropout: f64) -> Self {
-        Self { d_model, n_heads, ff_mult, dropout }
+        Self { d_model_heads: d_model, n_heads, ff_mult, dropout }
     }
 }
 
