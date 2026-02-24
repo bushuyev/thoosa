@@ -190,9 +190,11 @@ async fn collect_stream_with_progress<T, S>(
 ) where
     S: futures::stream::Stream<Item = Result<T, ThoError>> + Unpin,
 {
+
     let mut eta_tick = tokio::time::interval(COLLECT_ETA_LOG_INTERVAL);
     eta_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let _ = eta_tick.tick().await;
+
 
     loop {
         tokio::select! {
@@ -224,7 +226,7 @@ async fn collect_stream_with_progress<T, S>(
     }
 }
 
-pub const LOCK_TIMEOUT: Duration = Duration::from_mins(10);
+pub const LOCK_TIMEOUT: Duration = Duration::from_mins(1);
 pub const FUTURES_TIMEOUT: Duration = Duration::from_hours(24);
 
 

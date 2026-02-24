@@ -1,9 +1,11 @@
+use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use log::{debug, error, trace, warn};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc::error::SendError;
 use tokio::task::JoinHandle;
 use thoosa_shared::runner::global_ctx::GlobalCtx;
-use crate::ThoError;
+use crate::{panic_to_err, panic_to_err_async, ThoError};
 
 pub enum PurgeCmd {
     Gpu {
@@ -15,64 +17,83 @@ pub enum PurgeCmd {
 #[derive(Debug)]
 pub struct Purger {
     tx: mpsc::UnboundedSender<PurgeCmd>,
-    _worker: Option<JoinHandle<()>>,
+    //TODO Arc<RwLock seems to prevent self.tx.send failing "channel closed"
+    rx_arc: Arc<RwLock<mpsc::UnboundedReceiver<PurgeCmd>>>,
+    worker: JoinHandle<()>,
 }
 
 impl Purger {
     pub fn new() -> Self {
+        debug!("Purger::new");
 
         let (tx, mut rx) = mpsc::unbounded_channel::<PurgeCmd>();
+        let rx_arc = Arc::new(RwLock::new(rx));
+        let rx_arc_self = Arc::clone(&rx_arc);
         let worker = tokio::spawn(async move {
             // cache is owned here
             loop {
-                if GlobalCtx::global().is_shutting_down() {
-                    return
-                }
 
-                if rx.is_closed() {
-                    warn!("Purger::new, loop: channel is closed");
-                    return ;
-                }
-
-                match rx.recv().await {
+                match rx_arc.write().await.recv().await {
                     Some(PurgeCmd::Gpu { closures, cache_area }) => {
-                        trace!("Purger::new, loop, got cmd: closures.len={}, cache_area={cache_area:064b} ", closures.len());
+                        debug!("Purger::new, loop, got cmd: closures.len={}, cache_area={cache_area:064b} ", closures.len());
 
+                        // match panic_to_err_async!({
+                            for purge_cl in &closures {
 
-                        for purge_cl in &closures {
-                            if GlobalCtx::global().is_shutting_down() {
-                                break;
+                                match panic_to_err_async!(Ok::<_, ThoError>(purge_cl().await)) {
+                                    Ok(_) => {
+                                        trace!("Purger::new, loop: done purging ")
+                                    }
+                                    Err(e) => {
+                                        error!("Purger::new, loop:  purge failed: {e:?}")
+                                    }
+                                }
                             }
-                            // A shutdown can still occur while inside the purge_cl call spitting CUDA_ERROR_DEINITIALIZED, so it would need to be checked somewhere in cuda_utils::copy_h2d_from_ptr.
-                            // However, that would be rather wasteful since the app is not going to shut down very often.
-                            match purge_cl().await {
-                                Ok(()) => {
-                                    trace!("Purger::new, loop: done purging ")
+
+                            match panic_to_err!(Ok::<_, ThoError>(GlobalCtx::global().dispose_cache_area(cache_area))){
+                                Ok(_) => {
+                                    trace!("Purger::new, loop: done dispose_cache_area ")
                                 }
                                 Err(e) => {
-                                    error!("Purger::new, loop:  purge failed: {e:?}")
+                                    error!("Purger::new, loop: dispose_cache_area failed: {e:?}")
                                 }
-                            }
-                        }
+                            };
 
-                        GlobalCtx::global().dispose_cache_area(cache_area);
-
+                            // Ok::<_, ThoError>(())
+                        // }){
+                        //     Ok(_) => {
+                        //         trace!("Purger::new, loop, panic_to_err_async: done purging ")
+                        //     }
+                        //     Err(e) => {
+                        //         error!("Purger::new, loop, panic_to_err_async:  purge failed: {e:?}")
+                        //     }
+                        // };
                     }
-                    None => break,
+                    None => {
+                        debug!("Purger::new, loop, break");
+                        break;
+                    },
                 }
             }
+            warn!("Purger::new: loop exited");
         });
 
-        Self { tx, _worker: Some(worker),  }
+        Self { tx, rx_arc:rx_arc_self, worker,  }
     }
 
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>, cache_area: u64) -> Result<(), ThoError>{
         debug!("Purger::run_purge_gpu: closures.len={}", closures.len());
-        if GlobalCtx::global().is_shutting_down() {
-            debug!("Purger::run_purge_gpu: shutdown set, skipping purge");
-            return Ok(());
+
+        match self.tx.send(PurgeCmd::Gpu {cache_area, closures}) {
+            Ok(_) => {
+                Ok(())
+            }
+            Err(e) => {
+                warn!("Purger::run_purge_gpu: got e {e:?}");
+
+                Err(e.into())
+            }
         }
-        self.tx.send(PurgeCmd::Gpu {cache_area, closures}).map_err(|e|e.into())
     }
 
 

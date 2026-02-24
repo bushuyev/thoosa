@@ -56,6 +56,7 @@ thoosa_dummy_data_derive.workspace = true
 async-trait.workspace = true
 rand_distr.workspace = true
 tracing.workspace = true
+console-subscriber.workspace = true
 [dev-dependencies]
 rand_chacha = "0.3.1"
 approx = "0.5.1"

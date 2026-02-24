@@ -126,11 +126,11 @@ where
 
                             data.remove_cache_area(cache_area);
 
-                            trace!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} data.cache_area={:?} ", data.cache_area);
+                            debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} data.cache_area={:?} ", data.cache_area);
                             if data.cache_area.assigned_count() == 0 {
                                 data.dump_to_cpu(device_idx).await?;
 
-                                trace!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
+                                debug!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
                             }
                         }
                     } else {
@@ -444,6 +444,8 @@ where
             ))
         } else {
             drop(read_guard);
+
+            debug!("DataCacheWrapper::from_any_device id={:?} copying to_device_idx={to_device_idx}",wrap.id);
 
             for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
                 let source_read_guard = timed_tokio_read(op, "CpuOrGpu::load_from_any_device_ source read").await;
