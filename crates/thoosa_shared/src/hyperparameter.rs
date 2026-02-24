@@ -6,8 +6,8 @@ use crate::opt_rng::opt_rnd;
 use crate::val::Val;
 use log::trace;
 use once_cell::sync::Lazy;
+#[allow(unused_imports)]
 use rand::Rng;
-
 pub trait FieldName: Display + Debug + Clone {
     //+ for<'a>  Add<&'a dyn AsRef<Self>>
 }

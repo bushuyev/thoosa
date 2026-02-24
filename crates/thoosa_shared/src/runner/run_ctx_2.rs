@@ -156,8 +156,8 @@ impl RunCtx for RunCtxWithPermits {
             None => {
                 self.id.clone()
             }
-            Some(branch_name) => {
-                &self.id + mono_key!(branches, branch_name)
+            Some(_branch_name) => {
+                &self.id + mono_key!(branches, _branch_name)
             }
         };
         debug!("RunCtx2::branch: branch_full_id={branch_full_id:?}");

@@ -1,3 +1,5 @@
+#![allow(unused_assignments)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use async_trait::async_trait;
