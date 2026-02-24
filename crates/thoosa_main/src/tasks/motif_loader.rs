@@ -186,7 +186,7 @@ where
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "motif_loader").await?;
 
 
-        debug_plot!(&motif.as_ref(), "motif_{motif_id}")?; //.f_mul_scalar(100.)?
+        //debug_plot!(&motif.as_ref(), "motif_{motif_id}")?;
 
         Ok(Arc::new(DevicesWrap::wrap(
             DataWithExtra::new(
@@ -291,7 +291,7 @@ where
         let cache_area = ctx.cache_area().into();
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "random loader").await?;
 
-        debug_plot!(&motif.as_ref(), "random_motif_{motif_id}")?; //.f_mul_scalar(100.)?
+        // debug_plot!(&motif.as_ref(), "random_motif_{motif_id}")?;
 
 
         Ok(Arc::new(DevicesWrap::wrap(

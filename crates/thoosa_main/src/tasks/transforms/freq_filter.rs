@@ -123,7 +123,7 @@ where
                     debug!("FreqFilter::apply_tho_tensor, NotchBand: id={} filtered_t.size={:?} filtered_t_out.size={:?}", input_tensor.id(), filtered_t.size(), filtered_t_out.size());
 
                     filtered_t = filtered_t_out;
-                    debug_plot!(&filtered_t, "{}_NotchBand", input_tensor.id())?;
+                    // debug_plot!(&filtered_t, "{}_NotchBand", input_tensor.id())?;
                 }
                 PreparedFilter::BandPass { kernel, stride, padding } => {
                     filtered_t = kernel.run_inner(|band_filter_inner| {
@@ -138,7 +138,7 @@ where
                         Ok(output)
                     })?;
 
-                    debug_plot!(&filtered_t, "{}_BandPass", input_tensor.id())?;
+                    // debug_plot!(&filtered_t, "{}_BandPass", input_tensor.id())?;
                 }
             }
         }

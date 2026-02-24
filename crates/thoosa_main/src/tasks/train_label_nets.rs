@@ -398,8 +398,8 @@ where
 
                                     Ok((lin_label_node(&net_params)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
-                                LabelNetTypeArgs::SelfAttentionNet(SelfAttentionNetArgs { d_model, n_heads, ff_mult, dropout }) => {
-                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::SelfAttentionNetParams(SelfAttentionNetParams::new(d_model, n_heads, ff_mult, dropout)));
+                                LabelNetTypeArgs::SelfAttentionNet(SelfAttentionNetArgs { d_model_heads, n_heads, ff_mult, dropout }) => {
+                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::SelfAttentionNetParams(SelfAttentionNetParams::new(d_model_heads, n_heads, ff_mult, dropout)));
                                     Ok((self_attention_label_node(&net_params)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
                             }
@@ -459,7 +459,7 @@ where
                 labels_tain_and_valid_sets_len,
                 crate::buffer_limits::TRAIN_LABEL_NETS_RUN_BUFFER_UNORDERED_LIMIT,
                 StreamBuffering::Unordered,
-                "train label failed",
+                "train label",
             ).await;
             //gpt TODO!! collect_futures_with_progress drops per-label errors; results may be incomplete without signaling failure.
 
