@@ -36,7 +36,10 @@ fn main() -> Result<(), ThoError> {
         .max_blocking_threads(cpu_num/2)        // more threads for spawn_blocking jobs
         .enable_all()
         .build()
-        .map_err(|err| ThoError::from_error("tokio runtime build failed", err))?;
+        .map_err(|err| {
+            error!("main: {err:?}");
+            ThoError::from_error("tokio runtime build failed", err)
+        })?;
 
 
     let run_result = rt.block_on(async move {
@@ -62,6 +65,7 @@ fn main() -> Result<(), ThoError> {
     match run_result {
         Ok(_) => {
             info!("All done in {} mls", t1.elapsed().as_millis());
+            rt.shutdown_background();
             Ok(())
         }
         Err(e) => {
