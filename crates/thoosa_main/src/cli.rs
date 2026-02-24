@@ -351,8 +351,8 @@ where
                             prev_park[w] = park;
                             prev_busy[w] = busy;
                     }
-                    // debug!("run_cli: purge_cpu tick");
-                    // GlobalCtx::global().purge_cpu(100).await;
+                    debug!("run_cli: purge_cpu tick");
+                    GlobalCtx::global().purge_cpu(10).await;
                 }
                 _ = rx.changed() => {
                     if *rx.borrow() {
