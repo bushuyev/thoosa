@@ -7,7 +7,7 @@ use crate::runner::common::{DropIf, OutId};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::statistics::Statistics;
 use async_trait::async_trait;
-use log::{debug, error, warn};
+use log::{debug, warn};
 use mockall::automock;
 use mockall_double::double;
 use std::fmt::Debug;

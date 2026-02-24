@@ -18,7 +18,7 @@ use tracing_subscriber::{
     Layer,
 };
 use time_series_generator::{generate_sine_wave, generate_triangle_wave};
-use rand::{Rng, RngExt};
+use rand::RngExt;
 
 fn level_filter_allows(filter: LevelFilter, level: &Level) -> bool {
     if filter == LevelFilter::Off {

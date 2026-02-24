@@ -422,7 +422,7 @@ mod tests {
             let num_devices = GlobalCtx::global().device_count();
 
             let stage = Arc::clone(&self);
-            let mut ctx = ctx;
+            let ctx = ctx;
             let output = input
                 .with_data_ref(device_idx, ctx, None, move |tensor: &ThoTensor<LoadedTensor, SynKey>, run_ctx| {
                     Arc::clone(&stage).do_run(tensor, run_ctx)

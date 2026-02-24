@@ -659,7 +659,7 @@ mod tpe_optimizer_tests {
     use crate::parzen::optimizer::Val::Int;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer, Val, stack_params};
     use log::debug;
-    use tch::{IndexOp, Tensor};
+    use tch::Tensor;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::NamedVal;
     use crate::tho_tensor::ThoTensor;
