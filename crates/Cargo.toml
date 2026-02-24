@@ -83,12 +83,12 @@ dashmap = "6"
 polars = { version = "0", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in", "list_sample", "list_gather", "list_count", "list_sets", "list_any_all", "dtype-array"] }
 
 tokio = { version = "1", features = ["full", "test-util", "tracing"] }
-tokio-utils = "0"
-tracing = "0"
+tokio-utils = "0.1"
+tracing = "0.1"
 tracing-subscriber = { version = "0", features = ["fmt", "env-filter", "chrono"] }
-tracing-appender = "0"
-tracing-log = "0"
-console-subscriber = "0"
+tracing-appender = "0.2"
+tracing-log = "0.2"
+console-subscriber = "0.5"
 uuid = { version = "1.10", features = ["v4", "fast-rng"] }
 statrs = "0"
 proc-macro2 = {version = "1.0.103"}

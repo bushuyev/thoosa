@@ -265,7 +265,10 @@ pub fn maybe_init_perf_tracing_stdout_simplelog_like(
         .event_format(SimplelogLikeEvent::new(timer, false, false))
         .with_filter(FilterFn::new(perf_output_filter));
 
+    let console_layer = console_subscriber::spawn(); // :contentReference[oaicite:2]{index=2}
+
     let subscriber = registry()
+        .with(console_layer)
         .with(stdout_layer)
         .with(file_layer)
         .with(perf_layer)

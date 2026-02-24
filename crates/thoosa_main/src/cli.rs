@@ -63,8 +63,9 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{cdt, cdt_for_dir, ResourceType, ThoError};
 use thoosa_store::{SqlStore, Store};
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use tokio::{select, sync::watch, time::{self, Duration}};
+use tokio::time::MissedTickBehavior;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CopyCtx;
@@ -240,6 +241,7 @@ where
     F: Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
     R: Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoError> + Sync + Send,
 {
+    // console_subscriber::init();
     if log::log_enabled!(log::Level::Trace) {
         reset_print_options();
     }
@@ -312,14 +314,45 @@ where
     GlobalCtx::init_devices(2);
 
     let (stop_cpu_purge_tx, mut rx) = watch::channel(false);
+    let metrics = Handle::current().metrics();
+    let workers = metrics.num_workers();
+    let mut prev_poll = vec![0u64; workers];
+    let mut prev_park = vec![0u64; workers];
+    let mut prev_busy = vec![std::time::Duration::ZERO; workers];
 
     let purge_cpu_worker = tokio::spawn(async move {
         let mut ticker = time::interval(Duration::from_secs(60));
+        ticker.tick().await; //
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             select! {
                 _ = ticker.tick() => {
-                    debug!("run_cli: purge_cpu tick");
-                    GlobalCtx::global().purge_cpu(100).await;
+
+                    info!(
+                        "[tokio] alive_tasks={} global_q={} blocking_q={}",
+                        metrics.num_alive_tasks(),
+                        metrics.global_queue_depth(),
+                        metrics.blocking_queue_depth(),
+                    );
+
+                    for w in 0..workers {
+                           let poll = metrics.worker_poll_count(w);
+                            let park = metrics.worker_park_count(w);
+                            let busy = metrics.worker_total_busy_duration(w);
+
+                            info!(
+                                "  w{w}: poll+{} park+{} busy+{:?}",
+                                poll - prev_poll[w],
+                                park - prev_park[w],
+                                busy - prev_busy[w],
+                            );
+
+                            prev_poll[w] = poll;
+                            prev_park[w] = park;
+                            prev_busy[w] = busy;
+                    }
+                    // debug!("run_cli: purge_cpu tick");
+                    // GlobalCtx::global().purge_cpu(100).await;
                 }
                 _ = rx.changed() => {
                     if *rx.borrow() {
@@ -655,6 +688,7 @@ where
 
     let _ = stop_cpu_purge_tx.send(true);
     let _ = purge_cpu_worker.await;
+
 
     Ok(())
 }

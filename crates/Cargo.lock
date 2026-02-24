@@ -4699,6 +4699,7 @@ dependencies = [
  "cached_derive",
  "chrono",
  "clap",
+ "console-subscriber",
  "crossbeam-channel",
  "ctor 0.5.0",
  "dashmap 6.1.0",

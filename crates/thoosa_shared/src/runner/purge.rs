@@ -44,7 +44,7 @@ where
     O: Data + CopyToDevice + Output + Send + Sync + 'static,
     <O as Data>::M: DevicesWrapCopyMode<O>,
 {
-    async fn purge_cpu(&self, on_cpu_before: u64) -> usize{
+    async fn purge_cpu(&self, on_cpu_before: u64) -> usize {
         let mut purged_count = 0usize;
         self.retain(|k, v| {
             debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?}");
