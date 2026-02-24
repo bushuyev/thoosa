@@ -14,7 +14,7 @@ use crate::val::{NamedRange, NamedVal, Val};
 use bytemuck::{Pod, Zeroable};
 use chrono::SecondsFormat;
 use lazy_static::lazy_static;
-use log::{debug, info, trace, warn};
+use log::{debug, trace, warn};
 use num_traits::PrimInt;
 use rand::{Rng, RngExt};
 use regex::Regex;
@@ -37,7 +37,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use futures::stream::StreamExt;
 use async_trait::async_trait;
 use ambassador::delegatable_trait;
-use futures_util::{FutureExt, TryFutureExt};
 use mockall::automock;
 use rand::seq::{IndexedRandom, SliceRandom};
 #[cfg(test)]
@@ -2169,12 +2168,12 @@ pub fn shuffle_and_chunk_with_rng<R: rand::Rng + ?Sized>(
 
 /// Returns up to `n` *references* to randomly chosen distinct elements (no clones).
 pub fn sample_n_refs<'a, T, R: Rng + ?Sized>(v: &'a [T], n: usize, rng: &mut R) -> Vec<&'a T> {
-    v.choose_multiple(rng, n).collect() // returns min(n, v.len())
+    v.sample(rng, n).collect() // returns min(n, v.len())
 }
 
 /// Returns up to `n` randomly chosen distinct elements by *cloning* them.
 pub fn sample_n_cloned<T: Clone, R: Rng + ?Sized>(v: &[T], n: usize, rng: &mut R) -> Vec<T> {
-    v.choose_multiple(rng, n).cloned().collect()
+    v.sample(rng, n).cloned().collect()
 }
 
 /// Consumes the vector, shuffles it, and truncates to up to `n` elements (no clones).

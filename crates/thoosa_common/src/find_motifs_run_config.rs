@@ -1,18 +1,17 @@
 #![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
 
-use std::any::Any;
 use crate::transforms::filters::*;
 use log::debug;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::F64BitsKey;
 use thoosa_shared::run_configs::{RunConfig, RunId};
-use thoosa_shared::traits::{CachableIdTr, Named};
+use thoosa_shared::traits::Named;
 use thoosa_shared::val::Val;
 
 //TODO move to find, + nets move out of common

@@ -4,7 +4,7 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use log::{debug, error};
-use tch::{nn, Kind, Scalar, TchError, Tensor};
+use tch::{nn, Kind, TchError, Tensor};
 
 use tch::nn::{ConvConfig, Module};
 use tch::nn::{

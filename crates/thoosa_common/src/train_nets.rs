@@ -1811,7 +1811,7 @@ impl<D: Dims> TensorsDataBatch<D> {
                     );
 
                     tensors
-                        .choose_multiple(&mut rng, per_class_len as usize)
+                        .sample(&mut rng, per_class_len as usize)
                         .for_each(|t| {
                             x_y_acc.push((t.shallow_clone(), class as i64));
                         });

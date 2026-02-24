@@ -897,10 +897,10 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
 
         //TODO move to RangeOrSlice::select
         let resources_0 = match &selector.batch_0_selector {
-            RangeOrSlice::Full => (self.resources_0.as_slice()),
+            RangeOrSlice::Full => self.resources_0.as_slice(),
             RangeOrSlice::Range(range) => {
                 let range = range.start as usize..range.end as usize;
-                (&self.resources_0[range.clone()])
+                &self.resources_0[range.clone()]
             }
             RangeOrSlice::Slice((i, range)) => {
                 std::slice::from_ref(&self.resources_0[*i])
@@ -908,10 +908,10 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
         };
 
         let resources_1 = match &selector.batch_1_selector {
-            RangeOrSlice::Full => (self.resources_1.as_slice()),
+            RangeOrSlice::Full => self.resources_1.as_slice(),
             RangeOrSlice::Range(range) => {
                 let range = range.start as usize..range.end as usize;
-                (&self.resources_1[range.clone()])
+                &self.resources_1[range.clone()]
             }
             RangeOrSlice::Slice((i, range)) => {
                 std::slice::from_ref(&self.resources_1[*i])
