@@ -4,7 +4,7 @@ use crate::parzen::optimizer::{Distribution, ParzenEstimator};
 use crate::parzen::util::uniform_weight;
 use log::{debug, trace};
 use num_traits::*;
-use rand::{Rng, RngExt};
+use rand::RngExt;
 use rand::seq::IndexedRandom;
 use tch::{IndexOp, Kind, Tensor};
 use thoosa_shared::opt_rng::opt_rnd;
