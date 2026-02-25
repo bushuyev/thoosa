@@ -489,7 +489,7 @@ where
         S:Debug + Clone + 'static,
         P: RunCtx
     {
-        let mut permits_ctx = permits_ctx;
+        let permits_ctx = permits_ctx;
         // if permits_ctx.acquired_permits() == 0 {
         //     let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
         //     permits_ctx.add_permit(permit);
@@ -540,7 +540,7 @@ where
         P:RunCtx,
         Self: Sized
     {
-        let mut permits_ctx = permits_ctx;
+        let permits_ctx = permits_ctx;
         // if permits_ctx.acquired_permits() == 0 {
         //     let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
         //     permits_ctx.add_permit(permit);
@@ -1155,7 +1155,7 @@ mod tests {
         let tested = super::DevicesWrap::wrap(data, CacheArea::default());
         assert!(super::timed_tokio_read(&tested.cached_data[1], "test_dump_to_cpu read 1").await.is_none());
 
-        let mut ctx_for_data = mock_run_ctx::default(1);
+        let ctx_for_data = mock_run_ctx::default(1);
         tested
             .with_data_ref(1,
                ctx_for_data, None, |data_on_1: &MockDataWithId, _ctx| {

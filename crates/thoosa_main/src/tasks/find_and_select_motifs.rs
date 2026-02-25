@@ -1,3 +1,5 @@
+#![allow(unused_assignments)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use async_trait::async_trait;
@@ -12,7 +14,7 @@ use thoosa_common::train_nets::OptConfig;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
-use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesArgs};
+use thoosa_motifs::fragments::{MotifsBy, PlotSlicesArgs};
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -34,7 +36,7 @@ use crate::tasks::motif_loader::MotifLoader;
 use crate::tasks::select_motifs::SelectMotifsStage;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use thoosa_shared::comp_id::SynKey;
-use crate::cli::run_plot_motif_slices;
+use crate::cli::run_plot_slices;
 
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
@@ -254,7 +256,7 @@ impl FindAndSelectMotifsStage {
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::RunId{ find_motifs_run_id: run_config.find_motifs_run_config.id.unwrap(), select_motifs_run_ids: None }), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
+        run_plot_slices(&ws, &store, &loader, &PlotSlicesArgs::new(MotifsBy::RunId{ find_motifs_run_id: run_config.find_motifs_run_config.id.unwrap(), select_motifs_run_ids: None }), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
 
         let select_stage = Arc::new(
             SelectMotifsStage::<
@@ -289,7 +291,7 @@ impl FindAndSelectMotifsStage {
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesArgs::new(MotifsBy::GoodMotifs (select_run_id)), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
+        run_plot_slices(&ws, &store, &loader, &PlotSlicesArgs::new(MotifsBy::GoodMotifs (select_run_id)), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
 
         Ok(selected_count)
     }

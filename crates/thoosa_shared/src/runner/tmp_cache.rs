@@ -2,13 +2,10 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
-use std::future::Future;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use rand::distr::{Alphanumeric, SampleString};
 use log::{debug, error};
-use tokio::runtime::Handle;
-use futures_util::{stream, StreamExt, TryStreamExt};
 use mockall_double::double;
 use crate::applicables_runner::Output;
 use crate::ThoError;
@@ -17,8 +14,6 @@ use crate::CopyToDevice;
 use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
-#[cfg(any(test, feature = "mock_global_ctx"))]
-use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::purge::FuturesRunnerMapPurger;
 
 
@@ -175,6 +170,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::future::Future;
     use std::pin::Pin;
     use thoosa_dummy_data_derive::DummyData;
     use thoosa_shared::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
