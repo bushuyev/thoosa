@@ -697,7 +697,7 @@ mod tests {
             let num_devices = GlobalCtx::global().device_count();
 
             let stage = Arc::clone(&self);
-            let mut ctx = ctx;
+            let ctx = ctx;
             let output = input
                 .with_data_ref(device_idx, ctx, None, move |tensor: &Self::In<'_>, run_ctx| {
                     Arc::clone(&stage).do_run(tensor, run_ctx)
@@ -972,7 +972,7 @@ mod tests {
             .run_cached(input_cache, ctx.write().branch(Some("join_and_classify_cpu_many"), false, false))
             .await?;
 
-        let mut ctx_for_data = ctx.write().branch(Some("join_and_classify_cpu_many_data"), false, false);
+        let ctx_for_data = ctx.write().branch(Some("join_and_classify_cpu_many_data"), false, false);
         acc.with_data_ref(1,
                           ctx_for_data, None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
                                       let v = ClsOut::accuracy(acc);

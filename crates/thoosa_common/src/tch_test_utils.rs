@@ -330,7 +330,7 @@ pub fn generate_motifs_with_avg_distance(
 ///channels_motif_kinds -  channels x [(how many times motif should appear in the sequence, motif length , MotifKind)]
 ///returns Tensor [channels x resource_len] + channels[ motifs[ intervals[Interval] ] ]
 pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, usize, MotifKind)>], gap: usize, motif_ampl: f32) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rand::rngs::StdRng;
     use log::debug;
     use thoosa_shared::test_utils::gen_motif;
     const STEP_SIGMA: f32 = 0.4;
@@ -631,8 +631,8 @@ pub fn resource_tensor_two_easy_motifs(
             let tpl = if which == 0 { &t0 } else { &t1 };
 
             // Add motif onto background (keeps “match distance ≈ noise norm”)
-            for (o, &v) in tpl.iter().enumerate() {
-                signal[start + o] = signal[start + o] * 0.1 + v;
+            for (offset_idx, &v) in tpl.iter().enumerate() {
+                signal[start + offset_idx] = signal[start + offset_idx] * 0.1 + v;
             }
 
             let iv = Interval { start, end };
