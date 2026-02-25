@@ -326,6 +326,8 @@ impl AsyncStage for FindAndSelectMotifsStage {
         let mut find_and_select_run_find_ctx = ctx.branch("find_and_select_run_find".into(), true, false);
         let device_idx = ctx.device_idx();
         let grid_vals_sets_len = grid_vals_sets.len();
+        info!("FindAndSelectMotifsStage::run: grid_vals_sets_len={grid_vals_sets_len:?} opt_max_evals={opt_max_evals}");
+
         let futures = grid_vals_sets
             .into_iter()
             .enumerate()
