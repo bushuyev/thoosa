@@ -40,25 +40,31 @@ use thoosa_shared::*;
 
 
 #[derive(Clone, PartialEq, Debug)]
-pub enum MotifsBy {
+pub enum DataBy {
+
+    //--data-by=motif_id:1234
     MotifId(usize), //TODO u32
+    //--data-by=find_motifs_run_id:1234[;select_motifs_run_ids=12,34,56]
     RunId {
         find_motifs_run_id: RunId,
-        select_motifs_run_ids: Option<Vec<RunId>>,
+        select_motifs_run_ids: Option<Vec<RunId>>,//for list_motif_slices's select_motifs_run_ids param
     },
-    GoodMotifs(RunId),
+    //--data-by=select_motifs_run_ids:12,34,56
+    SelectedMotifs { select_motifs_run_ids: RunId },
+    //--data-by=resource:<resource_id>[;channels=1,2][;freq_filters=[...]]
     Resource {
         resource_id: ResourceId,
         channels: Option<Vec<u32>>,
         freq_filters: Option<Vec<InputFilter>>,
     },
+    //--data-by=motif_net_applied:resource_id=<id>;net_path=<path>
     MotifNetApplied {
         resource_id: ResourceId,
         net_path: PathBuf,
     },
 }
 
-impl MotifsBy {
+impl DataBy {
     fn parse_run_id_payload(payload: &str) -> Result<Self, String> {
         let (find_part, select_part) = if let Some((find, rest)) = payload.split_once('_') {
             (find, Some(rest))
@@ -87,7 +93,7 @@ impl MotifsBy {
             }
         };
 
-        Ok(MotifsBy::RunId {
+        Ok(DataBy::RunId {
             find_motifs_run_id,
             select_motifs_run_ids,
         })
@@ -135,7 +141,7 @@ impl MotifsBy {
             }
         }
 
-        Ok(MotifsBy::Resource {
+        Ok(DataBy::Resource {
             resource_id,
             channels,
             freq_filters,
@@ -149,7 +155,7 @@ impl MotifsBy {
             .collect::<Vec<_>>();
 
         if segments.len() == 2 && !segments[0].contains('=') && !segments[1].contains('=') {
-            return Ok(MotifsBy::MotifNetApplied {
+            return Ok(DataBy::MotifNetApplied {
                 resource_id: segments[0]
                     .parse::<ResourceId>()
                     .map_err(|e| format!("can't parse resource_id in {payload:?}: {e}"))?,
@@ -180,33 +186,33 @@ impl MotifsBy {
             }
         }
 
-        Ok(MotifsBy::MotifNetApplied {
+        Ok(DataBy::MotifNetApplied {
             resource_id: resource_id.ok_or_else(|| "motif_net_applied payload missing resource_id".to_string())?,
             net_path: net_path.ok_or_else(|| "motif_net_applied payload missing net_path".to_string())?,
         })
     }
 }
 
-impl FromStr for MotifsBy {
+impl FromStr for DataBy {
     type Err = String;
 
     fn from_str(v: &str) -> Result<Self, Self::Err> {
         if let Some(rest) = v.strip_prefix("motif_id:") {
-            Ok(MotifsBy::MotifId(
+            Ok(DataBy::MotifId(
                 rest.parse()
                     .map_err(|e| format!("can't parse {rest:?} to motif_id: {e}"))?,
             ))
         } else if let Some(rest) = v.strip_prefix("run_id:") {
-            MotifsBy::parse_run_id_payload(rest)
+            DataBy::parse_run_id_payload(rest)
         } else if let Some(rest) = v.strip_prefix("good_motifs_run_id:") {//renamed to select_motifs_run_id
-            Ok(MotifsBy::GoodMotifs(
-                rest.parse()
-                    .map_err(|e| format!("can't parse {rest:?} to good motifs run_id: {e}"))?,
-            ))
+            Ok(DataBy::SelectedMotifs {
+                select_motifs_run_ids: rest.parse()
+                .map_err( | e| format!("can't parse {rest:?} to good motifs run_id: {e}")) ?,
+            })
         } else if let Some(rest) = v.strip_prefix("resource:") {
-            MotifsBy::parse_resource_payload(rest)
+            DataBy::parse_resource_payload(rest)
         } else if let Some(rest) = v.strip_prefix("motif_net_applied:") {
-            MotifsBy::parse_motif_net_applied_payload(rest)
+            DataBy::parse_motif_net_applied_payload(rest)
         } else {
             Err(format!(
                 "unexpected parameter {v}, should be motif_id:nnn, run_id:nnn, resource:<resource_id>[;channels=1,2][;freq_filters=[...]], or motif_net_applied:resource_id=<id>;net_path=<path>"
@@ -215,29 +221,29 @@ impl FromStr for MotifsBy {
     }
 }
 
-impl From<&str> for MotifsBy {
-    fn from(v: &str) -> MotifsBy {
-        MotifsBy::from_str(v).unwrap_or_else(|err| panic!("{err}"))
+impl From<&str> for DataBy {
+    fn from(v: &str) -> DataBy {
+        DataBy::from_str(v).unwrap_or_else(|err| panic!("{err}"))
     }
 }
 
 #[derive(Debug, Args, Clone)]
-pub struct PlotSlicesArgs {
+pub struct PlotDataArgs {
     #[arg(long, value_enum)]
-    motifs_by: MotifsBy,
+    data_by: DataBy,
 
     #[arg(long, value_enum)]
     pub limit: Option<u32>,
 }
 
-impl PlotSlicesArgs {
-    pub fn motifs_by(&self) -> MotifsBy {
-        self.motifs_by.clone()
+impl PlotDataArgs {
+    pub fn motifs_by(&self) -> DataBy {
+        self.data_by.clone()
     }
 
-    pub fn new(motifs_by: MotifsBy) -> Self {
+    pub fn new(motifs_by: DataBy) -> Self {
         Self {
-            motifs_by,
+            data_by: motifs_by,
             limit: None,
         }
     }
@@ -263,7 +269,7 @@ impl MotifsToTensorArgs {
 
 #[cfg(test)]
 mod motifs_tests {
-    use super::MotifsBy;
+    use super::DataBy;
     use std::path::PathBuf;
     use thoosa_common::find_motifs_run_config::InputFilter;
     use std::collections::{HashMap, HashSet};
@@ -300,50 +306,50 @@ mod motifs_tests {
     fn parses_motifs_by_run_id_filters() {
         use std::str::FromStr;
 
-        let simple = MotifsBy::from_str("run_id:11").unwrap();
+        let simple = DataBy::from_str("run_id:11").unwrap();
         assert_eq!(
             simple,
-            MotifsBy::RunId {
+            DataBy::RunId {
                 find_motifs_run_id: 11,
                 select_motifs_run_ids: None
             }
         );
 
-        let empty = MotifsBy::from_str("run_id:42_").unwrap();
+        let empty = DataBy::from_str("run_id:42_").unwrap();
         assert_eq!(
             empty,
-            MotifsBy::RunId {
+            DataBy::RunId {
                 find_motifs_run_id: 42,
                 select_motifs_run_ids: Some(vec![])
             }
         );
 
-        let filtered = MotifsBy::from_str("run_id:7_10,20,30").unwrap();
+        let filtered = DataBy::from_str("run_id:7_10,20,30").unwrap();
         assert_eq!(
             filtered,
-            MotifsBy::RunId {
+            DataBy::RunId {
                 find_motifs_run_id: 7,
                 select_motifs_run_ids: Some(vec![10, 20, 30])
             }
         );
 
-        let good = MotifsBy::from_str("good_motifs_run_id:99").unwrap();
-        assert_eq!(good, MotifsBy::GoodMotifs(99));
+        let good = DataBy::from_str("good_motifs_run_id:99").unwrap();
+        assert_eq!(good, DataBy::SelectedMotifs{ select_motifs_run_ids:99});
 
-        let resource = MotifsBy::from_str("resource:55;channels=1,3").unwrap();
+        let resource = DataBy::from_str("resource:55;channels=1,3").unwrap();
         assert_eq!(
             resource,
-            MotifsBy::Resource {
+            DataBy::Resource {
                 resource_id: 55,
                 channels: Some(vec![1, 3]),
                 freq_filters: None,
             }
         );
 
-        let resource_with_filter = MotifsBy::from_str("resource:12;freq_filters=[{NotchBandFilter:{low_hz:58.0, high_hz:62.0}}]").unwrap();
+        let resource_with_filter = DataBy::from_str("resource:12;freq_filters=[{NotchBandFilter:{low_hz:58.0, high_hz:62.0}}]").unwrap();
         assert_eq!(
             resource_with_filter,
-            MotifsBy::Resource {
+            DataBy::Resource {
                 resource_id: 12,
                 channels: None,
                 freq_filters: Some(vec![InputFilter::NotchBandFilter(thoosa_common::transforms::filters::NotchBandFilterParams {
@@ -353,10 +359,10 @@ mod motifs_tests {
             }
         );
 
-        let net_applied = MotifsBy::from_str("motif_net_applied:resource_id=101;net_path=13/22127_7777772").unwrap();
+        let net_applied = DataBy::from_str("motif_net_applied:resource_id=101;net_path=13/22127_7777772").unwrap();
         assert_eq!(
             net_applied,
-            MotifsBy::MotifNetApplied {
+            DataBy::MotifNetApplied {
                 resource_id: 101,
                 net_path: PathBuf::from("13/22127_7777772"),
             }
