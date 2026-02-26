@@ -49,7 +49,7 @@ pub enum DataBy {
         find_motifs_run_id: RunId,
         select_motifs_run_ids: Option<Vec<RunId>>,//for list_motif_slices's select_motifs_run_ids param
     },
-    //--data-by=select_motifs_run_ids:12,34,56
+    //--data-by=select_motifs_run_ids:1234
     SelectedMotifs { select_motifs_run_ids: RunId },
     //--data-by=resource:<resource_id>[;channels=1,2][;freq_filters=[...]]
     Resource {
@@ -66,6 +66,42 @@ pub enum DataBy {
 
 impl DataBy {
     fn parse_run_id_payload(payload: &str) -> Result<Self, String> {
+        if payload.contains(';') {
+            let mut segments = payload.split(';').filter(|segment| !segment.is_empty());
+            let find_part = segments
+                .next()
+                .ok_or_else(|| "find_motifs_run_id payload is empty".to_string())?;
+
+            let find_motifs_run_id = find_part
+                .parse::<RunId>()
+                .map_err(|e| format!("can't parse {find_part:?} to find_motifs_run_id: {e}"))?;
+
+            let mut select_motifs_run_ids = None;
+            for segment in segments {
+                let (key, value) = segment
+                    .split_once('=')
+                    .ok_or_else(|| format!("run_id payload segment {segment:?} should be key=value"))?;
+                match key {
+                    "select_motifs_run_ids" => {
+                        let ids = value
+                            .split(',')
+                            .filter(|part| !part.is_empty())
+                            .map(|part| {
+                                part.parse::<RunId>().map_err(|e| format!("can't parse {part:?} to select_motifs_run_id: {e}"))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        select_motifs_run_ids = Some(ids);
+                    }
+                    _ => return Err(format!("unexpected run_id payload key {key:?}; expected select_motifs_run_ids")),
+                }
+            }
+
+            return Ok(DataBy::RunId {
+                find_motifs_run_id,
+                select_motifs_run_ids,
+            });
+        }
+
         let (find_part, select_part) = if let Some((find, rest)) = payload.split_once('_') {
             (find, Some(rest))
         } else {
@@ -84,9 +120,7 @@ impl DataBy {
                     .split(',')
                     .filter(|segment| !segment.is_empty())
                     .map(|segment| {
-                        segment
-                            .parse::<RunId>()
-                            .map_err(|e| format!("can't parse {segment:?} to select_motifs_run_id: {e}"))
+                        segment.parse::<RunId>().map_err(|e| format!("can't parse {segment:?} to select_motifs_run_id: {e}"))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Some(ids)
@@ -202,9 +236,12 @@ impl FromStr for DataBy {
                 rest.parse()
                     .map_err(|e| format!("can't parse {rest:?} to motif_id: {e}"))?,
             ))
-        } else if let Some(rest) = v.strip_prefix("run_id:") {
+        } else if let Some(rest) = v.strip_prefix("find_motifs_run_id:").or_else(|| v.strip_prefix("run_id:")) {
             DataBy::parse_run_id_payload(rest)
-        } else if let Some(rest) = v.strip_prefix("good_motifs_run_id:") {//renamed to select_motifs_run_id
+        } else if let Some(rest) = v
+            .strip_prefix("select_motifs_run_ids:")
+            .or_else(|| v.strip_prefix("select_motifs_run_id:"))
+            .or_else(|| v.strip_prefix("good_motifs_run_id:")) {//renamed to select_motifs_run_id
             Ok(DataBy::SelectedMotifs {
                 select_motifs_run_ids: rest.parse()
                 .map_err( | e| format!("can't parse {rest:?} to good motifs run_id: {e}")) ?,
@@ -215,7 +252,7 @@ impl FromStr for DataBy {
             DataBy::parse_motif_net_applied_payload(rest)
         } else {
             Err(format!(
-                "unexpected parameter {v}, should be motif_id:nnn, run_id:nnn, resource:<resource_id>[;channels=1,2][;freq_filters=[...]], or motif_net_applied:resource_id=<id>;net_path=<path>"
+                "unexpected parameter {v}, should be motif_id:nnn, find_motifs_run_id:nnn[;select_motifs_run_ids=...], select_motifs_run_ids:nnn, resource:<resource_id>[;channels=1,2][;freq_filters=[...]], or motif_net_applied:resource_id=<id>;net_path=<path>"
             ))
         }
     }
@@ -303,38 +340,48 @@ mod motifs_tests {
     }
 
     #[test]
-    fn parses_motifs_by_run_id_filters() {
+    fn parses_data_by_motif_id_comment_format() {
         use std::str::FromStr;
 
-        let simple = DataBy::from_str("run_id:11").unwrap();
-        assert_eq!(
-            simple,
-            DataBy::RunId {
-                find_motifs_run_id: 11,
-                select_motifs_run_ids: None
-            }
-        );
+        let parsed = DataBy::from_str("motif_id:1234").unwrap();
+        assert_eq!(parsed, DataBy::MotifId(1234));
+    }
+
+    #[test]
+    fn parses_data_by_find_motifs_run_id_comment_format() {
+        use std::str::FromStr;
+
+        let parsed = DataBy::from_str("find_motifs_run_id:11").unwrap();
+        assert_eq!(parsed, DataBy::RunId { find_motifs_run_id: 11, select_motifs_run_ids: None });
+    }
+
+    #[test]
+    fn parses_data_by_find_motifs_run_id_with_select_filter_comment_format() {
+        use std::str::FromStr;
+
+        let parsed = DataBy::from_str("find_motifs_run_id:7;select_motifs_run_ids=10,20,30").unwrap();
+        assert_eq!(parsed, DataBy::RunId { find_motifs_run_id: 7, select_motifs_run_ids: Some(vec![10, 20, 30]) });
+    }
+
+    #[test]
+    fn keeps_legacy_run_id_format_compatible() {
+        use std::str::FromStr;
 
         let empty = DataBy::from_str("run_id:42_").unwrap();
-        assert_eq!(
-            empty,
-            DataBy::RunId {
-                find_motifs_run_id: 42,
-                select_motifs_run_ids: Some(vec![])
-            }
-        );
+        assert_eq!(empty, DataBy::RunId { find_motifs_run_id: 42, select_motifs_run_ids: Some(vec![]) });
+    }
 
-        let filtered = DataBy::from_str("run_id:7_10,20,30").unwrap();
-        assert_eq!(
-            filtered,
-            DataBy::RunId {
-                find_motifs_run_id: 7,
-                select_motifs_run_ids: Some(vec![10, 20, 30])
-            }
-        );
+    #[test]
+    fn parses_data_by_selected_motifs_comment_prefix() {
+        use std::str::FromStr;
 
-        let good = DataBy::from_str("good_motifs_run_id:99").unwrap();
-        assert_eq!(good, DataBy::SelectedMotifs{ select_motifs_run_ids:99});
+        let parsed = DataBy::from_str("select_motifs_run_ids:99").unwrap();
+        assert_eq!(parsed, DataBy::SelectedMotifs { select_motifs_run_ids: 99 });
+    }
+
+    #[test]
+    fn parses_data_by_resource_comment_format() {
+        use std::str::FromStr;
 
         let resource = DataBy::from_str("resource:55;channels=1,3").unwrap();
         assert_eq!(
@@ -358,10 +405,15 @@ mod motifs_tests {
                 })]),
             }
         );
+    }
 
-        let net_applied = DataBy::from_str("motif_net_applied:resource_id=101;net_path=13/22127_7777772").unwrap();
+    #[test]
+    fn parses_data_by_motif_net_applied_comment_format() {
+        use std::str::FromStr;
+
+        let parsed = DataBy::from_str("motif_net_applied:resource_id=101;net_path=13/22127_7777772").unwrap();
         assert_eq!(
-            net_applied,
+            parsed,
             DataBy::MotifNetApplied {
                 resource_id: 101,
                 net_path: PathBuf::from("13/22127_7777772"),
