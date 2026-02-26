@@ -3,7 +3,7 @@ use parking_lot::RwLock;
 use tch::{Kind, Tensor, TchError};
 use tch::Kind::Float;
 
-type NormThicknessMockFn = Arc<dyn Fn(&Tensor, f64) -> Result<Tensor, TchError> + Send + Sync>;
+type NormThicknessMockFn = Arc<dyn Fn(&Tensor, f64, f64) -> Result<Tensor, TchError> + Send + Sync>;
 type InlierRatioMockFn = Arc<dyn Fn(&Tensor, f64, f64) -> Result<Tensor, TchError> + Send + Sync>;
 type CoherenceMockFn = Arc<dyn Fn(&Tensor, i64, f64) -> Result<Tensor, TchError> + Send + Sync>;
 
@@ -19,9 +19,9 @@ fn criteria_mocks() -> &'static RwLock<CriteriaMocks> {
     MOCKS.get_or_init(|| RwLock::new(CriteriaMocks::default()))
 }
 
-fn maybe_norm_thickness_mock(x: &Tensor, eps: f64) -> Option<Result<Tensor, TchError>> {
+fn maybe_norm_thickness_mock(x: &Tensor, k: f64, eps: f64) -> Option<Result<Tensor, TchError>> {
     let mock_fn = criteria_mocks().read().norm_thickness.as_ref().map(Arc::clone);
-    mock_fn.map(|mock_fn| mock_fn(x, eps))
+    mock_fn.map(|mock_fn| mock_fn(x, k, eps))
 }
 
 fn maybe_inlier_ratio_mock(x: &Tensor, k: f64, eps: f64) -> Option<Result<Tensor, TchError>> {
@@ -63,7 +63,7 @@ pub mod mock_criteria {
     impl MockCriteriaBuilder {
         pub fn with_norm_thickness<F>(mut self, f: F) -> Self
         where
-            F: Fn(&Tensor, f64) -> Result<Tensor, TchError> + Send + Sync + 'static,
+            F: Fn(&Tensor, f64, f64) -> Result<Tensor, TchError> + Send + Sync + 'static,
         {
             self.mocks.norm_thickness = Some(Arc::new(f) as NormThicknessMockFn);
             self
@@ -145,10 +145,9 @@ fn f_quantile_1d(v: &Tensor, q: f64) -> Result<Tensor, TchError> {
 ///
 /// thickness = mean_t( q90(x[:,t]) - q10(x[:,t]) )
 /// amp       = q95(consensus) - q05(consensus)
-/// score     = thickness / (amp + eps)
-pub fn norm_thickness(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
-    #[cfg(test)]
-    if let Some(mocked) = maybe_norm_thickness_mock(x, eps) {
+/// score     = 1 / (1 + k * thickness / (amp + eps))
+pub fn norm_thickness(x: &Tensor, k: f64, eps: f64) -> Result<Tensor, TchError> {
+    if let Some(mocked) = maybe_norm_thickness_mock(x, k, eps) {
         return mocked;
     }
     let sz = x.size();
@@ -176,7 +175,6 @@ pub fn norm_thickness(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
     let one_plus_s = one.f_add(&s)?;
     // one.f_div(&one_plus_s)
 
-    let k = 5.0;
     let s_strict = s.f_mul_scalar(k)?;
 
     // Q = 1 / (1 + s_strict)
@@ -206,7 +204,6 @@ fn f_rms_residuals(x: &Tensor, consensus: &Tensor) -> Result<Tensor, TchError> {
 /// - inlier if resid <= med + k*mad
 /// Returns fraction in [0,1] (scalar). Higher is better.
 pub fn inlier_ratio(x: &Tensor, k: f64, eps: f64) -> Result<Tensor, TchError> {
-    #[cfg(test)]
     if let Some(mocked) = maybe_inlier_ratio_mock(x, k, eps) {
         return mocked;
     }
@@ -239,7 +236,6 @@ pub fn inlier_ratio(x: &Tensor, k: f64, eps: f64) -> Result<Tensor, TchError> {
 /// We approximate largest eigenvalue by power iteration.
 /// Higher is better.
 pub fn coherence(x: &Tensor, iters: i64, eps: f64) -> Result<Tensor, TchError> {
-    #[cfg(test)]
     if let Some(mocked) = maybe_coherence_mock(x, iters, eps) {
         return mocked;
     }
@@ -315,7 +311,7 @@ mod tests {
             ])
                 .view([3, 4]);
 
-            let s = norm_thickness(&x, 1e-8)?;
+            let s = norm_thickness(&x, 5.0, 1e-8)?;
             assert_close(f64_of_scalar(&s), 1.0, 1e-12);
             Ok(())
         }
@@ -331,7 +327,8 @@ mod tests {
             // thickness = mean([0,0.2,0.2,0]) = 0.1
             // consensus median = [0,1,2,1]
             // amp = q95-q05 over time = 2-0 = 2
-            // norm_thickness = 0.1/2 = 0.05
+            // s = thickness / amp = 0.1/2 = 0.05
+            // with k=5 => score = 1 / (1 + 5*s) = 1 / 1.25 = 0.8
             let x = Tensor::from_slice(&[
                 0.0f32, 1.0, 2.0, 1.0,
                 0.0,    1.1, 1.9, 1.0,
@@ -339,8 +336,8 @@ mod tests {
             ])
             .view([3, 4]);
 
-            let s = norm_thickness(&x, 1e-8)?;
-            assert_close(f64_of_scalar(&s), 0.9523, 1e-3);
+            let s = norm_thickness(&x, 5.0, 1e-8)?;
+            assert_close(f64_of_scalar(&s), 0.8, 1e-6);
             Ok(())
         }
 
