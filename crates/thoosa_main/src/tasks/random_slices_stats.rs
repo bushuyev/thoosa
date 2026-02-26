@@ -377,7 +377,7 @@ mod tests {
         let motif_width = 6;
         let store = Arc::new(
             MockStoreBuilder::new()
-                .with_list_resources_not_in_group([(RANDOM_STATS_GROUP, Ok(resources.clone()))])
+                .with_list_random_resources([(None, Ok(resources.clone()))])
                 .with_list_run_config_values(
                     run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, motif_width, None, None)
