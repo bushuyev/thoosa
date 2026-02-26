@@ -32,7 +32,7 @@ pub struct GlobalCtx {
     cache_age: AtomicU64, //for tracking CPU-only lifetime
     purge_lock: tokio::sync::Mutex<()>,
     purger: Purger,
-    shutting_down:AtomicBool
+    shutting_down:AtomicBool//TODO not needed if tokios shutdown_background in project main
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
@@ -213,13 +213,16 @@ impl GlobalCtx {
 
     // #[cfg(debug_assertions)] TODO
     pub async fn debug_caches(&self, device_idx:usize) {
-        let maps = with_async_perf_log(
-            async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::debug_caches: timed out waiting for caches read lock"),
-            "GlobalCtx/debug_caches/read_caches",
-        )
-        .await;
+        let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
+            let maps = with_async_perf_log(
+                async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::debug_caches: timed out waiting for caches read lock"),
+                "GlobalCtx/debug_caches/read_caches",
+            )
+                .await;
+            maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
+        };
 
-        for (type_name, map) in maps.iter() {
+        for (type_name, map) in maps {
             info!("GlobalCtx::debug_caches: type_name={type_name}");
             if let Err(e) = map.debug_gpu(device_idx).await {
                 error!("GlobalCtx::debug_caches: failed with {e:?}");
@@ -238,13 +241,16 @@ impl GlobalCtx {
         debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?}");
 
         //should be ok to read lock -  caches are expected to be updated (GlobalCtx::register_cache) rarely, perhaps on app startup only or before running set of runs
-        let maps = with_async_perf_log(
-            async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock"),
-            "GlobalCtx/dump_all_to_cpu/read_caches",
-        )
-        .await;
+        let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
+            let maps = with_async_perf_log(
+                async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock"),
+                "GlobalCtx/dump_all_to_cpu/read_caches",
+            )
+                .await;
+            maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
+        };
 
-        for (type_name, map) in maps.iter() {
+        for (type_name, map) in maps {
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
 
             map.purge_gpu(required_ids.get(type_name).map(|v| *v), device_idx).await?;
@@ -258,21 +264,25 @@ impl GlobalCtx {
 
     pub async fn purge_cpu(&self, purge_last: u64) {
         //should be ok to read lock - see dump_all_to_cpu
-        let maps = with_async_perf_log(
-            async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::purge_cpu: timed out waiting for caches read lock"),
-            "GlobalCtx/purge_cpu/read_caches",
-        )
-        .await;
+        let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
+            let maps = with_async_perf_log(
+                async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::purge_cpu: timed out waiting for caches read lock"),
+                "GlobalCtx/purge_cpu/read_caches",
+            )
+                .await;
+            maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
+        };
 
         let purge_since = self.cache_age.load(Relaxed).saturating_sub(purge_last);
 
         debug!("GlobalCtx::purge_cpu: purge_since={purge_since} maps.len={}", maps.len());
         if purge_since > 0 {
-            for e in maps.iter() {
-                info!("GlobalCtx::purge_cpu: purged {} from {}", e.1.purge_cpu(purge_since).await, e.0);
+            for (type_name, map) in maps {
+                info!("GlobalCtx::purge_cpu: purged {} from {}", map.purge_cpu(purge_since).await, type_name);
             }
         }
     }
+
 
     pub fn next_cache_area(&self) -> Result<CacheAreaId, ThoError> {
         with_perf_log(
