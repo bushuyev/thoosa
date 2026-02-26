@@ -47,6 +47,11 @@ pub trait ResourceStore {
         limit: u32,
     ) -> Result<Vec<Resource>, ThoError>;
 
+    async fn list_random_resources(
+        &self,
+        limit: Option<u32>,
+    ) -> Result<Vec<Resource>, ThoError>;
+
 }
 
 #[derive(Debug, Clone, DummyData, Named)]
