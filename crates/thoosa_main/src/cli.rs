@@ -1003,8 +1003,8 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 band_hz:  RangeOrValue::Value(2.0),
                 // kernel_size: RangeOrValue::Value(100),
                 kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 200 }, step: None },
-                // stride: RangeOrValue::Value(10),
-                stride: RangeOrValue::Range { range: Range { start: 10, end: 200 }, step: None },
+                stride: RangeOrValue::Value(10),
+                // stride: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
                 padding: RangeOrValue::Value(0),
             }),
             NotchBandFilter(NotchBandFilterParamsRangeOrValue {

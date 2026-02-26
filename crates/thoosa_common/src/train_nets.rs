@@ -1240,13 +1240,13 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
             .linear_feats(
                 "self_attention_in_proj",
                 params.motif_nets,
-                sa_params.d_model_heads * sa_params.d_model_heads,
+                sa_params.d_model_heads * sa_params.n_heads,
                 #[cfg(debug_assertions)]
                 "self_attention_in_proj".to_string(),
             )?
             .self_attention(
                 "self_attention_block",
-                sa_params.d_model_heads * sa_params.d_model_heads,
+                sa_params.d_model_heads * sa_params.n_heads,
                 sa_params.n_heads,
                 sa_params.ff_mult,
                 sa_params.dropout,
