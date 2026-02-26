@@ -422,7 +422,9 @@ mod tests {
                 coherenceRunConfig: None,
             },
             threshold: RangeOrValue::Range { range: 0.4..0.6, step: Some((0.1, 1)) },
+            min_slices: None,
             max_slices: None,
+            extend_max_slices: None,
         };
 
         let run_configs: Vec<SelectMotifsRunConfig> = rc.grid_run_configs().expect("SelectMotifsRunConfigRangeOrValue::grid_run_configs should not fail").to_run_configs();
@@ -664,7 +666,15 @@ pub struct SelectMotifsRunConfig {
 
     #[in_map]
     #[run_config]
-    pub max_slices: Option<MaxSlices>
+    pub min_slices: Option<u32>,
+
+    #[in_map]
+    #[run_config]
+    pub max_slices: Option<u32>,
+
+    #[in_map]
+    #[run_config]
+    pub extend_max_slices: Option<MaxSlices>
 }
 
 impl SelectMotifsRunConfig {
@@ -674,7 +684,7 @@ impl SelectMotifsRunConfig {
 
     pub fn new_with_fields(id: Option<RunId>, extend_config: Option<ExtendMotifsConfig>, motif_criteria: MotifCriteria, threshold: f32) -> Self {
         Self::validate_threshold(threshold);
-        Self { id, extend_config, motif_criteria, threshold, max_slices: None }
+        Self { id, extend_config, motif_criteria, threshold, min_slices: None, max_slices: None, extend_max_slices: None }
     }
 
     // #[cfg(test)]
