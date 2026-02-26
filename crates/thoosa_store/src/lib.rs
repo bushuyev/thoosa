@@ -1659,9 +1659,9 @@ impl Store for SqlStore {
     async fn list_motif_slices(
         &self,
         motif_id: u32,
-        select_motifs_run_id: Option<Vec<RunId>>,
+        select_motifs_run_ids: Option<Vec<RunId>>, //None - all slices, empty - only slices from find_motifs, Some -  find_motifs + select_motif runs
         limit: Option<u32>,
-        all_but_in_run_id: Option<(RunId, u32/*channel*/)>,//TODO remove - load random slices from same channel/resources
+        all_but_in_run_id: Option<(RunId, u32/*channel*/)>, //TODO remove - load random slices from same channel/resources
     ) -> Result<
         (
             i64,
@@ -1671,12 +1671,12 @@ impl Store for SqlStore {
         ),
         ThoError,
     > {
-        debug!("list_motif_slices: motif_id={motif_id} select_motifs_run_id={select_motifs_run_id:?} limit={limit:?} all_but_in_run_id={all_but_in_run_id:?}");
+        debug!("list_motif_slices: motif_id={motif_id} select_motifs_run_id={select_motifs_run_ids:?} limit={limit:?} all_but_in_run_id={all_but_in_run_id:?}");
         self.with_reader_conn("list_motif_slices", move |conn| {
             let t = conn.transaction()?;
 
             let (slice_filter_clause, slice_filter_params) = if all_but_in_run_id.is_none() {
-                match select_motifs_run_id.as_ref() {
+                match select_motifs_run_ids.as_ref() {
                     None => (String::new(), Vec::new()),
                     Some(ids_raw) => {
                         let mut ids = ids_raw.clone();
