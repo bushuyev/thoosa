@@ -1,5 +1,5 @@
 use crate::cli::Commands::{
-    FindMotifs, ImportResources, Infer, MotifsToTensor, PlotSlices, RunAll, SayHello,
+    FindMotifs, ImportResources, Infer, MotifsToTensor, PlotData, RunAll, SayHello,
     SelectMotifs, TrainFinalNet, TrainMotifsNets,
 };
 use crate::data;
@@ -50,7 +50,7 @@ use thoosa_common::my_tch::ThoModule;
 use thoosa_motifs::find;
 use thoosa_motifs::find::{FindMotifsArgs, FixedFindMotifsConfig, SelectMotifsArgs};
 use thoosa_motifs::fragments::{
-    MotifsBy, MotifsToTensorArgs, PlotSlicesArgs};
+    DataBy, MotifsToTensorArgs, PlotDataArgs};
 use thoosa_properties_map::ToHashmap;
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 use thoosa_shared::applicables_runner::{Input};
@@ -206,7 +206,7 @@ pub struct SayHelloArgs {}
 pub enum Commands {
     ImportResources(ImportResourcesArgs),
     FindMotifs(FindMotifsArgs),
-    PlotSlices(PlotSlicesArgs),
+    PlotData(PlotDataArgs),
     MotifsToTensor(MotifsToTensorArgs),
     SelectMotifs(SelectMotifsArgs),
     TrainMotifsNets(TrainMotifsNetsArgs),
@@ -642,8 +642,8 @@ where
             // ))?;
         }
 
-        Some(PlotSlices(plot_slices_params)) => {
-            run_plot_slices(&ws, &store, &loader, &plot_slices_params, &devices[0], root_ctx).await?;
+        Some(PlotData(plot_slices_params)) => {
+            run_plot(&ws, &store, &loader, &plot_slices_params, &devices[0], root_ctx).await?;
         }
 
         Some(MotifsToTensor(choose_fragments_params)) => {
@@ -661,8 +661,8 @@ where
         Some(SayHello(args)) => {
             debug!("args={:?}", args);
 
-            let dir = read_dir(ws.read().tensors_path())?;
-
+            // let dir = read_dir(ws.read().tensors_path())?;
+            //
             // let mut lengths = vec![];
             // for tensorfile in dir {
             //     let path_buf = tensorfile?.path();
@@ -673,8 +673,7 @@ where
             // }
             //
             // info!("tensors: {} max={:?} avg={}",lengths.len(),lengths.iter().max(),lengths.iter().sum::<i64>() / lengths.len() as i64);
-
-            perf_unfold_concat_cuda_vs_cpu().await?;
+            // perf_unfold_concat_cuda_vs_cpu().await?;
 
             info!("Hello");
         }
@@ -873,7 +872,7 @@ async fn run_all(
     #[cfg(tho_debug_plots)]
     {
         for select_motifs_run_id in &select_motifs_run_ids {
-            run_plot_slices(&ws, &store, &loader, &PlotSlicesArgs::new(MotifsBy::GoodMotifs(*select_motifs_run_id)), &Cpu, root_ctx.branch("plot".into(), false, false)).await?;
+            run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs(*select_motifs_run_id)), &Cpu, root_ctx.branch("plot".into(), false, false)).await?;
         }
     }
 
@@ -1459,29 +1458,17 @@ where
     Ok(resource_ids) //for tests
 }
 
-pub async fn run_plot_slices<C>(
+pub async fn run_plot<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     loader: &Arc<RawTensorLoader<C>>,
-    plot_slices_params: &PlotSlicesArgs,
+    plot_params: &PlotDataArgs,
     _device: &Device,
     mut ctx:C
 ) -> Result<(), ThoError>
 where
     C:RunCtx + Adjustable{
-    match plot_slices_params.motifs_by() {
-        MotifsBy::Resource { resource_id, channels, freq_filters } => {
-            debug!("run_plot_slices: MotifsBy::Resource resource_id={resource_id} channels={channels:?} freq_filters={freq_filters:?}");
-            plot_resource_variant(ws, store, loader, resource_id, channels, freq_filters, ctx).await?;
-            return Ok(());
-        }
-        MotifsBy::MotifNetApplied { resource_id, net_path } => {
-            debug!("run_plot_slices: MotifsBy::MotifNetApplied resource_id={resource_id} net_path={net_path:?}");
-            plot_motif_net_applied_variant(ws, store, loader, resource_id, net_path, ctx).await?;
-            return Ok(());
-        }
-        _ => {}
-    }
+
 
     let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<C>, C>::new(
         Arc::clone(store),
@@ -1493,13 +1480,26 @@ where
         Arc::new(SlicesStats::<C>::new()),
     ));
 
-    match plot_slices_params.motifs_by() {
-        MotifsBy::MotifId(motif_id) => {
+    match plot_params.motifs_by() {
+        DataBy::Resource { resource_id, channels, freq_filters } => {
+            debug!("run_plot_slices: MotifsBy::Resource resource_id={resource_id} channels={channels:?} freq_filters={freq_filters:?}");
+            plot_resource_variant(ws, store, loader, resource_id, channels, freq_filters, ctx).await?;
+            return Ok(());
+        }
+        DataBy::MotifNetApplied { resource_id, net_path } => {
+            debug!("run_plot_slices: MotifsBy::MotifNetApplied resource_id={resource_id} net_path={net_path:?}");
+            plot_motif_net_applied_variant(ws, store, loader, resource_id, net_path, ctx).await?;
+            return Ok(());
+        }
+        DataBy::MotifId(motif_id) => {
             debug!("run_plot_slices: MotifsBy::MotifId run_id={motif_id}");
             plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None).await?;
         }
+        DataBy::RunId {
+            find_motifs_run_id,
+            select_motifs_run_ids
+        } => {
 
-        MotifsBy::RunId { find_motifs_run_id, select_motifs_run_ids } => {
             debug!("run_plot_slices: MotifsBy::RunId find_run_id={find_motifs_run_id} select_run_ids={select_motifs_run_ids:?}");
 
             let motifs = store.list_motifs(find_motifs_run_id).await?;
@@ -1513,11 +1513,12 @@ where
                     let clc_dist = Arc::clone(&clc_dist);
                     let motif_loader_impl = Arc::clone(&motif_loader_impl);
                     let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true, false);
+                    let select_motifs_run_ids = select_motifs_run_ids.clone();
                     async move {
                         debug!("run_plot_slices: motif_id={motif_id}");
 
                         //gpt TODO!! select_motifs_run_ids is not forwarded to plot_motif here; plots ignore selection filtering even when provided.
-                        if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, None).await {
+                        if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_ids).await {
                             error!("motif {motif_id} failed: e={e:?}");
                         };
                         MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();
@@ -1541,12 +1542,12 @@ where
             .await;
         }
 
-        MotifsBy::GoodMotifs(selection_run_id) => {
+        DataBy::SelectedMotifs{ select_motifs_run_ids: select_motifs_run_id } => {
             let channels = ws.read().channels();
-            debug!("run_plot_slices: MotifsBy::GoodMotifs selection_run_id={selection_run_id} channels={channels}");
+            debug!("run_plot_slices: MotifsBy::GoodMotifs select_motifs_run_id={select_motifs_run_id} channels={channels}");
 
             let motifs = store
-                .list_selected_motifs(selection_run_id, channels)
+                .list_selected_motifs(select_motifs_run_id, channels)
                 .await?;
 
             let motif_ids: Vec<usize> = motifs
@@ -1555,13 +1556,13 @@ where
                 .collect();
 
             if motif_ids.is_empty() {
-                warn!("run_plot_slices: no motifs found for selection_run_id={selection_run_id}");
+                warn!("run_plot_slices: no motifs found for select_motifs_run_id={select_motifs_run_id}");
                 return Ok(());
             }
 
             let motifs_len = motif_ids.len();
             let done_cnt = Arc::new(AtomicU32::new(0));
-            let suffix = Some(vec![selection_run_id]);
+            let suffix = Some(vec![select_motifs_run_id]);
             let futures = motif_ids
                 .into_iter()
                 .map(|motif_id| {
@@ -1598,7 +1599,6 @@ where
             .await;
         }
 
-        MotifsBy::Resource { .. } | MotifsBy::MotifNetApplied { .. } => unreachable!(),
     }
 
     Ok(())
@@ -2225,7 +2225,7 @@ where
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, import_resources_with_pure_sets, run_all, run_all_config_0, run_all_config_test_1, run_all_grid_step, run_grid, run_opt_step, run_plot_slices, Cli, RunAllArgs};
+    use crate::cli::{import_resources, import_resources_with_pure_sets, run_all, run_all_config_0, run_all_config_test_1, run_all_grid_step, run_grid, run_opt_step, run_plot, Cli, RunAllArgs};
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Info, Trace, Warn};
@@ -2269,7 +2269,7 @@ mod cli_tests {
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::find::{
         FixedFindMotifsConfig, SelectMotifsParams};
-    use thoosa_motifs::fragments::{MotifsBy, PlotSlicesArgs};
+    use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;
