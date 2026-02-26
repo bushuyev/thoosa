@@ -47,7 +47,6 @@ pub trait ResourceStore {
         limit: u32,
     ) -> Result<Vec<Resource>, ThoError>;
 
-
 }
 
 #[derive(Debug, Clone, DummyData, Named)]
