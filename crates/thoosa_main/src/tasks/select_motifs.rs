@@ -1226,7 +1226,7 @@ where
 
     fn clc_criterion_score(motif_slices: &Tensor, criterion: &MotifCriterion) -> Result<f64, ThoError> {
         let score_t = match criterion {
-            MotifCriterion::NormThickness(v) => norm_thickness(motif_slices, v.eps)?,
+            MotifCriterion::NormThickness(v) => norm_thickness(motif_slices, v.k, v.eps)?,
             MotifCriterion::InlierRatio(v) => inlier_ratio(motif_slices, v.k, v.eps)?,
             MotifCriterion::Coherence(v) => coherence(motif_slices, v.k.round().max(1.0) as i64, v.eps)?,
         };
@@ -1884,7 +1884,7 @@ pub mod tests {
         ).await?;
 
         let _criteria_mocks = mock_criteria::build()
-            .with_norm_thickness(|x, _eps| {
+            .with_norm_thickness(|x, _k, _eps| {
                 let score = if x.size()[0] == 10 { 0.3 } else { 0.8 };
                 Ok(Tensor::from(score).to_kind(x.kind()).to_device(x.device()))
             })
@@ -1900,7 +1900,7 @@ pub mod tests {
 
         let mut select_motifs_run_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
         select_motifs_run_config.motif_criteria = MotifCriteria {
-            norm_thickness: Some(NormThicknessRunConfig { eps: 1e-8 }),
+            norm_thickness: Some(NormThicknessRunConfig { k: 5.0, eps: 1e-8 }),
             inlier_ratioRunConfig: Some(InlierRatioRunConfig { k: 3.0, eps: 1e-8 }),
             coherenceRunConfig: Some(CoherenceRunConfig { k: 3.0, eps: 1e-8 }),
         };
@@ -2165,7 +2165,7 @@ pub mod tests {
 
         let mut select_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
         select_config.extend_config = None;
-        select_config.motif_criteria.norm_thickness = Some(NormThicknessRunConfig { eps: 1e-8 });
+        select_config.motif_criteria.norm_thickness = Some(NormThicknessRunConfig { k: 5.0, eps: 1e-8 });
         select_config.threshold = 0.5;
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(

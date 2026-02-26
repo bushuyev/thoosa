@@ -1041,7 +1041,10 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         // }),
         extend_config: None,
         motif_criteria: MotifCriteriaRangeOrValue {
-            norm_thickness: Some(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
+            norm_thickness: Some(NormThicknessRunConfigRangeOrValue {
+                k: RangeOrValue::Value(5.0),
+                eps: RangeOrValue::Value(1e-8)
+            }),
             // inlier_ratioRunConfig:None,
             inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {
                 k: RangeOrValue::Value(3.0),
@@ -1168,7 +1171,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         // }),
         extend_config:None,
         motif_criteria: MotifCriteriaRangeOrValue {
-            norm_thickness: Some(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
+            norm_thickness: Some(NormThicknessRunConfigRangeOrValue { k: RangeOrValue::Value(5.0), eps: RangeOrValue::Value(1e-8) }),
             inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {
                 k: RangeOrValue::Value(3.0),
                 eps: RangeOrValue::Value(1e-8),
@@ -1279,7 +1282,7 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
             slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
         }),
         motif_criteria: MotifCriteriaRangeOrValue {
-            norm_thickness: Some(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
+            norm_thickness: Some(NormThicknessRunConfigRangeOrValue { k: RangeOrValue::Value(5.0), eps: RangeOrValue::Value(1e-8) }),
             inlier_ratioRunConfig: None,
             coherenceRunConfig: None,
         },
