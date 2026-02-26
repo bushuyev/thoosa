@@ -872,7 +872,7 @@ async fn run_all(
     #[cfg(tho_debug_plots)]
     {
         for select_motifs_run_id in &select_motifs_run_ids {
-            run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs(*select_motifs_run_id)), &Cpu, root_ctx.branch("plot".into(), false, false)).await?;
+            run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![*select_motifs_run_id] }), &Cpu, root_ctx.branch("plot".into(), false, false)).await?;
         }
     }
 
@@ -1542,64 +1542,89 @@ where
             .await;
         }
 
-        DataBy::SelectedMotifs{ select_motifs_run_ids: select_motifs_run_id } => {
-            let channels = ws.read().channels();
-            debug!("run_plot_slices: MotifsBy::GoodMotifs select_motifs_run_id={select_motifs_run_id} channels={channels}");
-
-            let motifs = store
-                .list_selected_motifs(select_motifs_run_id, channels)
+        DataBy::SelectedMotifs { select_motifs_run_ids } => {
+            for select_motifs_run_id in select_motifs_run_ids {
+                plot_selected_motifs_variant(
+                    ws,
+                    store,
+                    select_motifs_run_id,
+                    &motif_loader_impl,
+                    &clc_dist,
+                    ctx.branch(Some(&format!("selected_motifs_run_{select_motifs_run_id}")), true, false),
+                )
                 .await?;
-
-            let motif_ids: Vec<usize> = motifs
-                .into_iter()
-                .flat_map(|channel| channel.into_iter().map(|(motif_id, _)| motif_id as usize))
-                .collect();
-
-            if motif_ids.is_empty() {
-                warn!("run_plot_slices: no motifs found for select_motifs_run_id={select_motifs_run_id}");
-                return Ok(());
             }
-
-            let motifs_len = motif_ids.len();
-            let done_cnt = Arc::new(AtomicU32::new(0));
-            let suffix = Some(vec![select_motifs_run_id]);
-            let futures = motif_ids
-                .into_iter()
-                .map(|motif_id| {
-                    let done_cnt = Arc::clone(&done_cnt);
-                    let clc_dist = Arc::clone(&clc_dist);
-                    let motif_loader_impl = Arc::clone(&motif_loader_impl);
-
-                    let ws = Arc::clone(&ws);
-                    let suffix = suffix.clone();
-                    let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true, false);
-                    async move {
-                        debug!("run_plot_slices: motif_id={motif_id}");
-                        if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix).await {
-                            error!("motif {motif_id} failed: e={e:?}");
-                        };
-                        MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();
-
-                        let done = done_cnt.fetch_add(1, Relaxed);
-                        if done % 32 == 0 {
-                            info!("done {done} from  {motifs_len}");
-                        }
-
-                        Ok::<_, ThoError>(())
-                    }
-                });
-
-            let _ = collect_futures_with_progress(
-                futures,
-                motifs_len,
-                crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
-                StreamBuffering::Unordered,
-                "run_plot_slices",
-            )
-            .await;
         }
 
     }
+
+    Ok(())
+}
+
+async fn plot_selected_motifs_variant<C>(
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Box<dyn Store>>,
+    select_motifs_run_id: RunId,
+    motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
+    clc_dist: &Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<C>, C>, SlicesStats<C>, C>>,
+    mut ctx: C,
+) -> Result<(), ThoError>
+where
+    C: RunCtx + Adjustable,
+{
+    let channels = ws.read().channels();
+    debug!("run_plot_slices: MotifsBy::GoodMotifs select_motifs_run_id={select_motifs_run_id} channels={channels}");
+
+    let motifs = store
+        .list_selected_motifs(select_motifs_run_id, channels)
+        .await?;
+
+    let motif_ids: Vec<usize> = motifs
+        .into_iter()
+        .flat_map(|channel| channel.into_iter().map(|(motif_id, _)| motif_id as usize))
+        .collect();
+
+    if motif_ids.is_empty() {
+        warn!("run_plot_slices: no motifs found for select_motifs_run_id={select_motifs_run_id}");
+        return Ok(());
+    }
+
+    let motifs_len = motif_ids.len();
+    let done_cnt = Arc::new(AtomicU32::new(0));
+    let suffix = Some(vec![select_motifs_run_id]);
+    let futures = motif_ids
+        .into_iter()
+        .map(|motif_id| {
+            let done_cnt = Arc::clone(&done_cnt);
+            let clc_dist = Arc::clone(clc_dist);
+            let motif_loader_impl = Arc::clone(motif_loader_impl);
+            let ws = Arc::clone(ws);
+            let suffix = suffix.clone();
+            let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true, false);
+            async move {
+                debug!("run_plot_slices: motif_id={motif_id}");
+                if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix).await {
+                    error!("motif {motif_id} failed: e={e:?}");
+                };
+                MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();
+
+                let done = done_cnt.fetch_add(1, Relaxed);
+                if done % 32 == 0 {
+                    info!("done {done} from  {motifs_len}");
+                }
+
+                Ok::<_, ThoError>(())
+            }
+        });
+
+    let _ = collect_futures_with_progress(
+        futures,
+        motifs_len,
+        crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
+        StreamBuffering::Unordered,
+        "run_plot_slices",
+    )
+    .await;
 
     Ok(())
 }
