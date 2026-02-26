@@ -773,7 +773,7 @@ async fn run_all(
                 &store,
                 run_configs,
                 fixed_find_motifs_config_for_opt,
-                Arc::clone(&all_config.train_opt_config),
+                Arc::clone(&all_config.find_and_select_motifs_opt_config),
                 run_all_args.max_chunk_size as i64,
             )))
         },
