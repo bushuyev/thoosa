@@ -26,7 +26,7 @@ use thoosa_with_data::with_data;
 
 use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::motif_loader::load_motif_slices;
-use crate::tasks::random_slices_stats::{random_non_overlapping_slices, RANDOM_STATS_GROUP};
+use crate::tasks::random_slices_stats::random_non_overlapping_slices;
 
 #[derive(Debug, Clone, DummyData)]
 pub struct RandomMotifInput {
@@ -196,7 +196,7 @@ where
 
         let resources = self
             .store
-            .list_resources_not_in_group(RANDOM_STATS_GROUP, u32::MAX)
+            .list_random_resources(None)
             .await?;
 
         debug!("RandomMotif::run: resources={resources:?}");

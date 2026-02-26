@@ -420,6 +420,11 @@ mock! {
             limit:u32
         ) -> Result<Vec<Resource>, ThoError>;
 
+        async fn list_random_resources(
+            &self,
+            limit: Option<u32>
+        ) -> Result<Vec<Resource>, ThoError>;
+
     }
 }
 
@@ -653,6 +658,44 @@ impl ResourceStore for SqlStore {
 
             t.commit()?;
             Ok(group_sets)
+        })
+        .await
+    }
+
+    async fn list_random_resources(
+        &self,
+        limit: Option<u32>
+    ) -> Result<Vec<Resource>, ThoError> {
+        self.with_reader_conn("list_random_resources", move |conn| {
+            let t = conn.transaction()?;
+            let resources = if let Some(limit) = limit {
+                let mut stmt = t.prepare("SELECT r.id, r.import_id, r.key, r.length FROM resources AS r ORDER BY RANDOM() LIMIT ?")?;
+                stmt.query_map([Value::Integer(limit as i64)], |row| {
+                    Ok(Resource::new(
+                        row.get::<usize, u32>(0)?,
+                        row.get::<usize, u32>(1)?,
+                        row.get::<usize, String>(2)?,
+                        row.get::<usize, u32>(3)?
+                    ))
+                })?
+                .map(|v| v.unwrap())
+                .collect()
+            } else {
+                let mut stmt = t.prepare("SELECT r.id, r.import_id, r.key, r.length FROM resources AS r ORDER BY RANDOM();")?;
+                stmt.query_map([], |row| {
+                    Ok(Resource::new(
+                        row.get::<usize, u32>(0)?,
+                        row.get::<usize, u32>(1)?,
+                        row.get::<usize, String>(2)?,
+                        row.get::<usize, u32>(3)?
+                    ))
+                })?
+                .map(|v| v.unwrap())
+                .collect()
+            };
+
+            t.commit()?;
+            Ok(resources)
         })
         .await
     }
@@ -4378,6 +4421,18 @@ impl MockStoreBuilder {
         self.store.expect_list_resources_not_in_group()
             .returning(move |group, _limit| {
                 map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()
+            });
+
+
+        self
+    }
+
+    pub fn with_list_random_resources<D:IntoIterator<Item=(Option<u32>, Result<Vec<Resource>, ThoError>)>>(mut self, data:D) -> Self {
+        let map :HashMap<Option<u32>, Result<Vec<Resource>, ThoError>> = HashMap::from_iter(data.into_iter());
+
+        self.store.expect_list_random_resources()
+            .returning(move |limit| {
+                map.get(&limit).expect(&format!("no mock data for limit={limit:?} configured in list_random_resources")).clone()
             });
 
 
