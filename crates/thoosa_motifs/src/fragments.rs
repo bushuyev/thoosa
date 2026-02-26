@@ -49,8 +49,8 @@ pub enum DataBy {
         find_motifs_run_id: RunId,
         select_motifs_run_ids: Option<Vec<RunId>>,//for list_motif_slices's select_motifs_run_ids param
     },
-    //--data-by=select_motifs_run_ids:1234
-    SelectedMotifs { select_motifs_run_ids: RunId },
+    //--data-by=select_motifs_run_ids:12,34,56
+    SelectedMotifs { select_motifs_run_ids: Vec<RunId> },
     //--data-by=resource:<resource_id>[;channels=1,2][;freq_filters=[...]]
     Resource {
         resource_id: ResourceId,
@@ -65,6 +65,17 @@ pub enum DataBy {
 }
 
 impl DataBy {
+    fn parse_select_motifs_run_ids(payload: &str) -> Result<Vec<RunId>, String> {
+        payload
+            .split(',')
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                part.replace(" ", "")
+                    .parse::<RunId>().map_err(|e| format!("can't parse {part:?} to select_motifs_run_id: {e}"))
+            })
+            .collect()
+    }
+
     fn parse_run_id_payload(payload: &str) -> Result<Self, String> {
         if payload.contains(';') {
             let mut segments = payload.split(';').filter(|segment| !segment.is_empty());
@@ -83,14 +94,7 @@ impl DataBy {
                     .ok_or_else(|| format!("run_id payload segment {segment:?} should be key=value"))?;
                 match key {
                     "select_motifs_run_ids" => {
-                        let ids = value
-                            .split(',')
-                            .filter(|part| !part.is_empty())
-                            .map(|part| {
-                                part.parse::<RunId>().map_err(|e| format!("can't parse {part:?} to select_motifs_run_id: {e}"))
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        select_motifs_run_ids = Some(ids);
+                        select_motifs_run_ids = Some(Self::parse_select_motifs_run_ids(value)?);
                     }
                     _ => return Err(format!("unexpected run_id payload key {key:?}; expected select_motifs_run_ids")),
                 }
@@ -115,16 +119,7 @@ impl DataBy {
         let select_motifs_run_ids = match select_part {
             None => None,
             Some("") => Some(vec![]),
-            Some(values) => {
-                let ids = values
-                    .split(',')
-                    .filter(|segment| !segment.is_empty())
-                    .map(|segment| {
-                        segment.parse::<RunId>().map_err(|e| format!("can't parse {segment:?} to select_motifs_run_id: {e}"))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Some(ids)
-            }
+            Some(values) => Some(Self::parse_select_motifs_run_ids(values)?),
         };
 
         Ok(DataBy::RunId {
@@ -243,8 +238,7 @@ impl FromStr for DataBy {
             .or_else(|| v.strip_prefix("select_motifs_run_id:"))
             .or_else(|| v.strip_prefix("good_motifs_run_id:")) {//renamed to select_motifs_run_id
             Ok(DataBy::SelectedMotifs {
-                select_motifs_run_ids: rest.parse()
-                .map_err( | e| format!("can't parse {rest:?} to good motifs run_id: {e}")) ?,
+                select_motifs_run_ids: Self::parse_select_motifs_run_ids(rest)?,
             })
         } else if let Some(rest) = v.strip_prefix("resource:") {
             DataBy::parse_resource_payload(rest)
@@ -252,7 +246,7 @@ impl FromStr for DataBy {
             DataBy::parse_motif_net_applied_payload(rest)
         } else {
             Err(format!(
-                "unexpected parameter {v}, should be motif_id:nnn, find_motifs_run_id:nnn[;select_motifs_run_ids=...], select_motifs_run_ids:nnn, resource:<resource_id>[;channels=1,2][;freq_filters=[...]], or motif_net_applied:resource_id=<id>;net_path=<path>"
+                "unexpected parameter {v}, should be motif_id:nnn, find_motifs_run_id:nnn[;select_motifs_run_ids=...], select_motifs_run_ids:nnn[,mmm], resource:<resource_id>[;channels=1,2][;freq_filters=[...]], or motif_net_applied:resource_id=<id>;net_path=<path>"
             ))
         }
     }
@@ -375,8 +369,8 @@ mod motifs_tests {
     fn parses_data_by_selected_motifs_comment_prefix() {
         use std::str::FromStr;
 
-        let parsed = DataBy::from_str("select_motifs_run_ids:99").unwrap();
-        assert_eq!(parsed, DataBy::SelectedMotifs { select_motifs_run_ids: 99 });
+        let parsed = DataBy::from_str("select_motifs_run_ids:99,101").unwrap();
+        assert_eq!(parsed, DataBy::SelectedMotifs { select_motifs_run_ids: vec![99, 101] });
     }
 
     #[test]

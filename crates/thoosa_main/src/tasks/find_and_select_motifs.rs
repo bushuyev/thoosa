@@ -291,7 +291,7 @@ impl FindAndSelectMotifsStage {
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs(select_run_id)), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
+        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![select_run_id] }), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
 
         Ok(selected_count)
     }
