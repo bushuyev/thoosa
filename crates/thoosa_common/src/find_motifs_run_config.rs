@@ -417,7 +417,7 @@ mod tests {
                 slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
             }),
             motif_criteria: MotifCriteriaRangeOrValue {
-                norm_thickness: Some(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
+                norm_thickness: Some(NormThicknessRunConfigRangeOrValue { k: RangeOrValue::Value(5.0), eps: RangeOrValue::Value(1e-8) }),
                 inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue { k: RangeOrValue::Value(3.0), eps: RangeOrValue::Value(1e-8) }),
                 coherenceRunConfig: None,
             },
@@ -501,6 +501,10 @@ impl FromHashmap for ExtendMotifsConfig {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
 pub struct NormThicknessRunConfig {
+    #[in_map]
+    #[run_config]
+    pub k: f64,
+
     #[in_map]
     #[run_config]
     pub eps: f64,
@@ -602,6 +606,7 @@ impl FromHashmap for MotifCriteria {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct NormThickness {
+    pub k: f64,
     pub eps: f64,
 }
 
@@ -628,7 +633,7 @@ impl From<&MotifCriteria> for Vec<MotifCriterion> {
     fn from(value: &MotifCriteria) -> Self {
         let mut criteria = Vec::new();
         if let Some(v) = value.norm_thickness.as_ref() {
-            criteria.push(MotifCriterion::NormThickness(NormThickness { eps: v.eps }));
+            criteria.push(MotifCriterion::NormThickness(NormThickness { k: v.k, eps: v.eps }));
         }
         if let Some(v) = value.inlier_ratioRunConfig.as_ref() {
             criteria.push(MotifCriterion::InlierRatio(InlierRatio { k: v.k, eps: v.eps }));

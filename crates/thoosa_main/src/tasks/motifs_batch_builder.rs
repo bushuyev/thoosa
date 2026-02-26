@@ -90,6 +90,7 @@ mod tests {
     use std::collections::HashSet;
     use tch::{Device, IndexOp, Kind, Tensor};
     use tch::kind::FLOAT_CPU;
+    use thoosa_motifs::criteria::norm_thickness;
 
     fn row_matrix(n: i64, m: i64) -> Tensor {
         // Rows encode their index so we can check uniqueness/bounds.
@@ -181,5 +182,35 @@ mod tests {
         let out = make_batch_with(&x, b, cfg).expect("ok");
         assert_eq!(out.kind(), Kind::Double, "output dtype should match input");
         assert_eq!(out.size().as_slice(), &[b, m]);
+    }
+
+    #[test]
+    fn norm_thickness_k_can_flip_filter_for_generated_batch() -> Result<(), tch::TchError> {
+        tch::manual_seed(17);
+
+        let motif = Tensor::from_slice(&[
+            0.0f32, 1.0, 2.0, 1.0, 0.0, -0.5,
+            0.0,    1.1, 1.9, 1.0, 0.0, -0.4,
+            0.0,    0.9, 2.1, 1.0, 0.0, -0.6,
+        ])
+        .view([3, 6]);
+
+        // Jitter-only keeps the test deterministic (tch::manual_seed controls randomness here).
+        let cfg = MixupJitterCfg { alpha: 0.4, sigma: 0.08, do_mixup: false, do_jitter: true };
+        let batch = make_batch_with(&motif, 32, cfg)?;
+        assert_eq!(batch.size().as_slice(), &[32, 6]);
+
+        let score_k_lo = norm_thickness(&batch, 1.0, 1e-8)?.double_value(&[]);
+        let score_k_hi = norm_thickness(&batch, 12.0, 1e-8)?.double_value(&[]);
+
+        assert!(score_k_hi < score_k_lo, "expected stronger k to lower score, got k=1:{score_k_lo:.6} k=12:{score_k_hi:.6}");
+
+        // Derive a threshold from observed scores to show that changing k can change keep/drop decisions.
+        let threshold = (score_k_lo + score_k_hi) / 2.0;
+        let keep_k_lo = score_k_lo < threshold;
+        let keep_k_hi = score_k_hi < threshold;
+        assert_ne!(keep_k_lo, keep_k_hi, "expected k to flip threshold decision: k=1:{score_k_lo:.6} k=12:{score_k_hi:.6} threshold={threshold:.6}");
+
+        Ok(())
     }
 }
