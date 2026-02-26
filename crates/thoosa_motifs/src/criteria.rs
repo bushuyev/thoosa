@@ -1,5 +1,101 @@
+use std::sync::{Arc, OnceLock};
+use parking_lot::RwLock;
 use tch::{Kind, Tensor, TchError};
 use tch::Kind::Float;
+
+type NormThicknessMockFn = Arc<dyn Fn(&Tensor, f64) -> Result<Tensor, TchError> + Send + Sync>;
+type InlierRatioMockFn = Arc<dyn Fn(&Tensor, f64, f64) -> Result<Tensor, TchError> + Send + Sync>;
+type CoherenceMockFn = Arc<dyn Fn(&Tensor, i64, f64) -> Result<Tensor, TchError> + Send + Sync>;
+
+#[derive(Default, Clone)]
+struct CriteriaMocks {
+    norm_thickness: Option<NormThicknessMockFn>,
+    inlier_ratio: Option<InlierRatioMockFn>,
+    coherence: Option<CoherenceMockFn>,
+}
+
+fn criteria_mocks() -> &'static RwLock<CriteriaMocks> {
+    static MOCKS: OnceLock<RwLock<CriteriaMocks>> = OnceLock::new();
+    MOCKS.get_or_init(|| RwLock::new(CriteriaMocks::default()))
+}
+
+fn maybe_norm_thickness_mock(x: &Tensor, eps: f64) -> Option<Result<Tensor, TchError>> {
+    let mock_fn = criteria_mocks().read().norm_thickness.as_ref().map(Arc::clone);
+    mock_fn.map(|mock_fn| mock_fn(x, eps))
+}
+
+fn maybe_inlier_ratio_mock(x: &Tensor, k: f64, eps: f64) -> Option<Result<Tensor, TchError>> {
+    let mock_fn = criteria_mocks().read().inlier_ratio.as_ref().map(Arc::clone);
+    mock_fn.map(|mock_fn| mock_fn(x, k, eps))
+}
+
+fn maybe_coherence_mock(x: &Tensor, iters: i64, eps: f64) -> Option<Result<Tensor, TchError>> {
+    let mock_fn = criteria_mocks().read().coherence.as_ref().map(Arc::clone);
+    mock_fn.map(|mock_fn| mock_fn(x, iters, eps))
+}
+
+pub mod mock_criteria {
+    use super::{criteria_mocks, CoherenceMockFn, CriteriaMocks, InlierRatioMockFn, NormThicknessMockFn};
+    use parking_lot::{Mutex, MutexGuard};
+    use std::sync::{Arc, OnceLock};
+    use tch::{Tensor, TchError};
+
+    fn install_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    pub struct MockCriteriaGuard {
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for MockCriteriaGuard {
+        fn drop(&mut self) {
+            *criteria_mocks().write() = CriteriaMocks::default();
+        }
+    }
+
+    #[derive(Default)]
+    pub struct MockCriteriaBuilder {
+        mocks: CriteriaMocks,
+    }
+
+    impl MockCriteriaBuilder {
+        pub fn with_norm_thickness<F>(mut self, f: F) -> Self
+        where
+            F: Fn(&Tensor, f64) -> Result<Tensor, TchError> + Send + Sync + 'static,
+        {
+            self.mocks.norm_thickness = Some(Arc::new(f) as NormThicknessMockFn);
+            self
+        }
+
+        pub fn with_inlier_ratio<F>(mut self, f: F) -> Self
+        where
+            F: Fn(&Tensor, f64, f64) -> Result<Tensor, TchError> + Send + Sync + 'static,
+        {
+            self.mocks.inlier_ratio = Some(Arc::new(f) as InlierRatioMockFn);
+            self
+        }
+
+        pub fn with_coherence<F>(mut self, f: F) -> Self
+        where
+            F: Fn(&Tensor, i64, f64) -> Result<Tensor, TchError> + Send + Sync + 'static,
+        {
+            self.mocks.coherence = Some(Arc::new(f) as CoherenceMockFn);
+            self
+        }
+
+        pub fn install(self) -> MockCriteriaGuard {
+            let lock = install_lock().lock();
+            *criteria_mocks().write() = self.mocks;
+            MockCriteriaGuard { _lock: lock }
+        }
+    }
+
+    pub fn build() -> MockCriteriaBuilder {
+        MockCriteriaBuilder::default()
+    }
+}
 
 
 /// Quantile for x over dim=0 (x is [N, L]).
@@ -51,6 +147,9 @@ fn f_quantile_1d(v: &Tensor, q: f64) -> Result<Tensor, TchError> {
 /// amp       = q95(consensus) - q05(consensus)
 /// score     = thickness / (amp + eps)
 pub fn norm_thickness(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
+    if let Some(mocked) = maybe_norm_thickness_mock(x, eps) {
+        return mocked;
+    }
     let sz = x.size();
     assert_eq!(sz.len(), 2, "expects [N, L]");
     let l = sz[1];
@@ -98,6 +197,9 @@ fn f_rms_residuals(x: &Tensor, consensus: &Tensor) -> Result<Tensor, TchError> {
 /// - inlier if resid <= med + k*mad
 /// Returns fraction in [0,1] (scalar). Higher is better.
 pub fn inlier_ratio(x: &Tensor, k: f64, eps: f64) -> Result<Tensor, TchError> {
+    if let Some(mocked) = maybe_inlier_ratio_mock(x, k, eps) {
+        return mocked;
+    }
     let sz = x.size();
 
     assert_eq!(sz.len(), 2, "expected [N,L], got {:?}", sz);
@@ -127,6 +229,9 @@ pub fn inlier_ratio(x: &Tensor, k: f64, eps: f64) -> Result<Tensor, TchError> {
 /// We approximate largest eigenvalue by power iteration.
 /// Higher is better.
 pub fn coherence(x: &Tensor, iters: i64, eps: f64) -> Result<Tensor, TchError> {
+    if let Some(mocked) = maybe_coherence_mock(x, iters, eps) {
+        return mocked;
+    }
     let sz = x.size();
     assert_eq!(sz.len(), 2, "expected [N,L], got {:?}", sz);
 

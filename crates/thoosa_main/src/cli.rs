@@ -1049,7 +1049,9 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             }),
         },
         threshold: RangeOrValue::Value(0.9), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
-        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
+        min_slices: None,
+        max_slices: None,
+        extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
     let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(50, 10));
 
@@ -1173,7 +1175,9 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         },
         threshold: RangeOrValue::Value(0.8),
         // threshold: RangeOrValue::Range{range: 0.4..1.1, step: Some((0.1, 1))},
-        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
+        min_slices: None,
+        max_slices: None,
+        extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
     };
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
@@ -1275,7 +1279,9 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
             coherenceRunConfig: None,
         },
         threshold: RangeOrValue::Value(0.5),
+        min_slices: None,
         max_slices: None,
+        extend_max_slices: None,
     };
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
