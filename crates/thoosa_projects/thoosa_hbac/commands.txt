@@ -18,7 +18,7 @@ select count(*) cnt, motif_id from slice_matches group by motif_id order by cnt 
 
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=motif_id:4879426
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=run_id:11
-cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=select_motifs_run_ids:1,2,3
+cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=select_motifs_run_ids:'36764, 36752, 36834, 37084, 36628, 37346, 37320, 37374, 36946'
 
 
 cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="group:pure group 1000" --run-config-cnt="{motif_criteria: {'norm_thickness': {'eps':'0.00000001'}}, 'threshold':'0.9'}"
