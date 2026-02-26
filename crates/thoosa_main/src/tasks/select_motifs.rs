@@ -1108,7 +1108,7 @@ where
                 ),
             )
             .await?;
-            let max_slices = select_motifs_run_config.max_slices.as_ref().map(|max_slices| {
+            let max_slices = select_motifs_run_config.extend_max_slices.as_ref().map(|max_slices| {
                 match max_slices {
                     MaxSlices::ByResourcesCount( MaxSlicesByResources {k}) => {
                         *k * num_resources as u32
@@ -1258,6 +1258,9 @@ where
         debug!("SelectMotifsStage::run: 1. extended_motif_ids.len={}", extended_motif_ids.len());
 
         let threshold = select_motifs_run_config.threshold as f64;
+        let min_slices = select_motifs_run_config.min_slices.unwrap_or(10) as i64;
+        let max_slices = select_motifs_run_config.max_slices.unwrap_or(100) as i64;
+        assert!(min_slices <= max_slices, "SelectMotifsStage::filter_motifs_by_criteria: min_slices={min_slices} must be <= max_slices={max_slices}");
         let mut extended_motif_ids_filtered = Vec::with_capacity(extended_motif_ids.len());
 
         for motif_id in extended_motif_ids {
@@ -1273,7 +1276,7 @@ where
                 let motif_slices = motif_data.data().t_ref();
                 debug!("SelectMotifsStage::run: motif_id={motif_id} motif_criteria={motif_criteria:?} threshold={threshold:.6} motif_slices={motif_slices:?}");
 
-                if motif_slices.size()[0] < 10 || motif_slices.size()[0] > 100 {//TODO conf min slices
+                if motif_slices.size()[0] < min_slices || motif_slices.size()[0] > max_slices {
                     return Ok::<(bool, f64), ThoError>((false, 0.0));
                 }
                 let mut score_sum = 0.0f64;
@@ -1406,12 +1409,13 @@ pub mod tests {
     use thoosa_shared::runner::global_ctx;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::runner::permits::MAX_PERMITS;
-    use thoosa_common::find_motifs_run_config::{ByAvgEucDist, FindMotifsRunConfig, MotifSelector, NormThicknessRunConfig, SelectMotifsRunConfig};
+    use thoosa_common::find_motifs_run_config::{ByAvgEucDist, CoherenceRunConfig, FindMotifsRunConfig, InlierRatioRunConfig, MotifCriteria, MotifSelector, NormThicknessRunConfig, SelectMotifsRunConfig};
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::tch_test_utils;
     use thoosa_common::utils::{draw_function_plot, reset_print_options, to_vec_f32, z_norm, z_norm_2};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
+    use thoosa_motifs::criteria::mock_criteria;
     use thoosa_common::tch_test_utils::generate_motifs_with_avg_distance;
     use thoosa_common::tch_test_utils::Interval;
     use thoosa_properties_map::ToHashmap;
@@ -1849,6 +1853,68 @@ pub mod tests {
         debug!("motifs_tensor: t.size={:?}", t.size());
 
         t
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_filter_motifs_by_criteria_filters_by_slices_and_score() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        let find_motifs_run_id: RunId = 11;
+        let select_motifs_run_id: RunId = 22;
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let store = Arc::new(MockStoreBuilder::new().with_list_motifs([(find_motifs_run_id, Ok(vec![1, 2, 3, 4]))]).build());
+        let loader = Arc::new(mock_tensor_loader::build().finish());
+
+        let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
+            (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[9, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::all_slices(DataId(2)), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[10, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::all_slices(DataId(3)), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[101, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::all_slices(DataId(4)), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[100, 4], (Kind::Float, tch::Device::Cpu)))),
+        ]).finish());
+
+        let stage = SelectMotifsStage::new(
+            &ws,
+            &store,
+            loader,
+            motif_loader,
+            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }))],
+            vec![find_motifs_run_id],
+            1024,
+            None,
+        ).await?;
+
+        let _criteria_mocks = mock_criteria::build()
+            .with_norm_thickness(|x, _eps| {
+                let score = if x.size()[0] == 10 { 0.3 } else { 0.8 };
+                Ok(Tensor::from(score).to_kind(x.kind()).to_device(x.device()))
+            })
+            .with_inlier_ratio(|x, _k, _eps| {
+                let score = if x.size()[0] == 10 { 0.3 } else { 0.8 };
+                Ok(Tensor::from(score).to_kind(x.kind()).to_device(x.device()))
+            })
+            .with_coherence(|x, _iters, _eps| {
+                let score = if x.size()[0] == 10 { 0.3 } else { 0.8 };
+                Ok(Tensor::from(score).to_kind(x.kind()).to_device(x.device()))
+            })
+            .install();
+
+        let mut select_motifs_run_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
+        select_motifs_run_config.motif_criteria = MotifCriteria {
+            norm_thickness: Some(NormThicknessRunConfig { eps: 1e-8 }),
+            inlier_ratioRunConfig: Some(InlierRatioRunConfig { k: 3.0, eps: 1e-8 }),
+            coherenceRunConfig: Some(CoherenceRunConfig { k: 3.0, eps: 1e-8 }),
+        };
+        select_motifs_run_config.threshold = 0.5;
+        select_motifs_run_config.min_slices = Some(10);
+        select_motifs_run_config.max_slices = Some(100);
+
+        let filtered = stage.filter_motifs_by_criteria(&select_motifs_run_config, mock_run_ctx::default(0)).await?;
+
+        assert_eq!(filtered.len(), 1, "filtered={filtered:?}");
+        assert_eq!(filtered[0].0, 2, "filtered={filtered:?}");
+        assert!((filtered[0].1 - 0.3).abs() < 1e-6, "filtered={filtered:?}");
+
+        Ok(())
     }
 
     #[test]
