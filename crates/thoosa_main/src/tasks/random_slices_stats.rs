@@ -11,6 +11,7 @@ use rand::seq::{IndexedRandom, SliceRandom};
 use rand::Rng;
 use rand::rngs::ThreadRng;
 use tch::Tensor;
+use tracing::error;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, StatsKey, StatsKeys};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -287,11 +288,13 @@ pub(crate) fn random_non_overlapping_slices(
         .collect();
 
     if states.is_empty() {
+
         return Err(ThoError::new(format!("random_non_overlapping_slices: no suitable resource for {number_of_slices} of {slice_width} width")));
     }
 
     let available_total: usize = states.iter().map(|s| s.starts.len()).sum();
     if available_total < number_of_slices as usize {
+        error!("random_non_overlapping_slices: no suitable resource for {number_of_slices} of {slice_width} width, slice_width={slice_width} resources={resources:?}");
         return Err(ThoError::new(format!("random_non_overlapping_slices: not enough resources ({available_total}) available for {number_of_slices} random slices")));
         // warn!("random_non_overlapping_slices: not enough resources ({available_total}) available for {number_of_slices} random slices");
     }
