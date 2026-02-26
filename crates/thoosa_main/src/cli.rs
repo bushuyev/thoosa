@@ -149,7 +149,10 @@ pub struct RunAllArgs {
     pub max_motif_net_loss: f32, //FixedFindMotifsConfig::max_chunk_size
 
     #[arg(long, default_value = "100")]
-    pub motif_slices_step: u32
+    pub motif_slices_step: u32,
+
+    #[arg(long, default_value = "false")]
+    pub with_plots: bool
 }
 
 impl RunAllArgs {
@@ -869,8 +872,8 @@ async fn run_all(
         Err(e) => return Err(e),
     };
 
-    #[cfg(tho_debug_plots)]
-    {
+    // #[cfg(tho_debug_plots)]
+    if run_all_args.with_plots {
         for select_motifs_run_id in &select_motifs_run_ids {
             run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![*select_motifs_run_id] }), &Cpu, root_ctx.branch("plot".into(), false, false)).await?;
         }
@@ -1039,18 +1042,20 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         extend_config: None,
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
+            // inlier_ratioRunConfig:None,
             inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {
                 k: RangeOrValue::Value(3.0),
                 eps: RangeOrValue::Value(1e-8),
             }),
+            // coherenceRunConfig:None,
             coherenceRunConfig: Some(CoherenceRunConfigRangeOrValue {
                 k: RangeOrValue::Value(10.0),
                 eps: RangeOrValue::Value(1e-8),
             }),
         },
         threshold: RangeOrValue::Value(0.9), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
-        min_slices: None,
-        max_slices: None,
+        min_slices: Some(RangeOrValue::Value(5)),
+        max_slices: Some(RangeOrValue::Value(100)),
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
     let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(50, 10));
@@ -2647,6 +2652,7 @@ mod cli_tests {
             run_config_cnt: "".to_string(),
             max_motif_net_loss: 0.4,
             motif_slices_step: 10,
+            with_plots: false,
         };
 
         let all_configs = run_all_config_test_1(&run_all_args);
