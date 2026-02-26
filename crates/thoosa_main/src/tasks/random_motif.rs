@@ -196,7 +196,7 @@ where
 
         let resources = self
             .store
-            .list_resources_not_in_group(RANDOM_STATS_GROUP, max_slices * 100/*TODO this is to compensate for filter, add proper coefficient */)
+            .list_resources_not_in_group(RANDOM_STATS_GROUP, u32::MAX)
             .await?;
 
         debug!("RandomMotif::run: resources={resources:?}");
