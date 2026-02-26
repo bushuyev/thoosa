@@ -17,7 +17,7 @@ use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::comp_id::SynKey;
 
 #[derive(Debug, cached_derive::Cached, Named)]
-pub struct ABStage<A, B, C>
+pub struct ABStage<A, B, C>//TODO rename to Pair/Chained
 where
     C:RunCtx + 'static,
 
@@ -159,7 +159,7 @@ where
 }
 
 #[derive(cached_derive::Cached, Named)]//TODO delegate to B's cache
-pub enum StageChainOption<A, B>
+pub enum StageChainOption<A, B>//TODO it's not Chained, rename to Or/AB?
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,

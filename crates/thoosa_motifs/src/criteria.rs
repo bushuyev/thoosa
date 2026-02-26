@@ -147,6 +147,7 @@ fn f_quantile_1d(v: &Tensor, q: f64) -> Result<Tensor, TchError> {
 /// amp       = q95(consensus) - q05(consensus)
 /// score     = thickness / (amp + eps)
 pub fn norm_thickness(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
+    #[cfg(test)]
     if let Some(mocked) = maybe_norm_thickness_mock(x, eps) {
         return mocked;
     }
@@ -166,14 +167,22 @@ pub fn norm_thickness(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
     let c_q95 = f_quantile_1d(&consensus, 0.95)?;
     let amp = c_q95.f_sub(&c_q05)?;                      // scalar
 
-    // s = thickness / (amp + eps)
+    // s = thickness / (amp + eps)#[cfg(test)]
     let denom = amp.f_add_scalar(eps)?;
     let s = thickness.f_div(&denom)?;                    // scalar
 
     // Q = 1 / (1 + s)
     let one = Tensor::from(1.0).to_device(x.device()).to_kind(x.kind());
     let one_plus_s = one.f_add(&s)?;
-    one.f_div(&one_plus_s)
+    // one.f_div(&one_plus_s)
+
+    let k = 5.0;
+    let s_strict = s.f_mul_scalar(k)?;
+
+    // Q = 1 / (1 + s_strict)
+    let one = Tensor::from(1.0).to_device(x.device()).to_kind(x.kind());
+    let denom = one.f_add(&s_strict)?;
+    one.f_div(&denom)
 }
 
 
@@ -197,6 +206,7 @@ fn f_rms_residuals(x: &Tensor, consensus: &Tensor) -> Result<Tensor, TchError> {
 /// - inlier if resid <= med + k*mad
 /// Returns fraction in [0,1] (scalar). Higher is better.
 pub fn inlier_ratio(x: &Tensor, k: f64, eps: f64) -> Result<Tensor, TchError> {
+    #[cfg(test)]
     if let Some(mocked) = maybe_inlier_ratio_mock(x, k, eps) {
         return mocked;
     }
@@ -229,6 +239,7 @@ pub fn inlier_ratio(x: &Tensor, k: f64, eps: f64) -> Result<Tensor, TchError> {
 /// We approximate largest eigenvalue by power iteration.
 /// Higher is better.
 pub fn coherence(x: &Tensor, iters: i64, eps: f64) -> Result<Tensor, TchError> {
+    #[cfg(test)]
     if let Some(mocked) = maybe_coherence_mock(x, iters, eps) {
         return mocked;
     }
