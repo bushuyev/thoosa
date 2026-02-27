@@ -1213,7 +1213,7 @@ where
             .collect::<Result<Vec<_>, ThoError>>()?;
 
             debug!("SelectMotifsStage::run: 2. find_motifs_run_config={find_motifs_run_config:?}");
-            print!(".");
+            
 
             t_1_batch_dim_0_size = 0;
             t_1_batch = vec![];

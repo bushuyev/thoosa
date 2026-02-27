@@ -350,7 +350,7 @@ where
 
                 }
 
-                print!(".");
+                
                 std::io::stdout().flush()?;
             }
             if saved_best {
