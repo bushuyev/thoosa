@@ -80,7 +80,7 @@ use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::perf_logging::{format_perf_map, maybe_init_perf_tracing_stdout_simplelog_like, PERF};
+use thoosa_shared::perf_logging::{format_perf_map, init_tracing, PERF};
 use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
@@ -288,7 +288,7 @@ where
     };
 
 
-    let _logging_guards = maybe_init_perf_tracing_stdout_simplelog_like(
+    let _logging_guards = init_tracing(
         cli.term_logger_level,
         cli.term_logger_extra_fields,
         cli.write_logger_level,
@@ -996,7 +996,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        window: RangeOrValue::Range { range: Range { start: 100, end: 1000 }, step: Some((100, 0)) }, //RangeOrValue::Value(1000),
+        window: RangeOrValue::Range { range: Range { start: 100, end: 1100 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -1022,6 +1022,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.02)  }) }),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }) }),//Some((0.05, 2))
+        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.0005) }) }),//Some((0.05, 2))
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
@@ -1042,7 +1043,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         extend_config: None,
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(NormThicknessRunConfigRangeOrValue {
-                k: RangeOrValue::Value(5.0),
+                k: RangeOrValue::Range{range: 1.0..10.0, step: None},
                 eps: RangeOrValue::Value(1e-8)
             }),
             // inlier_ratioRunConfig:None,
@@ -1056,12 +1057,12 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 eps: RangeOrValue::Value(1e-8),
             }),
         },
-        threshold: RangeOrValue::Value(0.9), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
+        threshold: RangeOrValue::Value(0.95), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
         min_slices: Some(RangeOrValue::Value(5)),
         max_slices: Some(RangeOrValue::Value(100)),
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
-    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(50, 10));
+    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(100, 10));
 
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
@@ -1498,17 +1499,17 @@ where
 
     match plot_params.motifs_by() {
         DataBy::Resource { resource_id, channels, freq_filters } => {
-            debug!("run_plot_slices: MotifsBy::Resource resource_id={resource_id} channels={channels:?} freq_filters={freq_filters:?}");
-            plot_resource_variant(ws, store, loader, resource_id, channels, freq_filters, ctx).await?;
+            debug!("run_plot: MotifsBy::Resource resource_id={resource_id} channels={channels:?} freq_filters={freq_filters:?}");
+            plot_resource(ws, store, loader, resource_id, channels, freq_filters, ctx).await?;
             return Ok(());
         }
         DataBy::MotifNetApplied { resource_id, net_path } => {
-            debug!("run_plot_slices: MotifsBy::MotifNetApplied resource_id={resource_id} net_path={net_path:?}");
-            plot_motif_net_applied_variant(ws, store, loader, resource_id, net_path, ctx).await?;
+            debug!("run_plot: MotifsBy::MotifNetApplied resource_id={resource_id} net_path={net_path:?}");
+            plot_motif_net_applied(ws, store, loader, resource_id, net_path, ctx).await?;
             return Ok(());
         }
         DataBy::MotifId(motif_id) => {
-            debug!("run_plot_slices: MotifsBy::MotifId run_id={motif_id}");
+            debug!("run_plot: MotifsBy::MotifId run_id={motif_id}");
             plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None).await?;
         }
         DataBy::RunId {
@@ -1516,7 +1517,7 @@ where
             select_motifs_run_ids
         } => {
 
-            debug!("run_plot_slices: MotifsBy::RunId find_run_id={find_motifs_run_id} select_run_ids={select_motifs_run_ids:?}");
+            debug!("run_plot: MotifsBy::RunId find_run_id={find_motifs_run_id} select_run_ids={select_motifs_run_ids:?}");
 
             let motifs = store.list_motifs(find_motifs_run_id).await?;
             let motifs_len = motifs.len();
@@ -1531,7 +1532,7 @@ where
                     let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true, false);
                     let select_motifs_run_ids = select_motifs_run_ids.clone();
                     async move {
-                        debug!("run_plot_slices: motif_id={motif_id}");
+                        debug!("run_plot: motif_id={motif_id}");
 
                         //gpt TODO!! select_motifs_run_ids is not forwarded to plot_motif here; plots ignore selection filtering even when provided.
                         if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_ids).await {
@@ -1560,7 +1561,7 @@ where
 
         DataBy::SelectedMotifs { select_motifs_run_ids } => {
             for select_motifs_run_id in select_motifs_run_ids {
-                plot_selected_motifs_variant(
+                plot_selected_motifs(
                     ws,
                     store,
                     select_motifs_run_id,
@@ -1577,7 +1578,7 @@ where
     Ok(())
 }
 
-async fn plot_selected_motifs_variant<C>(
+async fn plot_selected_motifs<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     select_motifs_run_id: RunId,
@@ -1589,7 +1590,7 @@ where
     C: RunCtx + Adjustable,
 {
     let channels = ws.read().channels();
-    debug!("run_plot_slices: MotifsBy::GoodMotifs select_motifs_run_id={select_motifs_run_id} channels={channels}");
+    debug!("run_plot: MotifsBy::GoodMotifs select_motifs_run_id={select_motifs_run_id} channels={channels}");
 
     let motifs = store
         .list_selected_motifs(select_motifs_run_id, channels)
@@ -1601,7 +1602,7 @@ where
         .collect();
 
     if motif_ids.is_empty() {
-        warn!("run_plot_slices: no motifs found for select_motifs_run_id={select_motifs_run_id}");
+        warn!("run_plot: no motifs found for select_motifs_run_id={select_motifs_run_id}");
         return Ok(());
     }
 
@@ -1618,7 +1619,7 @@ where
             let suffix = suffix.clone();
             let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true, false);
             async move {
-                debug!("run_plot_slices: motif_id={motif_id}");
+                debug!("run_plot: motif_id={motif_id}");
                 if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
@@ -1748,7 +1749,7 @@ fn plot_single_line_tensor(
     Ok(())
 }
 
-async fn plot_resource_variant<C>(
+async fn plot_resource<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     loader: &Arc<RawTensorLoader<C>>,
@@ -1763,11 +1764,14 @@ where
     let raw = load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(Some("plot_resource_load"), false, false)).await?;
 
     let raw_channels = channels.clone();
+    let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
+
     raw.with_data_ref(0, ctx.branch(Some("plot_resource_raw"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-        plot_resource_channels::<C>(ws, resource_id, "raw", &format!("Resource {resource_id} raw channels={raw_channels:?}"), tensor, raw_channels.as_ref())
+        plot_resource_channels::<C>(ws, resource_id, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels={raw_channels:?}"), tensor, raw_channels.as_ref())
     }).await?;
 
     if let Some(freq_filters) = freq_filters {
+        let filter_frag = sanitize_plot_path_segment(&freq_filters.iter().map(|f|format!("{:?}", f)).collect::<String>());//TODO remove "*Params"
         let filtered = Arc::new(FreqFilter::<C>::new(freq_filters.as_slice(), ws, resource_id)?)
             .run(
                 Arc::clone(&raw),
@@ -1777,14 +1781,14 @@ where
 
         let filtered_channels = channels.clone();
         filtered.with_data_ref(0, ctx.branch(Some("plot_resource_freq_filter_plot"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-            plot_resource_channels::<C>(ws, resource_id, "freq_filtered", &format!("Resource {resource_id} freq-filtered channels={filtered_channels:?}"), tensor, filtered_channels.as_ref())
+            plot_resource_channels::<C>(ws, resource_id, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} freq-filtered channels={filtered_channels:?}"), tensor, filtered_channels.as_ref())
         }).await?;
     }
 
     Ok(())
 }
 
-async fn plot_motif_net_applied_variant<C>(
+async fn plot_motif_net_applied<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     loader: &Arc<RawTensorLoader<C>>,

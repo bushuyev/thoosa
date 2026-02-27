@@ -203,6 +203,8 @@ mod tests {
         let score_k_lo = norm_thickness(&batch, 1.0, 1e-8)?.double_value(&[]);
         let score_k_hi = norm_thickness(&batch, 12.0, 1e-8)?.double_value(&[]);
 
+        debug!("score_k_lo={score_k_lo} score_k_hi={score_k_hi}");
+
         assert!(score_k_hi < score_k_lo, "expected stronger k to lower score, got k=1:{score_k_lo:.6} k=12:{score_k_hi:.6}");
 
         // Derive a threshold from observed scores to show that changing k can change keep/drop decisions.

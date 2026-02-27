@@ -133,7 +133,12 @@ impl DataBy {
             .split(',')
             .filter(|segment| !segment.is_empty())
             .map(|segment| {
+
+                #[cfg(any(debug_assertions, tho_debug))] //logging is set up after cli args are parsed
+                println!("parse_channels: segment={segment:?}");
+
                 segment
+                    .replace(" ", "")
                     .parse::<u32>()
                     .map_err(|e| format!("can't parse {segment:?} to channel: {e}"))
             })
@@ -141,6 +146,9 @@ impl DataBy {
     }
 
     fn parse_resource_payload(payload: &str) -> Result<Self, String> {
+        #[cfg(any(debug_assertions, tho_debug))]
+        println!("parse_resource_payload: payload={payload}");
+
         let mut segments = payload.split(';').filter(|segment| !segment.is_empty());
         let resource_id = segments
             .next()
@@ -151,10 +159,17 @@ impl DataBy {
         let mut channels = None;
         let mut freq_filters = None;
 
+        #[cfg(any(debug_assertions, tho_debug))]
+        println!("parse_resource_payload: segments={segments:?}");
+
         for segment in segments {
             let (key, value) = segment
                 .split_once('=')
                 .ok_or_else(|| format!("resource payload segment {segment:?} should be key=value"))?;
+
+            #[cfg(any(debug_assertions, tho_debug))]
+            println!("parse_resource_payload: key={key:?} value={value:?}");
+
             match key {
                 "channels" => {
                     channels = Some(Self::parse_channels(value)?);
@@ -383,6 +398,16 @@ mod motifs_tests {
             DataBy::Resource {
                 resource_id: 55,
                 channels: Some(vec![1, 3]),
+                freq_filters: None,
+            }
+        );
+
+        let resource = DataBy::from_str("resource:7;channels=0").unwrap();
+        assert_eq!(
+            resource,
+            DataBy::Resource {
+                resource_id: 7,
+                channels: Some(vec![0]),
                 freq_filters: None,
             }
         );

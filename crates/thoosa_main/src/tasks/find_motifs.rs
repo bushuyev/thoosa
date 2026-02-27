@@ -57,7 +57,7 @@ use crate::tasks::random_slices_stats::{RandomStats, RandomStatsInput};
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
 
-//TODO remove - use cross_loader directly
+//TODO remove - use cross_loader directly?
 #[derive(Debug)]
 struct FindMotifsStages<RC, L, C>
 where
