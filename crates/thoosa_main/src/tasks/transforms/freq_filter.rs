@@ -39,7 +39,7 @@ enum PreparedFilter {
     BandPass {
         kernel: ThoTensor<BandPassDims, SynKey>,
         stride: i64,
-        padding: i64,
+        padding: SgPadding,
     },
     SavGol {
         weights: ThoTensor<BandPassDims, SynKey>,
@@ -160,14 +160,44 @@ where
                     // debug_plot!(&filtered_t, "{}_NotchBand", input_tensor.id())?;
                 }
                 PreparedFilter::BandPass { kernel, stride, padding } => {
+                    let t = filtered_t.size()[1];
                     filtered_t = kernel.run_inner(|band_filter_inner| {
-                        let kernel_t = if band_filter_inner.device() == filtered_t.device() {
+                        let mut kernel_t = if band_filter_inner.device() == filtered_t.device() {
                             band_filter_inner.shallow_clone()
                         } else {
                             band_filter_inner.f_to_device(filtered_t.device())?
                         };
-                        let input_t = filtered_t.unsqueeze(0);
-                        let output = input_t.conv1d(&kernel_t, None::<Tensor>, *stride, *padding, 1, self.num_channels).view((self.num_channels, -1));
+                        let input_kind = match filtered_t.kind() {
+                            tch::Kind::Float | tch::Kind::Double => filtered_t.kind(),
+                            _ => tch::Kind::Float,
+                        };
+                        if kernel_t.kind() != input_kind {
+                            kernel_t = kernel_t.f_to_kind(input_kind)?;
+                        }
+                        let input_t = filtered_t.f_to_kind(input_kind)?.f_unsqueeze(0)?;
+                        let kernel_size = kernel_t.size()[2];
+                        let pad = kernel_size / 2;
+
+                        let output_3d = match padding {
+                            SgPadding::Zero(_) => input_t.f_conv1d(&kernel_t, None::<Tensor>, *stride, pad, 1, self.num_channels)?,
+                            SgPadding::Replicate(_) => {
+                                let left = input_t.narrow(2, 0, 1).repeat(&[1, 1, pad]);
+                                let right = input_t.narrow(2, t - 1, 1).repeat(&[1, 1, pad]);
+                                let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
+                                xpad.f_conv1d(&kernel_t, None::<Tensor>, *stride, 0, 1, self.num_channels)?
+                            }
+                            SgPadding::Reflect(_) => {
+                                if pad >= t {
+                                    return Err(ThoError::new(format!("reflect padding requires pad < T, got pad={} T={}", pad, t)));
+                                }
+                                let left = input_t.narrow(2, 1, pad).flip(&[2]);
+                                let right = input_t.narrow(2, t - pad - 1, pad).flip(&[2]);
+                                let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
+                                xpad.f_conv1d(&kernel_t, None::<Tensor>, *stride, 0, 1, self.num_channels)?
+                            }
+                        };
+
+                        let output = output_3d.f_view((self.num_channels, -1))?;
                         debug!("FreqFilter::apply_tho_tensor, BandPass: id={} band_filter.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), kernel_t.size(), input_t.size(), output.size());
                         Ok(output)
                     })?;
@@ -320,7 +350,7 @@ mod tests {
                 band_hz: 100.0,
                 kernel_size: 859,
                 stride: 10,
-                padding: 0,
+                padding: SgPadding::zero(),
             }),
         ];
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 20, 100, 10000)));
