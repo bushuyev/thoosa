@@ -638,7 +638,7 @@ mod tests {
             (src_ptr, src_size) = (tensor.data_ptr() as usize, tensor.size());
 
             assert!(equal_bytes(&tensor, &src_t));
-            print!(".");
+
             src_t = tensor;
         }
 

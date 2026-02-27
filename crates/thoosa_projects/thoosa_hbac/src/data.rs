@@ -683,8 +683,7 @@ impl EEGs {
                 }
             }
 
-            print!(".");
-            std::io::stdout().flush()?;
+
         }
 
         debug!(
