@@ -227,7 +227,7 @@ fn init_perf_writer(
 }
 
 /// Initialize tracing logging for stdout, log file, and perf output.
-pub fn maybe_init_perf_tracing_stdout_simplelog_like(
+pub fn init_tracing(
     term_level: LevelFilter,
     term_extra_fields: bool,
     file_level: LevelFilter,

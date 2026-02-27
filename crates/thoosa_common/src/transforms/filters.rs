@@ -4,6 +4,7 @@ use tch::kind::FLOAT_CPU;
 use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
+use thoosa_shared::math::sg_smoothing_coeffs;
 use thoosa_shared::ThoError;
 
 pub trait InputFilterLengthAdjuster {
@@ -171,6 +172,117 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor
     Ok(y)
 }
 
+
+#[derive(Clone, Copy, Debug)]
+pub enum SgPadding {
+    /// Pad with zeros (uses conv1d's built-in padding).
+    Zero,
+    /// Mirror the signal at the boundary, **excluding** the edge value (PyTorch "reflect").
+    Reflect,
+    /// Repeat the edge value (PyTorch "replicate").
+    Replicate,
+}
+
+
+/// Pad a [N, C, T] tensor along the last dimension by `pad` on both sides.
+fn pad_1d(x: &Tensor, pad: i64, mode: SgPadding) -> Result<Tensor, ThoError> {
+    if pad == 0 {
+        return Ok(x.shallow_clone());
+    }
+
+    assert_eq!(x.dim(), 3, "pad_1d expects [N,C,T], got dim={} size={:?}", x.dim(), x.size());
+
+    let sz = x.size();
+    let t = sz[2];
+
+    match mode {
+        SgPadding::Zero => {
+            // handled elsewhere (conv padding), but allow here if needed:
+            let zeros_l = Tensor::zeros(&[sz[0], sz[1], pad], (x.kind(), x.device()));
+            let zeros_r = Tensor::zeros(&[sz[0], sz[1], pad], (x.kind(), x.device()));
+            Ok(Tensor::cat(&[&zeros_l, x, &zeros_r], 2))
+        }
+        SgPadding::Replicate => {
+            let left = x.narrow(2, 0, 1).repeat(&[1, 1, pad]);
+            let right = x.narrow(2, t - 1, 1).repeat(&[1, 1, pad]);
+            Ok(Tensor::cat(&[&left, x, &right], 2))
+        }
+        SgPadding::Reflect => {
+            // PyTorch reflect requires pad <= T-1
+            if pad >= t {
+                return Err(ThoError::new(format!(
+                    "reflect padding requires pad < T, got pad={} T={}",
+                    pad, t
+                )));
+            }
+            // left: x[..., 1..=pad] reversed
+            let left = x.narrow(2, 1, pad).flip(&[2]);
+            // right: x[..., T-pad-1 .. T-1) reversed (exclude last element)
+            let right = x.narrow(2, t - pad - 1, pad).flip(&[2]);
+            Ok(Tensor::cat(&[&left, x, &right], 2))
+        }
+    }
+}
+
+/// Apply Savitzky–Golay smoothing to x shaped [C, T].
+/// Keeps length the same. Padding choice: Zero / Reflect / Replicate.
+pub fn savgol_smooth_1d_channels(
+    x: &Tensor,
+    window_len: i64,
+    poly_order: i64,
+    padding: SgPadding,
+) -> Result<Tensor, ThoError> {
+
+    assert_eq!(x.dim(), 2,  "expected x to have shape [C, T], got dim={} size={:?}", x.dim(), x.size());
+
+    let sz = x.size();
+    let c = sz[0];
+    let t = sz[1];
+
+    if window_len < 3 || window_len % 2 == 0 {
+        return Err(ThoError::new("window_len must be odd and >= 3"));
+    }
+    if poly_order < 0 || poly_order >= window_len {
+        return Err(ThoError::new("poly_order must be >= 0 and < window_len"));
+    }
+    if t < window_len {
+        return Err(ThoError::new(format!("time length T={} must be >= window_len={}", t, window_len)));
+    }
+
+    let pad = window_len / 2;
+
+    // Preserve Float/Double if possible; otherwise use Float.
+    let kind = match x.kind() {
+        Kind::Float | Kind::Double => x.kind(),
+        _ => Kind::Float,
+    };
+
+    let coeffs = sg_smoothing_coeffs(window_len as usize, poly_order as usize)?;
+
+    // Weight for grouped conv1d: [C, 1, W] (same kernel per channel)
+    let w = Tensor::from_slice(&coeffs)
+        .to_kind(kind)
+        .to_device(x.device())
+        .view([1, 1, window_len])
+        .repeat(&[c, 1, 1]);
+
+    // Input: [N=1, C, T]
+    let x3 = x.to_kind(kind).unsqueeze(0);
+
+    let y3 = match padding {
+        SgPadding::Zero => {
+            // conv1d built-in zero padding
+            x3.conv1d(&w, None::<Tensor>, 1, pad, 1, c)
+        }
+        SgPadding::Reflect | SgPadding::Replicate => {
+            // pre-pad, then conv without padding
+            let xpad = pad_1d(&x3, pad, padding)?;
+            xpad.conv1d(&w, None::<Tensor>, 1, 0, 1, c)
+        }
+    };
+
+    Ok(y3.squeeze_dim(0))
+}
 
 #[cfg(test)]
 #[allow(unused_imports)]
