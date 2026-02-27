@@ -17,3 +17,4 @@ pub mod find;
 pub mod fragments;
 pub mod pearson_corr;
 pub mod criteria;
+pub mod common_stats;
