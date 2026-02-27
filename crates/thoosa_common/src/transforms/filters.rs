@@ -1,3 +1,5 @@
+#![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
+
 use crate::utils::from;
 use serde::Deserialize;
 use tch::kind::FLOAT_CPU;
@@ -59,6 +61,27 @@ pub struct NotchBandFilterParams {
 }
 
 impl InputFilterLengthAdjuster for NotchBandFilterParams {
+    fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
+        Box::new(|l: u32| l)
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+pub struct SavGolFilterParams {
+    #[in_map]
+    #[run_config]
+    pub window_len: i64,
+
+    #[in_map]
+    #[run_config]
+    pub poly_order: i64,
+
+    #[in_map]
+    #[run_config]
+    pub padding: SgPadding,
+}
+
+impl InputFilterLengthAdjuster for SavGolFilterParams {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
         Box::new(|l: u32| l)
     }
@@ -173,15 +196,38 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor
 }
 
 
-#[derive(Clone, Copy, Debug)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SgPadding {
     /// Pad with zeros (uses conv1d's built-in padding).
-    Zero,
+    Zero(SgZeroPadding),
     /// Mirror the signal at the boundary, **excluding** the edge value (PyTorch "reflect").
-    Reflect,
+    Reflect(SgReflectPadding),
     /// Repeat the edge value (PyTorch "replicate").
-    Replicate,
+    Replicate(SgReplicatePadding),
 }
+
+impl SgPadding {
+    pub fn zero() -> Self {
+        Self::Zero(SgZeroPadding {})
+    }
+
+    pub fn reflect() -> Self {
+        Self::Reflect(SgReflectPadding {})
+    }
+
+    pub fn replicate() -> Self {
+        Self::Replicate(SgReplicatePadding {})
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct SgZeroPadding {}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct SgReflectPadding {}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct SgReplicatePadding {}
 
 
 /// Pad a [N, C, T] tensor along the last dimension by `pad` on both sides.
@@ -196,18 +242,18 @@ fn pad_1d(x: &Tensor, pad: i64, mode: SgPadding) -> Result<Tensor, ThoError> {
     let t = sz[2];
 
     match mode {
-        SgPadding::Zero => {
+        SgPadding::Zero(_) => {
             // handled elsewhere (conv padding), but allow here if needed:
             let zeros_l = Tensor::zeros(&[sz[0], sz[1], pad], (x.kind(), x.device()));
             let zeros_r = Tensor::zeros(&[sz[0], sz[1], pad], (x.kind(), x.device()));
             Ok(Tensor::cat(&[&zeros_l, x, &zeros_r], 2))
         }
-        SgPadding::Replicate => {
+        SgPadding::Replicate(_) => {
             let left = x.narrow(2, 0, 1).repeat(&[1, 1, pad]);
             let right = x.narrow(2, t - 1, 1).repeat(&[1, 1, pad]);
             Ok(Tensor::cat(&[&left, x, &right], 2))
         }
-        SgPadding::Reflect => {
+        SgPadding::Reflect(_) => {
             // PyTorch reflect requires pad <= T-1
             if pad >= t {
                 return Err(ThoError::new(format!(
@@ -270,11 +316,11 @@ pub fn savgol_smooth_1d_channels(
     let x3 = x.to_kind(kind).unsqueeze(0);
 
     let y3 = match padding {
-        SgPadding::Zero => {
+        SgPadding::Zero(_) => {
             // conv1d built-in zero padding
             x3.conv1d(&w, None::<Tensor>, 1, pad, 1, c)
         }
-        SgPadding::Reflect | SgPadding::Replicate => {
+        SgPadding::Reflect(_) | SgPadding::Replicate(_) => {
             // pre-pad, then conv without padding
             let xpad = pad_1d(&x3, pad, padding)?;
             xpad.conv1d(&w, None::<Tensor>, 1, 0, 1, c)
