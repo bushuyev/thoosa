@@ -388,6 +388,94 @@ where
     }).map(|v|(window, v))
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_slices_"))]
+pub(crate) async fn load_motif_slices_<L, C>(
+    motif_id: DataId,
+    find_motifs_run_id: u32,
+    resources_map: HashMap<ResourceId, Resource>,
+    slices: Vec<TensorIdSliceIdx>,
+    store: Arc<Box<dyn Store>>,
+    loader: Arc<L>,
+    mut ctx: C,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    descr: &str
+) -> Result<(u32, ThoTensor<AnyDims, DataId>), ThoError>
+where
+    C: 'static + RunCtx,
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
+{
+    let device_idx = ctx.device_idx();
+    debug!("load_motif_slices_: motif_id={motif_id} slices={slices:?} descr={descr}");
+
+    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
+        find_motifs_run_id,
+        &store.list_run_config_values(find_motifs_run_id).await?,
+    )?;
+
+    let resource_ids_slices = slices
+        .iter()
+        .fold(HashMap::new(), |mut acc, slice| {
+            acc.entry(slice.0.clone()).or_insert_with(Vec::new).push(slice.1);
+            acc
+        });
+
+    assert!(!resource_ids_slices.is_empty());
+
+    let window = find_motifs_run_config.window;
+    let channels = thoosa_shared::with_perf_log(
+        || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+        "load_motif_slices_/read_ws",
+    )
+    .channels() as i64;
+    assert!(channels > 0, "load_motif_slices_: channels must be > 0");
+
+    debug!("load_motif_slices_: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?} device_idx={device_idx} channels={channels}");
+
+    //it won't be dumped to cpu - add to TmpCache
+    let motif_t = Arc::new(DevicesWrap::wrap(
+        ThoTensor::<AnyDims, DataId>::zeros(
+            motif_id.clone(),
+            [channels, resource_ids_slices.values().map(|v| v.len()).sum::<usize>() as i64, window as i64],
+            (Float, ThoDevice::from(ctx.device_idx()).into()),
+        ),
+        CacheArea::default(),
+    ));
+
+    let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
+    let mut slice_i: i64 = 0;
+    for (resource_id, slices) in resource_ids_slices {
+        debug!("load_motif_slices_: motif_id={motif_id} resource_id={resource_id} slices={slices:?}");
+
+        let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
+        let resource_cache = Arc::new(DevicesWrap::wrap(resource, ctx.cache_area().into()));
+        let raw_tensor = Arc::clone(&configurable_loader)
+            .run_cached(resource_cache, ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false, false))
+            .await?;
+        let size = raw_tensor.size();
+
+        with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false, false), raw_tensor, motif_t; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>, motif_tt:&ThoTensor<AnyDims, DataId>| {
+            for slice in slices {
+                let in_range = MonoMetrics::<1,2>::from([channels, (slice + window) as i64]) <= *size;
+                if !in_range {
+                    warn!("load_motif_slices_: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id} in {descr}");
+                } else {
+                    debug!("load_motif_slices_: motif_id={motif_id} slice_i={slice_i} slice={slice:?} size={size:?}");
+                    let src = raw_tt.t.f_i((0..channels, slice as i64..(slice + window) as i64))?;
+                    let mut dst = motif_tt.t.f_i((0..channels, slice_i, ..))?;
+                    dst.copy_(&src);
+                    slice_i += 1;
+                }
+            }
+
+            Ok::<_, ThoError>(())
+        })?;
+    }
+
+    with_data!(ctx.branch(Some("motif_"), false, false), motif_t; |_ctx, motif_tt:&ThoTensor<AnyDims, DataId>|{
+        ThoTensor::new(motif_tt.id().clone(), motif_tt.t.f_i((.., 0..slice_i, ..))?)
+    }).map(|v| (window, v))
+}
+
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_slices/cat_slices"))]
 fn cat_slices(motif_id: &DataId, tensors: Vec<Tensor>) -> Result<ThoTensor<MotifSlices, DataId>, ThoError> {
     ThoTensor::new(
