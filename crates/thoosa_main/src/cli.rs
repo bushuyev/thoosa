@@ -38,7 +38,7 @@ use tch::{Device, IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::{ThoDevice};
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStatsRangeOrValue, CoherenceRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, QuantileAggrRangeOrValue, ComparisonMethodRangeOrValue, PearsonCorrConfigRangeOrValue, EucDistConfigRangeOrValue, MinAggrRangeOrValue, ExactStatsRangeOrValue, MaxSlicesRangeOrValue, MaxSlicesAbsRangeOrValue};
+use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, AccumulateStatsRangeOrValue, CoherenceRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, QuantileAggrRangeOrValue, ComparisonMethodRangeOrValue, PearsonCorrConfigRangeOrValue, EucDistConfigRangeOrValue, MinAggrRangeOrValue, ExactStatsRangeOrValue, MaxSlicesRangeOrValue, MaxSlicesAbsRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -996,8 +996,8 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        // window: RangeOrValue::Range { range: Range { start: 100, end: 1100 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000),
-        window: RangeOrValue::Value(1000), //RangeOrValue::Value(1000),
+        window: RangeOrValue::Range { range: Range { start: 100, end: 2000 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000),
+        // window: RangeOrValue::Value(1000), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -1006,7 +1006,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 // band_hz: RangeOrValue::Value(10.),
                 band_hz:  RangeOrValue::Value(2.0),
                 // kernel_size: RangeOrValue::Value(100),
-                kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 200 }, step: None },
+                kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 1000 }, step: None },
                 stride: RangeOrValue::Value(10),
                 // stride: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
                 padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
@@ -1047,17 +1047,22 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 k: RangeOrValue::Range{range: 1.0..10.0, step: None},
                 eps: RangeOrValue::Value(1e-8)
             }),
-            // inlier_ratioRunConfig:None,
-            inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {
-                k: RangeOrValue::Value(3.0),
+            inlier_ratioRunConfig:None,
+            // inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {
+            //     k: RangeOrValue::Value(3.0),
+            //     eps: RangeOrValue::Value(1e-8),
+            // }),
+            coherenceRunConfig:None,
+            // coherenceRunConfig: Some(CoherenceRunConfigRangeOrValue {
+            //     k: RangeOrValue::Value(10.0),
+            //     eps: RangeOrValue::Value(1e-8),
+            // }),
+            interesting_amp_01: Some(InterestingAmp01RunConfigRangeOrValue {
+                q_lo: RangeOrValue::Value(0.05),
+                q_hi: RangeOrValue::Value(0.95),
+                a0: RangeOrValue::Value(0.5),
                 eps: RangeOrValue::Value(1e-8),
             }),
-            // coherenceRunConfig:None,
-            coherenceRunConfig: Some(CoherenceRunConfigRangeOrValue {
-                k: RangeOrValue::Value(10.0),
-                eps: RangeOrValue::Value(1e-8),
-            }),
-            interesting_amp_01: None,
             interesting_tv_norm_01: None,
             interesting_curvature_norm_01: None,
             interesting_turning_points_ratio: None,
