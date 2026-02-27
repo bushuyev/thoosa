@@ -275,6 +275,315 @@ pub fn coherence(x: &Tensor, iters: i64, eps: f64) -> Result<Tensor, TchError> {
     lambda.f_div(&trace.f_add_scalar(eps)?)
 }
 
+
+
+
+fn scalar_like(x: &Tensor, v: f64) -> Tensor {
+    Tensor::from(v).to_device(x.device()).to_kind(x.kind())
+}
+
+fn consensus_median(x: &Tensor) -> Result<Tensor, TchError> {
+    // x: [N,L] -> c: [L]
+    f_quantile_dim0(x, 0.50)
+}
+
+/// Robust amplitude of the consensus curve:
+/// A = q_hi(c) - q_lo(c)   over time
+/// Higher is "more interesting" (bigger signal).
+pub fn interesting_amp_consensus(
+    x: &Tensor,
+    q_lo: f64,   // e.g. 0.05
+    q_hi: f64,   // e.g. 0.95
+) -> Result<Tensor, TchError> {
+    let sz = x.size();
+    assert_eq!(sz.len(), 2, "expected [N,L]");
+    let c = consensus_median(x)?; // [L]
+    let lo = f_quantile_1d(&c, q_lo)?;
+    let hi = f_quantile_1d(&c, q_hi)?;
+    hi.f_sub(&lo) // scalar
+}
+
+/// Total variation ("wiggliness") of the consensus:
+/// TV = sum_{t=0..L-2} |c[t+1]-c[t]|
+/// Returns TV normalized by robust amplitude: TV / (A + eps)
+/// Higher => more (non-periodic-friendly) fluctuations.
+pub fn interesting_tv_norm(
+    x: &Tensor,
+    amp_q_lo: f64, // e.g. 0.05
+    amp_q_hi: f64, // e.g. 0.95
+    eps: f64,
+) -> Result<Tensor, TchError> {
+    let sz = x.size();
+    assert_eq!(sz.len(), 2, "expected [N,L]");
+    let l = sz[1];
+    assert!(l >= 2, "need L>=2");
+
+    let c = consensus_median(x)?; // [L]
+
+    let c1 = c.f_narrow(0, 1, l - 1)?;     // [L-1]
+    let c0 = c.f_narrow(0, 0, l - 1)?;     // [L-1]
+    let dv = c1.f_sub(&c0)?.f_abs()?;      // [L-1]
+    let tv = dv.f_sum(x.kind())?;          // scalar
+
+    let amp = interesting_amp_consensus(x, amp_q_lo, amp_q_hi)?; // scalar
+    tv.f_div(&amp.f_add_scalar(eps)?) // scalar
+}
+
+/// Curvature / "bends" of the consensus via second differences:
+/// CURV = sum_{t=1..L-2} |c[t+1] - 2c[t] + c[t-1]|
+/// Returns CURV normalized by robust amplitude: CURV / (A + eps)
+/// Higher => more turning / local structure.
+pub fn interesting_curvature_norm(
+    x: &Tensor,
+    amp_q_lo: f64, // e.g. 0.05
+    amp_q_hi: f64, // e.g. 0.95
+    eps: f64,
+) -> Result<Tensor, TchError> {
+    let sz = x.size();
+    assert_eq!(sz.len(), 2, "expected [N,L]");
+    let l = sz[1];
+    assert!(l >= 3, "need L>=3");
+
+    let c = consensus_median(x)?; // [L]
+
+    let cp = c.f_narrow(0, 2, l - 2)?; // c[t+1], t=1..L-2  -> [L-2]
+    let cc = c.f_narrow(0, 1, l - 2)?; // c[t],   t=1..L-2  -> [L-2]
+    let cm = c.f_narrow(0, 0, l - 2)?; // c[t-1], t=1..L-2  -> [L-2]
+
+    let two = scalar_like(&c, 2.0);
+    let d2 = cp.f_sub(&cc.f_mul(&two)?)?.f_add(&cm)?; // [L-2]
+    let curv = d2.f_abs()?.f_sum(x.kind())?;          // scalar
+
+    let amp = interesting_amp_consensus(x, amp_q_lo, amp_q_hi)?; // scalar
+    curv.f_div(&amp.f_add_scalar(eps)?) // scalar
+}
+
+/// Turning-points ratio of the consensus:
+/// Count sign changes in first difference (ignores zeros).
+/// ratio = (# sign changes) / (L-2)
+/// Higher => more "nonlinear" / wiggly.
+/// NOTE: This is cheap and often very effective for rejecting lines.
+pub fn interesting_turning_points_ratio(x: &Tensor) -> Result<Tensor, TchError> {
+    let sz = x.size();
+    assert_eq!(sz.len(), 2, "expected [N,L]");
+    let l = sz[1];
+    assert!(l >= 3, "need L>=3");
+
+    let c = consensus_median(x)?; // [L]
+
+    // d[t] = c[t+1]-c[t], length L-1
+    let d = c
+        .f_narrow(0, 1, l - 1)?
+        .f_sub(&c.f_narrow(0, 0, l - 1)?)?; // [L-1]
+
+    let s = d.f_sign()?; // [-1,0,1], [L-1]
+
+    // sign change when s[t]*s[t+1] < 0
+    let s0 = s.f_narrow(0, 0, l - 2)?; // [L-2]
+    let s1 = s.f_narrow(0, 1, l - 2)?; // [L-2]
+    let prod = s0.f_mul(&s1)?;         // [L-2]
+    let ch = prod.f_lt(0.0)?.f_to_kind(Kind::Float)?; // [L-2] float mask
+    let count = ch.f_sum(Kind::Float)?; // scalar
+
+    count.f_div_scalar((l - 2) as f64)
+}
+
+/// Helper: power spectrum of consensus using torch.fft.rfft.
+/// Returns power: [F] where F = floor(L/2)+1, includes DC bin at 0.
+fn consensus_power_rfft(c: &Tensor) -> Result<Tensor, TchError> {
+    // c: [L]
+    let c2 = c.f_unsqueeze(0)?; // [1,L]
+    let l = c2.size()[1];
+    let spec = c2.f_fft_rfft(Some(l), 1, "forward")?; // [1,F] complex
+    let p = spec.f_abs()?.f_pow_tensor_scalar(2.0)?; // [1,F]
+    p.f_squeeze() // [F]
+}
+
+/// High-band energy ratio of the consensus:
+/// ratio = sum_{f in [f_lo,f_hi]} P(f) / sum_{f>0} P(f)
+/// Excludes DC from denominator.
+/// Higher => more high-frequency / fast structure.
+/// Needs sample rate to map Hz->bins.
+pub fn interesting_band_energy_ratio(
+    x: &Tensor,
+    fs: f64,
+    f_lo: f64,
+    f_hi: f64,
+    eps: f64,
+) -> Result<Tensor, TchError> {
+    let sz = x.size();
+    assert_eq!(sz.len(), 2, "expected [N,L]");
+    let l = sz[1];
+    assert!(l >= 2, "need L>=2");
+    assert!(fs > 0.0, "fs must be > 0");
+
+    let c = consensus_median(x)?;     // [L]
+    let p = consensus_power_rfft(&c)?; // [F]
+    let f_bins = p.size()[0];         // F = L/2+1
+
+    // denom: sum over bins 1..F-1 (exclude DC)
+    if f_bins <= 1 {
+        return Ok(scalar_like(x, 0.0));
+    }
+    let denom = p
+        .f_narrow(0, 1, f_bins - 1)?
+        .f_sum(x.kind())?
+        .f_add_scalar(eps)?; // scalar
+
+    // map Hz -> bin index k ~= f * L / fs, clamp to [1, F-1]
+    let lo_hz = f_lo.max(0.0);
+    let hi_hz = f_hi.max(0.0);
+    let (lo_hz, hi_hz) = if lo_hz <= hi_hz { (lo_hz, hi_hz) } else { (hi_hz, lo_hz) };
+
+    let n = l as f64;
+    let mut k_lo = (lo_hz * n / fs).ceil() as i64;
+    let mut k_hi = (hi_hz * n / fs).floor() as i64;
+
+    let k_min = 1i64;
+    let k_max = (f_bins - 1) as i64;
+    if k_lo < k_min { k_lo = k_min; }
+    if k_hi > k_max { k_hi = k_max; }
+
+    if k_hi < k_lo {
+        return Ok(scalar_like(x, 0.0));
+    }
+
+    let len = k_hi - k_lo + 1;
+    let band = p.f_narrow(0, k_lo, len)?.f_sum(x.kind())?; // scalar
+
+    band.f_div(&denom)
+}
+
+/// Spectral entropy of the consensus (normalized to [0,1]):
+/// Compute power P(k) for k=1..F-1 (exclude DC),
+/// p_k = P(k)/sum P
+/// H = -sum p_k log(p_k) / log(K)
+///
+/// Interpretation:
+/// - ~0 : very tonal / narrowband / simple
+/// - ~1 : very flat / noise-like
+/// Often "interesting but structured" is somewhere in the middle.
+pub fn interesting_spectral_entropy(
+    x: &Tensor,
+    eps: f64,
+) -> Result<Tensor, TchError> {
+    let sz = x.size();
+    assert_eq!(sz.len(), 2, "expected [N,L]");
+    let l = sz[1];
+    assert!(l >= 2, "need L>=2");
+
+    let c = consensus_median(x)?;
+    let p = consensus_power_rfft(&c)?; // [F]
+    let f_bins = p.size()[0];
+    if f_bins <= 2 {
+        // no meaningful non-DC bins
+        return Ok(scalar_like(x, 0.0));
+    }
+
+    // P_ndc: bins 1..F-1
+    let p_ndc = p.f_narrow(0, 1, f_bins - 1)?; // [K]
+    let sum = p_ndc.f_sum(x.kind())?.f_add_scalar(eps)?; // scalar
+    let prob = p_ndc.f_div(&sum)?; // [K]
+
+    // H = -sum p log p
+    let logp = prob.f_add_scalar(eps)?.f_log()?; // [K]
+    let plogp = prob.f_mul(&logp)?;              // [K]
+    let h = plogp.f_sum(x.kind())?.f_neg()?;     // scalar
+
+    let k = (f_bins - 1) as f64;
+    let logk = k.ln().max(eps);
+    h.f_div_scalar(logk) // scalar in ~[0,1]
+}
+
+
+/// Map s>=0 to [0,1): q = s / (s + s0)
+/// If s0 is small, q saturates fast; if large, q is conservative.
+fn squash_pos_to_01(s: &Tensor, s0: f64, eps: f64) -> Result<Tensor, TchError> {
+    assert!(s0 > 0.0, "s0 must be > 0");
+    let denom = s.f_add_scalar(s0)?.f_add_scalar(eps)?; // s + s0 + eps
+    s.f_div(&denom)
+}
+
+/// 0..1, 1 good: high consensus amplitude is good.
+pub fn interesting_amp_01(
+    x: &Tensor,
+    q_lo: f64,   // e.g. 0.05
+    q_hi: f64,   // e.g. 0.95
+    a0: f64,     // scale (amp == a0 => 0.5)
+    eps: f64,
+) -> Result<Tensor, TchError> {
+    let a = interesting_amp_consensus(x, q_lo, q_hi)?;  // scalar >=0
+    squash_pos_to_01(&a, a0, eps)
+}
+
+/// 0..1, 1 good: high wiggliness per amplitude is good.
+pub fn interesting_tv_norm_01(
+    x: &Tensor,
+    amp_q_lo: f64,
+    amp_q_hi: f64,
+    tv0: f64,   // scale (tv_norm == tv0 => 0.5)
+    eps: f64,
+) -> Result<Tensor, TchError> {
+    let tvn = interesting_tv_norm(x, amp_q_lo, amp_q_hi, eps)?; // scalar >=0
+    squash_pos_to_01(&tvn, tv0, eps)
+}
+
+/// 0..1, 1 good: high curvature per amplitude is good.
+pub fn interesting_curvature_norm_01(
+    x: &Tensor,
+    amp_q_lo: f64,
+    amp_q_hi: f64,
+    curv0: f64, // scale (curv_norm == curv0 => 0.5)
+    eps: f64,
+) -> Result<Tensor, TchError> {
+    let cn = interesting_curvature_norm(x, amp_q_lo, amp_q_hi, eps)?; // scalar >=0
+    squash_pos_to_01(&cn, curv0, eps)
+}
+
+/// Already in [0,1], higher => more energy in the chosen band.
+pub fn interesting_band_energy_ratio_01(
+    x: &Tensor,
+    fs: f64,
+    f_lo: f64,
+    f_hi: f64,
+    eps: f64,
+) -> Result<Tensor, TchError> {
+    interesting_band_energy_ratio(x, fs, f_lo, f_hi, eps)
+}
+
+/// Spectral entropy H is ~[0,1] but "best" is usually *middle*, not max.
+/// Smooth "1 good" mapping: peak at h0 with width sigma.
+pub fn interesting_entropy_gauss_01(
+    x: &Tensor,
+    h0: f64,     // preferred entropy (e.g. 0.5..0.7)
+    sigma: f64,  // width (e.g. 0.10..0.25)
+    eps: f64,
+) -> Result<Tensor, TchError> {
+    assert!(sigma > 0.0, "sigma must be > 0");
+    let h = interesting_spectral_entropy(x, eps)?; // scalar ~[0,1]
+
+    let z = h.f_sub_scalar(h0)?.f_div_scalar(sigma)?; // (h-h0)/sigma
+    let z2 = z.f_mul(&z)?;                             // z^2
+    // q = exp(-0.5*z^2)
+    let neg_half = scalar_like(x, -0.5);
+    let arg = z2.f_mul(&neg_half)?;                    // -0.5*z^2
+    arg.f_exp()
+}
+
+/// Hard band-pass on entropy: 1 if H in [h_min, h_max], else 0.
+/// Useful to reject "too tonal" (low H) and "too noisy" (high H).
+pub fn interesting_entropy_band_01(
+    x: &Tensor,
+    h_min: f64,
+    h_max: f64,
+    eps: f64,
+) -> Result<Tensor, TchError> {
+    let (h_min, h_max) = if h_min <= h_max { (h_min, h_max) } else { (h_max, h_min) };
+    let h = interesting_spectral_entropy(x, eps)?; // scalar
+    let ge = h.f_ge(h_min)?.f_to_kind(Kind::Float)?; // scalar float mask {0,1}
+    let le = h.f_le(h_max)?.f_to_kind(Kind::Float)?;
+    ge.f_mul(&le)?.f_to_kind(x.kind())
+}
 #[cfg(test)]
 mod tests {
     #[cfg(test)]
