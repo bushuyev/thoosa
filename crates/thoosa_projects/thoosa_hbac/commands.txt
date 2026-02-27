@@ -19,6 +19,7 @@ select count(*) cnt, motif_id from slice_matches group by motif_id order by cnt 
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by='resource:6;channels=0'
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by="resource:6;channels=0;freq_filters=[{BandPassFilter:{low_hz:0.0,band_hz:2.0,kernel_size:100,stride:10,padding:0}},{NotchBandFilter:{low_hz:59.0,high_hz:62.0}}]"
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by="resource:6;channels=0;freq_filters=[{NotchBandFilter:{low_hz:5.0,high_hz:200.0}}]"
+cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by="resource:6;channels=0;freq_filters=[{SavGolFilter:{window_len:100,poly_order:10,padding:{Zero:{}}}}]"
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=motif_id:4879426
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=run_id:11
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=select_motifs_run_ids:'36764, 36752, 36834, 37084, 36628, 37346, 37320, 37374, 36946'
@@ -58,38 +59,3 @@ select run_id, label_id, sl.motif_id, count(*) from slices sl left join labeled_
 
 insert into selected_motifs (motif_id, run_id, rate) select motif_id, 0, 0.0 from (select motif_id, count(*) cnt from slices group by motif_id having cnt < 100 and cnt > 10);
 
-
-
-Key                                                                   | busy time, mls | elapsed time, mls | invocations |  per inv. |
----------------------------------------------------------------------------------------------------------------------------------------
-CrossLoader::run                                                      |      2 321 493 |        10 360 654 |         180 |    12 897 |
-CrossUnfoldClc::do_run                                                |      2 284 764 |         2 284 940 |     163 980 |        13 |
-DistsMask::to_cpu                                                     |          5 687 |         3 368 684 |     163 980 |         0 |
-DistsTracker::build_groups                                            |             10 |           208 908 |         180 |         0 |
-DistsTracker::consume                                                 |          2 679 |         4 462 813 |     163 980 |         0 |
-FindMotifsStage::run                                                  |      2 321 883 |         2 591 304 |           1 | 2 321 883 |
-OOMHandler::run                                                       |      2 310 429 |         2 318 615 |     167 580 |        13 |
-RandomMotif::run                                                      |      6 454 280 |        62 924 149 |         180 |    35 857 |
-RandomStats::run                                                      |      6 466 484 |        63 006 653 |         180 |    35 924 |
-RawTensorLoader::run                                                  |         25 562 |            25 576 |      17 088 |         1 |
-Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey>::subview |         20 282 |            21 682 |   3 600 000 |         0 |
-SimpleMotifTracker::dump                                              |        484 729 |           489 012 |   5 700 049 |         0 |
-SimpleMotifTracker::track                                             |        132 808 |           224 806 | 193 376 859 |         0 |
-SlicesStats::do_run                                                   |         10 737 |            10 740 |       3 600 |         2 |
-cross_batch_clc/unfold_and_cat                                        |         10 553 |            10 770 |     327 960 |         0 |
-cuda_utils::copy_d2h_from_ptr                                         |          4 163 |         3 381 004 |     184 668 |         0 |
-cuda_utils::copy_h2d_from_ptr                                         |          8 739 |        55 967 801 |   3 101 886 |         0 |
-cuda_utils::move_d2h                                                  |          4 747 |         3 367 817 |     163 980 |         0 |
-distance::clc_dist_d2_and_mask                                        |      1 515 727 |         1 515 906 |     163 980 |         9 |
-load_motif_slices                                                     |        142 834 |        56 613 460 |       3 600 |        39 |
-random_non_overlapping_slices                                         |          6 247 |             6 248 |         180 |        34 |
-
-
-
-(gdb) bt
-#0  0x000057c7115ac89f in <dashmap::iter::Iter<K,V,S,M> as core::iter::traits::iterator::Iterator>::next ()
-Backtrace stopped: Cannot access memory at address 0x7ffc165e4338
-
-
-* 1    LWP 1830778       0x000057c7115ac89f in <dashmap::iter::Iter<K,V,S,M> as core::iter::traits::iterator::Iterator>::next ()
-  2    LWP 1831073       0x000057c711cb510b in <tracing_subscriber::registry::sharded::CloseGuard as core::ops::drop::Drop>::drop ()

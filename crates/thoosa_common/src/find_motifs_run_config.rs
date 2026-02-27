@@ -59,7 +59,12 @@ pub enum StatsKey {
         band_hz: F64BitsKey,
 
         kernel_size: i64,
-    }
+    },
+    SavGolFilter {
+        window_len: i64,
+        poly_order: i64,
+        padding: SgPadding,
+    },
 }
 
 impl Named for StatsKeys {//for  CachableIdTr
@@ -84,11 +89,22 @@ impl From<&BandPassFilterParams> for StatsKey {
     }
 }
 
+impl From<&SavGolFilterParams> for StatsKey {
+    fn from(value: &SavGolFilterParams) -> Self {
+        StatsKey::SavGolFilter {
+            window_len: value.window_len,
+            poly_order: value.poly_order,
+            padding: value.padding,
+        }
+    }
+}
+
 impl From<&InputFilter> for StatsKey {
     fn from(value: &InputFilter) -> Self {
         match value {
             InputFilter::NotchBandFilter(filter) =>filter.into(),
-            InputFilter::BandPassFilter(filter) => filter.into()
+            InputFilter::BandPassFilter(filter) => filter.into(),
+            InputFilter::SavGolFilter(filter) => filter.into(),
         }
     }
 }
@@ -193,6 +209,7 @@ impl FindMotifsRunConfig {
 pub enum InputFilter {
     NotchBandFilter(NotchBandFilterParams),
     BandPassFilter(BandPassFilterParams),
+    SavGolFilter(SavGolFilterParams),
 }
 
 impl InputFilterLengthAdjuster for InputFilter {
@@ -200,6 +217,7 @@ impl InputFilterLengthAdjuster for InputFilter {
         match self {
             InputFilter::NotchBandFilter(filter) => filter.adjust_length(),
             InputFilter::BandPassFilter(filter) => filter.adjust_length(),
+            InputFilter::SavGolFilter(filter) => filter.adjust_length(),
         }
     }
 }
@@ -325,8 +343,8 @@ pub struct ExactStats {
 #[allow(unused_imports)]
 mod tests {
     use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
-    use crate::find_motifs_run_config::InputFilter::{BandPassFilter, NotchBandFilter};
-    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParams};
+    use crate::find_motifs_run_config::InputFilter::{BandPassFilter, NotchBandFilter, SavGolFilter};
+    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, SgPadding};
     use log::debug;
     use tch::Tensor;
     use thoosa_properties_map::ToHashmap;
@@ -409,6 +427,19 @@ mod tests {
     }
 
     #[test]
+    fn test_input_len_adjuster_savgol_is_identity() {
+        let config = FindMotifsRunConfig::new_with_running_mean(
+            None,
+            100,
+            100,
+            Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 3, padding: SgPadding::replicate() })]),
+            None,
+        );
+        let adjust = config.input_len_adjuster();
+        assert_eq!(1000, adjust(1000));
+    }
+
+    #[test]
     fn test_select_motifs_run_config_grid_with_criteria() {
         let rc = SelectMotifsRunConfigRangeOrValue {
             id: Some(7),
@@ -453,6 +484,30 @@ mod tests {
             ] }
         );
 
+    }
+
+    #[test]
+    fn test_to_stats_keys_with_savgol() {
+        let run_config = FindMotifsRunConfig {
+            id: Some(246),
+            step: 100,
+            window: 1000,
+            freq_filter: Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 2, padding: SgPadding::reflect() })]),
+            slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
+            max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
+        };
+
+        let keys = run_config.to_stats_keys();
+
+        assert_eq!(
+            keys,
+            StatsKeys {
+                keys: vec![
+                    StatsKey::Window(1000),
+                    StatsKey::SavGolFilter { window_len: 11, poly_order: 2, padding: SgPadding::reflect() },
+                ]
+            }
+        );
     }
 }
 
