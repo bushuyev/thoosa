@@ -60,6 +60,7 @@ pub mod copy_mode;
 pub mod runner;
 pub mod comp_id;
 mod collect_futures_eta;
+pub mod math;
 
 struct GroupSlicesBuilder<T> {
     pairs_groups: HashMap<T, u16>,

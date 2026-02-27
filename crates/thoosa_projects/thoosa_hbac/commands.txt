@@ -16,6 +16,9 @@ cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logge
 
 select count(*) cnt, motif_id from slice_matches group by motif_id order by cnt desc limit 100;
 
+cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by='resource:6;channels=0'
+cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by="resource:6;channels=0;freq_filters=[{BandPassFilter:{low_hz:0.0,band_hz:2.0,kernel_size:100,stride:10,padding:0}},{NotchBandFilter:{low_hz:59.0,high_hz:62.0}}]"
+cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by="resource:6;channels=0;freq_filters=[{NotchBandFilter:{low_hz:5.0,high_hz:200.0}}]"
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=motif_id:4879426
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=run_id:11
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=select_motifs_run_ids:'36764, 36752, 36834, 37084, 36628, 37346, 37320, 37374, 36946'
@@ -38,7 +41,7 @@ cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logge
 
 
 
-cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=DEBUG  --ws-path=/home/bu/tmp/ws_test_hbac/  run-all --find-resources="group:pure group 100" --select-resources="group:pure group 100" --train-resource-group="pure group 100" --valid-resource-group="pure group 10" --run-config-cnt="" --motif-slices-step=10 --max-motif-net-loss=0.2 --with-plots=true
+cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/  run-all --find-resources="group:pure group 100" --select-resources="group:pure group 100" --train-resource-group="pure group 100" --valid-resource-group="pure group 10" --run-config-cnt="" --motif-slices-step=10 --max-motif-net-loss=0.2 --with-plots
 
 
 cargo nextest run --release --no-fail-fast --retries=0 --no-capture tasks::train_label_nets::tests::test_train_label_net_3x3 > /tmp/test.log 2>&1

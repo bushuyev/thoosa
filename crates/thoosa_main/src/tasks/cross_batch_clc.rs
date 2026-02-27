@@ -471,7 +471,7 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params
     });
 
     if tensors.is_empty() {
-        return Err(ThoError::new("batch 0 is empty"));
+        return Err(ThoError::new("batch is empty"));
     }
 
 
