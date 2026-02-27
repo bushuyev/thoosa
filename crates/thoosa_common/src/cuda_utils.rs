@@ -323,7 +323,7 @@ pub async fn copy_h2d_from_ptr(
     let last = tensor_mem_size % buf_size;
 
     // destination tensor lives on GPU 0
-    let dst_t = Tensor::empty(size, (init_type, Device::Cuda(dst_device_idx - 1)));
+    let dst_t = Tensor::f_empty(size, (init_type, Device::Cuda(dst_device_idx - 1)))?;
 
     unsafe {
         // base pointers

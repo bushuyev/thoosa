@@ -217,8 +217,7 @@ impl GlobalCtx {
             let maps = with_async_perf_log(
                 async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::debug_caches: timed out waiting for caches read lock"),
                 "GlobalCtx/debug_caches/read_caches",
-            )
-                .await;
+            ).await;
             maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
         };
 
@@ -263,6 +262,7 @@ impl GlobalCtx {
     }
 
     pub async fn purge_cpu(&self, purge_last: u64) {
+
         //should be ok to read lock - see dump_all_to_cpu
         let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
             let maps = with_async_perf_log(
@@ -277,9 +277,13 @@ impl GlobalCtx {
 
         debug!("GlobalCtx::purge_cpu: purge_since={purge_since} maps.len={}", maps.len());
         if purge_since > 0 {
+            GlobalCtx::global().debug_caches(1).await;
+
             for (type_name, map) in maps {
                 info!("GlobalCtx::purge_cpu: purged {} from {}", map.purge_cpu(purge_since).await, type_name);
             }
+
+            GlobalCtx::global().debug_caches(1).await;
         }
     }
 

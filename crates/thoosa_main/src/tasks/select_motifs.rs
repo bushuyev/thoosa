@@ -901,7 +901,7 @@ where
     }
 
     async fn clc_stacked_motifs_statistics(
-        clc_dist: Arc<LoadMotifAndClcDistanceStage<ML, SlicesStats<C>, C>>,
+        load_and_clc_dist: Arc<LoadMotifAndClcDistanceStage<ML, SlicesStats<C>, C>>,
         motif_data: Arc<DevicesWrap<StackedMotifsOutput>>,
         slices_selector_metric: Metrics,
         slices_selector_aggr: Aggr,
@@ -929,7 +929,7 @@ where
         let futures = motif_ids
             .into_iter()
             .map(|motif_id| {
-                let clc_dist = Arc::clone(&clc_dist);
+                let load_and_clc_dist = Arc::clone(&load_and_clc_dist);
                 let mut ctx_for_motif = ctx.branch(Some(format!("select_motifs_clc_stacked_motifs_statistics_motif_{motif_id}").as_str()), false, false);
                 let cache_area = cache_area.clone();
                 async move {
@@ -939,7 +939,7 @@ where
                             LoadMotifAndClcDistanceInput::new(motif_loader_input, slices_selector_metric, slices_selector_aggr),
                             cache_area,
                         ));
-                        let motif_stat = clc_dist
+                        let motif_stat = load_and_clc_dist
                             .run(clc_input, ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc"), false, false))
                             .await?
                             .with_data_ref(0, ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc_with_data_ref"), false, false), None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))

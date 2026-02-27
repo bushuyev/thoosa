@@ -22,6 +22,7 @@ use thoosa_motifs::find::{FixedFindMotifsConfig, SimpleMotifTracker};
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::run_configs::RunId;
 use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
 use thoosa_shared::runner::common::RunCtx;
 use thoosa_shims::stream::ThoCudaStream;
@@ -1455,6 +1456,7 @@ pub struct DistsTracker<C>
 where
     C: RunCtx + 'static,
 {
+    find_motifs_run_id:RunId,
     channel_trackers: Vec<Arc<RwLock<SimpleMotifTracker<'static>>>>,
     store: Arc<Box<dyn Store>>,
     _ctx: PhantomData<C>,
@@ -1533,6 +1535,7 @@ where
         Self {
             channel_trackers,
             store: Arc::clone(store),
+            find_motifs_run_id: run_config.id.expect("id"),
             _ctx: PhantomData,
         }
     }
@@ -1552,7 +1555,8 @@ where
             let groups_inserted = dumper.load_slices_into_groups(&self.store, max_slices_counts).await?;
             channels_groups.push((channel, groups_inserted));
         }
-        info!("groups inserted: {:?}", channels_groups.into_iter().map(|(_, v)| v).collect::<Vec<_>>());
+
+        info!("groups inserted: {:?} find_motifs_run_id={}", channels_groups.into_iter().map(|(_, v)| v).collect::<Vec<_>>(), self.find_motifs_run_id);
         Ok(())
     }
 }
