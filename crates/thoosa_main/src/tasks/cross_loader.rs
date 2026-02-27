@@ -416,8 +416,7 @@ where
 
                     ],
                     None,
-                )
-                    .run(
+                ).run(
                         &cross_unfold_clc,
                         Arc::new(input),
                         ctx.branch("batch_clc_ctx".into(), false, false),
@@ -429,8 +428,7 @@ where
                                 DumpToCpuContextImpl::new(&required_ids),
                             ),
                         ),
-                    )
-                    .await {
+                ).await {
                     Ok( mut cross_clc_output  ) => {
                         let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await?;
 
@@ -440,7 +438,7 @@ where
 
                     }
                     Err(e) => {
-                        warn!("CrossLoader::run: got error {e:?}");
+                        warn!("CrossLoader::run: got error {e:?}, find_motifs_run_config_id={}", self.find_motifs_run_config_id);
                     }
                 };
 
