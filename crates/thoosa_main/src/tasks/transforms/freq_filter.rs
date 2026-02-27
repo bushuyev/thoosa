@@ -15,13 +15,14 @@ use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_common::find_motifs_run_config::InputFilter;
-use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft};
+use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, SgPadding};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{CachableIdTr, WithId};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::RunId;
+use thoosa_shared::math::sg_smoothing_coeffs;
 use crate::tasks::cross_dims::ChannelsData2;
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 
@@ -39,6 +40,11 @@ enum PreparedFilter {
         kernel: ThoTensor<BandPassDims, SynKey>,
         stride: i64,
         padding: i64,
+    },
+    SavGol {
+        weights: ThoTensor<BandPassDims, SynKey>,
+        window_len: i64,
+        padding: SgPadding,
     },
 }
 
@@ -101,6 +107,34 @@ where
                         padding: band_pass_config.padding,
                     });
                 }
+                InputFilter::SavGolFilter(sav_gol_config) => {
+                    if sav_gol_config.window_len < 3 || sav_gol_config.window_len % 2 == 0 {
+                        return Err(ThoError::new(format!("window_len must be odd and >= 3, got {}", sav_gol_config.window_len)));
+                    }
+                    if sav_gol_config.poly_order < 0 || sav_gol_config.poly_order >= sav_gol_config.window_len {
+                        return Err(ThoError::new(format!("poly_order must be >= 0 and < window_len, got poly_order={} window_len={}", sav_gol_config.poly_order, sav_gol_config.window_len)));
+                    }
+
+                    let coeffs = sg_smoothing_coeffs(sav_gol_config.window_len as usize, sav_gol_config.poly_order as usize)?;
+                    let weights = Tensor::from_slice(&coeffs)
+                        .f_to_kind(tch::Kind::Float)?
+                        .f_to_device(Cuda(0))?
+                        .f_view([1, 1, sav_gol_config.window_len])?
+                        .repeat([num_channels, 1, 1]);
+
+                    filters.push(PreparedFilter::SavGol {
+                        weights: ThoTensor::new(
+                            SynKey::new([
+                                mono_key!(format!("{}", sav_gol_config.window_len), "window_len"),
+                                mono_key!(format!("{}", sav_gol_config.poly_order), "poly_order"),
+                                mono_key!(format!("{:?}", sav_gol_config.padding), "padding"),
+                            ]),
+                            weights
+                        )?,
+                        window_len: sav_gol_config.window_len,
+                        padding: sav_gol_config.padding,
+                    });
+                }
             }
         }
 
@@ -139,6 +173,52 @@ where
                     })?;
 
                     // debug_plot!(&filtered_t, "{}_BandPass", input_tensor.id())?;
+                }
+                PreparedFilter::SavGol { weights, window_len, padding } => {
+                    let t = filtered_t.size()[1];
+                    if t < *window_len {
+                        return Err(ThoError::new(format!("time length T={} must be >= window_len={}", t, window_len)));
+                    }
+                    let pad = window_len / 2;
+
+                    filtered_t = weights.run_inner(|weights_inner| {
+                        let mut weights_t = if weights_inner.device() == filtered_t.device() {
+                            weights_inner.shallow_clone()
+                        } else {
+                            weights_inner.f_to_device(filtered_t.device())?
+                        };
+                        let input_kind = match filtered_t.kind() {
+                            tch::Kind::Float | tch::Kind::Double => filtered_t.kind(),
+                            _ => tch::Kind::Float,
+                        };
+                        if weights_t.kind() != input_kind {
+                            weights_t = weights_t.f_to_kind(input_kind)?;
+                        }
+                        let input_t = filtered_t.f_to_kind(input_kind)?.f_unsqueeze(0)?;
+
+                        let output_3d = match padding {
+                            SgPadding::Zero(_) => input_t.f_conv1d(&weights_t, None::<Tensor>, 1, pad, 1, self.num_channels)?,
+                            SgPadding::Replicate(_) => {
+                                let left = input_t.narrow(2, 0, 1).repeat(&[1, 1, pad]);
+                                let right = input_t.narrow(2, t - 1, 1).repeat(&[1, 1, pad]);
+                                let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
+                                xpad.f_conv1d(&weights_t, None::<Tensor>, 1, 0, 1, self.num_channels)?
+                            }
+                            SgPadding::Reflect(_) => {
+                                if pad >= t {
+                                    return Err(ThoError::new(format!("reflect padding requires pad < T, got pad={} T={}", pad, t)));
+                                }
+                                let left = input_t.narrow(2, 1, pad).flip(&[2]);
+                                let right = input_t.narrow(2, t - pad - 1, pad).flip(&[2]);
+                                let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
+                                xpad.f_conv1d(&weights_t, None::<Tensor>, 1, 0, 1, self.num_channels)?
+                            }
+                        };
+
+                        let output = output_3d.f_view((self.num_channels, -1))?;
+                        debug!("FreqFilter::apply_tho_tensor, SavGol: id={} weights.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), weights_t.size(), input_t.size(), output.size());
+                        Ok(output)
+                    })?;
                 }
             }
         }
@@ -212,7 +292,7 @@ mod tests {
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
-    use thoosa_common::transforms::filters::BandPassFilterParams;
+    use thoosa_common::transforms::filters::{BandPassFilterParams, SavGolFilterParams, SgPadding};
     use thoosa_shared::ThoError;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::ws::mock_ws_simp;
@@ -229,6 +309,11 @@ mod tests {
             InputFilter::NotchBandFilter(thoosa_common::transforms::filters::NotchBandFilterParams {
                 low_hz: 58.0,
                 high_hz: 62.0,
+            }),
+            InputFilter::SavGolFilter(SavGolFilterParams {
+                window_len: 11,
+                poly_order: 2,
+                padding: SgPadding::reflect(),
             }),
             InputFilter::BandPassFilter(BandPassFilterParams{
                 low_hz: 0.0,
