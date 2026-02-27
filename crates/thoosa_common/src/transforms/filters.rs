@@ -33,18 +33,25 @@ pub struct BandPassFilterParams {
 
     #[in_map]
     #[run_config]
-    pub padding: i64,
+    pub padding: SgPadding,
 }
 
 impl InputFilterLengthAdjuster for BandPassFilterParams {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
         let kernel_size = self.kernel_size;
         let stride = self.stride;
+        let padding = self.padding;
         Box::new(move |l: u32| {
             assert!(kernel_size > 0, "kernel_size({kernel_size}) must be > 0");
             assert!(stride > 0, "stride({stride}) must be > 0");
-            assert!(l > kernel_size as u32, "l({l}) kernel_size({kernel_size})");
-            (l - kernel_size as u32) / stride as u32
+            assert!(l > 0, "l({l}) must be > 0");
+            let pad = kernel_size / 2;
+            if let SgPadding::Reflect(_) = padding {
+                assert!(pad < l as i64, "reflect padding requires pad({pad}) < l({l})");
+            }
+            let out = (l as i64 + 2 * pad - kernel_size) / stride + 1;
+            assert!(out > 0, "invalid conv output length: l={l} kernel_size={kernel_size} stride={stride} pad={pad}");
+            out as u32
         })
     }
 }

@@ -344,7 +344,7 @@ pub struct ExactStats {
 mod tests {
     use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
     use crate::find_motifs_run_config::InputFilter::{BandPassFilter, NotchBandFilter, SavGolFilter};
-    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, SgPadding};
+    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, SgPadding, SgPaddingRangeOrValue, SgZeroPaddingRangeOrValue};
     use log::debug;
     use tch::Tensor;
     use thoosa_properties_map::ToHashmap;
@@ -372,7 +372,7 @@ mod tests {
                     band_hz: 300f64.into(),
                     kernel_size: 12000i64.into(),
                     stride: 1i64.into(),
-                    padding: 1i64.into(),
+                    padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
                 },
             )]),
             slices_filter: SlicesFilterRangeOrValue::Accumulate(
@@ -409,14 +409,14 @@ mod tests {
                     band_hz: 300.0,
                     kernel_size: 100,
                     stride: 5,
-                    padding: 0,
+                    padding: SgPadding::zero(),
                 }),
             ]),
             None,
         );
 
         let adjust = config.input_len_adjuster();
-        assert_eq!(180, adjust(1000));
+        assert_eq!(201, adjust(1000));
     }
 
     #[test]
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_to_stats_keys(){
-        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: 50 }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })) };
+        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: SgPadding::zero() }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })) };
 
         let keys = run_config.to_stats_keys();
         
