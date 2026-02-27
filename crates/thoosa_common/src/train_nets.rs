@@ -1729,7 +1729,7 @@ where
                         .write()
                         .replace((vs, node_params, run_config, loss));
                 }
-                print!(".");
+
                 loss
             },
             ConfigurationSpace::new(run_config_source.opt_params().clone()),

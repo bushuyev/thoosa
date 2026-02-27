@@ -996,7 +996,8 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        window: RangeOrValue::Range { range: Range { start: 100, end: 1100 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000),
+        // window: RangeOrValue::Range { range: Range { start: 100, end: 1100 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000),
+        window: RangeOrValue::Value(1000), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -1767,7 +1768,7 @@ where
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
     raw.with_data_ref(0, ctx.branch(Some("plot_resource_raw"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-        plot_resource_channels::<C>(ws, resource_id, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels={raw_channels:?}"), tensor, raw_channels.as_ref())
+        plot_resource_channels::<C>(ws, resource_id, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref())
     }).await?;
 
     if let Some(freq_filters) = freq_filters {
@@ -1781,7 +1782,7 @@ where
 
         let filtered_channels = channels.clone();
         filtered.with_data_ref(0, ctx.branch(Some("plot_resource_freq_filter_plot"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-            plot_resource_channels::<C>(ws, resource_id, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} freq-filtered channels={filtered_channels:?}"), tensor, filtered_channels.as_ref())
+            plot_resource_channels::<C>(ws, resource_id, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref())
         }).await?;
     }
 
