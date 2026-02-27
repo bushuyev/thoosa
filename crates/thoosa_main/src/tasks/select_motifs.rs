@@ -35,7 +35,7 @@ use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ExtendMotifsC
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
-use thoosa_motifs::criteria::{coherence, inlier_ratio, norm_thickness};
+use thoosa_motifs::criteria::{coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01, interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio, interesting_tv_norm_01, norm_thickness};
 use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
@@ -1229,6 +1229,13 @@ where
             MotifCriterion::NormThickness(v) => norm_thickness(motif_slices, v.k, v.eps)?,
             MotifCriterion::InlierRatio(v) => inlier_ratio(motif_slices, v.k, v.eps)?,
             MotifCriterion::Coherence(v) => coherence(motif_slices, v.k.round().max(1.0) as i64, v.eps)?,
+            MotifCriterion::InterestingAmp01(v) => interesting_amp_01(motif_slices, v.q_lo, v.q_hi, v.a0, v.eps)?,
+            MotifCriterion::InterestingTvNorm01(v) => interesting_tv_norm_01(motif_slices, v.amp_q_lo, v.amp_q_hi, v.tv0, v.eps)?,
+            MotifCriterion::InterestingCurvatureNorm01(v) => interesting_curvature_norm_01(motif_slices, v.amp_q_lo, v.amp_q_hi, v.curv0, v.eps)?,
+            MotifCriterion::InterestingTurningPointsRatio(_) => interesting_turning_points_ratio(motif_slices)?,
+            MotifCriterion::InterestingBandEnergyRatio01(v) => interesting_band_energy_ratio_01(motif_slices, v.fs, v.f_lo, v.f_hi, v.eps)?,
+            MotifCriterion::InterestingEntropyGauss01(v) => interesting_entropy_gauss_01(motif_slices, v.h0, v.sigma, v.eps)?,
+            MotifCriterion::InterestingEntropyBand01(v) => interesting_entropy_band_01(motif_slices, v.h_min, v.h_max, v.eps)?,
         };
         let raw_score = score_t.f_double_value(&[])?;
         if raw_score.is_finite() {
@@ -1903,6 +1910,13 @@ pub mod tests {
             norm_thickness: Some(NormThicknessRunConfig { k: 5.0, eps: 1e-8 }),
             inlier_ratioRunConfig: Some(InlierRatioRunConfig { k: 3.0, eps: 1e-8 }),
             coherenceRunConfig: Some(CoherenceRunConfig { k: 3.0, eps: 1e-8 }),
+            interesting_amp_01: None,
+            interesting_tv_norm_01: None,
+            interesting_curvature_norm_01: None,
+            interesting_turning_points_ratio: None,
+            interesting_band_energy_ratio_01: None,
+            interesting_entropy_gauss_01: None,
+            interesting_entropy_band_01: None,
         };
         select_motifs_run_config.threshold = 0.5;
         select_motifs_run_config.min_slices = Some(10);
