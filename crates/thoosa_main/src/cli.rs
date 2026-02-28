@@ -995,9 +995,9 @@ struct AllConfigs {
 fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(5), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+        step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         // window: RangeOrValue::Range { range: Range { start: 100, end: 5100 }, step: Some((500, 0)) }, //RangeOrValue::Value(1000),
-        window: RangeOrValue::Value(1000), //RangeOrValue::Value(1000),
+        window: RangeOrValue::Value(500), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -1007,7 +1007,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 band_hz:  RangeOrValue::Value(1.0),
                 // kernel_size: RangeOrValue::Value(100),
                 kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 1000 }, step: None },
-                stride: RangeOrValue::Value(5),
+                stride: RangeOrValue::Value(10),
                 // stride: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
                 padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             }),
@@ -1071,7 +1071,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             interesting_entropy_gauss_01: None,
             interesting_entropy_band_01: None,
         },
-        threshold: RangeOrValue::Value(0.95), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
+        threshold: RangeOrValue::Value(0.8), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
         min_slices: Some(RangeOrValue::Value(5)),
         max_slices: Some(RangeOrValue::Value(100)),
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),

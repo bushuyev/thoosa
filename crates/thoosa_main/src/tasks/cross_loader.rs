@@ -438,7 +438,7 @@ where
 
                     }
                     Err(e) => {
-                        warn!("CrossLoader::run: find_motifs_run_config_id={} got error {e:?}", self.find_motifs_run_config_id);
+                        warn!("CrossLoader::run: got error  find_motifs_run_config_id={} {e:?}", self.find_motifs_run_config_id);
                     }
                 };
 
