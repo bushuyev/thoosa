@@ -250,35 +250,17 @@ where
     }
 }
 
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    fn test(){
-
-    }
-
-}
-
 #[async_trait]
 impl<A, B> Cached for StageChainOption<A, B>
 where
-    A: for<'i> Cached<In<'i>=<StageChainOption<A, B> as Stage>::In<'i>, Out=<StageChainOption<A, B> as Stage>::Out, Ctx=<StageChainOption<A, B> as Stage>::Ctx>
-        + OutId
-        + Send
-        + Sync
-        + Debug
-        + 'static,
+    A: Cached + OutId + Send + Sync + Debug + 'static,
+    <A as Stage>::Out: CopyToDevice,
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId + Send + Sync + Debug + 'static,
+    for<'i> StageChainOption<A, B>: Stage<In<'i>=<A as Stage>::In<'i>>,
+    StageChainOption<A, B>: Stage<Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx>,
     for<'i> <StageChainOption<A, B> as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <StageChainOption<A, B> as Stage>::Out: Data + WithId + Send + Sync + CopyToDevice,
+    <StageChainOption<A, B> as Stage>::Out: Data + WithId + Send + Sync + 'static,
     <<StageChainOption<A, B> as Stage>::Out as Data>::M: DevicesWrapCopyMode<<StageChainOption<A, B> as Stage>::Out>,
-    B: for<'i> Cached<In<'i>=<StageChainOption<A, B> as Stage>::In<'i>, Out=<StageChainOption<A, B> as Stage>::Out, Ctx=<StageChainOption<A, B> as Stage>::Ctx>
-        + OutId
-        + Send
-        + Sync
-        + Debug
-        + 'static,
-
 {
     async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>>
     where
@@ -301,9 +283,15 @@ where
         <Self as Stage>::Out: 'static,
         Self::Out: Data,
     {
-        match &*self {
-            StageChainOption::Single(stage) => Arc::clone(stage).run_cached(input, ctx).await,
-            StageChainOption::Chained(stage) => Arc::clone(stage).run_cached(input, ctx).await,
-        }
+        let input_a: Arc<DevicesWrap<<A as Stage>::In<'static>>> = input;
+        let ctx_a: <A as Stage>::Ctx = ctx;
+
+        let output_a: Arc<DevicesWrap<<A as Stage>::Out>> = match &*self {
+            StageChainOption::Single(stage) => Arc::clone(stage).run_cached(input_a, ctx_a).await?,
+            StageChainOption::Chained(stage) => Arc::clone(stage).run_cached(input_a, ctx_a).await?,
+        };
+
+        let output: Arc<DevicesWrap<Self::Out>> = output_a;
+        Ok(output)
     }
 }
