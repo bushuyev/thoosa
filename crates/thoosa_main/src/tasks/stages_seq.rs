@@ -8,7 +8,6 @@ use dashmap::DashMap;
 use futures_util::future::{BoxFuture, Shared};
 use parking_lot::RwLock;
 use log::debug;
-use cached_derive::Cached;
 use thoosa_named_derive::Named;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode};
 use thoosa_shared::applicables_runner::*;
@@ -16,7 +15,7 @@ use thoosa_shared::{CopyToDevice, ThoError, ThoosaError};
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::comp_id::SynKey;
 
-#[derive(Debug, cached_derive::Cached, Named)]
+#[derive(Debug, Named)]
 pub struct ABStage<A, B, C>//TODO rename to Pair/Chained
 where
     C:RunCtx + 'static,
@@ -156,6 +155,44 @@ where
         Ok(output_b)
     }
 
+}
+
+#[async_trait]
+impl<A, B, C> Cached for ABStage<A, B, C>
+where
+    C:RunCtx + 'static,
+
+    A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
+    A::Out: Data + WithId + Send + Sync + 'static,
+    <A::Out as Data>::M: DevicesWrapCopyMode<A::Out>,
+
+    for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
+    B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>,
+    for<'i> ABStage<A, B, C>: Stage<In<'i>=A::In<'i>>,
+    ABStage<A, B, C>: Stage<Out=B::Out, Ctx=C>,
+    for<'i> <ABStage<A, B, C> as Stage>::In<'i>: Data + WithId + Send + Sync,
+{
+    async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>>
+    where
+        Self: Sized,
+        Self::Out: Data + Sync + Send,
+    {
+        unimplemented!()
+    }
+
+    async fn run_cached(
+        self: Arc<Self>,
+        input: Arc<DevicesWrap<Self::In<'static>>>,
+        mut ctx: Self::Ctx,
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+        let input_a: Arc<DevicesWrap<A::In<'static>>> = input;
+        let mut ctx_c: C = ctx;
+        let output_a: Arc<DevicesWrap<A::Out>> = Arc::clone(&self.stage_a).run_cached(input_a, ctx_c.branch(Some("ab_stage_a"), false, false)).await?;
+        let output_b: Arc<DevicesWrap<B::Out>> = Arc::clone(&self.stage_b).run_cached(output_a, ctx_c.branch(Some("ab_stage_b"), false, false)).await?;
+        let output: Arc<DevicesWrap<Self::Out>> = output_b;
+        Ok(output)
+    }
 }
 
 #[derive(Named)]//TODO delegate to B's cache
