@@ -1297,7 +1297,7 @@ where
                     debug!("SelectMotifsStage::run: motif_id={motif_id} criterion={criterion:?} criterion_score={criterion_score:.6} avg_score={avg_score:.6}");
                 }
 
-                Ok::<(bool, f64), ThoError>((avg_score < threshold, avg_score))
+                Ok::<(bool, f64), ThoError>((avg_score >= threshold, avg_score))
             })?;
 
             if keep_score.0 {
