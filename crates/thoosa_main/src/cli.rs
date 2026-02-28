@@ -995,19 +995,19 @@ struct AllConfigs {
 fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        window: RangeOrValue::Range { range: Range { start: 100, end: 2000 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000),
-        // window: RangeOrValue::Value(1000), //RangeOrValue::Value(1000),
+        step: RangeOrValue::Value(5), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+        // window: RangeOrValue::Range { range: Range { start: 100, end: 5100 }, step: Some((500, 0)) }, //RangeOrValue::Value(1000),
+        window: RangeOrValue::Value(1000), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             BandPassFilter(BandPassFilterParamsRangeOrValue {
                 // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
                 low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 200. }, step: None },//Some((10., 1))
                 // band_hz: RangeOrValue::Value(10.),
-                band_hz:  RangeOrValue::Value(2.0),
+                band_hz:  RangeOrValue::Value(1.0),
                 // kernel_size: RangeOrValue::Value(100),
                 kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 1000 }, step: None },
-                stride: RangeOrValue::Value(10),
+                stride: RangeOrValue::Value(5),
                 // stride: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
                 padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             }),
@@ -1016,8 +1016,8 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 high_hz: RangeOrValue::Value(62.0),
             })
         ]),
-        slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.0005) }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
-        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.01, step: None} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
+        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.0005) }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
+        slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.001, step: None} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 3))
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }) }),//Some((0.05, 2))
@@ -1044,7 +1044,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         extend_config: None,
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(NormThicknessRunConfigRangeOrValue {
-                k: RangeOrValue::Range{range: 1.0..10.0, step: None},
+                k: RangeOrValue::Value(0.0), //not used RangeOrValue::Range{range: 1.0..10.0, step: None},
                 eps: RangeOrValue::Value(1e-8)
             }),
             inlier_ratioRunConfig:None,
@@ -1057,12 +1057,13 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             //     k: RangeOrValue::Value(10.0),
             //     eps: RangeOrValue::Value(1e-8),
             // }),
-            interesting_amp_01: Some(InterestingAmp01RunConfigRangeOrValue {
-                q_lo: RangeOrValue::Value(0.05),
-                q_hi: RangeOrValue::Value(0.95),
-                a0: RangeOrValue::Value(0.5),
-                eps: RangeOrValue::Value(1e-8),
-            }),
+            interesting_amp_01: None,
+            // interesting_amp_01: Some(InterestingAmp01RunConfigRangeOrValue {
+            //     q_lo: RangeOrValue::Value(0.05),
+            //     q_hi: RangeOrValue::Value(0.95),
+            //     a0: RangeOrValue::Value(0.5),
+            //     eps: RangeOrValue::Value(1e-8),
+            // }),
             interesting_tv_norm_01: None,
             interesting_curvature_norm_01: None,
             interesting_turning_points_ratio: None,

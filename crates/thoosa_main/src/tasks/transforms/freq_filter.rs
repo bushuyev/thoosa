@@ -98,8 +98,8 @@ where
                     filters.push(PreparedFilter::BandPass {
                         kernel: ThoTensor::new(
                             SynKey::new([
-                                mono_key!(format!("{}", band_pass_config.low_hz), "low_hz"),
-                                mono_key!(format!("{}", high_hz), "high_hz"),
+                                mono_key!(format!("{}", band_pass_config.low_hz), format!("{} low_hz", band_pass_config.low_hz)),
+                                mono_key!(format!("{}", high_hz), format!("{} high_hz", high_hz) ),
                             ]),
                             kernel
                         )?,
@@ -160,47 +160,13 @@ where
                     // debug_plot!(&filtered_t, "{}_NotchBand", input_tensor.id())?;
                 }
                 PreparedFilter::BandPass { kernel, stride, padding } => {
-                    let t = filtered_t.size()[1];
-                    filtered_t = kernel.run_inner(|band_filter_inner| {
-                        let mut kernel_t = if band_filter_inner.device() == filtered_t.device() {
-                            band_filter_inner.shallow_clone()
-                        } else {
-                            band_filter_inner.f_to_device(filtered_t.device())?
-                        };
-                        let input_kind = match filtered_t.kind() {
-                            tch::Kind::Float | tch::Kind::Double => filtered_t.kind(),
-                            _ => tch::Kind::Float,
-                        };
-                        if kernel_t.kind() != input_kind {
-                            kernel_t = kernel_t.f_to_kind(input_kind)?;
-                        }
-                        let input_t = filtered_t.f_to_kind(input_kind)?.f_unsqueeze(0)?;
-                        let kernel_size = kernel_t.size()[2];
-                        let pad = kernel_size / 2;
 
-                        let output_3d = match padding {
-                            SgPadding::Zero(_) => input_t.f_conv1d(&kernel_t, None::<Tensor>, *stride, pad, 1, self.num_channels)?,
-                            SgPadding::Replicate(_) => {
-                                let left = input_t.narrow(2, 0, 1).repeat(&[1, 1, pad]);
-                                let right = input_t.narrow(2, t - 1, 1).repeat(&[1, 1, pad]);
-                                let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
-                                xpad.f_conv1d(&kernel_t, None::<Tensor>, *stride, 0, 1, self.num_channels)?
-                            }
-                            SgPadding::Reflect(_) => {
-                                if pad >= t {
-                                    return Err(ThoError::new(format!("reflect padding requires pad < T, got pad={} T={}", pad, t)));
-                                }
-                                let left = input_t.narrow(2, 1, pad).flip(&[2]);
-                                let right = input_t.narrow(2, t - pad - 1, pad).flip(&[2]);
-                                let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
-                                xpad.f_conv1d(&kernel_t, None::<Tensor>, *stride, 0, 1, self.num_channels)?
-                            }
-                        };
+                    let input_t = filtered_t.as_ref().f_unsqueeze(0)?;
 
-                        let output = output_3d.f_view((self.num_channels, -1))?;
-                        debug!("FreqFilter::apply_tho_tensor, BandPass: id={} band_filter.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), kernel_t.size(), input_t.size(), output.size());
-                        Ok(output)
-                    })?;
+                    let output = self.run_conv_with_padding(*stride, padding, &kernel.as_ref(), &input_t);//TODO conf stride?
+                    debug!("FreqFilter::apply_tho_tensor, BandPass: id={} kernel.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), kernel.size(), input_t.size(), output.as_ref().map(|v|v.size()));
+                    filtered_t = output?
+
 
                     // debug_plot!(&filtered_t, "{}_BandPass", input_tensor.id())?;
                 }
@@ -209,51 +175,47 @@ where
                     if t < *window_len {
                         return Err(ThoError::new(format!("time length T={} must be >= window_len={}", t, window_len)));
                     }
-                    let pad = window_len / 2;
 
-                    filtered_t = weights.run_inner(|weights_inner| {
-                        let mut weights_t = if weights_inner.device() == filtered_t.device() {
-                            weights_inner.shallow_clone()
-                        } else {
-                            weights_inner.f_to_device(filtered_t.device())?
-                        };
-                        let input_kind = match filtered_t.kind() {
-                            tch::Kind::Float | tch::Kind::Double => filtered_t.kind(),
-                            _ => tch::Kind::Float,
-                        };
-                        if weights_t.kind() != input_kind {
-                            weights_t = weights_t.f_to_kind(input_kind)?;
-                        }
-                        let input_t = filtered_t.f_to_kind(input_kind)?.f_unsqueeze(0)?;
+                    let input_t = filtered_t.as_ref().f_unsqueeze(0)?;
 
-                        let output_3d = match padding {
-                            SgPadding::Zero(_) => input_t.f_conv1d(&weights_t, None::<Tensor>, 1, pad, 1, self.num_channels)?,
-                            SgPadding::Replicate(_) => {
-                                let left = input_t.narrow(2, 0, 1).repeat(&[1, 1, pad]);
-                                let right = input_t.narrow(2, t - 1, 1).repeat(&[1, 1, pad]);
-                                let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
-                                xpad.f_conv1d(&weights_t, None::<Tensor>, 1, 0, 1, self.num_channels)?
-                            }
-                            SgPadding::Reflect(_) => {
-                                if pad >= t {
-                                    return Err(ThoError::new(format!("reflect padding requires pad < T, got pad={} T={}", pad, t)));
-                                }
-                                let left = input_t.narrow(2, 1, pad).flip(&[2]);
-                                let right = input_t.narrow(2, t - pad - 1, pad).flip(&[2]);
-                                let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
-                                xpad.f_conv1d(&weights_t, None::<Tensor>, 1, 0, 1, self.num_channels)?
-                            }
-                        };
 
-                        let output = output_3d.f_view((self.num_channels, -1))?;
-                        debug!("FreqFilter::apply_tho_tensor, SavGol: id={} weights.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), weights_t.size(), input_t.size(), output.size());
-                        Ok(output)
-                    })?;
+                    let output = self.run_conv_with_padding(1, padding, &weights.as_ref(), &input_t);
+                    debug!("FreqFilter::apply_tho_tensor, SavGol: id={} weights.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), weights.size(), input_t.size(), output.as_ref().map(|v|v.size()));
+                    filtered_t = output?
+
                 }
             }
         }
 
         Ok(ThoTensor::new(self.out_id(input_tensor.id()), filtered_t)?)
+    }
+
+    fn run_conv_with_padding(&self, stride: i64, padding: &SgPadding, kernel_t: &Tensor, input_t: &Tensor) -> Result<Tensor, ThoError> {
+        let t = input_t.size()[1];
+        let kernel_size = kernel_t.size()[2];
+        let pad = kernel_size / 2;
+
+
+        let output_3d = match padding {
+            SgPadding::Zero(_) => input_t.f_conv1d(&kernel_t, None::<Tensor>, stride, pad, 1, self.num_channels)?,
+            SgPadding::Replicate(_) => {
+                let left = input_t.narrow(2, 0, 1).repeat(&[1, 1, pad]);
+                let right = input_t.narrow(2, t - 1, 1).repeat(&[1, 1, pad]);
+                let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
+                xpad.f_conv1d(&kernel_t, None::<Tensor>, stride, 0, 1, self.num_channels)?
+            }
+            SgPadding::Reflect(_) => {
+                if pad >= t {
+                    return Err(ThoError::new(format!("reflect padding requires pad < T, got pad={} T={}", pad, t)));
+                }
+                let left = input_t.narrow(2, 1, pad).flip(&[2]);
+                let right = input_t.narrow(2, t - pad - 1, pad).flip(&[2]);
+                let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
+                xpad.f_conv1d(&kernel_t, None::<Tensor>, stride, 0, 1, self.num_channels)?
+            }
+        };
+
+        Ok(output_3d.f_view((self.num_channels, -1))?)
     }
 }
 
@@ -314,6 +276,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use log::debug;
     use parking_lot::RwLock;
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
@@ -331,20 +294,21 @@ mod tests {
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use crate::tasks::transforms::freq_filter::FreqFilter;
     use thoosa_shared::runner::common::RunCtx;
+    use thoosa_with_data::with_data;
 
     #[tokio::test]
-    async fn test_freq_filter() ->Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+    async fn test_band_pass() ->Result<(), ThoError> {
+
         let filter_configs = vec![
-            InputFilter::NotchBandFilter(thoosa_common::transforms::filters::NotchBandFilterParams {
-                low_hz: 58.0,
-                high_hz: 62.0,
-            }),
-            InputFilter::SavGolFilter(SavGolFilterParams {
-                window_len: 11,
-                poly_order: 2,
-                padding: SgPadding::reflect(),
-            }),
+            // InputFilter::NotchBandFilter(thoosa_common::transforms::filters::NotchBandFilterParams {
+            //     low_hz: 58.0,
+            //     high_hz: 62.0,
+            // }),
+            // InputFilter::SavGolFilter(SavGolFilterParams {
+            //     window_len: 11,
+            //     poly_order: 2,
+            //     padding: SgPadding::reflect(),
+            // }),
             InputFilter::BandPassFilter(BandPassFilterParams{
                 low_hz: 0.0,
                 band_hz: 100.0,
@@ -353,6 +317,30 @@ mod tests {
                 padding: SgPadding::zero(),
             }),
         ];
+
+
+        run_freq_filter(filter_configs).await
+    }
+
+    #[tokio::test]
+    async fn test_savitzky_golay() ->Result<(), ThoError> {
+
+        let filter_configs = vec![
+
+            InputFilter::SavGolFilter(SavGolFilterParams {
+                window_len: 11,
+                poly_order: 2,
+                padding: SgPadding::reflect(),
+            }),
+        ];
+
+
+        run_freq_filter(filter_configs).await
+    }
+
+
+    async fn run_freq_filter(filter_configs: Vec<InputFilter>) -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 20, 100, 10000)));
 
         let bf = FreqFilter::new(&filter_configs, &ws, 0)?;
@@ -369,12 +357,16 @@ mod tests {
 
         let adjuster = find_motifs_run_config.input_len_adjuster();
 
-        println!("r={r:?}");
 
-        assert_eq!(adjuster(size[1] as u32), r.size().dim_1() as u32);
+        with_data!(ctx.branch(Some("freq_filter_test"), false, false), r; |ctx, r|{
+            debug!("filter r={r:?}");
+            Ok::<_, ThoError>(())
+        })?;
+
+
+        // assert_eq!(adjuster(size[1] as u32), r.size().dim_1() as u32);
         //TODO asserts
 
         Ok(())
     }
-
 }

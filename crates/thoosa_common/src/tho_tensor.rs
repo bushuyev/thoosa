@@ -230,7 +230,23 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     pub fn zeros(id: Id, size: impl IntList, options: (Kind, Device)) -> Self {
         Self {
             id,
-            t: Tensor::zeros(size, options),
+            /*                               at /rustc/b15a874aafe7eab9ea3ac2c1d59c7b03e1425027/library/core/src/panicking.rs:80:14
+  16:     0x650bc6172c06 - core::result::unwrap_failed::hb3955d4a33f491ad
+                               at /rustc/b15a874aafe7eab9ea3ac2c1d59c7b03e1425027/library/core/src/result.rs:1862:5
+  17:     0x650bc2986325 - core::result::Result<T,E>::unwrap::h084cb97a7d73525b
+                               at /home/bu/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1233:23
+  18:     0x650bc2986325 - tch::wrappers::tensor_generated::<impl tch::wrappers::tensor::Tensor>::zeros::h989c1bb7ff9d3639
+                               at /home/bu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tch-0.20.0/src/wrappers/tensor_generated.rs:19386:40
+  19:     0x650bc2986325 - thoosa_common::tho_tensor::ThoTensor<D,Id>::zeros::hec7444fdf1238b68
+                               at /home/bu/dvl/rust/thoosa/crates/thoosa_common/src/tho_tensor.rs:233:16
+  20:     0x650bc2986325 - thoosa_main::tasks::motif_loader::load_motif_slices::{{closure}}::{{closure}}::ha04a296d1395eb8b
+                               at /home/bu/dvl/rust/thoosa/crates/thoosa_main/src/tasks/motif_loader.rs:346:46
+  21:     0x650bc29851cc - <tracing::instrument::Instrumented<T> as core::future::future::Future>::poll::h285e9afbf1ed55e9
+                               at /home/bu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tracing-0.1.43/src/instrument.rs:321:15
+  22:     0x650bc29851cc - thoosa_main::tasks::motif_loader::load_motif_slices::{{closure}}::hcda8bc73e874ad61
+                               at /home/bu/dvl/rust/thoosa/crates/thoosa_main/src/tasks/motif_loader.rs:304:1
+*/
+            t: Tensor::zeros(size, options),//TODO f_zeros
             tracking: Default::default(),
             pd: PhantomData,
         }
