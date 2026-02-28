@@ -495,7 +495,7 @@ mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Bool, Uint8};
     use tch::Tensor;
-    use tch::kind::FLOAT_CPU;
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use thoosa_common::utils::lin_t;
     use thoosa_shared::ThoError;
     use thoosa_shared::resource::Resource;
@@ -604,16 +604,17 @@ mod tests {
 
     #[test]
     fn test_0(){
-        let t = Tensor::rand(&[20, 1122], FLOAT_CPU);
-        let u = t.unfold(1, 914, 100);
-
-        debug!("u={:?}", u.size());
-
-        let t = Tensor::arange(11, FLOAT_CPU);
-
-        let u = t.unfold(0, 3, 3);
-
-        debug!("u=\n{u}");
+        let t = Tensor::rand(&[20, 1122], FLOAT_CUDA);
+        // let u = t.unfold(1, 914, 100);
+        //
+        // debug!("u={:?}", u.size());
+        //
+        // let t = Tensor::arange(11, FLOAT_CPU);
+        //
+        // let u = t.unfold(0, 3, 3);
+        //
+        debug!("t=\n{t}");
+        // debug!("u=\n{u}");
 
     }
 
