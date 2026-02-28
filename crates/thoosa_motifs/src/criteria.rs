@@ -173,14 +173,14 @@ pub fn norm_thickness(x: &Tensor, k: f64, eps: f64) -> Result<Tensor, TchError> 
     // Q = 1 / (1 + s)
     let one = Tensor::from(1.0).to_device(x.device()).to_kind(x.kind());
     let one_plus_s = one.f_add(&s)?;
-    // one.f_div(&one_plus_s)
+    one.f_div(&one_plus_s)
 
-    let s_strict = s.f_mul_scalar(k)?;
-
-    // Q = 1 / (1 + s_strict)
-    let one = Tensor::from(1.0).to_device(x.device()).to_kind(x.kind());
-    let denom = one.f_add(&s_strict)?;
-    one.f_div(&denom)
+    // let s_strict = s.f_mul_scalar(k)?;
+    //
+    // // Q = 1 / (1 + s_strict)
+    // let one = Tensor::from(1.0).to_device(x.device()).to_kind(x.kind());
+    // let denom = one.f_add(&s_strict)?;
+    // one.f_div(&denom)
 }
 
 

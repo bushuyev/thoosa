@@ -103,7 +103,7 @@ pub fn sg_smoothing_coeffs(window_len: usize, poly_order: usize) -> Result<Vec<f
     }
 
     // Invert ATA via Gauss-Jordan: inv = (ATA)^-1  [p x p]
-    let inv = invert_square(&ata).ok_or(ThoError::new("failed to invert (A^T A)"))?;
+    let inv = invert_square(&ata).ok_or_else(||ThoError::new("failed to invert (A^T A)"))?;
 
     // Pseudoinverse B = (A^T A)^-1 A^T  =>  [p x window_len]
     // We only need the first row (corresponding to value at x=0), i.e. row 0 of B:
