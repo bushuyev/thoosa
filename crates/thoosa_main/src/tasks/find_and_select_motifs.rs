@@ -143,6 +143,8 @@ impl SavableResult for FindAndSelectMotifsResult {
     }
 }
 
+
+///for each grid values combo search for optimal opt values (RangeOrValue::Range without step)
 #[derive(Debug)]
 pub struct FindAndSelectMotifsStage {
     ws: Arc<RwLock<Box<dyn Workspace>>>,
