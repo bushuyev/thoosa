@@ -526,7 +526,7 @@ mod tests {
             interesting_amp_01: Some(crate::find_motifs_run_config::InterestingAmp01RunConfig { q_lo: 0.05, q_hi: 0.95, a0: 0.1, eps: 1e-8 }),
             interesting_tv_norm_01: Some(crate::find_motifs_run_config::InterestingTvNorm01RunConfig { amp_q_lo: 0.05, amp_q_hi: 0.95, tv0: 0.2, eps: 1e-8 }),
             interesting_curvature_norm_01: Some(crate::find_motifs_run_config::InterestingCurvatureNorm01RunConfig { amp_q_lo: 0.05, amp_q_hi: 0.95, curv0: 0.3, eps: 1e-8 }),
-            interesting_turning_points_ratio: Some(crate::find_motifs_run_config::InterestingTurningPointsRatioRunConfig {  }),
+            interesting_turning_points_ratio: Some(crate::find_motifs_run_config::InterestingTurningPointsRatioRunConfig { peak: 4 }),
             interesting_band_energy_ratio_01: Some(crate::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig { fs: 100.0, f_lo: 5.0, f_hi: 20.0, eps: 1e-8 }),
             interesting_entropy_gauss_01: Some(crate::find_motifs_run_config::InterestingEntropyGauss01RunConfig { h0: 0.6, sigma: 0.2, eps: 1e-8 }),
             interesting_entropy_band_01: Some(crate::find_motifs_run_config::InterestingEntropyBand01RunConfig { h_min: 0.2, h_max: 0.8, eps: 1e-8 }),
@@ -680,7 +680,9 @@ pub struct InterestingCurvatureNorm01RunConfig {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
 pub struct InterestingTurningPointsRatioRunConfig {
-
+    #[in_map]
+    #[run_config]
+    pub peak: u32,
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
@@ -969,7 +971,7 @@ pub struct InterestingCurvatureNorm01 {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct InterestingTurningPointsRatio {
-
+    pub peak:u32
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1030,7 +1032,7 @@ impl From<&MotifCriteria> for Vec<MotifCriterion> {
             criteria.push(MotifCriterion::InterestingCurvatureNorm01(InterestingCurvatureNorm01 { amp_q_lo: v.amp_q_lo, amp_q_hi: v.amp_q_hi, curv0: v.curv0, eps: v.eps }));
         }
         if let Some(v) = value.interesting_turning_points_ratio.as_ref() {
-            criteria.push(MotifCriterion::InterestingTurningPointsRatio(InterestingTurningPointsRatio {}));
+            criteria.push(MotifCriterion::InterestingTurningPointsRatio(InterestingTurningPointsRatio { peak: v.peak }));
         }
         if let Some(v) = value.interesting_band_energy_ratio_01.as_ref() {
             criteria.push(MotifCriterion::InterestingBandEnergyRatio01(InterestingBandEnergyRatio01 { fs: v.fs, f_lo: v.f_lo, f_hi: v.f_hi, eps: v.eps }));

@@ -2,6 +2,7 @@ use std::sync::{Arc, OnceLock};
 use parking_lot::RwLock;
 use tch::{Kind, Tensor, TchError};
 use tch::Kind::Float;
+use tracing::debug;
 
 type NormThicknessMockFn = Arc<dyn Fn(&Tensor, f64, f64) -> Result<Tensor, TchError> + Send + Sync>;
 type InlierRatioMockFn = Arc<dyn Fn(&Tensor, f64, f64) -> Result<Tensor, TchError> + Send + Sync>;
@@ -391,7 +392,74 @@ pub fn interesting_turning_points_ratio(x: &Tensor) -> Result<Tensor, TchError> 
     let ch = prod.f_lt(0.0)?.f_to_kind(Kind::Float)?; // [L-2] float mask
     let count = ch.f_sum(Kind::Float)?; // scalar
 
+    debug!("count=\n{count}");
+
     count.f_div_scalar((l - 2) as f64)
+}
+
+
+/// Turning-points score with a "peak" turn count.
+///
+/// We count sign changes in the first difference of the consensus curve.
+/// Let T = number of turns (sign changes).
+///
+/// Score is triangular:
+///   if T <= peak_turns:         score = T / peak_turns
+///   if peak_turns < T < 2P:     score = (2P - T) / peak_turns
+///   if T >= 2*peak_turns:       score = 0
+///
+/// Output: scalar Tensor in [0,1], where 1 is "best" (at peak_turns).
+pub fn interesting_turning_points_ratio_peaked_01(
+    x: &Tensor,        // [N, L]
+    peak_turns: u32,   // P > 0
+) -> Result<Tensor, TchError> {
+    let sz = x.size();
+    assert_eq!(sz.len(), 2, "expected [N,L]");
+    let l = sz[1];
+    assert!(l >= 3, "need L>=3");
+    assert!(peak_turns > 0, "peak_turns must be > 0");
+
+    // consensus = median across occurrences per timepoint
+    let c = f_quantile_dim0(x, 0.50)?; // [L]
+
+    // d[t] = c[t+1]-c[t], length L-1
+    let d = c
+        .f_narrow(0, 1, l - 1)?
+        .f_sub(&c.f_narrow(0, 0, l - 1)?)?; // [L-1]
+
+    // s[t] in {-1,0,1}
+    let s = d.f_sign()?; // [L-1]
+
+    // sign change when s[t]*s[t+1] < 0
+    let s0 = s.f_narrow(0, 0, l - 2)?; // [L-2]
+    let s1 = s.f_narrow(0, 1, l - 2)?; // [L-2]
+    let prod = s0.f_mul(&s1)?;         // [L-2]
+    let turns_mask = prod.f_lt(0.0)?;  // [L-2] bool
+    let turns = turns_mask
+        .f_to_kind(Kind::Float)?
+        .f_sum(Kind::Float)?;          // scalar (float)
+
+    // Triangular score around peak_turns
+    let p = peak_turns as f64;
+    let p2 = 2.0 * p;
+
+    let turns_k = turns.f_to_kind(x.kind())?; // scalar in x.kind()
+    let p_k = scalar_like(x, p);
+    let p2_k = scalar_like(x, p2);
+
+    let score_left = turns_k.f_div(&p_k)?;                // T / P
+    let score_right = p2_k.f_sub(&turns_k)?.f_div(&p_k)?; // (2P - T) / P
+
+    let m_left = turns_k.f_le_tensor(&p_k)?.f_to_kind(x.kind())?; // 1 if T<=P else 0
+    let m_mid = turns_k
+        .f_gt_tensor(&p_k)?
+        .f_bitwise_and_tensor(&turns_k.f_lt_tensor(&p2_k)?)?
+        .f_to_kind(x.kind())?; // 1 if P<T<2P else 0
+
+    // score = m_left*score_left + m_mid*score_right (else 0)
+    let s_left = m_left.f_mul(&score_left)?;
+    let s_mid = m_mid.f_mul(&score_right)?;
+    s_left.f_add(&s_mid)
 }
 
 /// Helper: power spectrum of consensus using torch.fft.rfft.
@@ -592,12 +660,19 @@ pub fn interesting_entropy_band_01(
 }
 #[cfg(test)]
 mod tests {
+    use tch::{Device, Kind, Tensor};
+    use thoosa_common::transforms::utils::sin_t;
+    use crate::criteria::interesting_turning_points_ratio;
+
     #[cfg(test)]
     mod tests {
         use log::debug;
         use super::*;
         use tch::{Tensor, TchError};
-        use crate::criteria::{coherence, inlier_ratio, norm_thickness};
+        use thoosa_common::debug_plot;
+        use thoosa_common::utils::debug_plot_impl;
+        use thoosa_shared::ThoError;
+        use crate::criteria::{coherence, inlier_ratio, interesting_turning_points_ratio_peaked_01, norm_thickness};
 
         fn f64_of_scalar(t: &Tensor) -> f64 {
             assert!(
@@ -752,6 +827,43 @@ mod tests {
             );
             Ok(())
         }
+
+        #[test]
+        fn test_interesting_turning_points_ratio() -> Result<(), ThoError>{
+            let t = Tensor::arange(1000, (Kind::Float, Device::Cpu)) / 200;
+            let t_sin = sin_t(&t, 1.).view((1, -1));
+
+            debug_plot_impl(&t_sin, "/tmp/sinp.png")?;
+
+            let r = interesting_turning_points_ratio(&t_sin)?.double_value(&[]);
+
+            // debug!("r=\n{r}");
+            assert_close(r, 0.01, 0.01);
+
+            Ok(())
+        }
+
+        #[test]
+        fn test_interesting_turning_points_ratio_peaked() -> Result<(), ThoError>{
+            let t = Tensor::arange(1000, (Kind::Float, Device::Cpu)) / 200;
+            let t_sin = sin_t(&t, 1.).view((1, -1));
+
+            debug_plot_impl(&t_sin, "/tmp/sinp.png")?;
+
+            let r = interesting_turning_points_ratio_peaked_01(&t_sin, 1)?.double_value(&[]);
+            assert_close(r, 0., 0.01);
+
+            let r = interesting_turning_points_ratio_peaked_01(&t_sin, 10)?.double_value(&[]);
+            assert_close(r, 1., 0.01);
+
+            let r = interesting_turning_points_ratio_peaked_01(&t_sin, 100)?.double_value(&[]);
+            assert_close(r, 0.1, 0.01);
+
+            Ok(())
+        }
+
+
     }
+
 
 }
