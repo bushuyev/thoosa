@@ -58,11 +58,12 @@ pub enum StatsKey {
 
         band_hz: F64BitsKey,
 
-        kernel_size: i64,
+        kernel_size: u32,
     },
     SavGolFilter {
         window_len: i64,
         poly_order: i64,
+        stride: u32,
         padding: SgPadding,
     },
 }
@@ -94,6 +95,7 @@ impl From<&SavGolFilterParams> for StatsKey {
         StatsKey::SavGolFilter {
             window_len: value.window_len,
             poly_order: value.poly_order,
+            stride: value.stride,
             padding: value.padding,
         }
     }
@@ -370,8 +372,8 @@ mod tests {
                 BandPassFilterParamsRangeOrValue {
                     low_hz: 10f64.into(),
                     band_hz: 300f64.into(),
-                    kernel_size: 12000i64.into(),
-                    stride: 1i64.into(),
+                    kernel_size: 12000u32.into(),
+                    stride: 1u32.into(),
                     padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
                 },
             )]),
@@ -432,7 +434,7 @@ mod tests {
             None,
             100,
             100,
-            Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 3, padding: SgPadding::replicate() })]),
+            Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 3, stride: 1, padding: SgPadding::replicate() })]),
             None,
         );
         let adjust = config.input_len_adjuster();
@@ -499,7 +501,7 @@ mod tests {
             id: Some(246),
             step: 100,
             window: 1000,
-            freq_filter: Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 2, padding: SgPadding::reflect() })]),
+            freq_filter: Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 2, stride: 1, padding: SgPadding::reflect() })]),
             slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
         };
@@ -511,7 +513,7 @@ mod tests {
             StatsKeys {
                 keys: vec![
                     StatsKey::Window(1000),
-                    StatsKey::SavGolFilter { window_len: 11, poly_order: 2, padding: SgPadding::reflect() },
+                    StatsKey::SavGolFilter { window_len: 11, poly_order: 2, stride: 1, padding: SgPadding::reflect() },
                 ]
             }
         );

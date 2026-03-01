@@ -25,11 +25,11 @@ pub struct BandPassFilterParams {
 
     #[in_map]
     #[run_config]
-    pub kernel_size: i64,
+    pub kernel_size: u32,
 
     #[in_map]
     #[run_config]
-    pub stride: i64,
+    pub stride: u32,
 
     #[in_map]
     #[run_config]
@@ -47,10 +47,12 @@ impl InputFilterLengthAdjuster for BandPassFilterParams {
             assert!(l > 0, "l({l}) must be > 0");
             let pad = kernel_size / 2;
             if let SgPadding::Reflect(_) = padding {
-                assert!(pad < l as i64, "reflect padding requires pad({pad}) < l({l})");
+                assert!(pad < l, "reflect padding requires pad({pad}) < l({l})");
             }
-            let out = (l as i64 + 2 * pad - kernel_size) / stride + 1;
-            assert!(out > 0, "invalid conv output length: l={l} kernel_size={kernel_size} stride={stride} pad={pad}");
+            let padded = l as u64 + 2 * pad as u64;
+            assert!(padded >= kernel_size as u64, "invalid conv output length: l={l} kernel_size={kernel_size} stride={stride} pad={pad}");
+            let out = (padded - kernel_size as u64) / stride as u64 + 1;
+            assert!(out > 0 && out <= u32::MAX as u64, "invalid conv output length: l={l} kernel_size={kernel_size} stride={stride} pad={pad} out={out}");
             out as u32
         })
     }
@@ -85,12 +87,33 @@ pub struct SavGolFilterParams {
 
     #[in_map]
     #[run_config]
+    pub stride: u32,
+
+    #[in_map]
+    #[run_config]
     pub padding: SgPadding,
 }
 
 impl InputFilterLengthAdjuster for SavGolFilterParams {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
-        Box::new(|l: u32| l)
+        let window_len = self.window_len;
+        let stride = self.stride;
+        let padding = self.padding;
+        Box::new(move |l: u32| {
+            assert!(window_len > 0 && window_len <= u32::MAX as i64, "window_len({window_len}) must be in 1..={}", u32::MAX);
+            let kernel_size = window_len as u32;
+            assert!(stride > 0, "stride({stride}) must be > 0");
+            assert!(l > 0, "l({l}) must be > 0");
+            let pad = kernel_size / 2;
+            if let SgPadding::Reflect(_) = padding {
+                assert!(pad < l, "reflect padding requires pad({pad}) < l({l})");
+            }
+            let padded = l as u64 + 2 * pad as u64;
+            assert!(padded >= kernel_size as u64, "invalid conv output length: l={l} window_len={window_len} stride={stride} pad={pad}");
+            let out = (padded - kernel_size as u64) / stride as u64 + 1;
+            assert!(out > 0 && out <= u32::MAX as u64, "invalid conv output length: l={l} window_len={window_len} stride={stride} pad={pad} out={out}");
+            out as u32
+        })
     }
 }
 
