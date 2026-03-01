@@ -1067,7 +1067,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             interesting_tv_norm_01: None,
             interesting_curvature_norm_01: None,
             // interesting_turning_points_ratio: None,
-            interesting_turning_points_ratio: Some(InterestingTurningPointsRatioRunConfigRangeOrValue{  }),
+            interesting_turning_points_ratio: Some(InterestingTurningPointsRatioRunConfigRangeOrValue{ peak: RangeOrValue::Value(4), }),
             interesting_band_energy_ratio_01: None,
             interesting_entropy_gauss_01: None,
             interesting_entropy_band_01: None,
