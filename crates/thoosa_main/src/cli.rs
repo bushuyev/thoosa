@@ -996,7 +996,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        window: RangeOrValue::Range { range: Range { start: 20, end: 200 }, step: Some((20, 0)) }, //RangeOrValue::Value(1000),
+        window: RangeOrValue::Range { range: Range { start: 20, end: 420 }, step: Some((40, 0)) }, //RangeOrValue::Value(1000),
         // window: RangeOrValue::Value(500), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
@@ -1017,7 +1017,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             })
         ]),
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.0005) }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
-        slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.005, step: None} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
+        slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 3))
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }) }),//Some((0.05, 2))
