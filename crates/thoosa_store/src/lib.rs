@@ -86,6 +86,15 @@ impl SetCond {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunConfigEntry {
+    pub id: RunId,
+    pub run_config_type: String,
+    pub descr: String,
+    pub run_on: String,
+}
+
 #[async_trait]
 pub trait Store: ResourceStore + Debug + Sync + Send {
     async fn save_import(&self, descr: String) -> Result<u32, ThoError>;
@@ -203,6 +212,10 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     >;
 
     async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
+
+    async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
+
+    async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError>;
 
     async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
 
@@ -357,6 +370,8 @@ mock! {
             ThoError,
         >;
         async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
+        async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
+        async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError>;
         async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
         async fn save_selected_motifs(
             &self,
@@ -2084,6 +2099,47 @@ impl Store for SqlStore {
             t.commit()?;
             debug!("list_run_resources: result.is_ok={}", result.is_ok());
             result
+        })
+        .await
+    }
+
+    async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError> {
+        self.with_reader_conn("list_run_configs", move |conn| {
+            let t = conn.transaction()?;
+
+            let run_configs = {
+                let mut stmt = t.prepare("SELECT id, type, descr, run_on FROM run_configs ORDER BY id DESC")?;
+                stmt.query_map([], |row| {
+                    Ok(RunConfigEntry {
+                        id: row.get::<usize, RunId>(0)?,
+                        run_config_type: row.get::<usize, String>(1)?,
+                        descr: row.get::<usize, String>(2)?,
+                        run_on: row.get::<usize, String>(3)?,
+                    })
+                })?
+                .map(|v| v.map_err(ThoError::from))
+                .collect::<Result<Vec<RunConfigEntry>, ThoError>>()?
+            };
+
+            t.commit()?;
+            Ok(run_configs)
+        })
+        .await
+    }
+
+    async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError> {
+        self.with_reader_conn("list_run_config_types", move |conn| {
+            let t = conn.transaction()?;
+
+            let run_config_types = {
+                let mut stmt = t.prepare("SELECT DISTINCT type FROM run_configs ORDER BY type ASC")?;
+                stmt.query_map([], |row| row.get::<usize, String>(0))?
+                    .map(|v| v.map_err(ThoError::from))
+                    .collect::<Result<Vec<String>, ThoError>>()?
+            };
+
+            t.commit()?;
+            Ok(run_config_types)
         })
         .await
     }
