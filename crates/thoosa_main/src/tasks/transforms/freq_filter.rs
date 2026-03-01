@@ -38,12 +38,13 @@ enum PreparedFilter {
     NotchBand { low_hz: f64, high_hz: f64 },
     BandPass {
         kernel: ThoTensor<BandPassDims, SynKey>,
-        stride: i64,
+        stride: u32,
         padding: SgPadding,
     },
     SavGol {
         weights: ThoTensor<BandPassDims, SynKey>,
         window_len: i64,
+        stride: u32,
         padding: SgPadding,
     },
 }
@@ -88,7 +89,7 @@ where
                     let kernel = band_pass_filter(
                         band_pass_config.low_hz,
                         high_hz,
-                        band_pass_config.kernel_size,
+                        band_pass_config.kernel_size as i64,
                         sample_rate,
                         1e-6
                     )?.repeat([num_channels, 1, 1]).to_device(Cuda(0));//TODO device
@@ -132,6 +133,7 @@ where
                             weights
                         )?,
                         window_len: sav_gol_config.window_len,
+                        stride: sav_gol_config.stride,
                         padding: sav_gol_config.padding,
                     });
                 }
@@ -170,7 +172,7 @@ where
 
                     // debug_plot!(&filtered_t, "{}_BandPass", input_tensor.id())?;
                 }
-                PreparedFilter::SavGol { weights, window_len, padding } => {
+                PreparedFilter::SavGol { weights, window_len, stride, padding } => {
                     let t = filtered_t.size()[1];
                     if t < *window_len {
                         return Err(ThoError::new(format!("time length T={} must be >= window_len={}", t, window_len)));
@@ -179,7 +181,7 @@ where
                     let input_t = filtered_t.as_ref().f_unsqueeze(0)?;
 
 
-                    let output = self.run_conv_with_padding(1, padding, &weights.as_ref(), &input_t);
+                    let output = self.run_conv_with_padding(*stride, padding, &weights.as_ref(), &input_t);
                     debug!("FreqFilter::apply_tho_tensor, SavGol: id={} weights.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), weights.size(), input_t.size(), output.as_ref().map(|v|v.size()));
                     filtered_t = output?
 
@@ -190,19 +192,20 @@ where
         Ok(ThoTensor::new(self.out_id(input_tensor.id()), filtered_t)?)
     }
 
-    fn run_conv_with_padding(&self, stride: i64, padding: &SgPadding, kernel_t: &Tensor, input_t: &Tensor) -> Result<Tensor, ThoError> {
+    fn run_conv_with_padding(&self, stride: u32, padding: &SgPadding, kernel_t: &Tensor, input_t: &Tensor) -> Result<Tensor, ThoError> {
         let t = input_t.size()[1];
         let kernel_size = kernel_t.size()[2];
         let pad = kernel_size / 2;
+        let stride_i64 = stride as i64;
 
 
         let output_3d = match padding {
-            SgPadding::Zero(_) => input_t.f_conv1d(&kernel_t, None::<Tensor>, stride, pad, 1, self.num_channels)?,
+            SgPadding::Zero(_) => input_t.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, pad, 1, self.num_channels)?,
             SgPadding::Replicate(_) => {
                 let left = input_t.narrow(2, 0, 1).repeat(&[1, 1, pad]);
                 let right = input_t.narrow(2, t - 1, 1).repeat(&[1, 1, pad]);
                 let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
-                xpad.f_conv1d(&kernel_t, None::<Tensor>, stride, 0, 1, self.num_channels)?
+                xpad.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, 0, 1, self.num_channels)?
             }
             SgPadding::Reflect(_) => {
                 if pad >= t {
@@ -211,7 +214,7 @@ where
                 let left = input_t.narrow(2, 1, pad).flip(&[2]);
                 let right = input_t.narrow(2, t - pad - 1, pad).flip(&[2]);
                 let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
-                xpad.f_conv1d(&kernel_t, None::<Tensor>, stride, 0, 1, self.num_channels)?
+                xpad.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, 0, 1, self.num_channels)?
             }
         };
 
@@ -330,6 +333,7 @@ mod tests {
             InputFilter::SavGolFilter(SavGolFilterParams {
                 window_len: 11,
                 poly_order: 2,
+                stride: 1,
                 padding: SgPadding::reflect(),
             }),
         ];
