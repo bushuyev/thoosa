@@ -1,6 +1,4 @@
-#[cfg(test)]
 use std::f64::consts::PI;
-#[cfg(test)]
 use tch::Tensor;
 
 #[cfg(test)]
@@ -27,7 +25,6 @@ pub fn complex_conv(signal: &Tensor, wavelet_real: &Tensor, wavelet_imag: &Tenso
         .squeeze()
 }
 
-#[cfg(test)]
 pub fn sin_t(t: &Tensor, fr: f64) -> Tensor {
     (t * 2.0 * PI * fr).sin()
 }
