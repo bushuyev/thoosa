@@ -15,11 +15,16 @@ use thoosa_shared::val::{NamedVal, Val};
 struct RunResult {
     loss: f32,
     eval_config: Vec<Val>,
+    is_satisfied: Option<bool>,
 }
 
 impl RunResult {
-    pub fn new(loss: f32, eval_config: Vec<Val>) -> Self {
-        Self { loss, eval_config }
+    pub fn new(loss: f32, eval_config: Vec<Val>, is_satisfied: Option<bool>) -> Self {
+        Self {
+            loss,
+            eval_config,
+            is_satisfied,
+        }
     }
 }
 
@@ -53,10 +58,10 @@ mod run_result_tests {
     fn test_run_result_in_binaryheap() {
         let mut observations = BinaryHeap::new();
 
-        observations.push(Reverse(RunResult::new(10., vec![])));
-        observations.push(Reverse(RunResult::new(1., vec![])));
-        observations.push(Reverse(RunResult::new(20., vec![])));
-        observations.push(Reverse(RunResult::new(2., vec![])));
+        observations.push(Reverse(RunResult::new(10., vec![], None)));
+        observations.push(Reverse(RunResult::new(1., vec![], None)));
+        observations.push(Reverse(RunResult::new(20., vec![], None)));
+        observations.push(Reverse(RunResult::new(2., vec![], None)));
 
         let mut observations_c = observations.clone();
         let mut observations_vec = vec![];
@@ -85,16 +90,34 @@ pub trait Distribution: Debug + Send {
     fn weights(&self) -> &Tensor;
 }
 
+#[derive(Clone, Copy)]
+enum PercentileStrategy {
+    Default,
+    Threshold { upper_bound: f32 },
+}
+
 struct TreeStructuredParzenEstimator {
     observations: BinaryHeap<Reverse<RunResult>>,
     mvpe_lower: Option<MultiVariateParzenEstimator>, //TODO move out
     mvpe_upper: Option<MultiVariateParzenEstimator>, //TODO move out
     percentile: f32,                                 //TODO move out
     esitmators: Vec<Box<dyn ParzenEstimator>>,
+    percentile_strategy: PercentileStrategy,
 }
 
 impl TreeStructuredParzenEstimator {
     pub fn new<T: FieldName>(cs: &ConfigurationSpace<T>) -> Self {
+        Self::new_with_percentile_strategy(cs, PercentileStrategy::Default)
+    }
+
+    pub fn new_with_threshold<T: FieldName>(cs: &ConfigurationSpace<T>, upper_bound: f32) -> Self {
+        Self::new_with_percentile_strategy(cs, PercentileStrategy::Threshold { upper_bound })
+    }
+
+    fn new_with_percentile_strategy<T: FieldName>(
+        cs: &ConfigurationSpace<T>,
+        percentile_strategy: PercentileStrategy,
+    ) -> Self {
         debug!("TreeStructuredParzenEstimator::new: cs={cs:?}");
 
         let esitmators:Vec<_> = cs
@@ -136,21 +159,26 @@ impl TreeStructuredParzenEstimator {
             mvpe_upper: None,
             percentile: 0.,
             esitmators,
+            percentile_strategy,
         }
     }
 
-    pub fn update_observations(&mut self, loss: f32, eval_config: &Vec<Val>) {
+    pub fn update_observations(&mut self, loss: f32, eval_config: &Vec<Val>, is_satisfied: Option<bool>) {
+        self.observations.push(Reverse(RunResult::new(
+            loss,
+            eval_config.clone(),
+            is_satisfied,
+        ))); //TODO clone
 
-        self.observations.push(Reverse(RunResult::new(loss, eval_config.clone()))); //TODO clone
+        let sorted_observations = self.sorted_observations();
+        let n_lower = self.n_lower(&sorted_observations, is_satisfied.is_some());
 
-        let n_lower = Self::percentile(self.observations.len()) as usize;
-
-        debug!("TreeStructuredParzenEstimator::update_observations: n_lower={n_lower}");
+        debug!("TreeStructuredParzenEstimator::update_observations: n_lower={n_lower} sorted_observations.len={}", sorted_observations.len());
         trace!("TreeStructuredParzenEstimator::update_observations: self.observations={:?}", self.observations);
 
         self.percentile = n_lower as f32 / self.observations.len() as f32; //[self._metric_name].size
 
-        let (lower_vals, upper_vals) = self.pop_observations(n_lower);
+        let (lower_vals, upper_vals) = self.split_observations(&sorted_observations, n_lower);
 
         let (lower_esitmators, upper_esitmators) = self.esitmators.iter().enumerate().fold(
             (vec![], vec![]),
@@ -173,24 +201,70 @@ impl TreeStructuredParzenEstimator {
         trace!("TreeStructuredParzenEstimator::update_observations: self.self.mvpe_upper={:?}", self.mvpe_upper);
     }
 
-    fn pop_observations(&mut self, n_lower: usize) -> (Vec<Vec<Val>>, Vec<Vec<Val>>) {
+    fn sorted_observations(&self) -> Vec<RunResult> {
         let mut observations_c = self.observations.clone();
-        let mut lower_vals = Vec::with_capacity(n_lower);
-        let mut upper_vals = Vec::with_capacity(observations_c.len() - n_lower);
+        let mut sorted_observations = Vec::with_capacity(observations_c.len());
 
         while let Some(e) = observations_c.pop() {
-            // debug!(">>>v.0.eval_config={:?}", o);
+            sorted_observations.push(e.0);
+        }
+        sorted_observations
+    }
+
+    fn split_observations(&self, sorted_observations: &[RunResult], n_lower: usize) -> (Vec<Vec<Val>>, Vec<Vec<Val>>) {
+        let mut lower_vals = Vec::with_capacity(n_lower);
+        let mut upper_vals = Vec::with_capacity(sorted_observations.len() - n_lower);
+
+        for e in sorted_observations {
             if lower_vals.len() < n_lower {
-                lower_vals.push(e.0.eval_config);
+                lower_vals.push(e.eval_config.clone());
             } else {
-                upper_vals.push(e.0.eval_config);
+                upper_vals.push(e.eval_config.clone());
             }
         }
+
         (lower_vals, upper_vals)
     }
 
     fn percentile(size: usize) -> f32 {
         (0.25 * (size as f32).sqrt()).ceil()
+    }
+
+    fn n_lower(&self, sorted_observations: &[RunResult], enforce_feasible_min: bool) -> usize {
+        if sorted_observations.is_empty() {
+            return 0;
+        }
+
+        let min_num = if enforce_feasible_min {
+            let base = Self::percentile(sorted_observations.len()) as usize;
+            let mut n_satisfied = 0usize;
+            let mut min_num = sorted_observations.len();
+            for (i, observation) in sorted_observations.iter().enumerate() {
+                if observation.is_satisfied.unwrap_or(false) {
+                    n_satisfied += 1;
+                }
+                if n_satisfied >= base {
+                    min_num = i + 1;
+                    break;
+                }
+            }
+            min_num
+        } else {
+            1usize
+        };
+
+        match self.percentile_strategy {
+            PercentileStrategy::Default => {
+                (Self::percentile(sorted_observations.len()) as usize).max(min_num).min(sorted_observations.len())
+            }
+            PercentileStrategy::Threshold { upper_bound } => {
+                let threshold_count = sorted_observations
+                    .iter()
+                    .take_while(|observation| observation.loss <= upper_bound)
+                    .count();
+                threshold_count.max(min_num).min(sorted_observations.len())
+            }
+        }
     }
 
     /// variables/samples
@@ -266,13 +340,13 @@ mod tree_structured_parzen_estimator_tests {
         let mut tree_structured_parzen_estimator = TreeStructuredParzenEstimator::new(&cs);
 
         tree_structured_parzen_estimator
-            .update_observations(0.4, &vec![Val::Real(0.4), Val::Real(1.4)]);
+            .update_observations(0.4, &vec![Val::Real(0.4), Val::Real(1.4)], None);
         tree_structured_parzen_estimator
-            .update_observations(0.1, &vec![Val::Real(0.1), Val::Real(1.1)]);
+            .update_observations(0.1, &vec![Val::Real(0.1), Val::Real(1.1)], None);
         tree_structured_parzen_estimator
-            .update_observations(0.3, &vec![Val::Real(0.3), Val::Real(1.3)]);
+            .update_observations(0.3, &vec![Val::Real(0.3), Val::Real(1.3)], None);
         tree_structured_parzen_estimator
-            .update_observations(0.2, &vec![Val::Real(0.2), Val::Real(1.2)]);
+            .update_observations(0.2, &vec![Val::Real(0.2), Val::Real(1.2)], None);
 
         // debug!("{:?}", tree_structured_parzen_estimator.observations);
 
@@ -487,7 +561,7 @@ where
             debug!("TPEOptimizer::optimize: i={i} eval_config={:?} loss={loss}",eval_config);
 
             for (_key, tpe) in &mut self.tpe_samplers {
-                tpe.update_observations(loss, &eval_config)
+                tpe.update_observations(loss, &eval_config, None)
             }
         }
 
@@ -533,6 +607,159 @@ where
     }
 }
 
+#[allow(dead_code)]
+pub struct AsyncCTPEOptimizer<F, T>
+where
+    F: AsyncFnMut(&[NamedVal<T>]) -> HashMap<String, f32>,
+    T: FieldName,
+{
+    obj_func: F,
+    cs: ConfigurationSpace<T>,
+    constraints: HashMap<String, f32>,
+    constraint_keys: Vec<String>,
+    n_init: u32,
+    max_evals: u32,
+    tpe_samplers: HashMap<String, TreeStructuredParzenEstimator>,
+    _pd: PhantomData<T>,
+}
+
+impl<F, T: FieldName> AsyncCTPEOptimizer<F, T>
+where
+    F: AsyncFnMut(&[NamedVal<T>]) -> HashMap<String, f32>,
+{
+    const LOSS_METRIC: &str = "loss";
+    const N_EI_CANDIDATES: usize = 24;
+
+    pub fn new(
+        obj_func: F,
+        cs: ConfigurationSpace<T>,
+        constraints: HashMap<String, f32>,
+        max_evals: u32,
+        n_init: u32,
+    ) -> Self {
+        debug!("AsyncCTPEOptimizer:new: cs={cs:?} constraints={constraints:?}");
+
+        let mut tpe_samplers = HashMap::from([(
+            Self::LOSS_METRIC.to_string(),
+            TreeStructuredParzenEstimator::new(&cs),
+        )]);
+
+        let mut constraint_keys: Vec<String> = constraints.keys().cloned().collect();
+        constraint_keys.sort();
+
+        for key in &constraint_keys {
+            let upper_bound = constraints[key];
+            tpe_samplers.insert(
+                key.clone(),
+                TreeStructuredParzenEstimator::new_with_threshold(&cs, upper_bound),
+            );
+        }
+
+        Self {
+            obj_func,
+            cs,
+            constraints,
+            constraint_keys,
+            n_init,
+            max_evals,
+            tpe_samplers,
+            _pd: PhantomData::default(),
+        }
+    }
+
+    pub async fn optimize(&mut self) -> Vec<Val> {
+        let mut best_loss = f32::MAX;
+        let mut best_config: Option<Vec<Val>> = None;
+
+        for i in 0..self.max_evals {
+            let eval_config = if i < self.n_init {
+                debug!("AsyncCTPEOptimizer::optimize: i={i} random sample");
+                self.cs.random_sample()
+            } else {
+                debug!("AsyncCTPEOptimizer::optimize: i={i} sample");
+                self.sample()
+            };
+
+            let eval_config_named = eval_config
+                .iter()
+                .zip(self.cs.hyperparameters.iter())
+                .map(|(val, hp)| NamedVal::from((hp.name().clone(), val.clone())))
+                .collect::<Vec<_>>();
+            let results = self.obj_func.async_call_mut((&eval_config_named.as_slice(),)).await;
+            let loss = results
+                .get(Self::LOSS_METRIC)
+                .copied()
+                .unwrap_or(f32::MAX);
+            let is_satisfied = self.constraint_keys.iter().all(|constraint_name| {
+                let upper_bound = self.constraints[constraint_name];
+                upper_bound.is_infinite()
+                    || results
+                        .get(constraint_name)
+                        .map(|constraint_value| *constraint_value <= upper_bound)
+                        .unwrap_or(false)
+            });
+
+            debug!("AsyncCTPEOptimizer::optimize: i={i} eval_config={eval_config:?} results={results:?} is_satisfied={is_satisfied}");
+
+            if is_satisfied && loss < best_loss {
+                best_loss = loss;
+                best_config.replace(eval_config.clone());
+            }
+
+            self.tpe_samplers
+                .get_mut(Self::LOSS_METRIC)
+                .expect("loss sampler missing")
+                .update_observations(loss, &eval_config, Some(is_satisfied));
+
+            for constraint_name in &self.constraint_keys {
+                let constraint_loss = results
+                    .get(constraint_name)
+                    .copied()
+                    .unwrap_or(f32::INFINITY);
+                self.tpe_samplers
+                    .get_mut(constraint_name)
+                    .expect("constraint sampler missing")
+                    .update_observations(constraint_loss, &eval_config, None);
+            }
+        }
+
+        best_config.unwrap_or(vec![]) //TODO
+    }
+
+    fn sample(&self) -> Vec<Val> {
+        let mut candidate_sets = vec![
+            self.tpe_samplers[Self::LOSS_METRIC].get_config_candidates(Self::N_EI_CANDIDATES),
+        ];
+        for constraint_name in &self.constraint_keys {
+            if self.constraints[constraint_name].is_infinite() {
+                continue;
+            }
+
+            candidate_sets.push(
+                self.tpe_samplers[constraint_name].get_config_candidates(Self::N_EI_CANDIDATES),
+            );
+        }
+
+        let config_cands = stack_params(candidate_sets);
+
+        let mut pi_config = self.tpe_samplers[Self::LOSS_METRIC]
+            .compute_probability_improvement(&config_cands);
+        for constraint_name in &self.constraint_keys {
+            if self.constraints[constraint_name].is_infinite() {
+                continue;
+            }
+
+            pi_config += self.tpe_samplers[constraint_name].compute_probability_improvement(&config_cands);
+        }
+
+        let max_i = pi_config.argmax(0, false).double_value(&[]);
+        config_cands
+            .into_iter()
+            .map(|p| p[max_i as usize].clone())
+            .collect()
+    }
+}
+
 fn stack_params<T: Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
     let num_rows = input[0].len();
     let mut result = vec![vec![]; num_rows];
@@ -549,8 +776,9 @@ fn stack_params<T: Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
 #[cfg(test)]
 mod tpe_optimizer_tests {
     use crate::parzen::optimizer::Val::Int;
-    use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace, Val, stack_params};
+    use crate::parzen::optimizer::{AsyncCTPEOptimizer, AsyncTPEOptimizer, ConfigurationSpace, Val, stack_params};
     use log::debug;
+    use std::collections::HashMap;
     use tch::Tensor;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::NamedVal;
@@ -695,6 +923,43 @@ mod tpe_optimizer_tests {
         assert!((30. - <&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()).abs() < 3.);
         assert!((30. - <&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()).abs() < 3.);
         assert_eq!(Int(1), best_config[2]);
+    }
+
+    #[tokio::test]
+    async fn test_optimize_constrained() {
+        let mut opt: AsyncCTPEOptimizer<_, String> = AsyncCTPEOptimizer::new(
+            async move |params| {
+                let x: f32 = (&params[0]).try_into().unwrap();
+                let y: f32 = (&params[1]).try_into().unwrap();
+                let loss = (x - 3.).powi(2) + (y - 3.).powi(2);
+                HashMap::from([
+                    ("loss".to_string(), loss),
+                    ("c1".to_string(), x),
+                    ("c2".to_string(), y),
+                ])
+            },
+            ConfigurationSpace::new(vec![
+                Hyperparameter::UniformFloat {
+                    name: "x".into(),
+                    lower: -5.0,
+                    upper: 5.0,
+                },
+                Hyperparameter::UniformFloat {
+                    name: "y".into(),
+                    lower: -5.0,
+                    upper: 5.0,
+                },
+            ]),
+            HashMap::from([("c1".to_string(), 0.0), ("c2".to_string(), 0.0)]),
+            300,
+            10,
+        );
+
+        let best_config = opt.optimize().await;
+
+        assert!(!best_config.is_empty());
+        assert!((<&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()) <= 1.0);
+        assert!((<&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()) <= 1.0);
     }
 
     fn sphere(d_x: i64) -> impl Fn(&[NamedVal<String>]) -> f32 {
