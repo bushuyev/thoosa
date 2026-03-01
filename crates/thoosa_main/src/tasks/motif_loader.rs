@@ -86,6 +86,7 @@ impl MotifLoaderInput {
 impl Input for MotifLoaderInput {
 }
 
+//TODO composite id with select_motifs_run_id
 impl WithId for MotifLoaderInput {
     type ID = DataId;
 

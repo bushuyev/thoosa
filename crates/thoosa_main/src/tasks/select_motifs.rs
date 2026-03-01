@@ -1261,20 +1261,22 @@ where
             return Ok(self.find_motif_run_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).map(|v| (*v, 1.0)).collect::<Vec<_>>());
         }
 
-        let extended_motif_ids = self.find_motif_run_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).collect::<Vec<_>>();
-        debug!("SelectMotifsStage::run: 1. extended_motif_ids.len={}", extended_motif_ids.len());
+        let motif_ids = self.find_motif_run_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).collect::<Vec<_>>();
+        debug!("SelectMotifsStage::run: 1. motif_ids.len={}", motif_ids.len());
 
         let threshold = select_motifs_run_config.threshold as f64;
+
         let min_slices = select_motifs_run_config.min_slices.unwrap_or(10) as i64;
         let max_slices = select_motifs_run_config.max_slices.unwrap_or(100) as i64;
         assert!(min_slices <= max_slices, "SelectMotifsStage::filter_motifs_by_criteria: min_slices={min_slices} must be <= max_slices={max_slices}");
-        let mut extended_motif_ids_filtered = Vec::with_capacity(extended_motif_ids.len());
 
-        for motif_id in extended_motif_ids {
+        let mut motif_ids_filtered = Vec::with_capacity(motif_ids.len());
+
+        for motif_id in motif_ids {
             //gpt TODO!! MotifLoaderInput::all_slices ignores select_motifs_run_id; criteria see slices from all select runs, not just this run_config.
             let motif_data = Arc::clone(&self.clc_dist.motif_loader)
                 .run_cached(
-                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(DataId(*motif_id)), CacheArea::default())),
+                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(DataId(*motif_id), Some(vec![select_motifs_run_config.id.expect("no select_motifs_run_config")])), CacheArea::default())),
                     ctx.branch(Some("select_motifs_filter_motif_loader"), false, false),
                 )
                 .await?;
@@ -1301,12 +1303,12 @@ where
             })?;
 
             if keep_score.0 {
-                extended_motif_ids_filtered.push((*motif_id, keep_score.1));
+                motif_ids_filtered.push((*motif_id, keep_score.1));
             }
         }
 
-        debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered extended_motif_ids.len={}", extended_motif_ids_filtered.len());
-        Ok(extended_motif_ids_filtered)
+        debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered extended_motif_ids.len={}", motif_ids_filtered.len());
+        Ok(motif_ids_filtered)
     }
 
 }
