@@ -420,114 +420,6 @@ mod tree_structured_parzen_estimator_tests {
         );
     }
 }
-#[allow(dead_code)]//TODO remove
-pub struct TPEOptimizer<F, T>
-where
-    F: FnMut(&[NamedVal<T>]) -> f32,
-    T: FieldName,
-{
-    obj_func: F,
-    cs: ConfigurationSpace<T>,
-    n_init: u32,
-    max_evals: u32,
-    tpe_samplers: HashMap<String, TreeStructuredParzenEstimator>,
-    _pd: PhantomData<T>,
-}
-
-impl<F, T: FieldName> TPEOptimizer<F, T>
-where
-    F: FnMut(&[NamedVal<T>]) -> f32,
-{
-    pub fn new(obj_func: F, cs: ConfigurationSpace<T>, max_evals: u32, n_init: u32) -> Self {
-        debug!("TPEOptimizer:new: cs={cs:?}");
-
-        let estimator = TreeStructuredParzenEstimator::new(&cs);
-        Self {
-            obj_func,
-            cs,
-            n_init,
-            max_evals,
-            tpe_samplers: HashMap::from([("loss".to_string(), estimator)]),
-            _pd: PhantomData::default(),
-        }
-    }
-
-    pub fn optimize(&mut self) -> Vec<Val> {
-        let mut best_loss = f32::MAX;
-        let mut best_config: Option<Vec<Val>> = None;
-
-        (0..self.max_evals).for_each(|i| {
-
-            let eval_config = if i < self.n_init {
-                debug!("TPEOptimizer::optimize: i={i} random sample");
-                self.cs.random_sample()
-            } else {
-                debug!("TPEOptimizer::optimize: i={i} sample");
-                self.sample()
-            };
-
-            let loss = (self.obj_func)(
-                &eval_config
-                    .iter()
-                    .zip(self.cs.hyperparameters.iter())
-                    .map(|(val, hp)| {
-                        // (hp.name(), val.clone()).into()
-                        // NamedVal::from((hp.name().into(), val.clone()))
-                        NamedVal::from((hp.name().clone(), val.clone()))
-                    })
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            );
-            if loss < best_loss {
-                best_loss = loss;
-                best_config.replace(eval_config.clone());
-            }
-
-            debug!("TPEOptimizer::optimize: i={i} eval_config={:?} loss={loss}",eval_config);
-
-            for (_key, tpe) in &mut self.tpe_samplers {
-                tpe.update_observations(loss, &eval_config)
-            }
-        });
-
-        best_config.unwrap_or(vec![]) //TODO
-    }
-
-    fn sample(&self) -> Vec<Val> {
-        //TODO if always loss only - merge get_config_candidates & compute_probability_improvement
-        let config_cands = stack_params(
-            self.tpe_samplers
-                .values()
-                .map(|tpe| {
-                    tpe.get_config_candidates(24) //TODO to param
-                })
-                .collect::<Vec<Vec<Vec<Val>>>>(), //tpe(only loss)/params/candidates
-        );
-
-        //TODO weights? loss only
-        let pi_config = Tensor::stack(
-            self.tpe_samplers
-                .values()
-                .map(|tpe| tpe.compute_probability_improvement(&config_cands))
-                .collect::<Vec<Tensor>>()
-                .as_slice(),
-            0,
-        );
-
-        trace!("sample: config_cands={config_cands:?}");
-        trace!("sample: pi_config={pi_config}");
-
-        debug!("sample: max={}", pi_config.max());
-
-        let max_i = pi_config.argmax(1, true).i(0).double_value(&[]);
-
-        config_cands
-            .into_iter()
-            .map(|p| p[max_i as usize].clone())
-            .collect() // return weights @ pi_config_array
-    }
-}
-
 #[allow(dead_code)]
 pub struct AsyncTPEOptimizer<F, T>
 where
@@ -657,7 +549,7 @@ fn stack_params<T: Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
 #[cfg(test)]
 mod tpe_optimizer_tests {
     use crate::parzen::optimizer::Val::Int;
-    use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer, Val, stack_params};
+    use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace, Val, stack_params};
     use log::debug;
     use tch::Tensor;
     use thoosa_shared::hyperparameter::Hyperparameter;
@@ -669,8 +561,8 @@ mod tpe_optimizer_tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-    #[test]
-    fn test_params_stack() {
+    #[tokio::test]
+    async fn test_params_stack() {
         let params_0 = vec![vec![1., 2., 3.], vec![10., 20., 30.]];
 
         let params_1 = vec![vec![4., 5.], vec![40., 50.]];
@@ -683,8 +575,8 @@ mod tpe_optimizer_tests {
         // debug!("r={r:?}");
     }
 
-    #[test]
-    fn test_sphere() {
+    #[tokio::test]
+    async fn test_sphere() {
         let sphere = sphere(30)(&vec![
             ("x".into(), Val::Real(0.1)).into(),
             ("x".into(), Val::Real(0.2)).into(),
@@ -696,10 +588,11 @@ mod tpe_optimizer_tests {
         assert_eq!(4410.55, sphere);
     }
 
-    #[test]
-    fn test_optimize_numeric() {
-        let mut opt = TPEOptimizer::new(
-            sphere(300),
+    #[tokio::test]
+    async fn test_optimize_numeric() {
+        let sphere = sphere(300);
+        let mut opt = AsyncTPEOptimizer::new(
+            async move |params| sphere(params),
             ConfigurationSpace::new(
                 (0..3)
                     .map(|i| Hyperparameter::UniformFloat {
@@ -713,7 +606,7 @@ mod tpe_optimizer_tests {
             10,
         );
 
-        let best_config = opt.optimize();
+        let best_config = opt.optimize().await;
 
         debug!("best_config={best_config:?}");
         assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()).abs() < 3.);
@@ -721,10 +614,11 @@ mod tpe_optimizer_tests {
         assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[2]).unwrap()).abs() < 3.);
     }
 
-    #[test]
-    fn test_optimize_numeric_int() {
-        let mut opt = TPEOptimizer::new(
-            sphere(300),
+    #[tokio::test]
+    async fn test_optimize_numeric_int() {
+        let sphere = sphere(300);
+        let mut opt = AsyncTPEOptimizer::new(
+            async move |params| sphere(params),
             ConfigurationSpace::new(
                 (0..3)
                     .map(|i| Hyperparameter::UniformInt {
@@ -738,7 +632,7 @@ mod tpe_optimizer_tests {
             10,
         );
 
-        let best_config = opt.optimize();
+        let best_config = opt.optimize().await;
 
         debug!("best_config={best_config:?}");
         // assert!((300. - <Primitives as Into<f32>>::into(best_config[0])).abs() < 3.);
@@ -746,10 +640,10 @@ mod tpe_optimizer_tests {
         // assert!((300. - <Primitives as Into<f32>>::into(best_config[2])).abs() < 3.);
     }
 
-    #[test]
-    fn test_optimize_ctaegoric() {
-        let mut opt: TPEOptimizer<_, String> = TPEOptimizer::new(
-            move |params| {
+    #[tokio::test]
+    async fn test_optimize_categoric() {
+        let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
+            async move |params| {
                 debug!("params={params:?}");
 
                 let x_0: f32 = (&params[0]).try_into().unwrap();
@@ -795,7 +689,7 @@ mod tpe_optimizer_tests {
             10,
         );
 
-        let best_config = opt.optimize();
+        let best_config = opt.optimize().await;
 
         debug!("best_config={best_config:?}");
         assert!((30. - <&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()).abs() < 3.);
