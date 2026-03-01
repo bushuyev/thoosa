@@ -277,13 +277,13 @@ impl GlobalCtx {
 
         debug!("GlobalCtx::purge_cpu: purge_since={purge_since} maps.len={}", maps.len());
         if purge_since > 0 {
-            GlobalCtx::global().debug_caches(1).await;
+            // GlobalCtx::global().debug_caches(1).await;
 
             for (type_name, map) in maps {
                 info!("GlobalCtx::purge_cpu: purged {} from {}", map.purge_cpu(purge_since).await, type_name);
             }
 
-            GlobalCtx::global().debug_caches(1).await;
+            // GlobalCtx::global().debug_caches(1).await;
         }
     }
 

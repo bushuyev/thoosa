@@ -197,9 +197,8 @@ where
             let store = Arc::clone(&self.store);
             async move {
 
-                //gpt TODO!! MotifLoaderInput::all_slices ignores select_motifs_run_id; training may mix slices from other selection runs.
                 let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>> = motif_loader.run(
-                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::all_slices(motif_id_rate.0.into()), CacheArea::default())),
+                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(motif_id_rate.0.into(), Some(vec![select_motifs_run_id])), CacheArea::default())),
                     ctx.branch(Some("train_motif_nets_motif_loader"), false, false),
                 ).await?;
 

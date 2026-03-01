@@ -198,6 +198,12 @@ fn f_rms_residuals(x: &Tensor, consensus: &Tensor) -> Result<Tensor, TchError> {
 }
 
 /// 2) Inlier ratio (explicit “strays”):
+/// k - how many MADs above the median residual you still call “inlier”.
+/// k ≈ 4.5 → “3σ-ish” robust cutoff (moderate)
+///
+/// k ≈ 3.0 → aggressive (will reject more, especially if alignment jitter exists)
+///
+/// k ≈ 6.0 → lenient (keeps more shifted/noisy slices)
 /// - consensus = per-time median
 /// - resid_i = RMS(x_i - consensus)
 /// - med = median(resid), mad = median(|resid-med|)
