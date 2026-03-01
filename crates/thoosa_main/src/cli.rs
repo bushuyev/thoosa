@@ -70,8 +70,8 @@ use tokio::time::MissedTickBehavior;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CopyCtx;
-use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, NotchBandFilter};
-use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, SgPadding, SgPaddingRangeOrValue, SgZeroPaddingRangeOrValue};
+use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, SavGolFilter, NotchBandFilter};
+use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, SgPadding, SgPaddingRangeOrValue, SgZeroPaddingRangeOrValue};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::{OutId, RunCtx};
@@ -1000,15 +1000,21 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         // window: RangeOrValue::Value(500), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
-            BandPassFilter(BandPassFilterParamsRangeOrValue {
-                // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-                low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 200. }, step: None },//Some((10., 1))
-                // band_hz: RangeOrValue::Value(10.),
-                band_hz:  RangeOrValue::Value(1.0),
-                // kernel_size: RangeOrValue::Value(100),
-                kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 1000 }, step: None },
+            // BandPassFilter(BandPassFilterParamsRangeOrValue {
+            //     // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
+            //     low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 200. }, step: None },//Some((10., 1))
+            //     // band_hz: RangeOrValue::Value(10.),
+            //     band_hz:  RangeOrValue::Value(1.0),
+            //     // kernel_size: RangeOrValue::Value(100),
+            //     kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 1000 }, step: None },
+            //     stride: RangeOrValue::Value(10),
+            //     // stride: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
+            //     padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
+            // }),
+            SavGolFilter(SavGolFilterParamsRangeOrValue {
+                window_len: RangeOrValue::Value(1111),
+                poly_order: RangeOrValue::Value(3), //RangeOrValue::Range { range: Range { start: 1, end: 11 }, step: Some((3, 0)) },
                 stride: RangeOrValue::Value(10),
-                // stride: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
                 padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             }),
             NotchBandFilter(NotchBandFilterParamsRangeOrValue {
