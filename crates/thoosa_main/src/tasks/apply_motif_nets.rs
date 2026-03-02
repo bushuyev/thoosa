@@ -50,7 +50,6 @@ use thoosa_shared::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
-use crate::tasks::load_motif_and_clc_dist::MotifSlicesSelector;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::tasks::transforms::freq_filter::FreqFilter;

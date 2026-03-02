@@ -34,10 +34,10 @@ use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
-use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, MotifSlicesSelector};
+use crate::tasks::motif_loader::MotifLoader;
+use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::MotifMeta;
-use crate::tasks::random_motif::{RandomMotif, RandomMotifInput, RandomMotifOutput};
-use crate::tasks::slices_stats::{Aggr, Metrics, SlicesStats, SlicesStatsInput};
+use crate::tasks::slices_stats::{Aggr, Metrics};
 
 pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load random resources, TODO - add proper method to SqlStore
 pub const RANDOM_AVG_DIST_GROUP: &str = RANDOM_STATS_GROUP;
@@ -85,11 +85,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    store: Arc<Box<dyn Store>>,
-    loader: Arc<L>,
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
-    clc_stats: Arc<SlicesStats<C>>,
-    random_motif: Arc<RandomMotif<L, C>>,
+    motif_stats: Arc<MotifStats<MotifLoader<L, C>, L, C>>,
     pd: PhantomData<C>,
 }
 
@@ -99,20 +95,16 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
-
-        let random_motif = Arc::new(RandomMotif::new(
+        let motif_loader = Arc::new(MotifLoader::new(Arc::clone(&store), Arc::clone(&loader), ws));
+        let motif_stats = Arc::new(MotifStats::new(
             Arc::clone(&store),
             Arc::clone(&loader),
-            Arc::clone(&ws),
+            Arc::clone(ws),
+            motif_loader,
         ));
 
-
         Self {
-            store,
-            loader,
-            ws: Arc::clone(ws),
-            clc_stats: Arc::new(SlicesStats::<C>::new()),
-            random_motif,
+            motif_stats,
             pd: PhantomData,
         }
     }
@@ -160,87 +152,32 @@ where
             return Err(ThoError::new(format!("RandomStats: max_slices must be >= 2, got {max_slices}")));
         }
 
-        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-            find_motifs_run_id,
-            &self.store.list_run_config_values(find_motifs_run_id).await?,
-        )?;
-        debug!("RandomStats::run: find_motifs_run_config={find_motifs_run_config:?}");
+        let motif_stats_input = Arc::new(DevicesWrap::wrap(
+            MotifStatsInput::from_random(max_slices, find_motifs_run_id, vec![metrics], aggr),
+            cache_area.into(),
+        ));
 
-        let motif_width = find_motifs_run_config.window;
-        assert_ne!(motif_width, 0, "RandomStats: motif_width must be > 0");
-
-        let stats_keys = find_motifs_run_config.to_stats_keys();
-
-        debug!("RandomStats::run: stats_keys={stats_keys:?}");
-
-        let random_motif = Arc::clone(&self.random_motif)
-            .run_cached(
-                Arc::new(DevicesWrap::wrap(RandomMotifInput::new(find_motifs_run_id, max_slices, stats_keys), cache_area.into())),
-                ctx.branch(Some("random_stats_random_motif"), false, false),
+        let motif_stats = Arc::clone(&self.motif_stats)
+            .run(
+                motif_stats_input,
+                ctx.branch(Some("random_stats_motif_stats"), false, false),
             )
             .await?;
 
-        debug!("RandomStats::run: random_motif={random_motif:?}");
-
-
-        let motifs = with_data!(
-            ctx.branch(Some("random_stats_random_motif_with_data"), false, false),
-            random_motif;
-            |_ctx, random_motif: &RandomMotifOutput| {
-                random_motif
-                    .motifs()
-                    .iter()
-                    .map(|motif| ThoTensor::new(motif.id().clone(), motif.t_ref().shallow_clone()))
-                    .collect::<Result<Vec<_>, _>>()
+        let dists = with_data!(
+            ctx.branch(Some("random_stats_with_data"), false, false),
+            motif_stats;
+            |_ctx, motif_stats: &MotifStatsOutput| {
+                motif_stats.channels_motifs_dists(metrics)
             }
         )?;
 
-        debug!("RandomStats::run: motifs.len={}", motifs.len());
+        let stats_t = dists.t_ref().f_to_device(ThoDevice::from(device_idx).into())?;
 
-        let channels = motifs.len();
-        assert_ne!(channels, 0, "no channels");
-
-        let mut stats_values = Vec::with_capacity(channels);
-        for (channel, motif) in motifs.into_iter().enumerate() {
-            let slice_count = motif.t_ref().size()[0];
-            if slice_count < 2 {
-                return Err(ThoError::new(format!("RandomStats: not enough slices for channel {channel}, got {slice_count}")));
-            }
-
-            let stats_input = SlicesStatsInput::new(
-                metrics,
-                aggr,
-                DataWithExtra::new(motif, MotifMeta { channel: channel as i64, find_motifs_run_id, window: motif_width }),
-            );
-            let stats_input = Arc::new(DevicesWrap::wrap(stats_input, cache_area.into()));
-            let stats_input_size = stats_input.size().clone();
-            let stats_out_id = self.clc_stats.out_id(stats_input.id());
-
-            debug!("RandomStats::run: stats_input={stats_input:?}");
-
-            let stats = OOMHandler::new(vec![Adjusters::Input(Box::new(SplitsAdjuster::<MotifSlicesSelector, MonoMetrics<0, 2>>::new([2, -1].into())))], None)
-                .run(
-                    &self.clc_stats,
-                    Arc::clone(&stats_input),
-                    ctx.branch(Some(&format!("random_stats_channel_{channel}")), false, false),
-                    Contexts::new(
-                        SplitsAdjusterContextImpl::new(stats_input_size, DistOutputBuilder::new(stats_out_id, aggr)),
-                        NoopRunnableContext {},
-                        NoopRunCtxContext {},
-                    ),
-                )
-                .await?;
-
-            debug!("RandomStats::run: stats={stats:?}");
-
-            stats_values.push(stats.value());
-        }
-
-        let stats_t = Tensor::f_from_slice(stats_values.as_slice())?
-            .f_view([channels as i64, 1])?
-            .f_to_device(ThoDevice::from(device_idx).into())?;
-
-        Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(&input_id + &SynKey::new(["random_stats".into()]), stats_t)?, cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(
+            ThoTensor::new(&input_id + &SynKey::new(["random_stats".into()]), stats_t)?,
+            cache_area.into(),
+        )))
     }
 }
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="random_non_overlapping_slices"))]
