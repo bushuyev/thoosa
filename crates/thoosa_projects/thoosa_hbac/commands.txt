@@ -48,6 +48,8 @@ cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logge
 
 cargo nextest run --release --no-fail-fast --retries=0 --no-capture tasks::train_label_nets::tests::test_train_label_net_3x3 > /tmp/test.log 2>&1
 
+cargo build --release -p thoosa_tui && RUST_LOG=Info ./target/x86_64-unknown-linux-gnu/release/thoosa_tui /home/bu/tmp/ws_test_hbac/
+
 select motif_id, count(*) cnt from slices group by motif_id having cnt > 10000;
 
 select motif_id, count(*) as cnt from slices group by motif_id having cnt > 10000

@@ -294,7 +294,6 @@ where
             "TrainLabelNets::run/ws_read_channels",
         );
 
-
         debug!("TrainLabelNets::run: channels={channels} num_nets={}", self.num_nets);
 
         async move {

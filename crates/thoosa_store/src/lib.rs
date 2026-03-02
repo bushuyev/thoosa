@@ -2295,11 +2295,11 @@ impl Store for SqlStore {
             let selected_nets = {
                 let (query, params): (&str, Vec<rusqlite::types::Value>) = match loss {
                     Some(loss) => (
-                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC, net_path ASC",
+                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC, net_path ASC LIMIT 100",//TODO limit to params
                         vec![rusqlite::types::Value::Integer(run_id as i64), rusqlite::types::Value::Real(loss as f64)],
                     ),
                     None => (
-                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC, net_path ASC",
+                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC, net_path ASC  LIMIT 100",
                         vec![rusqlite::types::Value::Integer(run_id as i64)],
                     ),
                 };

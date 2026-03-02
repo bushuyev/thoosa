@@ -838,32 +838,36 @@ async fn run_all(
             //gpt TODO!! if find_motifs_run_ids is empty, downstream stages will still run; should we short-circuit?
 
             //gpt Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
-            let select_motifs_run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
-                Some(find_motifs_run_ids.clone()),
-                all_config.select_motifs_run_config,
-                select_motifs_input,
-                &ws,
-                &store,
-                true,
-                async |run_configs| {
-                    Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
-                        &ws,
-                        &store,
-                        Arc::clone(&loader),
-                        Arc::new(MotifLoader::new(
-                            Arc::clone(&store),
+            let mut select_motifs_run_ids = vec![];
+            for find_motifs_run_id in &find_motifs_run_ids {
+                select_motifs_run_ids.extend( run_grid::</*Labeled,*/ _, _, _, _, _>(
+                    Some(vec![*find_motifs_run_id]),
+                    all_config.select_motifs_run_config.clone(),
+                    select_motifs_input.clone(),
+                    &ws,
+                    &store,
+                    true,
+                    async |run_configs| {
+                        Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
+                            &ws,
+                            &store,
                             Arc::clone(&loader),
-                            &ws
-                        )),
-                        run_configs,
-                        find_motifs_run_ids.clone(),
-                        run_all_args.max_chunk_size as i64,
-                        #[cfg(test)]
-                        None
-                    ).await.expect("SelectMotifsStage::new failed"))
-                },
-                || root_ctx.branch(Some("select_motifs"), true, false),
-            ).await?;
+                            Arc::new(MotifLoader::new(
+                                Arc::clone(&store),
+                                Arc::clone(&loader),
+                                &ws
+                            )),
+                            run_configs,
+                            vec![*find_motifs_run_id],
+                            run_all_args.max_chunk_size as i64,
+                            #[cfg(test)]
+                            None
+                        ).await.expect("SelectMotifsStage::new failed"))
+                    },
+                    || root_ctx.branch(Some("select_motifs"), true, false),
+                ).await?);
+
+            }
 
             info!("select motifs done: find_motifs_run_ids={find_motifs_run_ids:?} select_motifs_run_ids={select_motifs_run_ids:?}");
 
@@ -996,7 +1000,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        window: RangeOrValue::Range { range: Range { start: 20, end: 420 }, step: Some((40, 0)) }, //RangeOrValue::Value(1000),
+        window: RangeOrValue::Range { range: Range { start: 100, end: 2100 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000),
         // window: RangeOrValue::Value(500), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
@@ -1012,8 +1016,9 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             //     padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             // }),
             SavGolFilter(SavGolFilterParamsRangeOrValue {
-                window_len: RangeOrValue::Value(1111),
-                poly_order: RangeOrValue::Value(3), //RangeOrValue::Range { range: Range { start: 1, end: 11 }, step: Some((3, 0)) },
+                window_len: RangeOrValue::Value(111),
+                // poly_order: RangeOrValue::Range { range: Range { start: 1, end: 11 }, step: Some((3, 0)) },
+                poly_order: RangeOrValue::Value(3),
                 stride: RangeOrValue::Value(10),
                 padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             }),
@@ -1023,13 +1028,13 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             })
         ]),
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.0005) }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
-        slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
+        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 3))
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.02)  }) }),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }) }),//Some((0.05, 2))
-        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.0005) }) }),//Some((0.05, 2))
+        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.005) }) }),//Some((0.05, 2))
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
@@ -1050,7 +1055,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         extend_config: None,
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(NormThicknessRunConfigRangeOrValue {
-                k: RangeOrValue::Value(0.0), //not used RangeOrValue::Range{range: 1.0..10.0, step: None},
+                k: RangeOrValue::Value(0.0), //TODO not used RangeOrValue::Range{range: 1.0..10.0, step: None},
                 eps: RangeOrValue::Value(1e-8)
             }),
             inlier_ratioRunConfig:None,
@@ -1079,7 +1084,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             interesting_entropy_band_01: None,
         },
         threshold: RangeOrValue::Value(0.8), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
-        min_slices: Some(RangeOrValue::Value(5)),
+        min_slices: Some(RangeOrValue::Value(3)),
         max_slices: Some(RangeOrValue::Value(100)),
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
@@ -1087,7 +1092,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(150),
+        cycles: RangeOrValue::Value(100),
         batch_size: RangeOrValue::Value(10),
         // lr: RangeOrValue::Value(0.0001),
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
@@ -2136,7 +2141,8 @@ where
     debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
 
     let mut run_configs: Vec<RC> = grid_run_configs.to_run_configs();
-    debug!("run_all_grid_step: run_configs.len={} run_configs={run_configs:?}", run_configs.len());
+    info!("run_all_grid_step: run_configs.len={}", run_configs.len());
+    debug!("run_all_grid_step: run_configs={run_configs:?}");
 
     let mut run_ids = if presave {
         save_run_configs(
