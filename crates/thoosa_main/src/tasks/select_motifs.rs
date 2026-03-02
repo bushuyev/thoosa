@@ -35,7 +35,7 @@ use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ExtendMotifsC
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
-use thoosa_motifs::criteria::{coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01, interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio, interesting_turning_points_ratio_peaked_01, interesting_tv_norm_01, norm_thickness};
+use thoosa_motifs::criteria::{coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01, interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio, interesting_turning_points_ratio_peaked_01, interesting_turning_points_ratio_trapezoid_01, interesting_tv_norm_01, norm_thickness};
 use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
@@ -1232,7 +1232,7 @@ where
             MotifCriterion::InterestingAmp01(v) => interesting_amp_01(motif_slices, v.q_lo, v.q_hi, v.a0, v.eps)?,
             MotifCriterion::InterestingTvNorm01(v) => interesting_tv_norm_01(motif_slices, v.amp_q_lo, v.amp_q_hi, v.tv0, v.eps)?,
             MotifCriterion::InterestingCurvatureNorm01(v) => interesting_curvature_norm_01(motif_slices, v.amp_q_lo, v.amp_q_hi, v.curv0, v.eps)?,
-            MotifCriterion::InterestingTurningPointsRatio(v) => interesting_turning_points_ratio_peaked_01(motif_slices, v.peak)?,
+            MotifCriterion::InterestingTurningPointsRatio(v) => interesting_turning_points_ratio_trapezoid_01(motif_slices, 2, 3, 5, 7)?,
             MotifCriterion::InterestingBandEnergyRatio01(v) => interesting_band_energy_ratio_01(motif_slices, v.fs, v.f_lo, v.f_hi, v.eps)?,
             MotifCriterion::InterestingEntropyGauss01(v) => interesting_entropy_gauss_01(motif_slices, v.h0, v.sigma, v.eps)?,
             MotifCriterion::InterestingEntropyBand01(v) => interesting_entropy_band_01(motif_slices, v.h_min, v.h_max, v.eps)?,
@@ -1273,13 +1273,11 @@ where
         let mut motif_ids_filtered = Vec::with_capacity(motif_ids.len());
 
         for motif_id in motif_ids {
-            //gpt TODO!! MotifLoaderInput::all_slices ignores select_motifs_run_id; criteria see slices from all select runs, not just this run_config.
             let motif_data = Arc::clone(&self.clc_dist.motif_loader)
                 .run_cached(
                     Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(DataId(*motif_id), Some(vec![select_motifs_run_config.id.expect("no select_motifs_run_config")])), CacheArea::default())),
                     ctx.branch(Some("select_motifs_filter_motif_loader"), false, false),
-                )
-                .await?;
+                ).await?;
 
             let keep_score = with_data!(ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
                 let motif_slices = motif_data.data().t_ref();
@@ -1294,6 +1292,9 @@ where
 
                 for (idx, criterion) in motif_criteria.iter().enumerate() {
                     let criterion_score = Self::clc_criterion_score(motif_slices, criterion)?;
+                    if criterion_score < 0.5 {//TODO config
+                        return Ok::<(bool, f64), ThoError>((false, 0.0));
+                    }
                     score_sum += criterion_score;
                     avg_score = score_sum / (idx + 1) as f64;
                     debug!("SelectMotifsStage::run: motif_id={motif_id} criterion={criterion:?} criterion_score={criterion_score:.6} avg_score={avg_score:.6}");
@@ -1378,11 +1379,11 @@ where
                 }
             }
 
-            let extended_motif_ids_filtered = self
+            let extended_motif_ids_scores_filtered = self
                 .filter_motifs_by_criteria(select_motifs_run_config, ctx.branch("filter_motifs_by_criteria".into(), false, false))
                 .await?;
 
-            run_config_extended_motif_ids.push((select_motifs_run_config.clone(), extended_motif_ids_filtered));
+            run_config_extended_motif_ids.push((select_motifs_run_config.clone(), extended_motif_ids_scores_filtered));
 
         }
 

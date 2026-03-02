@@ -258,7 +258,7 @@ impl FindAndSelectMotifsStage {
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_id: run_config.find_motifs_run_config.id.unwrap(), select_motifs_run_ids: None }), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
+        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_ids: vec![run_config.find_motifs_run_config.id.unwrap()], select_motifs_run_ids: None }), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
 
         let select_stage = Arc::new(
             SelectMotifsStage::<
@@ -287,7 +287,7 @@ impl FindAndSelectMotifsStage {
             .expect("FindAndSelectMotifsStage::run_find_and_select: select output still shared")
             .take_data(device_idx)
             .await?;
-        let selected_count = select_savable.total_selected_motifs();
+        let score_sum = select_savable.score_sum();
         select_savable.save(store, ws).await?;
 
 
@@ -295,7 +295,7 @@ impl FindAndSelectMotifsStage {
         #[cfg(tho_debug_plots)]
         run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![select_run_id] }), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
 
-        Ok(selected_count)
+        Ok(score_sum)
     }
 }
 
@@ -399,8 +399,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
 
                     opt.optimize().await;
 
-                    let guard = thoosa_shared::with_perf_log(
-                        || min_loss.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                    let guard = thoosa_shared::with_perf_log(|| min_loss.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
                         "FindAndSelectMotifs/run/read_min_loss",
                     );
                     let (best_loss, best_config) = (guard.0, guard.1.as_ref().map(|v|v.clone()));
@@ -408,7 +407,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                         info!("FindAndSelectMotifsStage::run: best_loss={best_loss:?} best_config={best_config:?}");
                         Ok::<_, ThoError>((grid_idx, Some(best_config)))
                     } else {
-                        warn!("FindAndSelectMotifsStage::run: no best config for grid_vals={grid_vals:?}");
+                        warn!("FindAndSelectMotifsStage::run: no best config for grid_vals={grid_vals:?} best_loss={best_loss:?}");
                         Ok::<_, ThoError>((grid_idx, None))
                     }
                 }
