@@ -462,6 +462,95 @@ pub fn interesting_turning_points_ratio_peaked_01(
     s_left.f_add(&s_mid)
 }
 
+/// Flat-top turning-points score in [0,1].
+///
+/// Computes T = (# sign changes in first difference of consensus median curve).
+/// Then applies trapezoid scoring with edges (a,b,c,d):
+///   T <= a : 0
+///   a < T < b : (T-a)/(b-a)
+///   b <= T <= c : 1
+///   c < T < d : (d-T)/(d-c)
+///   T >= d : 0
+///
+/// Example: a=2,b=3,c=5,d=7 gives:
+///   T=2.5 -> 0.5,  T in [3,5] -> 1,  T=6 -> 0.5
+pub fn interesting_turning_points_ratio_trapezoid_01(
+    x: &Tensor,  // [N, L]
+    a: i64,
+    b: i64,
+    c: i64,
+    d: i64,
+) -> Result<Tensor, TchError> {
+    let sz = x.size();
+    assert_eq!(sz.len(), 2, "expected [N,L]");
+    let l = sz[1];
+    assert!(l >= 3, "need L>=3");
+    assert!(a < b && b <= c && c < d, "need a < b <= c < d");
+
+    // consensus = median across occurrences per timepoint
+    let cns = f_quantile_dim0(x, 0.50)?; // [L]
+
+    // d[t] = c[t+1] - c[t], length L-1
+    let d1 = cns
+        .f_narrow(0, 1, l - 1)?
+        .f_sub(&cns.f_narrow(0, 0, l - 1)?)?; // [L-1]
+
+    // sign in {-1,0,1}
+    let s = d1.f_sign()?; // [L-1]
+
+    // turn when s[t]*s[t+1] < 0
+    let s0 = s.f_narrow(0, 0, l - 2)?; // [L-2]
+    let s1 = s.f_narrow(0, 1, l - 2)?; // [L-2]
+    let prod = s0.f_mul(&s1)?;         // [L-2]
+    let turns = prod
+        .f_lt(0.0)?                    // bool [L-2]
+        .f_to_kind(Kind::Float)?       // float mask
+        .f_sum(Kind::Float)?;          // scalar (float)
+
+    let t = turns.f_to_kind(x.kind())?; // scalar in x.kind()
+
+    // boundaries as scalars
+    let a_k = scalar_like(x, a as f64);
+    let b_k = scalar_like(x, b as f64);
+    let c_k = scalar_like(x, c as f64);
+    let d_k = scalar_like(x, d as f64);
+
+    let one = scalar_like(x, 1.0);
+    let zero = scalar_like(x, 0.0);
+
+    // rise: (t-a)/(b-a)
+    let rise = t
+        .f_sub(&a_k)?
+        .f_div(&b_k.f_sub(&a_k)?)?;
+
+    // fall: (d-t)/(d-c)
+    let fall = d_k
+        .f_sub(&t)?
+        .f_div(&d_k.f_sub(&c_k)?)?;
+
+    // masks
+    let m_rise = t
+        .f_gt_tensor(&a_k)?
+        .f_bitwise_and_tensor(&t.f_lt_tensor(&b_k)?)?
+        .f_to_kind(x.kind())?;
+
+    let m_flat = t
+        .f_ge_tensor(&b_k)?
+        .f_bitwise_and_tensor(&t.f_le_tensor(&c_k)?)?
+        .f_to_kind(x.kind())?;
+
+    let m_fall = t
+        .f_gt_tensor(&c_k)?
+        .f_bitwise_and_tensor(&t.f_lt_tensor(&d_k)?)?
+        .f_to_kind(x.kind())?;
+
+    // score = m_rise*rise + m_flat*1 + m_fall*fall
+    let s_r = m_rise.f_mul(&rise)?;
+    let s_f = m_fall.f_mul(&fall)?;
+    let s_flat = m_flat.f_mul(&one)?;
+    s_r.f_add(&s_flat)?.f_add(&s_f)?.f_maximum(&zero)?.f_minimum(&one)
+}
+
 /// Helper: power spectrum of consensus using torch.fft.rfft.
 /// Returns power: [F] where F = floor(L/2)+1, includes DC bin at 0.
 fn consensus_power_rfft(c: &Tensor) -> Result<Tensor, TchError> {
