@@ -83,10 +83,10 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::perf_logging::{format_perf_map, init_tracing, PERF};
 use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
-use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
+use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
-use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage, MotifSlicesSelector};
+use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
 use crate::tasks::train_final_net::new_train_final_net_with_ml;
@@ -1532,9 +1532,11 @@ where
         Arc::clone(loader),
         ws
     ));
-    let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
-        Arc::clone(&motif_loader_impl), // as Arc<dyn MotifLoaderStage<Output = <SlicesStats as Stage>::In<'static>>>,
-        Arc::new(SlicesStats::<C>::new()),
+    let clc_dist = Arc::new(MotifStats::new(
+        Arc::clone(store),
+        Arc::clone(loader),
+        Arc::clone(ws),
+        Arc::clone(&motif_loader_impl),
     ));
 
     match plot_params.motifs_by() {
@@ -1596,7 +1598,7 @@ async fn plot_found_motifs<C>(
     store: &Arc<Box<dyn Store>>,
     find_motifs_run_id: RunId,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
-    clc_dist: &Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<C>, C>, SlicesStats<C>, C>>,
+    clc_dist: &Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
     select_motifs_run_ids: Option<Vec<RunId>>,
     mut ctx: C,
 ) -> Result<(), ThoError>
@@ -1649,7 +1651,7 @@ async fn plot_selected_motifs<C>(
     store: &Arc<Box<dyn Store>>,
     select_motifs_run_id: RunId,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
-    clc_dist: &Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<C>, C>, SlicesStats<C>, C>>,
+    clc_dist: &Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
     mut ctx: C,
 ) -> Result<(), ThoError>
 where
@@ -1944,7 +1946,7 @@ async fn plot_motif<C>(
     mut ctx: C,
     motif_id: usize,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
-    clc_dist: Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<C>, C>, SlicesStats<C>, C>>,
+    clc_dist: Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
     select_motif_run_ids: Option<Vec<RunId>>,
 ) -> Result<(), ThoError>
 where
@@ -1952,7 +1954,10 @@ where
     let select_motif_run_ids_sfx = select_motif_run_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
     let motif_loader_input = MotifLoaderInput::new(DataId(motif_id as u32), select_motif_run_ids);
     let motif_id_arc = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), CacheArea::default()));
-    let clc_input = Arc::new(DevicesWrap::wrap(LoadMotifAndClcDistanceInput::new(motif_loader_input, Metrics::EucDist, Aggr::Mean(1.0)), CacheArea::default()));
+    let clc_input = Arc::new(DevicesWrap::wrap(
+        MotifStatsInput::from_motif_input(motif_loader_input, vec![Metrics::EucDist], Aggr::Mean(1.0)),
+        CacheArea::default(),
+    ));
 
     let motif = Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_arc),
@@ -1964,7 +1969,7 @@ where
     let dist = clc_dist
         .run/*_cached*/(clc_input, ctx.branch(Some("plot_motif_clc_dist"), false, false))
         .await?
-        .with_data_ref(0, ctx_for_dist, None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
+        .with_data_ref(0, ctx_for_dist, None, |stats: &MotifStatsOutput, _ctx| stats.channel_value(Metrics::EucDist, 0))
         .await?;
 
 
@@ -2404,12 +2409,12 @@ mod cli_tests {
     use thoosa_shared::val::NamedVal;
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
     use thoosa_with_data::with_data;
-    use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
+    use crate::tasks::slices_stats::{Aggr, Metrics};
     use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue};
     use crate::tasks::find_motifs::FindMotifsStage;
-    use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage};
+    use crate::tasks::motif_stats::MotifStats;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::tensor_loader::RawTensorLoader;
     use crate::tasks::transforms::freq_filter::FreqFilter;
@@ -2832,9 +2837,11 @@ mod cli_tests {
         ));
 
 
-        let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
-            Arc::clone(&motif_loader_impl), // as Arc<dyn MotifLoaderStage<Output = <SlicesStats as Stage>::In<'static>>>,
-            Arc::new(SlicesStats::<RunCtxWithPermits>::new()),
+        let clc_dist = Arc::new(MotifStats::new(
+            Arc::clone(&store),
+            Arc::clone(&loader),
+            Arc::clone(&ws),
+            Arc::clone(&motif_loader_impl),
         ));
 
         let resource = "1315636310"; //3879494837";

@@ -33,7 +33,10 @@ use thoosa_motifs::common_stats::{estimate_channel_stats_from_windows, Stats};
 
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::motif_loader::load_motif_slices_;
+use crate::tasks::motif_loader::MotifLoader;
+use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::random_slices_stats::random_non_overlapping_slices;
+use crate::tasks::slices_stats::{Aggr, Metrics};
 
 const DEFAULT_Q_LO: f64 = 0.05;
 const DEFAULT_Q_HI: f64 = 0.95;
@@ -256,10 +259,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    store: Arc<Box<dyn Store>>,
-    loader: Arc<L>,
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
-    clc_common_stats: Arc<CommonStatsSyncStage<C>>,
+    motif_stats: Arc<MotifStats<MotifLoader<L, C>, L, C>>,
     pd: PhantomData<C>,
 }
 
@@ -269,11 +269,10 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: Arc<RwLock<Box<dyn Workspace>>>) -> Self {
+        let motif_loader = Arc::new(MotifLoader::new(Arc::clone(&store), Arc::clone(&loader), &ws));
+        let motif_stats = Arc::new(MotifStats::new(Arc::clone(&store), Arc::clone(&loader), Arc::clone(&ws), motif_loader));
         Self {
-            store,
-            loader,
-            ws,
-            clc_common_stats: Arc::new(CommonStatsSyncStage::<C>::new(DEFAULT_Q_LO, DEFAULT_Q_HI, DEFAULT_SCALE_Q, DEFAULT_EPS)),
+            motif_stats,
             pd: PhantomData,
         }
     }
@@ -319,52 +318,73 @@ where
             return Err(ThoError::new(format!("CommonStats: max_slices must be >= 2, got {max_slices}")));
         }
 
-        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(find_motifs_run_id, &self.store.list_run_config_values(find_motifs_run_id).await?)?;
-        let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
-        let resources = self.store.list_random_resources(None).await?;
-        let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, find_motifs_run_config.window, input_len_adjuster)?;
+        let metrics = vec![
+            Metrics::CommonEucDist,
+            Metrics::CommonPearson,
+            Metrics::CommonA0,
+            Metrics::CommonTv0,
+            Metrics::CommonCurv0,
+            Metrics::CommonAmpP10,
+            Metrics::CommonAmpP50,
+            Metrics::CommonAmpP90,
+            Metrics::CommonTvnP10,
+            Metrics::CommonTvnP50,
+            Metrics::CommonTvnP90,
+            Metrics::CommonCurvnP10,
+            Metrics::CommonCurvnP50,
+            Metrics::CommonCurvnP90,
+        ];
 
-        debug!("CommonStats::run: find_motifs_run_id={find_motifs_run_id} slices={slices:?} resources_map={resources_map:?}");
+        let motif_stats = Arc::clone(&self.motif_stats)
+            .run(
+                Arc::new(DevicesWrap::wrap(
+                    MotifStatsInput::from_random(max_slices, find_motifs_run_id, metrics.clone(), Aggr::Mean(1.0)),
+                    cache_area.into(),
+                )),
+                ctx.branch(Some("common_stats_motif_stats"), false, false),
+            )
+            .await?;
 
-        let (_window, channels_slices) = load_motif_slices_(
-            DataId(0),
-            find_motifs_run_id,
-            resources_map,
-            slices,
-            Arc::clone(&self.store),
-            Arc::clone(&self.loader),
-            ctx.branch(Some("common_stats_load_slices"), false, false),
-            &self.ws,
-            "common_stats",
-        )
-        .await?;
+        let stats = with_data!(ctx.branch(Some("common_stats_with_data"), false, false), motif_stats; |_ctx, out: &MotifStatsOutput| {
+            let euc_dist = out.channels_values(Metrics::CommonEucDist)?;
+            let pearson = out.channels_values(Metrics::CommonPearson)?;
+            let a0 = out.channels_values(Metrics::CommonA0)?;
+            let tv0 = out.channels_values(Metrics::CommonTv0)?;
+            let curv0 = out.channels_values(Metrics::CommonCurv0)?;
+            let amp_p10 = out.channels_values(Metrics::CommonAmpP10)?;
+            let amp_p50 = out.channels_values(Metrics::CommonAmpP50)?;
+            let amp_p90 = out.channels_values(Metrics::CommonAmpP90)?;
+            let tvn_p10 = out.channels_values(Metrics::CommonTvnP10)?;
+            let tvn_p50 = out.channels_values(Metrics::CommonTvnP50)?;
+            let tvn_p90 = out.channels_values(Metrics::CommonTvnP90)?;
+            let curvn_p10 = out.channels_values(Metrics::CommonCurvnP10)?;
+            let curvn_p50 = out.channels_values(Metrics::CommonCurvnP50)?;
+            let curvn_p90 = out.channels_values(Metrics::CommonCurvnP90)?;
 
-        let slice_count = channels_slices.t_ref().size()[1];
-        if slice_count < 2 {
-            return Err(ThoError::new(format!("CommonStats: not enough slices, got {slice_count}")));
-        }
+            let channels = euc_dist.len();
+            let stats = (0..channels)
+                .map(|idx| Stats {
+                    euc_dist: euc_dist[idx],
+                    pearson: pearson[idx],
+                    a0: a0[idx],
+                    tv0: tv0[idx],
+                    curv0: curv0[idx],
+                    amp_p10: amp_p10[idx],
+                    amp_p50: amp_p50[idx],
+                    amp_p90: amp_p90[idx],
+                    tvn_p10: tvn_p10[idx],
+                    tvn_p50: tvn_p50[idx],
+                    tvn_p90: tvn_p90[idx],
+                    curvn_p10: curvn_p10[idx],
+                    curvn_p50: curvn_p50[idx],
+                    curvn_p90: curvn_p90[idx],
+                    m: max_slices as i64,
+                    l: 0,
+                })
+                .collect::<Vec<_>>();
+            Ok::<_, ThoError>(stats)
+        })?;
 
-        let common_stats_input = Arc::new(DevicesWrap::wrap(CommonStatsCalcInput::new(input_id, channels_slices), cache_area.into()));
-        let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-        let common_stats = OOMHandler::new(
-            vec![
-                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
-                Adjusters::RunContext(Box::new(DumpToCpu::new())),
-            ],
-            None,
-        )
-        .run(
-            &self.clc_common_stats,
-            common_stats_input,
-            ctx.branch(Some("common_stats_sync"), false, false),
-            Contexts::new(
-                NoopInputContext(None),
-                NoopRunnableContext {},
-                PermitsAndDumpToCpuAdjustableContex::new(PermitsAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
-            ),
-        )
-        .await?;
-
-        Ok(Arc::new(DevicesWrap::wrap(common_stats, cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(CommonStatsOutput::new(input_id, stats), cache_area.into())))
     }
 }

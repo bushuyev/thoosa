@@ -21,16 +21,140 @@ use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, Select, WithId};
 use thoosa_shared::{mono_key, panic_to_err, CopyToDevice, ThoError};
 use thoosa_motifs::pearson_corr::pearson_corr_distance_matrix_0_2_single as pearson_corr_distance_matrix_0_2_single_matrix;
+use thoosa_motifs::common_stats::Stats as CommonStatsValue;
+use thoosa_motifs::criteria::{
+    coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01,
+    interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio_peaked_01,
+    interesting_tv_norm_01, norm_thickness,
+};
 
-#[derive(Debug, Copy, Clone, DummyData)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, DummyData)]
 pub enum Metrics {
     EucDist,
     PearsonCorr,//not used yet
+    CommonEucDist,
+    CommonPearson,
+    CommonA0,
+    CommonTv0,
+    CommonCurv0,
+    CommonAmpP10,
+    CommonAmpP50,
+    CommonAmpP90,
+    CommonTvnP10,
+    CommonTvnP50,
+    CommonTvnP90,
+    CommonCurvnP10,
+    CommonCurvnP50,
+    CommonCurvnP90,
+    NormThickness,
+    InlierRatioRunConfig,
+    CoherenceRunConfig,
+    InterestingAmp01,
+    InterestingTvNorm01,
+    InterestingCurvatureNorm01,
+    InterestingTurningPointsRatio,
+    InterestingBandEnergyRatio01,
+    InterestingEntropyGauss01,
+    InterestingEntropyBand01,
 }
 
 impl Default for Metrics {
     fn default() -> Self {
         Self::EucDist
+    }
+}
+
+impl Metrics {
+    pub fn is_common_stats_metric(&self) -> bool {
+        matches!(
+            self,
+            Metrics::CommonEucDist
+                | Metrics::CommonPearson
+                | Metrics::CommonA0
+                | Metrics::CommonTv0
+                | Metrics::CommonCurv0
+                | Metrics::CommonAmpP10
+                | Metrics::CommonAmpP50
+                | Metrics::CommonAmpP90
+                | Metrics::CommonTvnP10
+                | Metrics::CommonTvnP50
+                | Metrics::CommonTvnP90
+                | Metrics::CommonCurvnP10
+                | Metrics::CommonCurvnP50
+                | Metrics::CommonCurvnP90
+        )
+    }
+
+    pub fn common_stats_value(&self, stats: &CommonStatsValue) -> Result<f32, ThoError> {
+        match self {
+            Metrics::CommonEucDist => Ok(stats.euc_dist),
+            Metrics::CommonPearson => Ok(stats.pearson),
+            Metrics::CommonA0 => Ok(stats.a0),
+            Metrics::CommonTv0 => Ok(stats.tv0),
+            Metrics::CommonCurv0 => Ok(stats.curv0),
+            Metrics::CommonAmpP10 => Ok(stats.amp_p10),
+            Metrics::CommonAmpP50 => Ok(stats.amp_p50),
+            Metrics::CommonAmpP90 => Ok(stats.amp_p90),
+            Metrics::CommonTvnP10 => Ok(stats.tvn_p10),
+            Metrics::CommonTvnP50 => Ok(stats.tvn_p50),
+            Metrics::CommonTvnP90 => Ok(stats.tvn_p90),
+            Metrics::CommonCurvnP10 => Ok(stats.curvn_p10),
+            Metrics::CommonCurvnP50 => Ok(stats.curvn_p50),
+            Metrics::CommonCurvnP90 => Ok(stats.curvn_p90),
+            _ => Err(ThoError::new(format!("common_stats_value called with non-common metric: {self:?}"))),
+        }
+    }
+}
+
+pub fn metric_scalar_for_motif(motif_slices: &Tensor, metric: Metrics, aggr: Aggr) -> Result<f32, ThoError> {
+    let score_t = match metric {
+        Metrics::EucDist => return panic_to_err!(euclidean_distance(motif_slices, aggr)),
+        Metrics::PearsonCorr => return panic_to_err!(pearson_corr_distance_matrix_0_2_single(motif_slices, 1e-8, aggr)),
+
+        Metrics::CommonEucDist
+        | Metrics::CommonPearson
+        | Metrics::CommonA0
+        | Metrics::CommonTv0
+        | Metrics::CommonCurv0
+        | Metrics::CommonAmpP10
+        | Metrics::CommonAmpP50
+        | Metrics::CommonAmpP90
+        | Metrics::CommonTvnP10
+        | Metrics::CommonTvnP50
+        | Metrics::CommonTvnP90
+        | Metrics::CommonCurvnP10
+        | Metrics::CommonCurvnP50
+        | Metrics::CommonCurvnP90 => {
+            let common_stats = thoosa_motifs::common_stats::estimate_channel_stats_from_windows(
+                &motif_slices.f_unsqueeze(0)?,
+                0.05,
+                0.95,
+                0.50,
+                1e-8,
+            )?;
+            let stats = common_stats
+                .first()
+                .ok_or_else(|| ThoError::new("metric_scalar_for_motif: no common stats for motif"))?;
+            return metric.common_stats_value(stats);
+        }
+
+        Metrics::NormThickness => norm_thickness(motif_slices, 1.0, 1e-8)?,
+        Metrics::InlierRatioRunConfig => inlier_ratio(motif_slices, 4.5, 1e-8)?,
+        Metrics::CoherenceRunConfig => coherence(motif_slices, 10, 1e-8)?,
+        Metrics::InterestingAmp01 => interesting_amp_01(motif_slices, 0.05, 0.95, 1.0, 1e-8)?,
+        Metrics::InterestingTvNorm01 => interesting_tv_norm_01(motif_slices, 0.05, 0.95, 1.0, 1e-8)?,
+        Metrics::InterestingCurvatureNorm01 => interesting_curvature_norm_01(motif_slices, 0.05, 0.95, 1.0, 1e-8)?,
+        Metrics::InterestingTurningPointsRatio => interesting_turning_points_ratio_peaked_01(motif_slices, 4)?,
+        Metrics::InterestingBandEnergyRatio01 => interesting_band_energy_ratio_01(motif_slices, 250.0, 8.0, 30.0, 1e-8)?,
+        Metrics::InterestingEntropyGauss01 => interesting_entropy_gauss_01(motif_slices, 0.6, 0.15, 1e-8)?,
+        Metrics::InterestingEntropyBand01 => interesting_entropy_band_01(motif_slices, 0.3, 0.85, 1e-8)?,
+    };
+
+    let raw = score_t.f_double_value(&[])?;
+    if raw.is_finite() {
+        Ok(raw as f32)
+    } else {
+        Ok(0.0)
     }
 }
 
@@ -220,10 +344,7 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SlicesStats::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let value = match input.metrics() {
-            Metrics::EucDist => panic_to_err!(euclidean_distance(input.slices().data().t_ref(), input.aggr()))?,
-            Metrics::PearsonCorr => panic_to_err!(pearson_corr_distance_matrix_0_2_single(input.slices().data().t_ref(), 1e-8, input.aggr()))?,
-        };
+        let value = metric_scalar_for_motif(input.slices().data().t_ref(), input.metrics(), input.aggr())?;
 
         Ok(ScalarStatsValue::new(SynKey::new([mono_key!("AverageDistanceValue", "AverageDistanceValue")]), value))
     }

@@ -12,6 +12,7 @@ pub mod random_motif;
 pub mod common_stats;
 pub mod welch_psd;
 pub mod slices_stats;
+pub mod motif_stats;
 pub mod load_motif_and_clc_dist;
 pub mod transforms;
 pub mod stages_seq;
