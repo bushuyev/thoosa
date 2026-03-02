@@ -258,7 +258,7 @@ impl FindAndSelectMotifsStage {
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_id: run_config.find_motifs_run_config.id.unwrap(), select_motifs_run_ids: None }), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
+        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_ids: vec![run_config.find_motifs_run_config.id.unwrap()], select_motifs_run_ids: None }), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
 
         let select_stage = Arc::new(
             SelectMotifsStage::<

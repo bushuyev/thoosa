@@ -1001,7 +1001,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         id: None,
         step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Range { range: Range { start: 100, end: 2100 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000),
-        // window: RangeOrValue::Value(500), //RangeOrValue::Value(1000),
+        // window: RangeOrValue::Value(300), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             // BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -1019,7 +1019,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 window_len: RangeOrValue::Value(111),
                 // poly_order: RangeOrValue::Range { range: Range { start: 1, end: 11 }, step: Some((3, 0)) },
                 poly_order: RangeOrValue::Value(3),
-                stride: RangeOrValue::Value(10),
+                stride: RangeOrValue::Value(5),
                 padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             }),
             NotchBandFilter(NotchBandFilterParamsRangeOrValue {
@@ -1083,7 +1083,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             interesting_entropy_gauss_01: None,
             interesting_entropy_band_01: None,
         },
-        threshold: RangeOrValue::Value(0.8), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
+        threshold: RangeOrValue::Value(0.7), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
         min_slices: Some(RangeOrValue::Value(3)),
         max_slices: Some(RangeOrValue::Value(100)),
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
@@ -1553,50 +1553,23 @@ where
             plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None).await?;
         }
         DataBy::RunId {
-            find_motifs_run_id,
+            find_motifs_run_ids,
             select_motifs_run_ids
         } => {
 
-            debug!("run_plot: MotifsBy::RunId find_run_id={find_motifs_run_id} select_run_ids={select_motifs_run_ids:?}");
-
-            let motifs = store.list_motifs(find_motifs_run_id).await?;
-            let motifs_len = motifs.len();
-            let done_cnt = Arc::new(AtomicU32::new(0));
-
-            let futures = motifs
-                .into_iter()
-                .map(|motif_id| {
-                    let done_cnt = Arc::clone(&done_cnt);
-                    let clc_dist = Arc::clone(&clc_dist);
-                    let motif_loader_impl = Arc::clone(&motif_loader_impl);
-                    let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true, false);
-                    let select_motifs_run_ids = select_motifs_run_ids.clone();
-                    async move {
-                        debug!("run_plot: motif_id={motif_id}");
-
-                        //gpt TODO!! select_motifs_run_ids is not forwarded to plot_motif here; plots ignore selection filtering even when provided.
-                        if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_ids).await {
-                            error!("motif {motif_id} failed: e={e:?}");
-                        };
-                        MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();
-
-                        let done = done_cnt.fetch_add(1, Relaxed);
-                        if done % 32 == 0 {
-                            info!("done {done} from  {motifs_len}");
-                        }
-
-                        Ok::<_, ThoError>(())
-                    }
-                });
-
-            let _ = collect_futures_with_progress(
-                futures,
-                motifs_len,
-                crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
-                StreamBuffering::Unordered,
-                "run_plot_slices",
-            )
-            .await;
+            debug!("run_plot: MotifsBy::RunId find_run_ids={find_motifs_run_ids:?} select_run_ids={select_motifs_run_ids:?}");
+            for find_motifs_run_id in find_motifs_run_ids {
+                plot_found_motifs(
+                    ws,
+                    store,
+                    find_motifs_run_id,
+                    &motif_loader_impl,
+                    &clc_dist,
+                    select_motifs_run_ids.clone(),
+                    ctx.branch(Some(&format!("find_motifs_run_{find_motifs_run_id}")), true, false),
+                )
+                .await?;
+            }
         }
 
         DataBy::SelectedMotifs { select_motifs_run_ids } => {
@@ -1614,6 +1587,59 @@ where
         }
 
     }
+
+    Ok(())
+}
+
+async fn plot_found_motifs<C>(
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Box<dyn Store>>,
+    find_motifs_run_id: RunId,
+    motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
+    clc_dist: &Arc<LoadMotifAndClcDistanceStage<MotifLoader<RawTensorLoader<C>, C>, SlicesStats<C>, C>>,
+    select_motifs_run_ids: Option<Vec<RunId>>,
+    mut ctx: C,
+) -> Result<(), ThoError>
+where
+    C: RunCtx + Adjustable,
+{
+    let motifs = store.list_motifs(find_motifs_run_id).await?;
+    let motifs_len = motifs.len();
+    let done_cnt = Arc::new(AtomicU32::new(0));
+
+    let futures = motifs
+        .into_iter()
+        .map(|motif_id| {
+            let done_cnt = Arc::clone(&done_cnt);
+            let clc_dist = Arc::clone(clc_dist);
+            let motif_loader_impl = Arc::clone(motif_loader_impl);
+            let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true, false);
+            let select_motifs_run_ids = select_motifs_run_ids.clone();
+            async move {
+                debug!("run_plot: motif_id={motif_id}");
+
+                if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_ids).await {
+                    error!("motif {motif_id} failed: e={e:?}");
+                };
+                MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();
+
+                let done = done_cnt.fetch_add(1, Relaxed);
+                if done % 32 == 0 {
+                    info!("done {done} from  {motifs_len}");
+                }
+
+                Ok::<_, ThoError>(())
+            }
+        });
+
+    let _ = collect_futures_with_progress(
+        futures,
+        motifs_len,
+        crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
+        StreamBuffering::Unordered,
+        "run_plot_slices",
+    )
+    .await;
 
     Ok(())
 }

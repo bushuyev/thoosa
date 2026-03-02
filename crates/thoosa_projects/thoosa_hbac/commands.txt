@@ -62,3 +62,4 @@ select run_id, label_id, sl.motif_id, count(*) from slices sl left join labeled_
 
 insert into selected_motifs (motif_id, run_id, rate) select motif_id, 0, 0.0 from (select motif_id, count(*) cnt from slices group by motif_id having cnt < 100 and cnt > 10);
 
+
