@@ -29,7 +29,6 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_with_data::with_data;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, MotifSlices};
-use crate::tasks::load_motif_and_clc_dist::MotifSlicesSelector;
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;

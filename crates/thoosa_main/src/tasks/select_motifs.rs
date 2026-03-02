@@ -50,13 +50,13 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 use crate::cli::Commands::SelectMotifs;
-use crate::tasks::slices_stats::{Aggr, ScalarStatsValue, Metrics, SlicesStats};
+use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
 use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::tasks::cross_loader::{RangeOrSlice, ResourcesConfigInput};
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
-use crate::tasks::load_motif_and_clc_dist::{DistOutputBuilder, LoadMotifAndClcDistanceInput, LoadMotifAndClcDistanceStage, MotifSlicesSelector};
+use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use crate::buffer_limits::LOAD_STACKED_MOTIFS_LIMIT;
@@ -106,7 +106,7 @@ where
     find_motifs_run_ids:Vec<RunId>,
     clc_resources_motifs_dist:Arc<ClcResourcesMotifsDist<C>>,
     max_batch:i64,//TODO to SelectMotifsSFixedConfig,
-    clc_dist:Arc<LoadMotifAndClcDistanceStage<ML, SlicesStats<C>, C>>,
+    clc_dist:Arc<MotifStats<ML, L, C>>,
 
     find_motif_run_ids_motif_ids: HashMap<RunId, Vec<u32>>
 }
@@ -688,9 +688,11 @@ where
 
 
 
-        let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
+        let clc_dist = Arc::new(MotifStats::new(
+            Arc::clone(store),
+            Arc::clone(&loader),
+            Arc::clone(ws),
             Arc::clone(&motif_loader),
-            Arc::new(SlicesStats::<C>::new())
         ));
 
         //gpt Snapshot motif ids for each find_motifs_run_id; used later for criteria filtering.
@@ -901,7 +903,7 @@ where
     }
 
     async fn clc_stacked_motifs_statistics(
-        load_and_clc_dist: Arc<LoadMotifAndClcDistanceStage<ML, SlicesStats<C>, C>>,
+        load_and_clc_dist: Arc<MotifStats<ML, L, C>>,
         motif_data: Arc<DevicesWrap<StackedMotifsOutput>>,
         slices_selector_metric: Metrics,
         slices_selector_aggr: Aggr,
@@ -936,13 +938,18 @@ where
                     let result = (async {
                         let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.clone());
                         let clc_input = Arc::new(DevicesWrap::wrap(
-                            LoadMotifAndClcDistanceInput::new(motif_loader_input, slices_selector_metric, slices_selector_aggr),
+                            MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric], slices_selector_aggr),
                             cache_area,
                         ));
                         let motif_stat = load_and_clc_dist
                             .run(clc_input, ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc"), false, false))
                             .await?
-                            .with_data_ref(0, ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc_with_data_ref"), false, false), None, |dist_val: &ScalarStatsValue, _ctx| Ok(dist_val.value()))
+                            .with_data_ref(
+                                0,
+                                ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc_with_data_ref"), false, false),
+                                None,
+                                |stats: &MotifStatsOutput, _ctx| stats.channel_value(slices_selector_metric, 0),
+                            )
                             .await?;
                         Ok::<_, ThoError>((motif_id, motif_stat))
                     })
@@ -1443,11 +1450,11 @@ pub mod tests {
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
-    use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
+    use crate::tasks::motif_stats::MotifStats;
     use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
     use crate::tasks::motif_loader::mock_motif_loader::MockMotifLoader;
     use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
-    use crate::tasks::slices_stats::{Aggr, Metrics, SlicesStats};
+    use crate::tasks::slices_stats::{Aggr, Metrics};
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use crate::tasks::select_motifs::{fold_dists, fold_mask, SelectMotifsSavableResultBuilder, SelectMotifsStage};
@@ -1977,6 +1984,7 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_clc_stacked_motifs_statistics_duplicates_and_pads_with_min() -> Result<(), ThoError> {
         GlobalCtx::init_devices(1);
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
         let find_motifs_run_id = 7u32;
         let find_motifs_run_config = Arc::new(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 3, None, None));
@@ -2016,7 +2024,9 @@ pub mod tests {
                 ),
             ),
         ]).finish());
-        let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(motif_loader, Arc::new(SlicesStats::<MockRunCtx>::new())));
+        let store = Arc::new(MockStoreBuilder::new().build());
+        let loader = Arc::new(mock_tensor_loader::build().finish());
+        let clc_dist = Arc::new(MotifStats::new(store, loader, Arc::clone(&ws), motif_loader));
 
         let mut ctx = mock_run_ctx::default(0);
         let motifs_stats = SelectMotifsStage::<MockTensorLoader, MockMotifLoader, MockRunCtx>::clc_stacked_motifs_statistics(
