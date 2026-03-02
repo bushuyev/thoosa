@@ -44,7 +44,7 @@ use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{load_final_model, opt_train, AttnPool1dArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, OptConfig, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
-use thoosa_common::utils::{cuda_mem, from, lin_t, list_devices, plot_series, reset_print_options, DummyListener, TrainListener};
+use thoosa_common::utils::{cuda_mem, from, lin_t, list_devices, plot_series, plot_series_with_sidebar_values, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_motifs::find;
@@ -1954,8 +1954,9 @@ where
     let select_motif_run_ids_sfx = select_motif_run_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
     let motif_loader_input = MotifLoaderInput::new(DataId(motif_id as u32), select_motif_run_ids);
     let motif_id_arc = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), CacheArea::default()));
+    let metrics = Metrics::all();
     let clc_input = Arc::new(DevicesWrap::wrap(
-        MotifStatsInput::from_motif_input(motif_loader_input, vec![Metrics::EucDist], Aggr::Mean(1.0)),
+        MotifStatsInput::from_motif_input(motif_loader_input, metrics.clone(), Aggr::Mean(1.0)),
         CacheArea::default(),
     ));
 
@@ -1965,19 +1966,30 @@ where
     )
     .await?;
 
-    let mut ctx_for_dist = ctx.branch(Some("plot_motif_dist_value"), false, false);
-    let dist = clc_dist
+    let metrics_for_plot = clc_dist
         .run/*_cached*/(clc_input, ctx.branch(Some("plot_motif_clc_dist"), false, false))
         .await?
-        .with_data_ref(0, ctx_for_dist, None, |stats: &MotifStatsOutput, _ctx| stats.channel_value(Metrics::EucDist, 0))
+        .with_data_ref(
+            0,
+            ctx.branch(Some("plot_motif_metrics_values"), false, false),
+            None,
+            move |stats: &MotifStatsOutput, _ctx| {
+                metrics
+                    .iter()
+                    .map(|metric| Ok((format!("{metric:?}"), stats.channel_value(*metric, 0)?)))
+                    .collect::<Result<Vec<_>, ThoError>>()
+            },
+        )
         .await?;
+    let metrics_for_plot = Arc::new(metrics_for_plot);
 
 
-    let r = motif.with_data_ref(0, ctx.branch(Some("plot_motif_data"), false, false), None, |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>, _ctx| {
+    let metrics_for_plot_ref = Arc::clone(&metrics_for_plot);
+    let r = motif.with_data_ref(0, ctx.branch(Some("plot_motif_data"), false, false), None, move |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>, _ctx| {
             let run_id = motif.extra().find_motifs_run_id;
             let channel = motif.extra().channel;
 
-            trace!("motif.t={} dist={dist}", motif.data().t_ref());
+            trace!("plot_motif: motif.t={}", motif.data().t_ref());
             let all_slices = motif.data().t_ref().unbind(0);
             let slices_len = all_slices.len();
             let mut color_iter = DistinctColorIter::new();
@@ -1992,11 +2004,13 @@ where
                     ))
                 })
                 .collect::<Result<Vec<_>, ThoError>>()?;
-            plot_series(
+            plot_series_with_sidebar_values(
                 plot_data,
-                format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={dist}").as_str(),
-                (2000, 1000),
-                &ws.read().plots_path().join(format!("{run_id}{select_motif_run_ids_sfx}")).join(format!("motif_{}.png", motif_id))
+                format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len}").as_str(),
+                (2600, 1200),
+                &ws.read().plots_path().join(format!("{run_id}{select_motif_run_ids_sfx}")).join(format!("motif_{}.png", motif_id)),
+                "Motif Metrics",
+                metrics_for_plot_ref.as_slice(),
             )?;
 
 

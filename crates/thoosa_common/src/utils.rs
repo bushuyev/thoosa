@@ -236,6 +236,109 @@ where
     _plot_series(name_x_y_vec, caption, w_h, path, None, Some(lanes))
 }
 
+pub fn plot_series_with_sidebar_values<S>(
+    name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
+    caption: &str,
+    w_h: (u32, u32),
+    path: &impl AsRef<std::path::Path>,
+    sidebar_title: &str,
+    sidebar_rows: &[(String, f32)],
+) -> Result<(), ThoError>
+where
+    S: Into<ShapeStyle> + Clone,
+{
+    if let Some(parent) = path.as_ref().parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (_, _, points) in &name_x_y_vec {
+        for (x, y) in points {
+            min_x = min_x.min(*x);
+            max_x = max_x.max(*x);
+            min_y = min_y.min(*y);
+            max_y = max_y.max(*y);
+        }
+    }
+    if !min_x.is_finite() || !max_x.is_finite() || !min_y.is_finite() || !max_y.is_finite() {
+        min_x = 0.0;
+        max_x = 1.0;
+        min_y = 0.0;
+        max_y = 1.0;
+    }
+    if (max_x - min_x).abs() < f32::EPSILON {
+        max_x = min_x + 1.0;
+    }
+    if (max_y - min_y).abs() < f32::EPSILON {
+        max_y = min_y + 1.0;
+    }
+
+    let root = BitMapBackend::new(path, w_h).into_drawing_area();
+    root.fill(&WHITE)?;
+    let total_w = w_h.0 as i32;
+    let sidebar_w = ((total_w as f32 * 0.30) as i32).clamp(360, 760).min(total_w - 200);
+    let (chart_area, sidebar_area) = root.split_horizontally(total_w - sidebar_w);
+
+    let mut chart = ChartBuilder::on(&chart_area)
+        .caption(caption, ("sans-serif", 42).into_font())
+        .margin(5)
+        .x_label_area_size(30)
+        .y_label_area_size(100)
+        .build_cartesian_2d(min_x..max_x, min_y..max_y)?;
+    chart.configure_mesh().draw()?;
+
+    for (name, color, x_y) in name_x_y_vec {
+        chart
+            .draw_series(LineSeries::new(x_y, color.clone()))?
+            .label(name)
+            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color.clone()));
+    }
+
+    chart
+        .configure_series_labels()
+        .background_style(&WHITE.mix(0.8))
+        .border_style(&BLACK)
+        .draw()?;
+
+    sidebar_area.fill(&RGBColor(245, 245, 245))?;
+    let (sidebar_w_px, sidebar_h_px) = sidebar_area.dim_in_pixel();
+    sidebar_area.draw(&Rectangle::new(
+        [(0, 0), (sidebar_w_px as i32 - 1, sidebar_h_px as i32 - 1)],
+        ShapeStyle::from(&BLACK).stroke_width(1),
+    ))?;
+    sidebar_area.draw(&Text::new(
+        sidebar_title.to_string(),
+        (12, 32),
+        ("sans-serif", 26).into_font().color(&BLACK),
+    ))?;
+
+    let mut y = 66;
+    let line_step = 30;
+    let last_line_y = sidebar_h_px as i32 - 18;
+    let mut clipped = false;
+    for (name, value) in sidebar_rows {
+        if y > last_line_y {
+            clipped = true;
+            break;
+        }
+        sidebar_area.draw(&Text::new(
+            format!("{name}: {value:.6}"),
+            (12, y),
+            ("sans-serif", 18).into_font().color(&BLACK),
+        ))?;
+        y += line_step;
+    }
+    if clipped {
+        sidebar_area.draw(&Text::new("...".to_string(), (12, last_line_y), ("sans-serif", 18).into_font().color(&BLACK)))?;
+    }
+
+    root.present()?;
+    Ok(())
+}
+
 
 fn _plot_series<S>(
     name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,

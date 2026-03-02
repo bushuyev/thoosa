@@ -48,6 +48,37 @@ impl Default for Metrics {
 }
 
 impl Metrics {
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::EucDist,
+            Self::PearsonCorr,
+            Self::CommonEucDist,
+            Self::CommonPearson,
+            Self::CommonA0,
+            Self::CommonTv0,
+            Self::CommonCurv0,
+            Self::CommonAmpP10,
+            Self::CommonAmpP50,
+            Self::CommonAmpP90,
+            Self::CommonTvnP10,
+            Self::CommonTvnP50,
+            Self::CommonTvnP90,
+            Self::CommonCurvnP10,
+            Self::CommonCurvnP50,
+            Self::CommonCurvnP90,
+            Self::NormThickness,
+            Self::InlierRatioRunConfig,
+            Self::CoherenceRunConfig,
+            Self::InterestingAmp01,
+            Self::InterestingTvNorm01,
+            Self::InterestingCurvatureNorm01,
+            Self::InterestingTurningPointsRatio,
+            Self::InterestingBandEnergyRatio01,
+            Self::InterestingEntropyGauss01,
+            Self::InterestingEntropyBand01,
+        ]
+    }
+
     pub fn is_common_stats_metric(&self) -> bool {
         matches!(
             self,
