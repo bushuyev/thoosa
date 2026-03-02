@@ -39,7 +39,6 @@ use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_common::cuda_utils::{pack_bits_bool, with_cuda_stream};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::data_with_extra::DataWithExtra;
-use crate::tasks::slices_stats::ScalarStatsValue;
 use crate::tasks::motif_loader::MotifMeta;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_common::tho_tensor::ThoTensor;
@@ -516,11 +515,8 @@ mod tests {
     use thoosa_shared::ResourceType::Group;
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_with_data::with_data;
-    use crate::tasks::slices_stats::SlicesStats;
-    use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::cross_dims::MotifSlices;
-    use crate::tasks::slices_stats::ScalarStatsValue;
     use crate::tasks::random_slices_stats::RANDOM_AVG_DIST_GROUP;
     use crate::tasks::select_motifs::SelectMotifsStage;
 
