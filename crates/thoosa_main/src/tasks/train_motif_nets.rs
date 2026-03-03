@@ -229,7 +229,7 @@ where
                     },
                     move |rc:&TrainMotifsNetsRunConfig, vs: &VarStore| {
                         let params = match &rc.net {
-                            MotifNetTypeArgs::ConvNet(net) => MotifNetParams::new_conv(motif_width, net.num_layers, net.step, net.channels, net.kernel),
+                            MotifNetTypeArgs::ConvNet(net) => MotifNetParams::new_conv(motif_width, net.conv_layers, net.head_layers, net.step, net.channels, net.kernel),
                             MotifNetTypeArgs::LinNet(net) => MotifNetParams::new_lin(motif_width, net.num_layers, net.step),
                             MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.step, net.channels, net.kernel),
                         };
@@ -410,11 +410,11 @@ where
             guard.branch(Some("motifs_batch_make"), false, false)
         }, motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, DataId>|{
 
-            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;//TODO config
-            let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
+            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.5 })?;//TODO config
+            let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 10.0 })?;
 
-            // debug_plot!(&motifs.as_ref(), "batch_motif_{motif_id}")?;
-            // debug_plot!(&random.as_ref(), "batch_random_motif_in_batch_{motif_id}")?;
+            debug_plot!(&motifs.as_ref(), "batch_motif_{motif_id}")?;
+            debug_plot!(&random.as_ref(), "batch_random_motif_in_batch_{motif_id}")?;
 
 
             let (x, _lengths, y) = mix_x_binary_with_labels(&motifs, None, &random, None)?;
@@ -623,7 +623,7 @@ mod tests {
                     // NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Step)), Val::Int(1)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Kernel)), Val::Int(100)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::NumLayers)), Val::Int(8)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::HeadLayers)), Val::Int(8)),
                 ]),
                 vec![
                     // NamedRange::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
