@@ -13,3 +13,9 @@ pub mod data;
 mod buffer_limits;
 mod tasks;
 pub mod version;
+
+pub use tasks::cross_dims::ChannelsData2;
+pub use tasks::apply_motif_nets::ApplyMotifNets;
+pub use tasks::tensor_loader::RawTensorLoader;
+pub use tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
+pub use tasks::transforms::freq_filter::FreqFilter;

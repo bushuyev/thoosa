@@ -4915,6 +4915,7 @@ dependencies = [
  "thoosa_common",
  "thoosa_main",
  "thoosa_motifs",
+ "thoosa_properties_map",
  "thoosa_shared",
  "thoosa_shims",
  "thoosa_store",
