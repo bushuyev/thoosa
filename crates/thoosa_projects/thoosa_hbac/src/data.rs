@@ -827,10 +827,8 @@ mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{Device, IndexOp, TchError, Tensor};
-    use thoosa_common::dims::AnyDims;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::my_tch::ThoModule;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifsNetsRunConfigFields};
@@ -840,7 +838,7 @@ mod tests {
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{Cli, import_resources};
-    use thoosa_main::{ChannelsData2, FreqFilter, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
+    use thoosa_main::{ApplyMotifNets, ChannelsData2, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::find::{SelectMotifsParams};
@@ -1078,6 +1076,7 @@ mod tests {
 
         let find_motifs_run_id: RunId = 1;
         let select_motifs_run_id: RunId = 2;
+        let train_motif_nets_run_id: RunId = 3;
         let motif_id = 10u32;
         let motif_width = 100u32;
         let resource_id = 1u32;
@@ -1110,8 +1109,7 @@ mod tests {
         let raw_loaded_for_apply = raw_loaded.shallow_clone();
 
         let channels = raw_loaded.size()[0] as u32;
-
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, channels, 200, raw_loaded.size()[1] as u32)));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(Path::new("/tmp").join(cdt_for_dir()), channels, raw_loaded.size()[1] as u32, 200)?));
 
         let raw_tensor = ThoTensor::<ChannelsData2, SynKey>::new(
             SynKey::new([mono_key!("test_train_motif_nets_cosine_with_filtered_real_eeg", "raw")]),
@@ -1154,6 +1152,7 @@ mod tests {
 
         let mut selected_motifs = vec![Vec::<(u32, f64)>::new(); channels as usize];
         selected_motifs[0].push((motif_id, 1.0));
+        let selected_net_path = PathBuf::from(format!("0/{}_{}", motif_id, train_motif_nets_run_id));
 
         let find_motifs_props = FindMotifsRunConfig::new_with_running_mean(
             Some(find_motifs_run_id),
@@ -1183,6 +1182,9 @@ mod tests {
                     None,
                     Ok((0i64, find_motifs_run_id, random_slices, resources_by_id)),
                 )
+                .with_list_selected_nets([
+                    (train_motif_nets_run_id, None, Ok(vec![(selected_net_path.clone(), 0.01)])),
+                ])
                 .build(),
         );
 
@@ -1215,42 +1217,43 @@ mod tests {
         let result: Arc<DevicesWrap<thoosa_common::train_nets::TrainMotifsNetsResult>> = train_motif_nets
             .run(input, run_ctx.branch(Some("test_train_motif_nets_cosine_with_filtered_real_eeg"), false, false))
             .await?;
-        let result = result.load_from_any_device_(0).await?;
+        let result = result.load_from_any_device_(1).await?;
 
         assert!(!result.train_motif_nets_results.is_empty());
 
         let train_result = result.train_motif_nets_results.first().expect("empty train_motif_nets_results");
-        let motif_width = train_result.params.num_features() as i64;
-        let stride = train_result.params.stride() as i64;
-        let motif_net: Box<dyn ThoModule<AnyDims, AnyDims>> = train_result.params.motif_net()?.build_tch_module(&train_result.vs.root())?;
+        let saved_path = ws.read().save_motif_net(&0u32, &train_motif_nets_run_id, &motif_id, &train_result.vs, &train_result.params)?;
+        assert_eq!(saved_path, selected_net_path);
 
-        let filtered_for_apply: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = Arc::new(FreqFilter::<MockRunCtx>::new(freq_filters.as_slice(), &ws, find_motifs_run_id)?)
-            .run(
-                Arc::new(DevicesWrap::wrap(
-                    ThoTensor::<ChannelsData2, SynKey>::new(
-                        SynKey::new([mono_key!("test_train_motif_nets_cosine_with_filtered_real_eeg_apply", "raw")]),
-                        raw_loaded_for_apply,
-                    )?,
-                    CacheArea::default(),
-                )),
-                mock_run_ctx::default(1),
-            )
-            .await?;
-        let filtered_for_apply = filtered_for_apply.load_from_any_device_(1).await?;
-        let channel_t = filtered_for_apply.t_ref().f_i((0, ..))?;
-        let unfolded = channel_t.f_unfold(0, motif_width, stride)?;
-        let output = motif_net.tho_forward(&unfolded.into(), None, false)?;
-        let scores = output.t.f_view([-1])?;
-        let slices = scores.size()[0];
-        let (top_vals, top_idx) = scores.f_topk(2, 0, true, true)?;
+        let apply_motif_nets = Arc::new(ApplyMotifNets::new(
+            &ws,
+            &store,
+            vec![train_motif_nets_run_id],
+            mock_run_ctx::default(1),
+            None,
+            1,
+        ).await?);
 
-        debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: scores.size={:?} slices={slices} top_vals={} top_idx={}", scores.size(), top_vals, top_idx);
+        let out = apply_motif_nets.run(
+            Arc::new(DevicesWrap::wrap(
+                ThoTensor::new(
+                    SynKey::new([mono_key!("test_apply_batch", "test_apply_batch")]),
+                    raw_loaded_for_apply,
+                )?,
+                CacheArea::default(),
+            )),
+            mock_run_ctx::default(1),
+        ).await?;
+        let out = out.load_from_any_device_(1).await?;
+        let (top_vals, top_idx) = out.t.f_i((0, ..))?.f_topk(2, 0, true, true)?;
 
-        let predicted_a = stride as f64 * top_idx.double_value(&[0]);
-        let predicted_b = stride as f64 * top_idx.double_value(&[1]);
+        debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: apply top_vals={} top_idx={}", top_vals, top_idx);
+
+        let predicted_a = top_idx.double_value(&[0]);
+        let predicted_b = top_idx.double_value(&[1]);
         let expected_a = motif_slices_expected[0].1 as f64;
         let expected_b = motif_slices_expected[1].1 as f64;
-        let max_diff = (stride * 20) as f64;
+        let max_diff = 20.0;
 
         let d_direct = (predicted_a - expected_a).abs() + (predicted_b - expected_b).abs();
         let d_swapped = (predicted_a - expected_b).abs() + (predicted_b - expected_a).abs();
