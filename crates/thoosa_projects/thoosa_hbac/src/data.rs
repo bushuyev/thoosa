@@ -810,6 +810,7 @@ mod tests {
     #![allow(unused_imports, dead_code, unused_variables)]
     use super::{ByPatientIdSplitter, EEG, parquet_to_tensor};
     use crate::data::EEGs;
+    use std::collections::HashMap;
     use log::LevelFilter::Trace;
     use log::debug;
     use parking_lot::{Mutex, RwLock};
@@ -826,22 +827,39 @@ mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{Device, IndexOp, TchError, Tensor};
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::my_tch::ThoModule;
-    use thoosa_common::train_nets::{MotifCosineNetParams, MotifNetParams, MotifNetTypeParams};
+    use thoosa_common::tho_device::ThoDevice;
+    use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifsNetsRunConfigFields};
+    use thoosa_common::transforms::filters::{NotchBandFilterParams, SavGolFilterParams, SgPadding};
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
     use thoosa_common::ws::Workspace;
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{Cli, import_resources};
+    use thoosa_main::{ChannelsData2, FreqFilter, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::find::{SelectMotifsParams};
+    use thoosa_properties_map::ToHashmap;
+    use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::resource::Resource;
+    use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunId};
+    use thoosa_shared::runner::cache_areas::CacheArea;
+    use thoosa_shared::runner::common::cachable::DevicesWrap;
+    use thoosa_shared::runner::common::mock_run_ctx;
+    use thoosa_shared::runner::common::runnable::AsyncStage;
+    use thoosa_shared::runner::common::{MockRunCtx, RunCtx};
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::test_utils::init_test_logging;
+    use thoosa_shared::val::{NamedRange, NamedVal, Val};
+    use thoosa_shared::TensorIdSliceIdx;
     use thoosa_shared::{ThoError, cdt_for_dir};
-    use thoosa_store::SqlStore;
+    use thoosa_store::{MockStoreBuilder, SqlStore};
+    use thoosa_shared::mono_key;
 
     #[ctor::ctor]
     fn init() {
@@ -1026,6 +1044,166 @@ mod tests {
             vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"],
             labels
         );
+
+        Ok(())
+    }
+
+    fn cosine_net_run_configs() -> OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields> {
+        OptRunConfigs::new(
+            GridRunConfigs::new(
+                ConstConfigs::new(vec![
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(3)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(4)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(2)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Step)), Val::Int(1)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Kernel)), Val::Int(100)),
+                ]),
+                vec![],
+            ),
+            vec![
+                Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
+                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Channels)), lower: 2, upper: 8 },
+            ],
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_train_motif_nets_cosine_with_filtered_real_eeg() -> Result<(), ThoError> {
+        if !tch::Cuda::is_available() {
+            return Ok(());
+        }
+        GlobalCtx::init_devices(2);
+
+        let find_motifs_run_id: RunId = 1;
+        let select_motifs_run_id: RunId = 2;
+        let motif_id = 10u32;
+        let motif_width = 1000u32;
+        let resource_id = 1u32;
+
+        let freq_filters = vec![
+            InputFilter::SavGolFilter(SavGolFilterParams {
+                window_len: 111,
+                poly_order: 3,
+                stride: 5,
+                padding: SgPadding::zero(),
+            }),
+            InputFilter::NotchBandFilter(NotchBandFilterParams {
+                low_hz: 62.0,
+                high_hz: 59.0,
+            }),
+        ];
+
+        let raw_loaded = Tensor::load("test_data/eeg/train_eegs/1014985354.parquet")?;
+        let raw_loaded = match raw_loaded.size().as_slice() {
+            [c, t] if c <= t => raw_loaded,
+            [t, c] if t > c => raw_loaded.f_transpose(0, 1)?,
+            [1, _, _] => raw_loaded.f_squeeze_dim(0)?,
+            dims => return Err(ThoError::new(format!("unexpected eeg shape: {dims:?}"))),
+        };
+        let raw_loaded = raw_loaded.f_to_kind(Float)?.f_to_device(Cuda(0))?;
+
+        let channels = raw_loaded.size()[0] as u32;
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, channels, 250, raw_loaded.size()[1] as u32)));
+
+        let raw_tensor = ThoTensor::<ChannelsData2, SynKey>::new(
+            SynKey::new([mono_key!("test_train_motif_nets_cosine_with_filtered_real_eeg", "raw")]),
+            raw_loaded,
+        )?;
+
+        let filtered: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = Arc::new(FreqFilter::<MockRunCtx>::new(freq_filters.as_slice(), &ws, find_motifs_run_id)?)
+            .run(Arc::new(DevicesWrap::wrap(raw_tensor, CacheArea::default())), mock_run_ctx::default(0))
+            .await?;
+
+        let filtered_cpu = {
+            let filtered_guard = filtered.load_from_any_device_(0).await?;
+            filtered_guard.t_ref().f_to_device(Device::Cpu)?
+        };
+
+        let filtered_len = filtered_cpu.size()[1];
+        if filtered_len < motif_width as i64 {
+            return Err(ThoError::new(format!("filtered tensor is too short: filtered_len={filtered_len} motif_width={motif_width}")));
+        }
+
+        let max_start = (filtered_len - motif_width as i64) as u32;
+        let motif_slices = vec![
+            TensorIdSliceIdx(resource_id, 0),
+            TensorIdSliceIdx(resource_id, if max_start > 0 { 1 } else { 0 }),
+        ];
+        let random_start = max_start / 2;
+        let random_slices = vec![
+            TensorIdSliceIdx(resource_id, random_start),
+            TensorIdSliceIdx(resource_id, (random_start + 1).min(max_start)),
+        ];
+
+        let resource = Resource::new(resource_id, 1, "test_train_motif_nets_cosine_with_filtered_real_eeg".to_string(), filtered_len as u32);
+        let resources_by_id = HashMap::from([(resource_id, resource.clone())]);
+        let loader_tensors = Arc::new(Mutex::new(HashMap::from([(resource.clone(), filtered_cpu)])));
+
+        let mut selected_motifs = vec![Vec::<(u32, f64)>::new(); channels as usize];
+        selected_motifs[0].push((motif_id, 1.0));
+
+        let find_motifs_props = FindMotifsRunConfig::new_with_running_mean(
+            Some(find_motifs_run_id),
+            1,
+            motif_width,
+            Some(freq_filters.clone()),
+            None,
+        )
+        .to_properties_iter(None)
+        .collect();
+
+        let store = Arc::new(
+            MockStoreBuilder::new()
+                .with_list_run_config_values(find_motifs_run_id, Ok(find_motifs_props))
+                .with_get_motif_meta([(motif_id, Ok((0usize, find_motifs_run_id)))])
+                .with_list_selected_motifs([(select_motifs_run_id, Ok(selected_motifs))])
+                .with_list_motif_slices(
+                    motif_id,
+                    Some(vec![select_motifs_run_id]),
+                    None,
+                    None,
+                    Ok((0i64, find_motifs_run_id, motif_slices, resources_by_id.clone())),
+                )
+                .with_list_random_motif_slices(
+                    motif_id,
+                    motif_width,
+                    None,
+                    Ok((0i64, find_motifs_run_id, random_slices, resources_by_id)),
+                )
+                .build(),
+        );
+
+        let loader = Arc::new(RawTensorLoader::<MockRunCtx>::new(
+            move |input_resource: &Resource, _device| {
+                let t = loader_tensors
+                    .try_lock_for(thoosa_shared::LOCK_TIMEOUT)
+                    .expect("lock timeout")
+                    .get(input_resource)
+                    .map(|v| v.shallow_clone())
+                    .ok_or_else(|| ThoError::new(format!("missing resource tensor for resource_id={}", input_resource.id())))?;
+                ThoTensor::new(
+                    SynKey::new([mono_key!(input_resource.id(), format!("filtered_resource_{}", input_resource.id()))]),
+                    t,
+                )
+            },
+            ThoDevice::from(0usize),
+        ));
+
+        let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, cosine_net_run_configs()));
+
+        let input = Arc::new(DevicesWrap::wrap(
+            TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(1, 1))),
+            CacheArea::default(),
+        ));
+
+        let mut run_ctx = mock_run_ctx::default(0);
+        let result: Arc<DevicesWrap<thoosa_common::train_nets::TrainMotifsNetsResult>> = train_motif_nets
+            .run(input, run_ctx.branch(Some("test_train_motif_nets_cosine_with_filtered_real_eeg"), false, false))
+            .await?;
+        let result = result.load_from_any_device_(0).await?;
+
+        assert!(!result.train_motif_nets_results.is_empty());
 
         Ok(())
     }
