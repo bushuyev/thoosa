@@ -1078,14 +1078,15 @@ mod tests {
         let find_motifs_run_id: RunId = 1;
         let select_motifs_run_id: RunId = 2;
         let motif_id = 10u32;
-        let motif_width = 1000u32;
+        let motif_width = 100u32;
         let resource_id = 1u32;
+        let filter_stride = 5;
 
         let freq_filters = vec![
             InputFilter::SavGolFilter(SavGolFilterParams {
                 window_len: 111,
                 poly_order: 3,
-                stride: 5,
+                stride: filter_stride,
                 padding: SgPadding::zero(),
             }),
             InputFilter::NotchBandFilter(NotchBandFilterParams {
@@ -1094,7 +1095,7 @@ mod tests {
             }),
         ];
 
-        let raw_loaded = Tensor::load("test_data/eeg/train_eegs/1014985354.parquet")?;
+        let raw_loaded = Tensor::load("test_data/eeg/1014985354.pt")?;
         let raw_loaded = match raw_loaded.size().as_slice() {
             [c, t] if c <= t => raw_loaded,
             [t, c] if t > c => raw_loaded.f_transpose(0, 1)?,
@@ -1102,43 +1103,51 @@ mod tests {
             dims => return Err(ThoError::new(format!("unexpected eeg shape: {dims:?}"))),
         };
         let raw_loaded = raw_loaded.f_to_kind(Float)?.f_to_device(Cuda(0))?;
+        debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: raw_loaded.size={:?}", raw_loaded.size());
+
+        let raw_loaded = Tensor::cat(&[raw_loaded.copy(), raw_loaded], 1);//concatenating to have same slices
 
         let channels = raw_loaded.size()[0] as u32;
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, channels, 250, raw_loaded.size()[1] as u32)));
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, channels, 200, raw_loaded.size()[1] as u32)));
 
         let raw_tensor = ThoTensor::<ChannelsData2, SynKey>::new(
             SynKey::new([mono_key!("test_train_motif_nets_cosine_with_filtered_real_eeg", "raw")]),
             raw_loaded,
         )?;
 
+        /*
+        it's applied  when being loaded
         let filtered: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = Arc::new(FreqFilter::<MockRunCtx>::new(freq_filters.as_slice(), &ws, find_motifs_run_id)?)
-            .run(Arc::new(DevicesWrap::wrap(raw_tensor, CacheArea::default())), mock_run_ctx::default(0))
+            .run(Arc::new(DevicesWrap::wrap(raw_tensor, CacheArea::default())), mock_run_ctx::default(1))
             .await?;
 
         let filtered_cpu = {
-            let filtered_guard = filtered.load_from_any_device_(0).await?;
+            let filtered_guard = filtered.load_from_any_device_(1).await?;
             filtered_guard.t_ref().f_to_device(Device::Cpu)?
-        };
+        };*/
 
-        let filtered_len = filtered_cpu.size()[1];
-        if filtered_len < motif_width as i64 {
-            return Err(ThoError::new(format!("filtered tensor is too short: filtered_len={filtered_len} motif_width={motif_width}")));
+        let input_len = raw_tensor.size()[1];
+        if input_len < motif_width as i64 {
+            return Err(ThoError::new(format!("filtered tensor is too short: filtered_len={input_len} motif_width={motif_width}")));
         }
+        let filtered_len = input_len / filter_stride as i64;
 
-        let max_start = (filtered_len - motif_width as i64) as u32;
         let motif_slices = vec![
-            TensorIdSliceIdx(resource_id, 0),
-            TensorIdSliceIdx(resource_id, if max_start > 0 { 1 } else { 0 }),
-        ];
-        let random_start = max_start / 2;
-        let random_slices = vec![
-            TensorIdSliceIdx(resource_id, random_start),
-            TensorIdSliceIdx(resource_id, (random_start + 1).min(max_start)),
+            TensorIdSliceIdx(resource_id, 100),
+            TensorIdSliceIdx(resource_id, (filtered_len /2 + 100) as u32), //same slice from concatenated part
         ];
 
-        let resource = Resource::new(resource_id, 1, "test_train_motif_nets_cosine_with_filtered_real_eeg".to_string(), filtered_len as u32);
+        let random_slices = vec![
+            TensorIdSliceIdx(resource_id, 200+motif_width),
+            TensorIdSliceIdx(resource_id, 300 + 2 * motif_width), //should fit
+        ];
+
+        debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: filtered_len={input_len} motif_slices={motif_slices:?} random_slices={random_slices:?}");
+
+        let resource = Resource::new(resource_id, 1, "test_train_motif_nets_cosine_with_filtered_real_eeg".to_string(), input_len as u32);
         let resources_by_id = HashMap::from([(resource_id, resource.clone())]);
-        let loader_tensors = Arc::new(Mutex::new(HashMap::from([(resource.clone(), filtered_cpu)])));
+        let loader_tensors = Arc::new(Mutex::new(HashMap::from([(resource.clone(), raw_tensor)])));
 
         let mut selected_motifs = vec![Vec::<(u32, f64)>::new(); channels as usize];
         selected_motifs[0].push((motif_id, 1.0));
@@ -1180,8 +1189,10 @@ mod tests {
                     .try_lock_for(thoosa_shared::LOCK_TIMEOUT)
                     .expect("lock timeout")
                     .get(input_resource)
-                    .map(|v| v.shallow_clone())
+                    .map(|v| v.as_ref().shallow_clone())
                     .ok_or_else(|| ThoError::new(format!("missing resource tensor for resource_id={}", input_resource.id())))?;
+
+                debug!("input_resource={input_resource:?} t.device={:?}", t.device());
                 ThoTensor::new(
                     SynKey::new([mono_key!(input_resource.id(), format!("filtered_resource_{}", input_resource.id()))]),
                     t,
@@ -1197,7 +1208,7 @@ mod tests {
             CacheArea::default(),
         ));
 
-        let mut run_ctx = mock_run_ctx::default(0);
+        let mut run_ctx = mock_run_ctx::default(1);
         let result: Arc<DevicesWrap<thoosa_common::train_nets::TrainMotifsNetsResult>> = train_motif_nets
             .run(input, run_ctx.branch(Some("test_train_motif_nets_cosine_with_filtered_real_eeg"), false, false))
             .await?;
