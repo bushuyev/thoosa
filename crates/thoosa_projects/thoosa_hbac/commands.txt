@@ -65,3 +65,9 @@ select run_id, count(*) from (select sm.run_id as run_id, sm.motif_id, count(*) 
 insert into selected_motifs (motif_id, run_id, rate) select motif_id, 0, 0.0 from (select motif_id, count(*) cnt from slices group by motif_id having cnt < 100 and cnt > 10);
 
 
+
+write test similar to test_apply_motif_nets_* in crates/thoosa_main/src/tasks/apply_motif_nets.rs but in crates/thoosa_projects/thoosa_hbac/src/data.rs.
+take one tensor from crates/thoosa_projects/thoosa_hbac/test_data/eeg, apply frequency filters [{SavGolFilter:{window_len:111,poly_order:3,stride:5,padding:{Zero:{}}}},{NotchBandFilter:{low_hz:62.0,high_hz:59.0}}]  (like in crates/thoosa_main/src/cli.rs:1894),   select slice of, say, 1000 length, and  train MotifNetTypeArgsRangeOrValue::CosineNet motif net using TrainMotifNets (MotifsBatch generate should add jitter to original slice to build batch, so one slice theoretically should suffice for a test).
+just make sure all compile, the test may still fail
+
+
