@@ -751,7 +751,8 @@ pub fn interesting_entropy_band_01(
 mod tests {
     use tch::{Device, Kind, Tensor};
     use thoosa_common::transforms::utils::sin_t;
-    use crate::criteria::interesting_turning_points_ratio;
+    use thoosa_shared::ThoError;
+    use crate::criteria::{interesting_turning_points_ratio, interesting_turning_points_ratio_trapezoid_01};
 
     #[cfg(test)]
     mod tests {
@@ -955,4 +956,51 @@ mod tests {
     }
 
 
+    fn f64_of_scalar(t: &Tensor) -> f64 {
+        assert!(t.size().is_empty(), "expected scalar, got {:?}", t.size());
+        t.double_value(&[])
+    }
+
+    fn assert_close(got: f64, expected: f64, tol: f64) {
+        let diff = (got - expected).abs();
+        assert!(
+            diff <= tol,
+            "got={got:.12}, expected={expected:.12}, diff={diff:.12}, tol={tol}"
+        );
+    }
+
+    fn make_batch_from_consensus(c: &[f32], n: i64) -> Tensor {
+        // x is [N, L] with all rows identical => median consensus == c exactly
+        let l = c.len() as i64;
+        let mut data = Vec::with_capacity((n * l) as usize);
+        for _ in 0..n {
+            data.extend_from_slice(c);
+        }
+        Tensor::from_slice(&data).view([n, l])
+    }
+
+    #[test]
+    fn test_interesting_turning_points_ratio_trapezoid_01() -> Result<(), ThoError> {
+        let (a, b, c, d) = (2, 3, 5, 7);
+
+        // Case 1: T=2 turns => score 0 (T <= a)
+        // consensus: 0,1,0,1 => diffs: +,-,+ => 2 sign changes
+        let x2 = make_batch_from_consensus(&[0.0, 1.0, 0.0, 1.0], 3);
+        let s2 = interesting_turning_points_ratio_trapezoid_01(&x2, a, b, c, d)?;
+        assert_close(f64_of_scalar(&s2), 0.0, 1e-6);
+
+        // Case 2: T=4 turns => score 1 (b <= T <= c)
+        // consensus: 0,1,0,1,0,1 => diffs: +,-,+,-,+ => 4 sign changes
+        let x4 = make_batch_from_consensus(&[0.0, 1.0, 0.0, 1.0, 0.0, 1.0], 3);
+        let s4 = interesting_turning_points_ratio_trapezoid_01(&x4, a, b, c, d)?;
+        assert_close(f64_of_scalar(&s4), 1.0, 1e-6);
+
+        // Case 3: T=6 turns => score (d - T)/(d - c) = (7-6)/(7-5) = 0.5
+        // consensus: 0,1,0,1,0,1,0,1 => diffs alternating => 6 sign changes
+        let x6 = make_batch_from_consensus(&[0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0], 3);
+        let s6 = interesting_turning_points_ratio_trapezoid_01(&x6, a, b, c, d)?;
+        assert_close(f64_of_scalar(&s6), 0.5, 1e-6);
+
+        Ok(())
+    }
 }

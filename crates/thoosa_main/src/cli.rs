@@ -89,8 +89,8 @@ use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSele
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
-use crate::tasks::train_final_net::new_train_final_net_with_ml;
-use crate::tasks::train_label_nets::{new_train_label_nets_with_ml, TrainLabelNets, TrainLabelNetsInput};
+use crate::tasks::train_final_net::new_train_final_net;
+use crate::tasks::train_label_nets::{new_train_label_nets, TrainLabelNets, TrainLabelNetsInput};
 use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 
@@ -550,7 +550,7 @@ where
                 true,
                 async |run_configs| {
 
-                    new_train_label_nets_with_ml(
+                    new_train_label_nets(
                         train_label_nets_args.train_motif_nets_run_ids.clone(),
                         loader,
                         run_configs,
@@ -591,7 +591,7 @@ where
                 true,
                 async |run_configs| {
 
-                    new_train_final_net_with_ml(
+                    new_train_final_net(
                         train_final_net_args.train_label_nets_run_ids.clone(),
                         loader,
                         run_configs,
@@ -933,7 +933,7 @@ async fn run_all(
         &store,
         true,
         async move |run_configs| {
-            new_train_label_nets_with_ml(
+            new_train_label_nets(
                 train_motif_nets_run_ids,
                 loader_in_train_labels,
                 run_configs,
@@ -969,7 +969,7 @@ async fn run_all(
         &store,
         true,
         async move |run_configs| {
-            new_train_final_net_with_ml(
+            new_train_final_net(
                 train_label_nets_run_ids,
                 loader_in_train_final,
                 run_configs,
@@ -1034,7 +1034,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.02)  }) }),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }) }),//Some((0.05, 2))
-        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.005) }) }),//Some((0.05, 2))
+        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.05) }) }),//Some((0.05, 2))
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
@@ -1077,14 +1077,14 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             // }),
             interesting_tv_norm_01: None,
             interesting_curvature_norm_01: None,
-            // interesting_turning_points_ratio: None,
-            interesting_turning_points_ratio: Some(InterestingTurningPointsRatioRunConfigRangeOrValue{ peak: RangeOrValue::Value(4), }),
+            interesting_turning_points_ratio: None,
+            // interesting_turning_points_ratio: Some(InterestingTurningPointsRatioRunConfigRangeOrValue{ peak: RangeOrValue::Value(4), }),
             interesting_band_energy_ratio_01: None,
             interesting_entropy_gauss_01: None,
             interesting_entropy_band_01: None,
         },
-        threshold: RangeOrValue::Value(0.7), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
-        min_slices: Some(RangeOrValue::Value(3)),
+        threshold: RangeOrValue::Value(0.73), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
+        min_slices: Some(RangeOrValue::Value(5)),
         max_slices: Some(RangeOrValue::Value(100)),
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
