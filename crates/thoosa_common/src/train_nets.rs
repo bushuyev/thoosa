@@ -777,6 +777,8 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
             ..ConvConfig::default()
         };
 
+        let hidden_config = ConvConfig::default();
+
         let mut net = builder
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
@@ -791,6 +793,16 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
             )?
             // .batch_norm()
             .conv_1d("conv_1", params.kernel, 1, params.channels, nd, None)?
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+            .conv_1d("conv_2", params.kernel, params.channels, params.channels, hidden_config, None)?
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+            .conv_1d("conv_3", params.kernel, params.channels, params.channels, hidden_config, None)?
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+            .conv_1d("conv_4", params.kernel, params.channels, params.channels, hidden_config, None)?
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+            .conv_1d("conv_5", params.kernel, params.channels, params.channels, hidden_config, None)?
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+            .conv_1d("conv_6", params.kernel, params.channels, params.channels, hidden_config, None)?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
             .adaptive_max_pool(1, params.channels)?
             .closure(

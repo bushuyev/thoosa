@@ -1059,7 +1059,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
 
-        let params = MotifNetParams::new_conv(10, 1, 100, 32, 10);
+        let params = MotifNetParams::new_conv(1000, 1, 10, 32, 10);
         let mut vs = VarStore::new(Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
             conv_motif_node(match &params.net_type {
