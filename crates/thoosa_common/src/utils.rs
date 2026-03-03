@@ -1246,7 +1246,7 @@ pub fn motif_test_net(
     Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
 ) {
     (
-        Box::new(move || MotifNetParams::new(motif_width, 1, 100, 32, 10)),
+        Box::new(move || MotifNetParams::new(motif_width, 1, 1, 100, 32, 10)),
         Box::new(move || {
             *test_net(motif_width, k, device, "test_motif_net").unwrap()
         }),
@@ -2302,13 +2302,15 @@ pub mod tests {
     }
 
     #[test]
-    fn mix_masks_align_with_rows() -> Result<(), ThoError> {
+    fn test_mix_masks_align_with_rows() -> Result<(), ThoError> {
         let a = Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]).reshape(&[2, 3]);
         let b = Tensor::from_slice(&[101., 102., 103., 104., 105., 106.]).reshape(&[2, 3]);
         let lengths_a = vec![2, 3];
         let lengths_b = vec![1, 2];
 
         let (x, lengths, y) = mix_x_binary_with_labels(&a, Some(lengths_a.as_slice()), &b, Some(lengths_b.as_slice()))?;
+        debug!("x=\n{x}");
+        debug!("y=\n{y}");
         let lengths = lengths.expect("lengths");
 
         assert_eq!(x.size(), [4, 3], "X must be [2m, n]");

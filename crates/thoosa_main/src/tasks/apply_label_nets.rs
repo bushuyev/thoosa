@@ -396,7 +396,7 @@ mod tests {
         Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send + 'static>,
     ) {
         (
-            Box::new(move || MotifNetParams::new(motif_width, 1, step, 32, 10)),
+            Box::new(move || MotifNetParams::new(motif_width, 1, 1, step, 32, 10)),
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {

@@ -473,7 +473,11 @@ impl TrainMotifsNetsArgs {
 pub struct MotifConvNetArgs {
     #[in_map]
     #[run_config]
-    pub num_layers: u32,
+    pub conv_layers: u32,
+
+    #[in_map]
+    #[run_config]
+    pub head_layers: u32,
 
     #[in_map]
     #[run_config]
@@ -636,15 +640,16 @@ impl OptConfig {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct MotifConvNetParams {
     pub num_features: u32,
-    pub num_layers: u32,
+    pub conv_layers: u32,
+    pub head_layers: u32,
     pub stride: u32,
     pub channels: u32,
     pub kernel: u32,
 }
 
 impl MotifConvNetParams {
-    pub fn new(num_features: u32, num_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
-        Self { num_features, num_layers, stride, channels, kernel }
+    pub fn new(num_features: u32, conv_layers: u32, head_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
+        Self { num_features, conv_layers, head_layers, stride, channels, kernel }
     }
 }
 
@@ -684,7 +689,7 @@ pub enum MotifNetTypeParams {
 
 impl Default for MotifNetTypeParams {
     fn default() -> Self {
-        MotifNetTypeParams::ConvNetParams(MotifConvNetParams::new(0, 1, 100, 32, 10))
+        MotifNetTypeParams::ConvNetParams(MotifConvNetParams::new(0, 1, 1, 100, 32, 10))
     }
 }
 
@@ -695,16 +700,16 @@ pub struct MotifNetParams {
 }
 
 impl MotifNetParams {
-    pub fn new(num_features: u32, num_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
-        Self::new_conv(num_features, num_layers, stride, channels, kernel)
+    pub fn new(num_features: u32, conv_layers: u32, head_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
+        Self::new_conv(num_features, conv_layers, head_layers, stride, channels, kernel)
     }
 
     pub fn new_with_net_type(net_type: MotifNetTypeParams) -> Self {
         Self { net_type }
     }
 
-    pub fn new_conv(num_features: u32, num_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
-        Self::new_with_net_type(MotifNetTypeParams::ConvNetParams(MotifConvNetParams::new(num_features, num_layers, stride, channels, kernel)))
+    pub fn new_conv(num_features: u32, conv_layers: u32, head_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
+        Self::new_with_net_type(MotifNetTypeParams::ConvNetParams(MotifConvNetParams::new(num_features, conv_layers, head_layers, stride, channels, kernel)))
     }
 
     pub fn new_lin(num_features: u32, num_layers: u32, stride: u32) -> Self {
@@ -726,6 +731,7 @@ impl MotifNetParams {
                 .expect(format!("no num_features in {:?}", properties).as_str())
                 .try_into()
                 .expect("num_features as_i64"),
+            1,
             1,
             100,
             32,
@@ -777,10 +783,11 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
             ..ConvConfig::default()
         };
 
+        let hidden_config = ConvConfig::default();
+
         let mut net = builder
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-
                     let r = t.unsqueeze(1);
 
                     debug!("motif_node_2: 0. input.size={:?}", r.size());
@@ -788,14 +795,21 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
                     Ok(r)
                 })),
                 None,
-            )?
-            // .batch_norm()
-            .conv_1d("conv_1", params.kernel, 1, params.channels, nd, None)?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+            )?;
+
+        // .batch_norm()
+        net = net.conv_1d("conv_1", params.kernel, 1, params.channels, nd, None)?
+            .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+        for i in 0..params.head_layers as usize {
+            net = net.conv_1d("conv_2", params.kernel, params.channels, params.channels, hidden_config, None)?
+                .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+        }
+
+        net
             .adaptive_max_pool(1, params.channels)?
+            // .adaptive_max_pool(1, params.channels)?
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-
                     let r = t.squeeze();
 
                     debug!("motif_node_2: 1. input.size={:?}", r);
@@ -804,16 +818,15 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
                 })),
                 None,
             )?
-
             .linear_s(
                 params.channels,
                 #[cfg(debug_assertions)]
                 "motif_node first layer".to_string(),
                 "motif_first_head",
             )?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+            .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
 
-        for i in 0..params.num_layers as usize {
+        for i in 0..params.head_layers as usize {
             net = net
                 .linear_s(
                     params.channels,
@@ -821,12 +834,12 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
                     format!("motif_node  {i}th layer"),
                     format!("motif_{i}_head"),
                 )?
-                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+                .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
         }
 
         net
             // .linear_s(180)
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+            .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?
             .linear_s(
                 1,
                 #[cfg(debug_assertions)]
@@ -3234,7 +3247,7 @@ mod train_tests {
             &motif_node_params_run_id,
             &motif_id,
             &vs_0,
-            &MotifNetParams::new(100, 1, 100, 32, 10),
+            &MotifNetParams::new(100, 1, 1, 100, 32, 10),
         )?;
         Ok(())
     }

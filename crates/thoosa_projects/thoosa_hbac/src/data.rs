@@ -831,7 +831,7 @@ mod tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifsNetsRunConfigFields};
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifLinNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifsNetsRunConfigFields};
     use thoosa_common::transforms::filters::{NotchBandFilterParams, SavGolFilterParams, SgPadding};
     use thoosa_common::utils::{assert_close, from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
     use thoosa_common::ws::Workspace;
@@ -1053,21 +1053,71 @@ mod tests {
                 ConstConfigs::new(vec![
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), cycles),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), batch_size),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(2)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(20)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.00001)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Step)), Val::Int(1)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Kernel)), kernel),
                     // NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Channels)), Val::Int(16)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.00001)),
                 ]),
                 vec![],
             ),
             vec![
                 // Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
-                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Channels)), lower: 8, upper: 10 },
+                // Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Kernel)), lower: 10, upper: 100 },
+                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Channels)), lower: 128, upper: 132 },
             ],
         )
     }
+
+    fn _test_lin_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields> {
+        OptRunConfigs::new(
+            GridRunConfigs::new(
+                ConstConfigs::new(vec![
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), cycles),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), batch_size),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(10)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.00001)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::NumLayers)), Val::Int(8)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Step)), Val::Int(1)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Kernel)), kernel),
+                ]),
+                vec![],
+            ),
+            vec![
+                // Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
+                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Channels)), lower: 8, upper: 10 },
+            ],
+        )
+    }
+
+    fn _test_conv_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields> {
+        OptRunConfigs::new(
+            GridRunConfigs::new(
+                ConstConfigs::new(vec![
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), cycles),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), batch_size),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(10)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.00001)),
+                    // NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::HeadLayers)), Val::Int(4)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::ConvLayers)), Val::Int(4)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Step)), Val::Int(1)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Kernel)), kernel),
+                ]),
+                vec![],
+            ),
+            vec![
+                // Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
+                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::ConvLayers)), lower: 2, upper: 24 },
+                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::HeadLayers)), lower: 2, upper: 24 },
+                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Channels)), lower: 8, upper: 256 },
+            ],
+        )
+    }
+
+
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_train_motif_nets_cosine_with_filtered_real_eeg() -> Result<(), ThoError> {
@@ -1133,17 +1183,17 @@ mod tests {
         if input_len < motif_width as i64 {
             return Err(ThoError::new(format!("filtered tensor is too short: filtered_len={input_len} motif_width={motif_width}")));
         }
-        let filtered_len = input_len / filter_stride as i64;
+        let filtered_len = input_len  as u32 / filter_stride;
 
         let motif_slices = vec![
             TensorIdSliceIdx(resource_id, 100),
-            TensorIdSliceIdx(resource_id, (filtered_len /2 + 100) as u32), //same slice from concatenated part
+            TensorIdSliceIdx(resource_id, (filtered_len /2 + 100)), //same slice from concatenated part
         ];
         let motif_slices_expected = motif_slices.clone();
 
         let random_slices = vec![
-            TensorIdSliceIdx(resource_id, 200+motif_width),
-            TensorIdSliceIdx(resource_id, 300 + 2 * motif_width), //should fit
+            TensorIdSliceIdx(resource_id, (filtered_len / 2 - (100 - motif_width))),
+            TensorIdSliceIdx(resource_id, (filtered_len / 2 - (100 - motif_width) * 2)), //should fit
         ];
 
         debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: filtered_len={input_len} motif_slices={motif_slices:?} random_slices={random_slices:?}");
@@ -1208,10 +1258,15 @@ mod tests {
             ThoDevice::from(0usize),
         ));
 
-        let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_cosine_net_run_configs(Val::Int(100), Val::Int(300), Val::Int(10))));
+        //conv_layers: 4, head_layers: 3, stride: 1, channels: 147,
+        //conv_layers: 11, head_layers: 3, stride: 1, channels: 218,
+        //conv_layers: 21, head_layers: 2, stride: 1, channels: 215
+        // let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_cosine_net_run_configs(Val::Int(10), Val::Int(300), Val::Int(10))));
+        let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_conv_net_run_configs(Val::Int(10), Val::Int(300), Val::Int(20))));
+        // let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_lin_net_run_configs(Val::Int(100), Val::Int(300), Val::Int(10))));
 
         let input = Arc::new(DevicesWrap::wrap(
-            TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(1, 1))),
+            TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(100, 10))),
             CacheArea::default(),
         ));
 

@@ -12,6 +12,8 @@ use crate::tho_tensor::ThoTensor;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out(l_in: u32, kernel: u32, c: ConvConfig) -> Result<u32, ThoError> {
+    debug!("clc_conv1d_out: l_in={l_in} kernel={kernel} padding={} dilation={} stride={}", c.padding, c.dilation, c.stride);
+
     if l_in == 0 { //convolution was first layer, num_features is not known
         return  Ok(0);
     }
@@ -27,8 +29,6 @@ pub fn clc_conv1d_out(l_in: u32, kernel: u32, c: ConvConfig) -> Result<u32, ThoE
         return Err(ThoError::new(format!("l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1 : l_in={l_in} kernel={} dilation={} should be bigger than 1", kernel, c.dilation)))
     }
 
-    debug!("clc_conv1d_out: l_in={l_in} kernel={kernel} padding={} dilation={} stride={}", c.padding, c.dilation, c.stride);
-
     let r = (l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) - 1) / c.stride as u32 + 1;
 
     debug!("clc_conv1d_out: r={r}");
@@ -41,6 +41,7 @@ pub fn clc_max_pool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, s
     if kernel < 2 {// if kernel is calculated in runtime
         return Err(ThoError::new(format!("kernel={kernel} should be bigger than 2")))
     }
+
     if l_in + 2 * padding < dilation * (kernel - 1) - 1 {
         return Err(ThoError::new(format!("l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={kernel} dilation={dilation} should be bigger than 2")))
     }

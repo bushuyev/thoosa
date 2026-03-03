@@ -1349,7 +1349,8 @@ fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrVal
         id: None,
         common_training_args: common_training_args.clone(),
         net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-            num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+            conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+            head_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
             step: RangeOrValue::Value(10),
             channels: RangeOrValue::Value(32),
             kernel: RangeOrValue::Value(10),
