@@ -1246,7 +1246,7 @@ pub fn motif_test_net(
     Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
 ) {
     (
-        Box::new(move || MotifNetParams::new(motif_width, 1, 100, 32, 10)),
+        Box::new(move || MotifNetParams::new(motif_width, 1, 1, 100, 32, 10)),
         Box::new(move || {
             *test_net(motif_width, k, device, "test_motif_net").unwrap()
         }),

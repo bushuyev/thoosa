@@ -229,7 +229,7 @@ where
                     },
                     move |rc:&TrainMotifsNetsRunConfig, vs: &VarStore| {
                         let params = match &rc.net {
-                            MotifNetTypeArgs::ConvNet(net) => MotifNetParams::new_conv(motif_width, net.num_layers, net.step, net.channels, net.kernel),
+                            MotifNetTypeArgs::ConvNet(net) => MotifNetParams::new_conv(motif_width, net.conv_layers, net.head_layers, net.step, net.channels, net.kernel),
                             MotifNetTypeArgs::LinNet(net) => MotifNetParams::new_lin(motif_width, net.num_layers, net.step),
                             MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.step, net.channels, net.kernel),
                         };
@@ -623,7 +623,7 @@ mod tests {
                     // NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Step)), Val::Int(1)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Kernel)), Val::Int(100)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::NumLayers)), Val::Int(8)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::HeadLayers)), Val::Int(8)),
                 ]),
                 vec![
                     // NamedRange::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))

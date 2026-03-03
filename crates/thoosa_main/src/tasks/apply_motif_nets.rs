@@ -634,7 +634,7 @@ pub fn motif_test_net_(
 ) {
     let motif_width = motif_t.as_ref().t_ref().size()[1] as u32;
     (
-        Box::new(move || MotifNetParams::new(motif_width, 1, step, 32, 10)),
+        Box::new(move || MotifNetParams::new(motif_width, 1, 1, step, 32, 10)),
         Box::new(move || {
             *dummy_motif_net::<Batch<Slice>, MotifProbability>(motif_width, 1., device, "test", &motif_t.as_ref().t_ref().i((0, ..)), step as i64).unwrap()//first slice
         }),
