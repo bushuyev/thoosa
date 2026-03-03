@@ -20,7 +20,7 @@ cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logg
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by="resource:6;channels=0;freq_filters=[{BandPassFilter:{low_hz:0.0,band_hz:2.0,kernel_size:100,stride:10,padding:{Zero:{}}}},{NotchBandFilter:{low_hz:59.0,high_hz:62.0}}]"
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by="resource:6;channels=0;freq_filters=[{BandPassFilter:{low_hz:0.0,band_hz:2.0,kernel_size:100,stride:10,padding:{Zero:{}}}}]"
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by="resource:6;channels=0;freq_filters=[{NotchBandFilter:{low_hz:5.0,high_hz:200.0}}]"
-cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by="resource:6;channels=0;freq_filters=[{SavGolFilter:{window_len:111,poly_order:10,stride:10,padding:{Zero:{}}}}]"
+cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by="resource:6;channels=0;freq_filters=[{SavGolFilter:{window_len:111,poly_order:3,stride:5,padding:{Zero:{}}}},{NotchBandFilter:{low_hz:62.0,high_hz:59.0}}]"
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=motif_id:4879426
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=run_id:59791
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=select_motifs_run_ids:'47962, 47856, 48146, 48222'
@@ -36,7 +36,7 @@ cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logg
 
 cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  train-label-nets --train-motif-nets-run-ids=2882 --train-resource-group="pure group 100" --valid-resource-group="pure group 50"  --run-config-cnt="{ 'common_training_args': { 'cycles' : '300', 'batch_size': '10', 'lr': '0.0001', 'opt_max_evals':'300', 'opt_n_init': '10', 'patience':'10', 'min_delta':'0.0001'}, 'net': {ConvNet:{'num_conv_layers':'3..10','hidden_conv_channels':'12..64',  'kernel':'10..100', 'num_head_layers':'3..10', 'num_head_features':'64..256', 'joint':{AttnPool1d:{'_dummy':0}}}}}"
 cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  train-label-nets --train-motif-nets-run-ids=29405 --train-resource-group="pure group 150" --valid-resource-group="pure group 50"  --run-config-cnt="{ 'common_training_args': { 'cycles' : '300', 'batch_size': '10', 'lr': '0.00001..0.0001', 'opt_max_evals':'100', 'opt_n_init': '10', 'patience':'10', 'min_delta':'0.0001'}, 'net': {SelfAttentionNet:{'d_model_heads':'64','n_heads':'4..8','ff_mult':'4..12','dropout':'0.01..0.2'}}}"
-cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  train-label-nets --train-motif-nets-run-ids=29405 --train-resource-group="pure group 150" --valid-resource-group="pure group 50"  --run-config-cnt="{ 'common_training_args': { 'cycles' : '300', 'batch_size': '10', 'lr': '0.00001..0.0001', 'opt_max_evals':'100', 'opt_n_init': '10', 'patience':'10', 'min_delta':'0.0001'}, 'net': {SelfAttentionNet:{'d_model_heads':'2..32','n_heads':'4..8','ff_mult':'4..12','dropout':'0.01..0.2'}}}"
+cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  train-label-nets --train-motif-nets-run-ids=66958 --train-resource-group="pure group 150" --valid-resource-group="pure group 50"  --run-config-cnt="{ 'common_training_args': { 'cycles' : '300', 'batch_size': '10', 'lr': '0.00001..0.0001', 'opt_max_evals':'100', 'opt_n_init': '10', 'patience':'10', 'min_delta':'0.0001'}, 'net': {SelfAttentionNet:{'d_model_heads':'2..4','n_heads':'4..8','ff_mult':'4..12','dropout':'0.01..0.2'}}}" --max-motif-net-loss=0.1 --motif-slices-step=5
 
 
 cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=DEBUG --ws-path=/home/bu/tmp/ws_test_hbac/  train-final-net --select-motifs-run-id=8521 --train-resource-group="pure group 50" --valid-resource-group="pure group 10"  --run-config-cnt="{ 'common_training_args': { 'cycles' : '10', 'batch_size': '11', 'lr': '0.0001', 'opt_max_evals':'10', 'opt_n_init': '3', 'patience':'10', 'min_delta':'0.0001'}, 'net': {'num_layers':'3..5'}}"
@@ -58,8 +58,16 @@ delete from motifs where not exists (select id from slices s where s.motif_id=mo
 
 select run_id, label_id, sl.motif_id, count(*) from slices sl left join labeled_resources lr on lr.resource_id=sl.resource_id  where sl.motif_id is not null group by run_id, lr.label_id, sl.motif_id order by sl.motif_id, label_id;
 
+--selected motifs by run_id filtered by number of slices
+select run_id, count(*) from (select sm.run_id as run_id, sm.motif_id, count(*) as cnt from selected_motifs sm left join slices s on s.motif_id=sm.motif_id where sm.run_id in (66928, 66929, 66930, 66931, 66932, 66933, 66934, 66935, 66936, 66937) group by sm.motif_id having cnt>5) group by run_id;
 
 
 insert into selected_motifs (motif_id, run_id, rate) select motif_id, 0, 0.0 from (select motif_id, count(*) cnt from slices group by motif_id having cnt < 100 and cnt > 10);
+
+
+
+write test similar to test_apply_motif_nets_* in crates/thoosa_main/src/tasks/apply_motif_nets.rs but in crates/thoosa_projects/thoosa_hbac/src/data.rs.
+take one tensor from crates/thoosa_projects/thoosa_hbac/test_data/eeg, apply frequency filters [{SavGolFilter:{window_len:111,poly_order:3,stride:5,padding:{Zero:{}}}},{NotchBandFilter:{low_hz:62.0,high_hz:59.0}}]  (like in crates/thoosa_main/src/cli.rs:1894),   select slice of, say, 1000 length, and  train MotifNetTypeArgsRangeOrValue::CosineNet motif net using TrainMotifNets (MotifsBatch generate should add jitter to original slice to build batch, so one slice theoretically should suffice for a test).
+just make sure all compile, the test may still fail
 
 

@@ -58,7 +58,7 @@ where
     opt_config: Arc<OptConfig>,
 }
 
-pub async fn new_train_final_net_with_ml<L, C, R>(
+pub async fn new_train_final_net<L, C, R>(
     train_label_nets_run_ids: Vec<RunId>,
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
@@ -413,7 +413,7 @@ mod tests {
     use crate::tasks::apply_motif_nets::motif_test_net_;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::train_final_net::{new_train_final_net_with_ml, TrainFinalNetOutput};
+    use crate::tasks::train_final_net::{new_train_final_net, TrainFinalNetOutput};
     use log::debug;
     use log::LevelFilter::Debug;
     use parking_lot::RwLock;
@@ -553,7 +553,7 @@ mod tests {
         );
 
         let mut run_ctx = mock_run_ctx::default(1);
-        let train_final_net = Arc::new(new_train_final_net_with_ml(vec![train_label_nets_run_id], loader, run_configs, &ws, &store, run_ctx.branch(Some("new_train_final_net_with_ml"), false, false), Arc::new(OptConfig::new(10, 3)), step).await?);
+        let train_final_net = Arc::new(new_train_final_net(vec![train_label_nets_run_id], loader, run_configs, &ws, &store, run_ctx.branch(Some("new_train_final_net_with_ml"), false, false), Arc::new(OptConfig::new(10, 3)), step).await?);
 
         let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string()))), CacheArea::default()));
 

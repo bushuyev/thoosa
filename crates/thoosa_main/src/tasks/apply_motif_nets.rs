@@ -879,8 +879,6 @@ pub(crate) mod tests {
                 .build()
         );
 
-
-
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
             &ws,
             &store,
