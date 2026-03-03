@@ -827,6 +827,7 @@ mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{Device, IndexOp, TchError, Tensor};
+    use thoosa_common::dims::AnyDims;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::my_tch::ThoModule;
@@ -834,7 +835,7 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifsNetsRunConfigFields};
     use thoosa_common::transforms::filters::{NotchBandFilterParams, SavGolFilterParams, SgPadding};
-    use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
+    use thoosa_common::utils::{assert_close, from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
     use thoosa_common::ws::Workspace;
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
@@ -1106,6 +1107,7 @@ mod tests {
         debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: raw_loaded.size={:?}", raw_loaded.size());
 
         let raw_loaded = Tensor::cat(&[raw_loaded.copy(), raw_loaded], 1);//concatenating to have same slices
+        let raw_loaded_for_apply = raw_loaded.shallow_clone();
 
         let channels = raw_loaded.size()[0] as u32;
 
@@ -1137,6 +1139,7 @@ mod tests {
             TensorIdSliceIdx(resource_id, 100),
             TensorIdSliceIdx(resource_id, (filtered_len /2 + 100) as u32), //same slice from concatenated part
         ];
+        let motif_slices_expected = motif_slices.clone();
 
         let random_slices = vec![
             TensorIdSliceIdx(resource_id, 200+motif_width),
@@ -1215,6 +1218,49 @@ mod tests {
         let result = result.load_from_any_device_(0).await?;
 
         assert!(!result.train_motif_nets_results.is_empty());
+
+        let train_result = result.train_motif_nets_results.first().expect("empty train_motif_nets_results");
+        let motif_width = train_result.params.num_features() as i64;
+        let stride = train_result.params.stride() as i64;
+        let motif_net: Box<dyn ThoModule<AnyDims, AnyDims>> = train_result.params.motif_net()?.build_tch_module(&train_result.vs.root())?;
+
+        let filtered_for_apply: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = Arc::new(FreqFilter::<MockRunCtx>::new(freq_filters.as_slice(), &ws, find_motifs_run_id)?)
+            .run(
+                Arc::new(DevicesWrap::wrap(
+                    ThoTensor::<ChannelsData2, SynKey>::new(
+                        SynKey::new([mono_key!("test_train_motif_nets_cosine_with_filtered_real_eeg_apply", "raw")]),
+                        raw_loaded_for_apply,
+                    )?,
+                    CacheArea::default(),
+                )),
+                mock_run_ctx::default(1),
+            )
+            .await?;
+        let filtered_for_apply = filtered_for_apply.load_from_any_device_(1).await?;
+        let channel_t = filtered_for_apply.t_ref().f_i((0, ..))?;
+        let unfolded = channel_t.f_unfold(0, motif_width, stride)?;
+        let output = motif_net.tho_forward(&unfolded.into(), None, false)?;
+        let scores = output.t.f_view([-1])?;
+        let slices = scores.size()[0];
+        let (top_vals, top_idx) = scores.f_topk(2, 0, true, true)?;
+
+        debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: scores.size={:?} slices={slices} top_vals={} top_idx={}", scores.size(), top_vals, top_idx);
+
+        let predicted_a = stride as f64 * top_idx.double_value(&[0]);
+        let predicted_b = stride as f64 * top_idx.double_value(&[1]);
+        let expected_a = motif_slices_expected[0].1 as f64;
+        let expected_b = motif_slices_expected[1].1 as f64;
+        let max_diff = (stride * 20) as f64;
+
+        let d_direct = (predicted_a - expected_a).abs() + (predicted_b - expected_b).abs();
+        let d_swapped = (predicted_a - expected_b).abs() + (predicted_b - expected_a).abs();
+        if d_direct <= d_swapped {
+            assert_close(expected_a, predicted_a, max_diff);
+            assert_close(expected_b, predicted_b, max_diff);
+        } else {
+            assert_close(expected_a, predicted_b, max_diff);
+            assert_close(expected_b, predicted_a, max_diff);
+        }
 
         Ok(())
     }
