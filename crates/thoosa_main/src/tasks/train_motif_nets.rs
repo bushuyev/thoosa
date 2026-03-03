@@ -214,8 +214,8 @@ where
 
 
                 let motif_width = with_data!(ctx.branch(Some("train_motif_nets_motif_width"), false, false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
-                Ok::<_, ThoError>(motif.extra().window)
-            })?;
+                    Ok::<_, ThoError>(motif.extra().window)
+                })?;
 
                 let random_slices_for_batch = Arc::clone(&random_slices);
 
@@ -360,7 +360,7 @@ where
 {
 
     pub async fn new(motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>, random_slices:Arc<DevicesWrap<ThoTensor<MotifSlices, DataId>>>, batch_size:i64, device_idx:usize, cache_area:u64, mut ctx: C) -> Result<Self, ThoError> {
-        debug!("TrainMotifNet::run: motif={motif:?}");
+        debug!("MotifsBatch::new: motif={motif:?}");
 
 
         let ctx_for_split = ctx.branch(Some("motifs_batch_split"), false, false);
@@ -368,6 +368,7 @@ where
             let motif_meta = motif.extra().clone();
 
             let num_motif_slices = motif.data().t_ref().size()[0];
+            debug!("MotifsBatch::new: motif.data={:?}", motif.data());
             assert!(num_motif_slices > 1);
             let num_validation_slices = (num_motif_slices as f32 * 0.2) as i64;
             let num_validation_slices = if num_validation_slices <= 0 {1} else {num_validation_slices};

@@ -810,6 +810,7 @@ mod tests {
     #![allow(unused_imports, dead_code, unused_variables)]
     use super::{ByPatientIdSplitter, EEG, parquet_to_tensor};
     use crate::data::EEGs;
+    use std::collections::HashMap;
     use log::LevelFilter::Trace;
     use log::debug;
     use parking_lot::{Mutex, RwLock};
@@ -826,22 +827,38 @@ mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{Device, IndexOp, TchError, Tensor};
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::my_tch::ThoModule;
-    use thoosa_common::train_nets::{MotifCosineNetParams, MotifNetParams, MotifNetTypeParams};
-    use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
+    use thoosa_common::tho_device::ThoDevice;
+    use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifsNetsRunConfigFields};
+    use thoosa_common::transforms::filters::{NotchBandFilterParams, SavGolFilterParams, SgPadding};
+    use thoosa_common::utils::{assert_close, from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
     use thoosa_common::ws::Workspace;
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{Cli, import_resources};
+    use thoosa_main::{ApplyMotifNets, ChannelsData2, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::find::{SelectMotifsParams};
+    use thoosa_properties_map::ToHashmap;
+    use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::resource::Resource;
+    use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunId};
+    use thoosa_shared::runner::cache_areas::CacheArea;
+    use thoosa_shared::runner::common::cachable::DevicesWrap;
+    use thoosa_shared::runner::common::mock_run_ctx;
+    use thoosa_shared::runner::common::runnable::AsyncStage;
+    use thoosa_shared::runner::common::{MockRunCtx, RunCtx};
+    use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::test_utils::init_test_logging;
+    use thoosa_shared::val::{NamedRange, NamedVal, Val};
+    use thoosa_shared::TensorIdSliceIdx;
     use thoosa_shared::{ThoError, cdt_for_dir};
-    use thoosa_store::SqlStore;
+    use thoosa_store::{MockStoreBuilder, SqlStore};
+    use thoosa_shared::mono_key;
 
     #[ctor::ctor]
     fn init() {
@@ -1026,6 +1043,233 @@ mod tests {
             vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"],
             labels
         );
+
+        Ok(())
+    }
+
+    fn _test_cosine_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields> {
+        OptRunConfigs::new(
+            GridRunConfigs::new(
+                ConstConfigs::new(vec![
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), cycles),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), batch_size),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(2)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Step)), Val::Int(1)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Kernel)), kernel),
+                    // NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Channels)), Val::Int(16)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.00001)),
+                ]),
+                vec![],
+            ),
+            vec![
+                // Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
+                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Channels)), lower: 8, upper: 10 },
+            ],
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_train_motif_nets_cosine_with_filtered_real_eeg() -> Result<(), ThoError> {
+        if !tch::Cuda::is_available() {
+            return Ok(());
+        }
+        GlobalCtx::init_devices(2);
+
+        let find_motifs_run_id: RunId = 1;
+        let select_motifs_run_id: RunId = 2;
+        let train_motif_nets_run_id: RunId = 3;
+        let motif_id = 10u32;
+        let motif_width = 100u32;
+        let resource_id = 1u32;
+        let filter_stride = 5;
+
+        let freq_filters = vec![
+            InputFilter::SavGolFilter(SavGolFilterParams {
+                window_len: 111,
+                poly_order: 3,
+                stride: filter_stride,
+                padding: SgPadding::zero(),
+            }),
+            InputFilter::NotchBandFilter(NotchBandFilterParams {
+                low_hz: 62.0,
+                high_hz: 59.0,
+            }),
+        ];
+
+        let raw_loaded = Tensor::load("test_data/eeg/1014985354.pt")?;
+        let raw_loaded = match raw_loaded.size().as_slice() {
+            [c, t] if c <= t => raw_loaded,
+            [t, c] if t > c => raw_loaded.f_transpose(0, 1)?,
+            [1, _, _] => raw_loaded.f_squeeze_dim(0)?,
+            dims => return Err(ThoError::new(format!("unexpected eeg shape: {dims:?}"))),
+        };
+        let raw_loaded = raw_loaded.f_to_kind(Float)?.f_to_device(Cuda(0))?;
+        debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: raw_loaded.size={:?}", raw_loaded.size());
+
+        let raw_loaded = Tensor::cat(&[raw_loaded.copy(), raw_loaded], 1);//concatenating to have same slices
+        let raw_loaded_for_apply = raw_loaded.shallow_clone();
+
+        let channels = raw_loaded.size()[0] as u32;
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(Path::new("/tmp").join(cdt_for_dir()), channels, raw_loaded.size()[1] as u32, 200)?));
+
+        let raw_tensor = ThoTensor::<ChannelsData2, SynKey>::new(
+            SynKey::new([mono_key!("test_train_motif_nets_cosine_with_filtered_real_eeg", "raw")]),
+            raw_loaded,
+        )?;
+
+        /*
+        it's applied  when being loaded
+        let filtered: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = Arc::new(FreqFilter::<MockRunCtx>::new(freq_filters.as_slice(), &ws, find_motifs_run_id)?)
+            .run(Arc::new(DevicesWrap::wrap(raw_tensor, CacheArea::default())), mock_run_ctx::default(1))
+            .await?;
+
+        let filtered_cpu = {
+            let filtered_guard = filtered.load_from_any_device_(1).await?;
+            filtered_guard.t_ref().f_to_device(Device::Cpu)?
+        };*/
+
+        let input_len = raw_tensor.size()[1];
+        if input_len < motif_width as i64 {
+            return Err(ThoError::new(format!("filtered tensor is too short: filtered_len={input_len} motif_width={motif_width}")));
+        }
+        let filtered_len = input_len / filter_stride as i64;
+
+        let motif_slices = vec![
+            TensorIdSliceIdx(resource_id, 100),
+            TensorIdSliceIdx(resource_id, (filtered_len /2 + 100) as u32), //same slice from concatenated part
+        ];
+        let motif_slices_expected = motif_slices.clone();
+
+        let random_slices = vec![
+            TensorIdSliceIdx(resource_id, 200+motif_width),
+            TensorIdSliceIdx(resource_id, 300 + 2 * motif_width), //should fit
+        ];
+
+        debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: filtered_len={input_len} motif_slices={motif_slices:?} random_slices={random_slices:?}");
+
+        let resource = Resource::new(resource_id, 1, "test_train_motif_nets_cosine_with_filtered_real_eeg".to_string(), input_len as u32);
+        let resources_by_id = HashMap::from([(resource_id, resource.clone())]);
+        let loader_tensors = Arc::new(Mutex::new(HashMap::from([(resource.clone(), raw_tensor)])));
+
+        let mut selected_motifs = vec![Vec::<(u32, f64)>::new(); channels as usize];
+        selected_motifs[0].push((motif_id, 1.0));
+        let selected_net_path = PathBuf::from(format!("0/{}_{}", motif_id, train_motif_nets_run_id));
+
+        let find_motifs_props = FindMotifsRunConfig::new_with_running_mean(
+            Some(find_motifs_run_id),
+            1,
+            motif_width,
+            Some(freq_filters.clone()),
+            None,
+        )
+        .to_properties_iter(None)
+        .collect();
+
+        let store = Arc::new(
+            MockStoreBuilder::new()
+                .with_list_run_config_values(find_motifs_run_id, Ok(find_motifs_props))
+                .with_get_motif_meta([(motif_id, Ok((0usize, find_motifs_run_id)))])
+                .with_list_selected_motifs([(select_motifs_run_id, Ok(selected_motifs))])
+                .with_list_motif_slices(
+                    motif_id,
+                    Some(vec![select_motifs_run_id]),
+                    None,
+                    None,
+                    Ok((0i64, find_motifs_run_id, motif_slices, resources_by_id.clone())),
+                )
+                .with_list_random_motif_slices(
+                    motif_id,
+                    motif_width,
+                    None,
+                    Ok((0i64, find_motifs_run_id, random_slices, resources_by_id)),
+                )
+                .with_list_selected_nets([
+                    (train_motif_nets_run_id, None, Ok(vec![(selected_net_path.clone(), 0.01)])),
+                ])
+                .build(),
+        );
+
+        let loader = Arc::new(RawTensorLoader::<MockRunCtx>::new(
+            move |input_resource: &Resource, _device| {
+                let t = loader_tensors
+                    .try_lock_for(thoosa_shared::LOCK_TIMEOUT)
+                    .expect("lock timeout")
+                    .get(input_resource)
+                    .map(|v| v.as_ref().shallow_clone())
+                    .ok_or_else(|| ThoError::new(format!("missing resource tensor for resource_id={}", input_resource.id())))?;
+
+                debug!("input_resource={input_resource:?} t.device={:?}", t.device());
+                ThoTensor::new(
+                    SynKey::new([mono_key!(input_resource.id(), format!("filtered_resource_{}", input_resource.id()))]),
+                    t,
+                )
+            },
+            ThoDevice::from(0usize),
+        ));
+
+        let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_cosine_net_run_configs(Val::Int(100), Val::Int(300), Val::Int(10))));
+
+        let input = Arc::new(DevicesWrap::wrap(
+            TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(1, 1))),
+            CacheArea::default(),
+        ));
+
+        let mut run_ctx = mock_run_ctx::default(1);
+        let result: Arc<DevicesWrap<thoosa_common::train_nets::TrainMotifsNetsResult>> = train_motif_nets
+            .run(input, run_ctx.branch(Some("test_train_motif_nets_cosine_with_filtered_real_eeg"), false, false))
+            .await?;
+        let result = result.load_from_any_device_(1).await?;
+
+
+        debug!("train_motif_nets: result={result:?}");
+        assert!(result.train_motif_nets_results[0].loss < 0.2);
+
+        assert!(!result.train_motif_nets_results.is_empty());
+
+        let train_result = result.train_motif_nets_results.first().expect("empty train_motif_nets_results");
+        let saved_path = ws.read().save_motif_net(&0u32, &train_motif_nets_run_id, &motif_id, &train_result.vs, &train_result.params)?;
+        assert_eq!(saved_path, selected_net_path);
+
+        let apply_motif_nets = Arc::new(ApplyMotifNets::new(
+            &ws,
+            &store,
+            vec![train_motif_nets_run_id],
+            mock_run_ctx::default(1),
+            None,
+            1,
+        ).await?);
+
+        let out = apply_motif_nets.run(
+            Arc::new(DevicesWrap::wrap(
+                ThoTensor::new(
+                    SynKey::new([mono_key!("test_apply_batch", "test_apply_batch")]),
+                    raw_loaded_for_apply,
+                )?,
+                CacheArea::default(),
+            )),
+            mock_run_ctx::default(1),
+        ).await?;
+        let out = out.load_from_any_device_(1).await?;
+        let (top_vals, top_idx) = out.t.f_i((0, ..))?.f_topk(2, 0, true, true)?;
+
+        debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: apply top_vals={} top_idx={}", top_vals, top_idx);
+
+        let predicted_a = top_idx.double_value(&[0]);
+        let predicted_b = top_idx.double_value(&[1]);
+        let expected_a = motif_slices_expected[0].1 as f64;
+        let expected_b = motif_slices_expected[1].1 as f64;
+        let max_diff = 20.0;
+
+        let d_direct = (predicted_a - expected_a).abs() + (predicted_b - expected_b).abs();
+        let d_swapped = (predicted_a - expected_b).abs() + (predicted_b - expected_a).abs();
+        if d_direct <= d_swapped {
+            assert_close(expected_a, predicted_a, max_diff);
+            assert_close(expected_b, predicted_b, max_diff);
+        } else {
+            assert_close(expected_a, predicted_b, max_diff);
+            assert_close(expected_b, predicted_a, max_diff);
+        }
 
         Ok(())
     }
