@@ -76,7 +76,7 @@ where
 
 }
 
-pub async fn new_train_label_nets_with_ml<L, C, R>(
+pub async fn new_train_label_nets<L, C, R>(
     train_motif_nets_run_ids: Vec<RunId>,
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
@@ -797,7 +797,7 @@ mod tests {
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::select_motifs::tests::motifs_tensor;
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::train_label_nets::{new_train_label_nets_with_ml, ResourcesBatch, TrainLabelNets, TrainLabelNetsInput, TrainLabelNetsOutput};
+    use crate::tasks::train_label_nets::{new_train_label_nets, ResourcesBatch, TrainLabelNets, TrainLabelNetsInput, TrainLabelNetsOutput};
 
     #[ctor::ctor]
     pub fn init() {
@@ -975,7 +975,7 @@ mod tests {
         // let ctx = MockRunCtx::purge_gpu_caches_context();
         // ctx.expect().with(always()).times(1..).returning( |_| Box::pin(async { Ok(()) }));
 
-        let train_label_nets = Arc::new(new_train_label_nets_with_ml(
+        let train_label_nets = Arc::new(new_train_label_nets(
             vec![select_motifs_run_id],
             loader,
             run_configs,
