@@ -782,7 +782,6 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
         let mut net = builder
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-
                     let r = t.unsqueeze(1);
 
                     debug!("motif_node_2: 0. input.size={:?}", r.size());
@@ -790,24 +789,21 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
                     Ok(r)
                 })),
                 None,
-            )?
-            // .batch_norm()
-            .conv_1d("conv_1", params.kernel, 1, params.channels, nd, None)?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-            .conv_1d("conv_2", params.kernel, params.channels, params.channels, hidden_config, None)?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-            .conv_1d("conv_3", params.kernel, params.channels, params.channels, hidden_config, None)?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-            .conv_1d("conv_4", params.kernel, params.channels, params.channels, hidden_config, None)?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-            .conv_1d("conv_5", params.kernel, params.channels, params.channels, hidden_config, None)?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-            .conv_1d("conv_6", params.kernel, params.channels, params.channels, hidden_config, None)?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+            )?;
+
+        // .batch_norm()
+        net = net.conv_1d("conv_1", params.kernel, 1, params.channels, nd, None)?
+            .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+        for i in 0..params.num_layers as usize {
+            net = net.conv_1d("conv_2", params.kernel, params.channels, params.channels, hidden_config, None)?
+                .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+        }
+
+        net
             .adaptive_max_pool(1, params.channels)?
+            // .adaptive_max_pool(1, params.channels)?
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-
                     let r = t.squeeze();
 
                     debug!("motif_node_2: 1. input.size={:?}", r);
@@ -816,14 +812,13 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
                 })),
                 None,
             )?
-
             .linear_s(
                 params.channels,
                 #[cfg(debug_assertions)]
                 "motif_node first layer".to_string(),
                 "motif_first_head",
             )?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+            .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
 
         for i in 0..params.num_layers as usize {
             net = net
@@ -833,12 +828,12 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
                     format!("motif_node  {i}th layer"),
                     format!("motif_{i}_head"),
                 )?
-                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+                .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
         }
 
         net
             // .linear_s(180)
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+            .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?
             .linear_s(
                 1,
                 #[cfg(debug_assertions)]
