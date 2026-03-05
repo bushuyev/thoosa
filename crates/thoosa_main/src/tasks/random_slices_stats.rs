@@ -181,7 +181,7 @@ where
     }
 }
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="random_non_overlapping_slices"))]
-pub(crate) fn random_non_overlapping_slices(
+pub fn random_non_overlapping_slices(
     resources: &[Resource],
     number_of_slices: u32,
     slice_width: u32,

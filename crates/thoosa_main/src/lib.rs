@@ -16,6 +16,7 @@ pub mod version;
 
 pub use tasks::cross_dims::ChannelsData2;
 pub use tasks::apply_motif_nets::ApplyMotifNets;
+pub use tasks::random_slices_stats::random_non_overlapping_slices;
 pub use tasks::tensor_loader::RawTensorLoader;
 pub use tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 pub use tasks::transforms::freq_filter::FreqFilter;
