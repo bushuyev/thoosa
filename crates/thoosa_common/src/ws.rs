@@ -956,9 +956,9 @@ mod tests {
     use std::path::{Path, PathBuf};
     use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
-    use tch::nn::{ConvConfig, VarStore};
+    use tch::nn::{ConvConfig, ModuleT, VarStore};
     use tch::Tensor;
-    use thoosa_shared::{ThoError, cdt_for_dir};
+    use thoosa_shared::{ThoError, cdt_for_dir, simple_id};
     use thoosa_shared::traits::SimpleId;
     use crate::tho_tensor::ThoTensor;
 
@@ -1059,7 +1059,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
 
-        let params = MotifNetParams::new_conv(1000, 1, 1, 10, 32, 10);
+        let params = MotifNetParams::new_conv(1000, 1, 1, 10, 27, 10);
         let mut vs = VarStore::new(Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
             conv_motif_node(match &params.net_type {
@@ -1076,8 +1076,11 @@ mod tests {
         assert_eq!(format!("{:?}", params), format!("{:?}", loaded_params));
         assert_eq!(vs.variables(), loaded_module.var_store().variables());
 
+        loaded_module.tho_forward(&ThoTensor::new(simple_id!(""), Tensor::rand(&[127, 10000], FLOAT_CPU))?, None, true)?;
+
         Ok(())
     }
+
     // #[test]
     // fn test_x()-> Result<(), ThoError>{
     //    let m =  MyCosineConv1d::new(&VarStore::new(Cpu).root(), 8, 10, ConvConfig::default())?;

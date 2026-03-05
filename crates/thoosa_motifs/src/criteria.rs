@@ -923,7 +923,7 @@ mod tests {
             let t = Tensor::arange(1000, (Kind::Float, Device::Cpu)) / 200;
             let t_sin = sin_t(&t, 1.).view((1, -1));
 
-            debug_plot_impl(&t_sin, "/tmp/sinp.png")?;
+            debug_plot_impl(&t_sin, "/tmp/sinp.png", true)?;
 
             let r = interesting_turning_points_ratio(&t_sin)?.double_value(&[]);
 
@@ -938,7 +938,7 @@ mod tests {
             let t = Tensor::arange(1000, (Kind::Float, Device::Cpu)) / 200;
             let t_sin = sin_t(&t, 1.).view((1, -1));
 
-            debug_plot_impl(&t_sin, "/tmp/sinp.png")?;
+            debug_plot_impl(&t_sin, "/tmp/sinp.png", true)?;
 
             let r = interesting_turning_points_ratio_peaked_01(&t_sin, 1)?.double_value(&[]);
             assert_close(r, 0., 0.01);

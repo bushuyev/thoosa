@@ -35,11 +35,47 @@ use thoosa_shared::colors_iter::DistinctColorIter;
 
 #[macro_export]
 macro_rules! debug_plot {
+    ($tensor:expr, $fmt:literal, $($arg:expr),+, plot_repeats = $plot_repeats:expr $(,)?) => {{
+        if $crate::utils::debug_plots_enabled() {
+            let __label = format!($fmt, $($arg),+);
+            if $crate::utils::debug_plot_label_allowed(&__label) {
+                $crate::utils::debug_plot_impl($tensor, &__label, $plot_repeats)
+            } else {
+                Ok::<(), thoosa_shared::ThoError>(())
+            }
+        } else {
+            Ok::<(), thoosa_shared::ThoError>(())
+        }
+    }};
+    ($tensor:expr, $fmt:literal, plot_repeats = $plot_repeats:expr $(,)?) => {{
+        if $crate::utils::debug_plots_enabled() {
+            let __label = format!($fmt);
+            if $crate::utils::debug_plot_label_allowed(&__label) {
+                $crate::utils::debug_plot_impl($tensor, &__label, $plot_repeats)
+            } else {
+                Ok::<(), thoosa_shared::ThoError>(())
+            }
+        } else {
+            Ok::<(), thoosa_shared::ThoError>(())
+        }
+    }};
+    ($tensor:expr, $label:expr, plot_repeats = $plot_repeats:expr $(,)?) => {{
+        if $crate::utils::debug_plots_enabled() {
+            let __label = format!("{}", $label);
+            if $crate::utils::debug_plot_label_allowed(&__label) {
+                $crate::utils::debug_plot_impl($tensor, &__label, $plot_repeats)
+            } else {
+                Ok::<(), thoosa_shared::ThoError>(())
+            }
+        } else {
+            Ok::<(), thoosa_shared::ThoError>(())
+        }
+    }};
     ($tensor:expr, $fmt:literal, $($arg:expr),+ $(,)?) => {{
         if $crate::utils::debug_plots_enabled() {
             let __label = format!($fmt, $($arg),+);
             if $crate::utils::debug_plot_label_allowed(&__label) {
-                $crate::utils::debug_plot_impl($tensor, &__label)
+                $crate::utils::debug_plot_impl($tensor, &__label, false)
             } else {
                 Ok::<(), thoosa_shared::ThoError>(())
             }
@@ -51,7 +87,7 @@ macro_rules! debug_plot {
         if $crate::utils::debug_plots_enabled() {
             let __label = format!($fmt);
             if $crate::utils::debug_plot_label_allowed(&__label) {
-                $crate::utils::debug_plot_impl($tensor, &__label)
+                $crate::utils::debug_plot_impl($tensor, &__label, false)
             } else {
                 Ok::<(), thoosa_shared::ThoError>(())
             }
@@ -63,7 +99,7 @@ macro_rules! debug_plot {
         if $crate::utils::debug_plots_enabled() {
             let __label = format!("{}", $label);
             if $crate::utils::debug_plot_label_allowed(&__label) {
-                $crate::utils::debug_plot_impl($tensor, &__label)
+                $crate::utils::debug_plot_impl($tensor, &__label, false)
             } else {
                 Ok::<(), thoosa_shared::ThoError>(())
             }
@@ -209,13 +245,16 @@ fn sanitize_debug_plot_label(label: &str) -> String {
 }
 
 #[doc(hidden)]
-pub fn debug_plot_impl(t_0: &Tensor, label: &str) -> Result<(), ThoError> {
+pub fn debug_plot_impl(t_0: &Tensor, label: &str, plot_repeats: bool) -> Result<(), ThoError> {
     let file_stem = sanitize_debug_plot_label(label);
     let file_name = {
         let mut counts = DEBUG_PLOT_LABEL_COUNTS
             .lock()
             .map_err(|e| ThoError::new(format!("debug_plot: lock failed: {e}")))?;
         let seen = counts.entry(file_stem.clone()).or_insert(0);
+        if !plot_repeats && *seen > 0 {
+            return Ok(());
+        }
         let file_name = if *seen == 0 {
             format!("{file_stem}.png")
         } else {
@@ -1450,6 +1489,11 @@ pub fn pool_time_mean(sims: &Tensor) -> Result<Tensor, TchError> {
     sum.f_div_scalar(tprime)
 }
 
+#[test]
+pub fn test_remove_strobs_by_len(){
+
+
+}
 
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
@@ -2428,5 +2472,16 @@ pub mod tests {
         assert!(super::debug_plot_label_allowed_with_mode(&mode, "batch_motif_10"));
         assert!(super::debug_plot_label_allowed_with_mode(&mode, "batch_random_motif_in_batch_99"));
         assert!(!super::debug_plot_label_allowed_with_mode(&mode, "channel_0"));
+    }
+
+    #[test]
+    fn test_debug_plot_macro_accepts_plot_repeats() -> Result<(), ThoError> {
+        let t = Tensor::zeros([1i64, 8], FLOAT_CPU);
+        crate::debug_plot!(&t, "debug_plot_macro_accepts_plot_repeats", plot_repeats = false)?;
+        let suffix = 1;
+        crate::debug_plot!(&t, "debug_plot_macro_accepts_plot_repeats_{suffix}", plot_repeats = true)?;
+        let label = "debug_plot_macro_accepts_plot_repeats_label";
+        crate::debug_plot!(&t, label, plot_repeats = false)?;
+        Ok(())
     }
 }
