@@ -309,9 +309,9 @@ where
 
             let labels_tain_and_valid_sets_len = labels_tain_and_valid_sets.len();
             let futures = labels_tain_and_valid_sets.iter()
-            // .filter(|v|{
-            //     v.0.eq("seizure")
-            // })
+            .filter(|v|{
+                v.0.eq("seizure")
+            })
             .map(|label_tain_and_valid_sets|{
                 let (label, resources_1) = label_tain_and_valid_sets;
                 let mut ctx_for_task = ctx.branch(Some(&format!("Train_{label}")), true, false);//into is needed because mock needs SynKey or &str

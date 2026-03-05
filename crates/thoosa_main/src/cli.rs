@@ -1110,13 +1110,22 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     kernel: RangeOrValue::Value(10),
         // }),
 
-        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
-            step: RangeOrValue::Value(1),
-            channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-            kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+        // net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
+        //     step: RangeOrValue::Value(1),
+        //     channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
+        //     kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+        // })
+
+        net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
+            conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 24 }, step: None },
+            head_layers: RangeOrValue::Range { range: Range { start: 3, end: 24 }, step: None },
+            step: RangeOrValue::Value(10),
+            channels: RangeOrValue::Range{ range: Range {start: 8, end: 256}, step: None },
+            kernel: RangeOrValue::Value(10),
         })
 
     };
+
     //////////////////////train labels
     let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
         id: None,
@@ -1280,110 +1289,6 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
     let train_opt_config = Arc::new(OptConfig::new(60, 10));
 
     AllConfigs{find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, find_and_select_motifs_opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value, train_opt_config}
-}
-
-
-
-fn run_all_config(run_all_params: &RunAllArgs) -> (FindMotifsRunConfigRangeOrValue, FixedFindMotifsConfig, SelectMotifsRunConfigRangeOrValue, Arc<OptConfig>, TrainMotifsNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue) {
-    let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
-        id: None,
-        step: RangeOrValue::Value(100), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        // window: RangeOrValue::Value(1000),
-        window: RangeOrValue::Range { range: Range { start: 1000, end: 5001 }, step: Some((1000, 1)) },
-        freq_filter: Some(vec![
-            NotchBandFilter(NotchBandFilterParamsRangeOrValue {
-                low_hz: RangeOrValue::Value(58.0),
-                high_hz: RangeOrValue::Value(62.0),
-            }),
-            BandPassFilter(BandPassFilterParamsRangeOrValue {
-                low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-                band_hz: RangeOrValue::Value(100.),
-                kernel_size: RangeOrValue::Value(1000),
-                stride: RangeOrValue::Value(1),
-                padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
-            }),
-        ]),
-        // freq_filter: None,
-        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.02) }) }),
-        max_slices: None,
-    };
-    let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
-    //////////////////////select
-    let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
-        id: None,
-        extend_config: Some(ExtendMotifsConfigRangeOrValue {
-            slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue {  }),
-            slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
-        }),
-        motif_criteria: MotifCriteriaRangeOrValue {
-            norm_thickness: Some(NormThicknessRunConfigRangeOrValue { k: RangeOrValue::Value(5.0), eps: RangeOrValue::Value(1e-8) }),
-            inlier_ratioRunConfig: None,
-            coherenceRunConfig: None,
-            interesting_amp_01: None,
-            interesting_tv_norm_01: None,
-            interesting_curvature_norm_01: None,
-            interesting_turning_points_ratio: None,
-            interesting_band_energy_ratio_01: None,
-            interesting_entropy_gauss_01: None,
-            interesting_entropy_band_01: None,
-        },
-        threshold: RangeOrValue::Value(0.5),
-        min_slices: None,
-        max_slices: None,
-        extend_max_slices: None,
-    };
-    /////////////////////train_motifs
-    let common_training_args = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(100),
-        batch_size: RangeOrValue::Value(20),
-        // batch_size: RangeOrValue::Range { range: Range { start: 5, end: 25 }, step: Some((5, 1)) },
-        lr: RangeOrValue::Range { range: Range { start: 0.00001, end: 0.0001 }, step: None },
-        // lr: RangeOrValue::Value(0.0001),
-        patience: RangeOrValue::Value(100),
-        min_delta: RangeOrValue::Value(1e-4_f32),
-
-    };
-    let opt_config = Arc::new(OptConfig::new(200, 10));
-
-    let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
-        id: None,
-        common_training_args: common_training_args.clone(),
-        net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-            conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
-            head_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
-            step: RangeOrValue::Value(10),
-            channels: RangeOrValue::Value(32),
-            kernel: RangeOrValue::Value(10),
-        }),
-
-    };
-    //////////////////////train labels
-    let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
-        id: None,
-        common_training_args: common_training_args.clone(),
-        // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue{
-        //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
-        //     slices_len: RangeOrValue::Value(1000)
-        // }),
-        net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
-            num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 12 }, step: None },
-            hidden_conv_channels: RangeOrValue::Value(64),
-            num_head_layers: RangeOrValue::Value(10),
-            // kernel: RangeOrValue::Value(10),
-            num_head_features: RangeOrValue::Value(256),
-            kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-            joint: ConvNetJointArgsRangeOrValue::MinMax(MinMaxArgsRangeOrValue{ _dummy: 0 }),
-        }),
-    };
-    //////////////////////train final
-    let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
-        id: None,
-        common_training_args,
-        net: FinalNetArgsRangeOrValue {
-            num_layers: RangeOrValue::Range { range: Range { start: 3, end: 20 }, step: None },
-        },
-    };
-    (find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value)
 }
 
 async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
@@ -1870,9 +1775,9 @@ where
 {
     let raw = load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(Some("plot_resource_motif_net_load"), false, false)).await?;
 
-    raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_raw_all"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-        plot_resource_channels::<C>(ws, resource_id, "raw_all_channels", &format!("Resource {resource_id} raw (all channels)"), tensor, None)
-    }).await?;
+    // raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_raw_all"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+    //     plot_resource_channels::<C>(ws, resource_id, "raw_all_channels", &format!("Resource {resource_id} raw (all channels)"), tensor, None)
+    // }).await?;
 
     let (path_channel, motif_id) = FsWorkspace::parse_motif_path(&net_path)?;
     let (store_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?;
@@ -1915,7 +1820,7 @@ where
         ws_guard.load_motif_net(&net_path, &Cpu)?
     };
     let motif_width = motif_net_params.num_features() as i64;
-    let stride = motif_net_params.stride() as i64;
+    let motif_slices_step = 5; //motif_net_params.stride() as i64;
 
     filtered_or_raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_apply"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
         let channel_t = tensor.t_ref().f_i((channel as i64, ..))?;
@@ -1925,7 +1830,7 @@ where
             thoosa_common::utils::pad_to(&channel_t, &[motif_width], 0.0)?
         };
 
-        let slices = channel_t.f_unfold(0, motif_width, stride)?;
+        let slices = channel_t.f_unfold(0, motif_width, motif_slices_step)?;
         let slices_tensor = ThoTensor::<Batch<thoosa_common::dims::Slice>, SimpleId>::from(slices);
         let out = motif_net.tho_forward(&slices_tensor, None, false)?;
 

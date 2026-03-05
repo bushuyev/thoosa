@@ -410,7 +410,7 @@ where
             guard.branch(Some("motifs_batch_make"), false, false)
         }, motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, DataId>|{
 
-            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.5 })?;//TODO config
+            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;//TODO config
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 10.0 })?;
 
             debug_plot!(&motifs.as_ref(), "batch_motif_{motif_id}")?;
