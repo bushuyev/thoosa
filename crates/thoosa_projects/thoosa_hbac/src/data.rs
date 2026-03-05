@@ -838,7 +838,7 @@ mod tests {
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{Cli, import_resources};
-    use thoosa_main::{ApplyMotifNets, ChannelsData2, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
+    use thoosa_main::{random_non_overlapping_slices, ApplyMotifNets, ChannelsData2, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::find::{SelectMotifsParams};
@@ -1131,8 +1131,14 @@ mod tests {
         let train_motif_nets_run_id: RunId = 3;
         let motif_id = 10u32;
         let motif_width = 100u32;
-        let resource_id = 1u32;
+        let max_slices = 100u32;
         let filter_stride = 5;
+        let target_eeg_file = "1014985354.pt";
+        let target_resource_id = target_eeg_file
+            .strip_suffix(".pt")
+            .ok_or_else(|| ThoError::new(format!("invalid target file name: {target_eeg_file}")))?
+            .parse::<u32>()
+            .map_err(|e| ThoError::new(format!("invalid target resource id in {target_eeg_file}: {e}")))?;
 
         let freq_filters = vec![
             InputFilter::SavGolFilter(SavGolFilterParams {
@@ -1147,14 +1153,19 @@ mod tests {
             }),
         ];
 
-        let raw_loaded = Tensor::load("test_data/eeg/1014985354.pt")?;
-        let raw_loaded = match raw_loaded.size().as_slice() {
-            [c, t] if c <= t => raw_loaded,
-            [t, c] if t > c => raw_loaded.f_transpose(0, 1)?,
-            [1, _, _] => raw_loaded.f_squeeze_dim(0)?,
-            dims => return Err(ThoError::new(format!("unexpected eeg shape: {dims:?}"))),
+        let load_eeg_tensor = |path: &Path| -> Result<Tensor, ThoError> {
+            let mut raw_loaded = Tensor::load(path)?;
+            if matches!(raw_loaded.size().as_slice(), [1, _, _]) {
+                raw_loaded = raw_loaded.f_squeeze_dim(0)?;
+            }
+            let raw_loaded = match raw_loaded.size().as_slice() {
+                [c, t] if c <= t => raw_loaded,
+                [t, c] if t > c => raw_loaded.f_transpose(0, 1)?,
+                dims => return Err(ThoError::new(format!("unexpected eeg shape in {}: {dims:?}", path.display()))),
+            };
+            raw_loaded.f_to_kind(Float).map_err(Into::into)
         };
-        let raw_loaded = raw_loaded.f_to_kind(Float)?.f_to_device(Cuda(0))?;
+        let raw_loaded = load_eeg_tensor(Path::new("test_data/eeg").join(target_eeg_file).as_path())?.f_to_device(Cuda(0))?;
         debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: raw_loaded.size={:?}", raw_loaded.size());
 
         let raw_loaded = Tensor::cat(&[raw_loaded.copy(), raw_loaded], 1);//concatenating to have same slices
@@ -1183,38 +1194,81 @@ mod tests {
         if input_len < motif_width as i64 {
             return Err(ThoError::new(format!("filtered tensor is too short: filtered_len={input_len} motif_width={motif_width}")));
         }
-        let filtered_len = input_len  as u32 / filter_stride;
-
-        let motif_slices = vec![
-            TensorIdSliceIdx(resource_id, 100),
-            TensorIdSliceIdx(resource_id, (filtered_len /2 + 100)), //same slice from concatenated part
-        ];
-        let motif_slices_expected = motif_slices.clone();
-
-        let random_slices = vec![
-            TensorIdSliceIdx(resource_id, (filtered_len / 2 - (100 - motif_width))),
-            TensorIdSliceIdx(resource_id, (filtered_len / 2 - (100 - motif_width) * 2)), //should fit
-        ];
-
-        debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: filtered_len={input_len} motif_slices={motif_slices:?} random_slices={random_slices:?}");
-
-        let resource = Resource::new(resource_id, 1, "test_train_motif_nets_cosine_with_filtered_real_eeg".to_string(), input_len as u32);
-        let resources_by_id = HashMap::from([(resource_id, resource.clone())]);
-        let loader_tensors = Arc::new(Mutex::new(HashMap::from([(resource.clone(), raw_tensor)])));
-
-        let mut selected_motifs = vec![Vec::<(u32, f64)>::new(); channels as usize];
-        selected_motifs[0].push((motif_id, 1.0));
-        let selected_net_path = PathBuf::from(format!("0/{}_{}", motif_id, train_motif_nets_run_id));
-
-        let find_motifs_props = FindMotifsRunConfig::new_with_running_mean(
+        let find_motifs_config = FindMotifsRunConfig::new_with_running_mean(
             Some(find_motifs_run_id),
             1,
             motif_width,
             Some(freq_filters.clone()),
             None,
-        )
-        .to_properties_iter(None)
-        .collect();
+        );
+        let input_len_adjuster = find_motifs_config.input_len_adjuster();
+        let filtered_len = input_len_adjuster(input_len as u32);
+
+        let motif_slices = vec![
+            TensorIdSliceIdx(target_resource_id, 100),
+            TensorIdSliceIdx(target_resource_id, filtered_len / 2 + 100), //same slice from concatenated part
+        ];
+        let motif_slices_expected = motif_slices.clone();
+
+        let target_resource = Resource::new(target_resource_id, 1, target_eeg_file.to_string(), input_len as u32);
+        let motif_resources_by_id = HashMap::from([(target_resource_id, target_resource.clone())]);
+        let mut loader_tensors_map = HashMap::from([(target_resource.clone(), raw_tensor)]);
+
+        let eeg_dir = Path::new("test_data/eeg");
+        let mut random_resources = Vec::new();
+        let mut eeg_files = std::fs::read_dir(eeg_dir)
+            .map_err(|e| ThoError::new(format!("failed to read {}: {e}", eeg_dir.display())))?
+            .map(|entry| entry.map(|e| e.path()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| ThoError::new(format!("failed to read entry in {}: {e}", eeg_dir.display())))?;
+        eeg_files.sort();
+
+        for path in eeg_files {
+            if path.extension().and_then(|ext| ext.to_str()) != Some("pt") {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .ok_or_else(|| ThoError::new(format!("invalid file name: {}", path.display())))?
+                .to_string();
+            if file_name == target_eeg_file {
+                continue;
+            }
+
+            let resource_id = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .ok_or_else(|| ThoError::new(format!("invalid file stem for {}", path.display())))?
+                .parse::<u32>()
+                .map_err(|e| ThoError::new(format!("invalid resource id in {}: {e}", path.display())))?;
+
+            let tensor = load_eeg_tensor(path.as_path())?;
+            if tensor.size()[0] as u32 != channels {
+                debug!("skipping {file_name}: expected channels={channels}, got={:?}", tensor.size());
+                continue;
+            }
+            let resource = Resource::new(resource_id, 1, file_name, tensor.size()[1] as u32);
+            random_resources.push(resource.clone());
+            loader_tensors_map.insert(
+                resource.clone(),
+                ThoTensor::<ChannelsData2, SynKey>::new(
+                    SynKey::new([mono_key!(resource.id(), format!("filtered_resource_{}", resource.id()))]),
+                    tensor,
+                )?,
+            );
+        }
+        let (random_slices, random_resources_by_id) = random_non_overlapping_slices(random_resources.as_slice(), max_slices, motif_width, input_len_adjuster)?;
+        assert!(random_slices.iter().all(|slice| slice.0 != target_resource_id));
+
+        debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: filtered_len={input_len} motif_slices={motif_slices:?} random_slices={random_slices:?}");
+        let loader_tensors = Arc::new(Mutex::new(loader_tensors_map));
+
+        let mut selected_motifs = vec![Vec::<(u32, f64)>::new(); channels as usize];
+        selected_motifs[0].push((motif_id, 1.0));
+        let selected_net_path = PathBuf::from(format!("0/{}_{}", motif_id, train_motif_nets_run_id));
+
+        let find_motifs_props = find_motifs_config.to_properties_iter(None).collect();
 
         let store = Arc::new(
             MockStoreBuilder::new()
@@ -1226,13 +1280,13 @@ mod tests {
                     Some(vec![select_motifs_run_id]),
                     None,
                     None,
-                    Ok((0i64, find_motifs_run_id, motif_slices, resources_by_id.clone())),
+                    Ok((0i64, find_motifs_run_id, motif_slices, motif_resources_by_id.clone())),
                 )
                 .with_list_random_motif_slices(
                     motif_id,
                     motif_width,
                     None,
-                    Ok((0i64, find_motifs_run_id, random_slices, resources_by_id)),
+                    Ok((0i64, find_motifs_run_id, random_slices, random_resources_by_id)),
                 )
                 .with_list_selected_nets([
                     (train_motif_nets_run_id, None, Ok(vec![(selected_net_path.clone(), 0.01)])),
