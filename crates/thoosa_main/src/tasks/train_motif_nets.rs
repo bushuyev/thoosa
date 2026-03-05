@@ -379,6 +379,10 @@ where
             let motifs_t = motif.data().t_ref();
             let train_motifs = motifs_t.i((0..split, .. ));
             let valid_motifs = motifs_t.i((split.., .. ));
+
+            debug_plot!(&train_motifs, "train_motif_net_new_train_motif_{}", motif.id())?;
+            debug_plot!(&train_motifs, "train_motif_net_new_valid_motifs_{}", motif.id())?;
+
             let train_motifs = ThoTensor::new(SynKey::new([mono_key!("train_motifs", "split")]), train_motifs)?;
             let valid_motifs = ThoTensor::new(SynKey::new([mono_key!("valid_motifs", "split")]), valid_motifs)?;
 
@@ -410,7 +414,7 @@ where
             guard.branch(Some("motifs_batch_make"), false, false)
         }, motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, DataId>|{
 
-            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.5 })?;//TODO config
+            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;//TODO config
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 10.0 })?;
 
             debug_plot!(&motifs.as_ref(), "batch_motif_{motif_id}")?;

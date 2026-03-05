@@ -609,11 +609,16 @@ impl <C> SyncStage for ApplyMotifNet<C> where
         let out_id = self.out_id(input.id());
         let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
         let out = input.motif_net.data().tho_forward(&slices_tensor, None, false)?;
+        debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 
-        debug_plot!(&t.view((1, -1)), "input_{}", input.id())?;
-        debug_plot!(&out.as_ref().transpose(0, 1), "input_{}_motif_applied_{motif_id}", input.id())?;
+        let out_t = out.as_ref().squeeze().f_sigmoid()?;
 
-        let out = ThoTensor::new(out_id, out.t())?;//TODO .f_sigmoid()?
+        debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out_t.size={:?}", out_t.size());
+
+        debug_plot!(&t.view((1, -1)), "apply_motif_net_run_input_{}", input.id())?;
+        debug_plot!(&out_t.view((1, -1)/*plot needs [nxm]*/), "apply_motif_net__run_input_{}_motif_applied_{motif_id}", input.id())?;
+
+        let out = ThoTensor::new(out_id, out_t)?;//TODO .f_sigmoid()?
 
         trace!("ApplyMotifNet::do_run, self.id={:?} out=\n{}", self.id, out.t);
         debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.size={:?}", input.id(), out.size());

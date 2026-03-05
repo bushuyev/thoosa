@@ -610,7 +610,7 @@ where
             } else {
                 // If it's locked, assume it's the current task's input. DumpToCpu only runs with
                 // MAX_PERMITS or when cache_area.assigned_count() == 0 (from purge_gpu_closure added in run_cached), so no other tasks should be running; skipping avoids deadlock.
-                debug!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}",wrap.id, wrap.cached_data)
+                warn!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}",wrap.id, wrap.cached_data)
             }
 
             let is_all_on_cpu = wrap.is_all_on_cpu().await;
