@@ -36,41 +36,94 @@ use thoosa_shared::colors_iter::DistinctColorIter;
 #[macro_export]
 macro_rules! debug_plot {
     ($tensor:expr, $fmt:literal, $($arg:expr),+ $(,)?) => {{
-        #[allow(unexpected_cfgs)]
-        #[cfg(tho_debug_plots)]
-        {
-            $crate::utils::debug_plot_impl($tensor, &format!($fmt, $($arg),+))
-        }
-        #[allow(unexpected_cfgs)]
-        #[cfg(not(tho_debug_plots))]
-        {
+        if $crate::utils::debug_plots_enabled() {
+            let __label = format!($fmt, $($arg),+);
+            if $crate::utils::debug_plot_label_allowed(&__label) {
+                $crate::utils::debug_plot_impl($tensor, &__label)
+            } else {
+                Ok::<(), thoosa_shared::ThoError>(())
+            }
+        } else {
             Ok::<(), thoosa_shared::ThoError>(())
         }
     }};
     ($tensor:expr, $fmt:literal $(,)?) => {{
-        #[allow(unexpected_cfgs)]
-        #[cfg(tho_debug_plots)]
-        {
-            $crate::utils::debug_plot_impl($tensor, &format!($fmt))
-        }
-        #[allow(unexpected_cfgs)]
-        #[cfg(not(tho_debug_plots))]
-        {
+        if $crate::utils::debug_plots_enabled() {
+            let __label = format!($fmt);
+            if $crate::utils::debug_plot_label_allowed(&__label) {
+                $crate::utils::debug_plot_impl($tensor, &__label)
+            } else {
+                Ok::<(), thoosa_shared::ThoError>(())
+            }
+        } else {
             Ok::<(), thoosa_shared::ThoError>(())
         }
     }};
     ($tensor:expr, $label:expr $(,)?) => {{
-        #[allow(unexpected_cfgs)]
-        #[cfg(tho_debug_plots)]
-        {
-            $crate::utils::debug_plot_impl($tensor, &format!("{}", $label))
-        }
-        #[allow(unexpected_cfgs)]
-        #[cfg(not(tho_debug_plots))]
-        {
+        if $crate::utils::debug_plots_enabled() {
+            let __label = format!("{}", $label);
+            if $crate::utils::debug_plot_label_allowed(&__label) {
+                $crate::utils::debug_plot_impl($tensor, &__label)
+            } else {
+                Ok::<(), thoosa_shared::ThoError>(())
+            }
+        } else {
             Ok::<(), thoosa_shared::ThoError>(())
         }
     }};
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DebugPlotsMode {
+    Off,
+    All,
+    Prefixes(Vec<String>),
+}
+
+static DEBUG_PLOTS_MODE: OnceLock<DebugPlotsMode> = OnceLock::new();
+
+fn debug_plots_mode() -> &'static DebugPlotsMode {
+    DEBUG_PLOTS_MODE.get_or_init(|| {
+        let mode = option_env!("THO_DEBUG_PLOTS_MODE").unwrap_or("off");
+        let prefixes = option_env!("THO_DEBUG_PLOTS_PREFIXES").unwrap_or("");
+        parse_debug_plots_mode(mode, prefixes)
+    })
+}
+
+fn parse_debug_plots_mode(mode: &str, prefixes: &str) -> DebugPlotsMode {
+    match mode {
+        "all" => DebugPlotsMode::All,
+        "prefixes" => {
+            let values = prefixes
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+            if values.is_empty() {
+                DebugPlotsMode::Off
+            } else {
+                DebugPlotsMode::Prefixes(values)
+            }
+        }
+        _ => DebugPlotsMode::Off,
+    }
+}
+
+pub fn debug_plots_enabled() -> bool {
+    !matches!(debug_plots_mode(), DebugPlotsMode::Off)
+}
+
+pub fn debug_plot_label_allowed(label: &str) -> bool {
+    debug_plot_label_allowed_with_mode(debug_plots_mode(), label)
+}
+
+fn debug_plot_label_allowed_with_mode(mode: &DebugPlotsMode, label: &str) -> bool {
+    match mode {
+        DebugPlotsMode::Off => false,
+        DebugPlotsMode::All => true,
+        DebugPlotsMode::Prefixes(prefixes) => prefixes.iter().any(|prefix| label.starts_with(prefix)),
+    }
 }
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
@@ -2349,5 +2402,31 @@ pub mod tests {
         let peaks = local_max_1d(&x, 3).unwrap().view([-1]);
         let pv = to_vec_f32(&peaks);
         assert_eq!(pv, vec![0., 1., 0., 2., 2., 0., 0.]);
+    }
+
+    #[test]
+    fn test_parse_debug_plots_mode() {
+        assert_eq!(super::parse_debug_plots_mode("off", ""), super::DebugPlotsMode::Off);
+        assert_eq!(super::parse_debug_plots_mode("all", ""), super::DebugPlotsMode::All);
+        assert_eq!(
+            super::parse_debug_plots_mode("prefixes", "batch_motif_,batch_random_motif_in_batch_"),
+            super::DebugPlotsMode::Prefixes(vec![
+                "batch_motif_".to_string(),
+                "batch_random_motif_in_batch_".to_string(),
+            ]),
+        );
+        assert_eq!(super::parse_debug_plots_mode("prefixes", ""), super::DebugPlotsMode::Off);
+    }
+
+    #[test]
+    fn test_debug_plot_label_allowed_with_mode_prefixes() {
+        let mode = super::DebugPlotsMode::Prefixes(vec![
+            "batch_motif_".to_string(),
+            "batch_random_motif_in_batch_".to_string(),
+        ]);
+
+        assert!(super::debug_plot_label_allowed_with_mode(&mode, "batch_motif_10"));
+        assert!(super::debug_plot_label_allowed_with_mode(&mode, "batch_random_motif_in_batch_99"));
+        assert!(!super::debug_plot_label_allowed_with_mode(&mode, "channel_0"));
     }
 }

@@ -642,7 +642,7 @@ pub struct MotifConvNetParams {
     pub num_features: u32,
     pub conv_layers: u32,
     pub head_layers: u32,
-    pub stride: u32,
+    pub stride: u32,//stride within slice
     pub channels: u32,
     pub kernel: u32,
 }
@@ -657,19 +657,18 @@ impl MotifConvNetParams {
 pub struct MotifLinNetParams {
     pub num_features: u32,
     pub num_layers: u32,
-    pub stride: u32,
 }
 
 impl MotifLinNetParams {
-    pub fn new(num_features: u32, num_layers: u32, stride: u32) -> Self {
-        Self { num_features, num_layers, stride }
+    pub fn new(num_features: u32, num_layers: u32) -> Self {
+        Self { num_features, num_layers }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct MotifCosineNetParams {
     pub num_features: u32,
-    pub stride: u32,
+    pub stride: u32,//stride within slice
     pub channels: u32,
     pub kernel: u32,
 }
@@ -713,7 +712,7 @@ impl MotifNetParams {
     }
 
     pub fn new_lin(num_features: u32, num_layers: u32, stride: u32) -> Self {
-        Self::new_with_net_type(MotifNetTypeParams::LinNetParams(MotifLinNetParams::new(num_features, num_layers, stride)))
+        Self::new_with_net_type(MotifNetTypeParams::LinNetParams(MotifLinNetParams::new(num_features, num_layers)))
     }
 
     pub fn new_cosine(num_features: u32, stride: u32, channels: u32, kernel: u32) -> Self {
@@ -751,15 +750,6 @@ impl MotifNetParams {
             MotifNetTypeParams::LinNetParams(v) => v.num_features,
             MotifNetTypeParams::ConvNetParams(v) => v.num_features,
             MotifNetTypeParams::CosineNetParams(v) => v.num_features,
-        }
-    }
-
-    //TODO
-    pub fn stride(&self) -> u32 {
-        match &self.net_type {
-            MotifNetTypeParams::LinNetParams(v) => v.stride,
-            MotifNetTypeParams::ConvNetParams(v) => v.stride,
-            MotifNetTypeParams::CosineNetParams(v) => v.stride,
         }
     }
 
@@ -3219,7 +3209,7 @@ mod train_tests {
     ) -> Result<(), ThoError> {
         let mut vs_0 = VarStore::new(Cpu);
         let _test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            train_nets::lin_motif_node(&MotifLinNetParams::new(window, 1, 100))?
+            train_nets::lin_motif_node(&MotifLinNetParams::new(window, 1))?
                 .build_tch_module(&vs_0.root())?;
 
         let test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> = SeqBuilder::new(100, None)?
