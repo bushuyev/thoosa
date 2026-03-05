@@ -1131,7 +1131,7 @@ mod tests {
         let train_motif_nets_run_id: RunId = 3;
         let motif_id = 10u32;
         let motif_width = 100u32;
-        let max_slices = 100u32;
+        let max_slices = 1000u32;
         let filter_stride = 5;
         let target_eeg_file = "1014985354.pt";
         let target_resource_id = target_eeg_file
@@ -1214,50 +1214,7 @@ mod tests {
         let motif_resources_by_id = HashMap::from([(target_resource_id, target_resource.clone())]);
         let mut loader_tensors_map = HashMap::from([(target_resource.clone(), raw_tensor)]);
 
-        let eeg_dir = Path::new("test_data/eeg");
-        let mut random_resources = Vec::new();
-        let mut eeg_files = std::fs::read_dir(eeg_dir)
-            .map_err(|e| ThoError::new(format!("failed to read {}: {e}", eeg_dir.display())))?
-            .map(|entry| entry.map(|e| e.path()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| ThoError::new(format!("failed to read entry in {}: {e}", eeg_dir.display())))?;
-        eeg_files.sort();
-
-        for path in eeg_files {
-            if path.extension().and_then(|ext| ext.to_str()) != Some("pt") {
-                continue;
-            }
-            let file_name = path
-                .file_name()
-                .and_then(|v| v.to_str())
-                .ok_or_else(|| ThoError::new(format!("invalid file name: {}", path.display())))?
-                .to_string();
-            if file_name == target_eeg_file {
-                continue;
-            }
-
-            let resource_id = path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .ok_or_else(|| ThoError::new(format!("invalid file stem for {}", path.display())))?
-                .parse::<u32>()
-                .map_err(|e| ThoError::new(format!("invalid resource id in {}: {e}", path.display())))?;
-
-            let tensor = load_eeg_tensor(path.as_path())?;
-            if tensor.size()[0] as u32 != channels {
-                debug!("skipping {file_name}: expected channels={channels}, got={:?}", tensor.size());
-                continue;
-            }
-            let resource = Resource::new(resource_id, 1, file_name, tensor.size()[1] as u32);
-            random_resources.push(resource.clone());
-            loader_tensors_map.insert(
-                resource.clone(),
-                ThoTensor::<ChannelsData2, SynKey>::new(
-                    SynKey::new([mono_key!(resource.id(), format!("filtered_resource_{}", resource.id()))]),
-                    tensor,
-                )?,
-            );
-        }
+        let random_resources = random_resources(target_eeg_file, load_eeg_tensor, channels, &mut loader_tensors_map)?;
         let (random_slices, random_resources_by_id) = random_non_overlapping_slices(random_resources.as_slice(), max_slices, motif_width, input_len_adjuster)?;
         assert!(random_slices.iter().all(|slice| slice.0 != target_resource_id));
 
@@ -1316,7 +1273,7 @@ mod tests {
         //conv_layers: 11, head_layers: 3, stride: 1, channels: 218,
         //conv_layers: 21, head_layers: 2, stride: 1, channels: 215
         // let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_cosine_net_run_configs(Val::Int(10), Val::Int(300), Val::Int(10))));
-        let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_conv_net_run_configs(Val::Int(10), Val::Int(300), Val::Int(20))));
+        let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_conv_net_run_configs(Val::Int(10), Val::Int(300), Val::Int(100))));
         // let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_lin_net_run_configs(Val::Int(100), Val::Int(300), Val::Int(10))));
 
         let input = Arc::new(DevicesWrap::wrap(
@@ -1381,5 +1338,53 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    fn random_resources(target_eeg_file: &str, load_eeg_tensor: fn(&Path) -> Result<Tensor, ThoError>, channels: u32, loader_tensors_map: &mut HashMap<Resource, ThoTensor<ChannelsData2, SynKey>>) -> Result<Vec<Resource>, ThoError> {
+        let eeg_dir = Path::new("test_data/eeg");
+        let mut random_resources = Vec::new();
+        let mut eeg_files = std::fs::read_dir(eeg_dir)
+            .map_err(|e| ThoError::new(format!("failed to read {}: {e}", eeg_dir.display())))?
+            .map(|entry| entry.map(|e| e.path()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| ThoError::new(format!("failed to read entry in {}: {e}", eeg_dir.display())))?;
+        eeg_files.sort();
+
+        for path in eeg_files {
+            if path.extension().and_then(|ext| ext.to_str()) != Some("pt") {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .ok_or_else(|| ThoError::new(format!("invalid file name: {}", path.display())))?
+                .to_string();
+            if file_name == target_eeg_file {
+                continue;
+            }
+
+            let resource_id = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .ok_or_else(|| ThoError::new(format!("invalid file stem for {}", path.display())))?
+                .parse::<u32>()
+                .map_err(|e| ThoError::new(format!("invalid resource id in {}: {e}", path.display())))?;
+
+            let tensor = load_eeg_tensor(path.as_path())?;
+            if tensor.size()[0] as u32 != channels {
+                debug!("skipping {file_name}: expected channels={channels}, got={:?}", tensor.size());
+                continue;
+            }
+            let resource = Resource::new(resource_id, 1, file_name, tensor.size()[1] as u32);
+            random_resources.push(resource.clone());
+            loader_tensors_map.insert(
+                resource.clone(),
+                ThoTensor::<ChannelsData2, SynKey>::new(
+                    SynKey::new([mono_key!(resource.id(), format!("filtered_resource_{}", resource.id()))]),
+                    tensor,
+                )?,
+            );
+        }
+        Ok(random_resources)
     }
 }

@@ -337,6 +337,8 @@ impl MyBatchNorm1d {
         num_features: u32,
         config: BatchNormConfig,
     ) -> Self {
+        debug!("MyBatchNorm1d::tho_forward: path={:?} num_features={num_features}", path.borrow());
+
         Self {
             batch_norm: batch_norm1d(path, num_features as i64, config),
         }
@@ -345,6 +347,7 @@ impl MyBatchNorm1d {
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyBatchNorm1d {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        debug!("MyBatchNorm1d::tho_forward: t.size={:?}", t.size());
         Ok(self.batch_norm.forward_t(t.as_ref(), train).into())
     }
 }

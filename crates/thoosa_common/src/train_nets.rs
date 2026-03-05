@@ -28,7 +28,7 @@ use std::{fmt, fs};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
-use tch::nn::{init, ConvConfig, LinearConfig, VarStore};
+use tch::nn::{init, BatchNormConfig, ConvConfig, LinearConfig, VarStore};
 use tch::Device::Cpu;
 use tch::{nn, Device, Kind, Tensor};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
@@ -776,28 +776,45 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
         let hidden_config = ConvConfig::default();
 
         let mut net = builder
+            // .batch_norm(BatchNormConfig::default())?
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                     let r = t.unsqueeze(1);
 
-                    debug!("motif_node_2: 0. input.size={:?}", r.size());
+                    debug!("motif_node_2: 0. t.size={:?} r.size={:?}", t.size(), r.size());
 
                     Ok(r)
                 })),
                 None,
             )?;
 
-        // .batch_norm()
-        net = net.conv_1d("conv_1", params.kernel, 1, params.channels, nd, None)?
+
+        net = net.conv_1d("motif_conv_1", params.kernel, 1, params.channels, nd, None)?
             .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
-        for i in 0..params.head_layers as usize {
-            net = net.conv_1d("conv_2", params.kernel, params.channels, params.channels, hidden_config, None)?
-                .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+
+        for i in 0..params.conv_layers as usize {
+            net = net
+                .conv_1d(format!("motif_{i}_conv"), params.kernel, params.channels, params.channels, hidden_config, None)?
+                .closure(
+                    Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+
+                        debug!("closure after conv_1d motif_{i}_conv, t.size={:?} _lengths={_lengths:?}", t.size());
+
+                        let r = t.shallow_clone();
+
+                        Ok(r)
+                    })),
+                    None,
+                )?
+                .batch_norm(BatchNormConfig::default())?
+                .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?
+                .dropout(0.1)?;
         }
 
         net
             .adaptive_max_pool(1, params.channels)?
             // .adaptive_max_pool(1, params.channels)?
+
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                     let r = t.squeeze();
@@ -821,10 +838,11 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
                 .linear_s(
                     params.channels,
                     #[cfg(debug_assertions)]
-                    format!("motif_node  {i}th layer"),
+                    format!("motif_node {i}th layer"),
                     format!("motif_{i}_head"),
                 )?
-                .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+
+                .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?;
         }
 
         net
