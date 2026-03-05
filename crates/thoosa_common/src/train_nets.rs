@@ -806,9 +806,10 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
                     })),
                     None,
                 )?
-                .batch_norm(BatchNormConfig::default())?
+                // .batch_norm(BatchNormConfig::default(), Some(params.channels))?
                 .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?
-                .dropout(0.1)?;
+                // .dropout(0.1)?
+            ;
         }
 
         net

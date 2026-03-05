@@ -334,13 +334,18 @@ where
             matches
         };
 
+        debug!("ApplyMotifNets::run: matches_2={matches:?}");
+
+
+        let res_t = Tensor::f_vstack(
+            &matches.into_iter().map(|v| v.t).collect::<Vec<_>>(),
+        )?;
+
+        debug!("ApplyMotifNets::run: res_t.size={:?}", res_t.size());
 
         let motif_nets_applied = ThoTensor::new(
             self.out_id(input.id()),
-            Tensor::f_concat(
-                &matches.into_iter().map(|v| v.t).collect::<Vec<_>>(), 1
-            )?
-            .f_transpose(0, 1)?,
+            res_t, //.f_transpose(0, 1)?,
         )?;
 
         Ok(Arc::new(DevicesWrap::wrap(motif_nets_applied, cache_area.into())))

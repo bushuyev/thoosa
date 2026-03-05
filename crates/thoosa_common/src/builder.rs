@@ -437,9 +437,9 @@ impl SeqBuilder {
         })
     }
 
-    pub fn batch_norm(&mut self, config: BatchNormConfig) -> Result<&mut Self, ThoError> {
+    pub fn batch_norm(&mut self, config: BatchNormConfig, option: Option<u32>) -> Result<&mut Self, ThoError> {
         self.elts.push(Node::BatchNorm {
-            num_features: self.num_features,
+            num_features: option.unwrap_or(self.num_features),
             config,
         });
         Ok(self)

@@ -958,7 +958,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::nn::{ConvConfig, ModuleT, VarStore};
     use tch::Tensor;
-    use thoosa_shared::{ThoError, cdt_for_dir};
+    use thoosa_shared::{ThoError, cdt_for_dir, simple_id};
     use thoosa_shared::traits::SimpleId;
     use crate::tho_tensor::ThoTensor;
 
@@ -1076,65 +1076,11 @@ mod tests {
         assert_eq!(format!("{:?}", params), format!("{:?}", loaded_params));
         assert_eq!(vs.variables(), loaded_module.var_store().variables());
 
-        loaded_module.tho_forward(&ThoTensor::new("".into(), Tensor::rand(&[127, 10000], FLOAT_CPU))?, None, true)?;
+        loaded_module.tho_forward(&ThoTensor::new(simple_id!(""), Tensor::rand(&[127, 10000], FLOAT_CPU))?, None, true)?;
 
         Ok(())
     }
 
-    #[test]
-    fn test_0(){
-        use tch::{nn, nn::ModuleT, Tensor};
-
-        #[derive(Debug)]
-        pub struct Net {
-            conv1: nn::Conv1D,
-            conv2: nn::Conv1D,
-            fc: nn::Linear,
-            p_conv: f64,
-            p_head: f64,
-        }
-
-        impl Net {
-            pub fn new(vs: &nn::Path) -> Self {
-                let conv1 = nn::conv1d(vs, 1, 32, 3, nn::ConvConfig { padding: 1, ..Default::default() });
-                let conv2 = nn::conv1d(vs, 32, 64, 3, nn::ConvConfig { padding: 1, ..Default::default() });
-                let fc = nn::linear(vs, 64, 1, Default::default());
-                Self { conv1, conv2, fc, p_conv: 0.1, p_head: 0.4 }
-            }
-        }
-
-        impl nn::ModuleT for Net {
-            fn forward_t(&self, xs: &Tensor, train: bool) -> Tensor {
-                debug!("xs.size={:?}", xs.size());
-                let x = xs
-                    .apply(&self.conv1);
-
-                debug!("0. x.size={:?}", x.size());
-
-                let x = x.relu()
-                    .dropout(self.p_conv, train)
-                    .apply(&self.conv2)
-                    .relu();
-
-                debug!("1. x.size={:?}", x.size());
-
-                let x = x    .dropout(self.p_conv, train);
-
-                // x.size= [123 (batch), 64, 1000]
-                let x = x.mean_dim(2, false, x.kind());
-
-                x.dropout(self.p_head, train)
-                    .apply(&self.fc) // logits
-            }
-        }
-
-        let net = Net::new(&VarStore::new(Cpu).root());
-
-        let r= net.forward_t(&Tensor::rand([123, 1, 1000], FLOAT_CPU), true);
-
-
-
-    }
     // #[test]
     // fn test_x()-> Result<(), ThoError>{
     //    let m =  MyCosineConv1d::new(&VarStore::new(Cpu).root(), 8, 10, ConvConfig::default())?;

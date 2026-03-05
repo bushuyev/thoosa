@@ -321,8 +321,8 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveMaxPool1d {
             }
         }
         Ok(t.as_ref()
-            .f_adaptive_max_pool1d(self.output_size as i64)?
-            .0.into())
+            .f_adaptive_avg_pool1d(self.output_size as i64)?
+            .into())
     }
 }
 
@@ -1342,7 +1342,7 @@ mod tch_tests {
         num_features: u32,
     ) -> Result<Box<dyn ThoModule<Batch<AnyDims>, AnyDims>>, ThoError> {
         SeqBuilder::new(num_features, None)?
-            .batch_norm(BatchNormConfig::default())?
+            .batch_norm(BatchNormConfig::default(), None)?
             .closure(
                 Arc::new(Box::new(|t: &Tensor, _lengths: Option<&[i64]>| {
                     Ok(t.view((t.size()[0], 1, t.size()[1]))) //channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
@@ -1470,7 +1470,7 @@ mod tch_tests {
                 .split(
                     vec![
                         SeqBuilder::new(123, None)?
-                            .batch_norm(BatchNormConfig::default())? //3 weight bias running_var
+                            .batch_norm(BatchNormConfig::default(), None)? //3 weight bias running_var
                             .linear(
                                 "todo",
                                 #[cfg(debug_assertions)]
@@ -1491,7 +1491,7 @@ mod tch_tests {
                             )? //2 weight bias
                             .end_seq()?,
                         SeqBuilder::new(321, None)?
-                            .batch_norm(BatchNormConfig::default())? //3 weight bias running_var
+                            .batch_norm(BatchNormConfig::default(), None)? //3 weight bias running_var
                             .linear(
                                 "todo",
                                 #[cfg(debug_assertions)]

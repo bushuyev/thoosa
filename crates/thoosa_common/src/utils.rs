@@ -1489,6 +1489,11 @@ pub fn pool_time_mean(sims: &Tensor) -> Result<Tensor, TchError> {
     sum.f_div_scalar(tprime)
 }
 
+#[test]
+pub fn test_remove_strobs_by_len(){
+
+
+}
 
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]

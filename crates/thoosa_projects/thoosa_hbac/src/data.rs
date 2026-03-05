@@ -1130,8 +1130,8 @@ mod tests {
         let select_motifs_run_id: RunId = 2;
         let train_motif_nets_run_id: RunId = 3;
         let motif_id = 10u32;
-        let motif_width = 100u32;
-        let max_slices = 1000u32;
+        let motif_width = 200u32;
+        let max_slices = 500u32;
         let filter_stride = 5;
         let target_eeg_file = "1014985354.pt";
         let target_resource_id = target_eeg_file
@@ -1306,10 +1306,21 @@ mod tests {
             1,
         ).await?);
 
+        let out = Arc::clone(&apply_motif_nets).run(
+            Arc::new(DevicesWrap::wrap(
+                ThoTensor::new(
+                    SynKey::new([mono_key!("raw_loaded_0", "raw_loaded_0")]),
+                    raw_loaded_for_apply.shallow_clone(),
+                )?,
+                CacheArea::default(),
+            )),
+            mock_run_ctx::default(1),
+        ).await?;
+
         let out = apply_motif_nets.run(
             Arc::new(DevicesWrap::wrap(
                 ThoTensor::new(
-                    SynKey::new([mono_key!("test_apply_batch", "test_apply_batch")]),
+                    SynKey::new([mono_key!("raw_loaded_1", "raw_loaded_1")]),
                     raw_loaded_for_apply,
                 )?,
                 CacheArea::default(),
