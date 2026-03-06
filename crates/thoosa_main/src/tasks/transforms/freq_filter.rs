@@ -15,7 +15,7 @@ use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_common::find_motifs_run_config::InputFilter;
-use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, SgPadding};
+use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, Padding};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{CachableIdTr, WithId};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
@@ -39,13 +39,13 @@ enum PreparedFilter {
     BandPass {
         kernel: ThoTensor<BandPassDims, SynKey>,
         stride: u32,
-        padding: SgPadding,
+        padding: Padding,
     },
     SavGol {
         weights: ThoTensor<BandPassDims, SynKey>,
         window_len: i64,
         stride: u32,
-        padding: SgPadding,
+        padding: Padding,
     },
 }
 
@@ -192,7 +192,7 @@ where
         Ok(ThoTensor::new(self.out_id(input_tensor.id()), filtered_t)?)
     }
 
-    fn run_conv_with_padding(&self, stride: u32, padding: &SgPadding, kernel_t: &Tensor, input_t: &Tensor) -> Result<Tensor, ThoError> {
+    fn run_conv_with_padding(&self, stride: u32, padding: &Padding, kernel_t: &Tensor, input_t: &Tensor) -> Result<Tensor, ThoError> {
         let t = input_t.size()[1];
         let kernel_size = kernel_t.size()[2];
         let pad = kernel_size / 2;
@@ -200,14 +200,14 @@ where
 
 
         let output_3d = match padding {
-            SgPadding::Zero(_) => input_t.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, pad, 1, self.num_channels)?,
-            SgPadding::Replicate(_) => {
+            Padding::Zero(_) => input_t.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, pad, 1, self.num_channels)?,
+            Padding::Replicate(_) => {
                 let left = input_t.narrow(2, 0, 1).repeat(&[1, 1, pad]);
                 let right = input_t.narrow(2, t - 1, 1).repeat(&[1, 1, pad]);
                 let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
                 xpad.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, 0, 1, self.num_channels)?
             }
-            SgPadding::Reflect(_) => {
+            Padding::Reflect(_) => {
                 if pad >= t {
                     return Err(ThoError::new(format!("reflect padding requires pad < T, got pad={} T={}", pad, t)));
                 }
@@ -288,7 +288,7 @@ mod tests {
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
-    use thoosa_common::transforms::filters::{BandPassFilterParams, SavGolFilterParams, SgPadding};
+    use thoosa_common::transforms::filters::{BandPassFilterParams, SavGolFilterParams, Padding};
     use thoosa_shared::ThoError;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::ws::mock_ws_simp;
@@ -317,7 +317,7 @@ mod tests {
                 band_hz: 100.0,
                 kernel_size: 859,
                 stride: 10,
-                padding: SgPadding::zero(),
+                padding: Padding::zero(),
             }),
         ];
 
@@ -334,7 +334,7 @@ mod tests {
                 window_len: 11,
                 poly_order: 2,
                 stride: 1,
-                padding: SgPadding::reflect(),
+                padding: Padding::reflect(),
             }),
         ];
 

@@ -64,7 +64,7 @@ pub enum StatsKey {
         window_len: i64,
         poly_order: i64,
         stride: u32,
-        padding: SgPadding,
+        padding: Padding,
     },
 }
 
@@ -346,7 +346,7 @@ pub struct ExactStats {
 mod tests {
     use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
     use crate::find_motifs_run_config::InputFilter::{BandPassFilter, NotchBandFilter, SavGolFilter};
-    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, SgPadding, SgPaddingRangeOrValue, SgZeroPaddingRangeOrValue};
+    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, Padding, PaddingRangeOrValue, SgZeroPaddingRangeOrValue};
     use log::debug;
     use tch::Tensor;
     use thoosa_properties_map::ToHashmap;
@@ -374,7 +374,7 @@ mod tests {
                     band_hz: 300f64.into(),
                     kernel_size: 12000u32.into(),
                     stride: 1u32.into(),
-                    padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
+                    padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
                 },
             )]),
             slices_filter: SlicesFilterRangeOrValue::Accumulate(
@@ -411,7 +411,7 @@ mod tests {
                     band_hz: 300.0,
                     kernel_size: 100,
                     stride: 5,
-                    padding: SgPadding::zero(),
+                    padding: Padding::zero(),
                 }),
             ]),
             None,
@@ -434,7 +434,7 @@ mod tests {
             None,
             100,
             100,
-            Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 3, stride: 1, padding: SgPadding::replicate() })]),
+            Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 3, stride: 1, padding: Padding::replicate() })]),
             None,
         );
         let adjust = config.input_len_adjuster();
@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn test_to_stats_keys(){
-        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: SgPadding::zero() }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })) };
+        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: Padding::zero() }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })) };
 
         let keys = run_config.to_stats_keys();
         
@@ -501,7 +501,7 @@ mod tests {
             id: Some(246),
             step: 100,
             window: 1000,
-            freq_filter: Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 2, stride: 1, padding: SgPadding::reflect() })]),
+            freq_filter: Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 2, stride: 1, padding: Padding::reflect() })]),
             slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
         };
@@ -513,7 +513,7 @@ mod tests {
             StatsKeys {
                 keys: vec![
                     StatsKey::Window(1000),
-                    StatsKey::SavGolFilter { window_len: 11, poly_order: 2, stride: 1, padding: SgPadding::reflect() },
+                    StatsKey::SavGolFilter { window_len: 11, poly_order: 2, stride: 1, padding: Padding::reflect() },
                 ]
             }
         );

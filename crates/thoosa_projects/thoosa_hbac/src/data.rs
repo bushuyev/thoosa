@@ -832,7 +832,7 @@ mod tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifLinNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifsNetsRunConfigFields};
-    use thoosa_common::transforms::filters::{NotchBandFilterParams, SavGolFilterParams, SgPadding};
+    use thoosa_common::transforms::filters::{NotchBandFilterParams, SavGolFilterParams, Padding};
     use thoosa_common::utils::{assert_close, from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
     use thoosa_common::ws::Workspace;
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
@@ -1145,7 +1145,7 @@ mod tests {
                 window_len: 111,
                 poly_order: 3,
                 stride: filter_stride,
-                padding: SgPadding::zero(),
+                padding: Padding::zero(),
             }),
             InputFilter::NotchBandFilter(NotchBandFilterParams {
                 low_hz: 62.0,
