@@ -157,7 +157,7 @@ where
             cache_area.into(),
         ));
 
-        let motif_stats = Arc::clone(&self.motif_stats)
+        let motif_stats: Arc<DevicesWrap<MotifStatsOutput>> = Arc::clone(&self.motif_stats)
             .run(
                 motif_stats_input,
                 ctx.branch(Some("random_stats_motif_stats"), false, false),

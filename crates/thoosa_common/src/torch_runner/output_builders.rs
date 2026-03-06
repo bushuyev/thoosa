@@ -42,13 +42,13 @@ where
         size: &[i64],
         options: (Kind, Device),
         add: BuildAs,
-    ) -> Self {
-        Self {
-            output: ThoTensor::zeros(id, size, options),
+    ) -> Result<Self, ThoError> {
+        Ok(Self {
+            output: ThoTensor::zeros(id, size, options)?,
             added_partial_output_len: 0,
             add,
             dim
-        }
+        })
     }
 }
 
@@ -112,7 +112,7 @@ mod tests {
     #[tokio::test]
     async fn test_append() -> Result<(), ThoError>{
         let mut builder: Box<SingleDimTensorOutputBuilder<SimpleId, TestDims>> = Box::new(
-            SingleDimTensorOutputBuilder::new(simple_id!("test"), 0, &[10], FLOAT_CPU, BuildAs::Append),
+            SingleDimTensorOutputBuilder::new(simple_id!("test"), 0, &[10], FLOAT_CPU, BuildAs::Append)?,
         );
 
         builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await;
@@ -137,7 +137,7 @@ mod tests {
     #[tokio::test]
     async fn test_sum() -> Result<(), ThoError>{
         let mut builder: Box<SingleDimTensorOutputBuilder<SimpleId, TestDims>> = Box::new(
-            SingleDimTensorOutputBuilder::new(simple_id!("test"), 0, &[3], FLOAT_CPU, BuildAs::Sum),
+            SingleDimTensorOutputBuilder::new(simple_id!("test"), 0, &[3], FLOAT_CPU, BuildAs::Sum)?,
         );
 
         builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await;
