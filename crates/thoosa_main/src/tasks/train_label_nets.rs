@@ -73,6 +73,7 @@ where
     num_nets:u32,
     store: Arc<Box<dyn Store>>,
     opt_config:Arc<OptConfig>,
+    labels: Option<Vec<String>>,
 
 }
 
@@ -84,6 +85,7 @@ pub async fn new_train_label_nets<L, C, R>(
     store: &Arc<Box<dyn Store>>,
     stage_ctx:R,
     opt_config:Arc<OptConfig>,
+    labels: Option<Vec<String>>,
     max_loss: Option<f32>,
     slices_step: u32
 ) -> Result<TrainLabelNets<L, ABStage<L, ApplyMotifNets<C>, C>, C>, ThoError>
@@ -126,6 +128,7 @@ where
         ws,
         store,
         opt_config,
+        labels,
     ).await
 }
 
@@ -143,9 +146,19 @@ where
         run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
-        opt_config:Arc<OptConfig>
+        opt_config:Arc<OptConfig>,
+        labels: Option<Vec<String>>,
     ) -> Result<Self, ThoError>
     {
+        let labels = labels
+            .map(|labels| {
+                labels
+                    .into_iter()
+                    .map(|label| label.trim().to_ascii_lowercase())
+                    .filter(|label| !label.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|labels| !labels.is_empty());
         Ok(Self {
             run_configs: Arc::new(run_configs),
             pd: PhantomData,
@@ -155,6 +168,7 @@ where
             store: Arc::clone(store),
             opt_config,
             train_motif_nets_run_ids,
+            labels,
 
         })
     }
@@ -308,9 +322,13 @@ where
             debug!("TrainLabelNets::run: labels_tain_and_valid_sets={labels_tain_and_valid_sets:?}");
 
             let labels_tain_and_valid_sets_len = labels_tain_and_valid_sets.len();
+            let labels_filter = self.labels.clone();
             let futures = labels_tain_and_valid_sets.iter()
-            .filter(|v|{
-                v.0.eq("seizure")
+            .filter(|(label, _)|{
+                labels_filter
+                    .as_ref()
+                    .map(|labels| labels.iter().any(|filter_label| filter_label.eq_ignore_ascii_case(label)))
+                    .unwrap_or(true)
             })
             .map(|label_tain_and_valid_sets|{
                 let (label, resources_1) = label_tain_and_valid_sets;
@@ -983,6 +1001,7 @@ mod tests {
             &store,
             mock_run_ctx::default(1),
             Arc::new(OptConfig::new(30, 10)),
+            None,
             Some(0.3),
             10
         ).await?);

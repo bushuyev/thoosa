@@ -76,7 +76,10 @@ pub struct TrainLabelNetsArgs {
     pub max_motif_net_loss: Option<f32>,
 
     #[arg(long)]
-    pub motif_slices_step: Option<u32>
+    pub motif_slices_step: Option<u32>,
+
+    #[arg(long)]
+    pub labels: Option<String>,
 }
 
 impl TrainLabelNetsArgs {
@@ -85,6 +88,14 @@ impl TrainLabelNetsArgs {
             Labeled::new(self.train_resource_group.clone()),
             Labeled::new(self.valid_resource_group.clone()),
         )
+    }
+
+    fn parse_labels_csv(raw: &str) -> Vec<String> {
+        raw.split(',').map(|label| label.trim().to_string()).filter(|label| !label.is_empty()).collect()
+    }
+
+    pub fn labels_filter(&self) -> Option<Vec<String>> {
+        self.labels.as_deref().map(Self::parse_labels_csv).filter(|labels| !labels.is_empty())
     }
 }
 

@@ -152,7 +152,10 @@ pub struct RunAllArgs {
     pub motif_slices_step: u32,
 
     #[arg(long, default_value = "false")]
-    pub with_plots: bool
+    pub with_plots: bool,
+
+    #[arg(long)]
+    pub labels: Option<String>,
 }
 
 impl RunAllArgs {
@@ -185,6 +188,14 @@ impl RunAllArgs {
             Logits::new(self.valid_resource_group.clone()),
         )
 
+    }
+
+    fn parse_labels_csv(raw: &str) -> Vec<String> {
+        raw.split(',').map(|label| label.trim().to_string()).filter(|label| !label.is_empty()).collect()
+    }
+
+    pub fn labels_filter(&self) -> Option<Vec<String>> {
+        self.labels.as_deref().map(Self::parse_labels_csv).filter(|labels| !labels.is_empty())
     }
 
 
@@ -540,6 +551,7 @@ where
 
             let opt_config = Arc::new(train_label_nets_args.fixed_config.clone());
             let init_ctx = root_ctx.branch(Some("init label nets"), true, false);
+            let labels_filter = train_label_nets_args.labels_filter();
 
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
                 None,
@@ -558,6 +570,7 @@ where
                         &store,
                         init_ctx,
                         opt_config,
+                        labels_filter.clone(),
                         train_label_nets_args.max_motif_net_loss,
                         train_label_nets_args.motif_slices_step.unwrap() //TODO or take from find motifs
                     ).await.map(|v|Arc::new(v))
@@ -923,6 +936,7 @@ async fn run_all(
     let ws_in_train_labels = Arc::clone(&ws);
     let loader_in_train_labels = Arc::clone(&loader);
     let opt_config_in_train_labels = Arc::clone(&all_config.train_opt_config);
+    let labels_filter = run_all_args.labels_filter();
 
     //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
     let train_label_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
@@ -941,6 +955,7 @@ async fn run_all(
                 &store_in_train_labels,
                 init_ctx_train_labels,
                 opt_config_in_train_labels,
+                labels_filter.clone(),
                 Some(run_all_args.max_motif_net_loss), //to RunAll args,
                 run_all_args.motif_slices_step
             ).await.map(|v| Arc::new(v))
@@ -2653,6 +2668,7 @@ mod cli_tests {
             max_motif_net_loss: 0.4,
             motif_slices_step: 10,
             with_plots: false,
+            labels: None,
         };
 
         let all_configs = run_all_config_test_1(&run_all_args);
