@@ -1891,7 +1891,7 @@ where
     )
     .await?;
 
-    let metrics_for_plot = clc_dist
+    let metrics_for_plot: Vec<(String, f32)> = clc_dist
         .run/*_cached*/(clc_input, ctx.branch(Some("plot_motif_clc_dist"), false, false))
         .await?
         .with_data_ref(

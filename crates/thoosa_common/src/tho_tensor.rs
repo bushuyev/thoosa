@@ -68,19 +68,19 @@ impl<D: Dims> ThoTensor<D, SimpleId> {
 impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
 
 
-    pub fn to_kind(&self, k: Kind) -> ThoTensor<D, Id> {
-        ThoTensor {
+    pub fn to_kind(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
+        Ok(ThoTensor {
             id: self.id.clone(),
-            t: self.t.to_kind(k),
+            t: self.t.f_to_kind(k)?,
             tracking: Default::default(),
             pd: PhantomData,
-        }
+        })
     }
     pub fn to_device(&self, d: Device) -> Result<ThoTensor<D, Id>, ThoError> {
-        ThoTensor::new(self.id.clone(), self.t.to_device(d))
+        ThoTensor::new(self.id.clone(), self.t.f_to_device(d)?)
     }
     pub fn contiguous(&self) -> Result<ThoTensor<D, Id>, ThoError> {
-        ThoTensor::new(self.id.clone(), self.t.contiguous())
+        ThoTensor::new(self.id.clone(), self.t.f_contiguous()?)
     }
 
 
@@ -227,8 +227,8 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         })
     }
 
-    pub fn zeros(id: Id, size: impl IntList, options: (Kind, Device)) -> Self {
-        Self {
+    pub fn zeros(id: Id, size: impl IntList, options: (Kind, Device)) -> Result<Self, ThoError> {
+        Ok(Self {
             id,
             /*                               at /rustc/b15a874aafe7eab9ea3ac2c1d59c7b03e1425027/library/core/src/panicking.rs:80:14
   16:     0x650bc6172c06 - core::result::unwrap_failed::hb3955d4a33f491ad
@@ -246,10 +246,10 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
   22:     0x650bc29851cc - thoosa_main::tasks::motif_loader::load_motif_slices::{{closure}}::hcda8bc73e874ad61
                                at /home/bu/dvl/rust/thoosa/crates/thoosa_main/src/tasks/motif_loader.rs:304:1
 */
-            t: Tensor::zeros(size, options),//TODO f_zeros
+            t: Tensor::f_zeros(size, options)?,
             tracking: Default::default(),
             pd: PhantomData,
-        }
+        })
     }
 
     pub fn requires_grad(&self) -> bool {
@@ -284,7 +284,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     }
 
     pub fn sum(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
-        ThoTensor::new(self.id.clone(), self.t.sum(k))
+        ThoTensor::new(self.id.clone(), self.t.f_sum(k)?)
     }
 
     pub fn sum_dim_intlist(&self, dim: i64) -> Result<ThoTensor<D, Id>, ThoError> {
@@ -303,7 +303,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     }
 
     pub fn mean(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
-        ThoTensor::new(self.id.clone(), self.t.mean(k))
+        ThoTensor::new(self.id.clone(), self.t.f_mean(k)?)
     }
 
     pub fn id(&self) -> &Id {
@@ -411,7 +411,7 @@ where
         };
 
         let copy_ctx = CopyCtx::instance(ctx_device);
-        let src = if self.t.is_contiguous() { None } else { Some(self.t.contiguous()) };
+        let src = if self.t.is_contiguous() { None } else { Some(self.t.f_contiguous()?) };
         let src_ref = src.as_ref().unwrap_or(&self.t);
         debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?} src_contiguous={}", self.id, dst_device.ordinal(), src.is_none());
 

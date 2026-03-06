@@ -144,11 +144,11 @@ where
                 v: input
                     .motifs_stats
                     .t_ref()
-                    .unsqueeze(-1)
-                    .expand(
+                    .f_unsqueeze(-1)?
+                    .f_expand(
                         [-1, -1, batch_1_t.data().size()[1]],
                         false,
-                    ),
+                    )?,
             },
         ];
 
@@ -181,9 +181,9 @@ where
                     if ids.is_empty() {
                         Ok(None) //no motifs in channel c
                     } else {
-                        let mask = fold_mask(mask.i((c as i64, .., ..)), ids, 0)?;
+                        let mask = fold_mask(mask.f_i((c as i64, .., ..))?, ids, 0)?;
                         let dists = match dists.as_ref() {
-                            Some(d) => Some(fold_dists(d.i((c as i64, .., ..)), ids, 0)?),
+                            Some(d) => Some(fold_dists(d.f_i((c as i64, .., ..))?, ids, 0)?),
                             None => None,
                         };
                         let mask_type = if mask.device().eq(&Cpu) {

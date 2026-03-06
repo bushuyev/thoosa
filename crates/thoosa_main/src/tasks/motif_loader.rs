@@ -343,7 +343,7 @@ where
     debug!("load_motif_slices: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?}  device_idx={device_idx}");
 
     //it won't be dumped to cpu - add to TmpCache
-    let motif_t = Arc::new(DevicesWrap::wrap(ThoTensor::<MotifSlices, DataId>::zeros(motif_id.clone(), [resource_ids_slices.values().map(|slices|slices.len()).sum::<usize>() as i64, window as i64], (Float, ThoDevice::from(ctx.device_idx()).into())), CacheArea::default()));
+    let motif_t = Arc::new(DevicesWrap::wrap(ThoTensor::<MotifSlices, DataId>::zeros(motif_id.clone(), [resource_ids_slices.values().map(|slices|slices.len()).sum::<usize>() as i64, window as i64], (Float, ThoDevice::from(ctx.device_idx()).into()))?, CacheArea::default()));
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
     let mut slice_i = 0;
@@ -372,7 +372,7 @@ where
                 } else {
                     debug!("load_motif_slices: motif_id={motif_id} slice_i={slice_i} slice={slice:?} size={size:?}");
 
-                    motif_tt.t.get(slice_i).copy_(&raw_tt.t.i((channel, slice as i64 .. (slice+window) as i64)));
+                    motif_tt.t.f_get(slice_i)?.f_copy_(&raw_tt.t.f_i((channel, slice as i64 .. (slice + window) as i64))?)?;
                     slice_i+=1;
                 }
             }
@@ -384,7 +384,7 @@ where
     }
 
     with_data!(ctx.branch(Some(&format!("motif")), false, false), motif_t; |_ctx, motif_tt:&ThoTensor::<MotifSlices, DataId>|{
-        ThoTensor::new(motif_tt.id().clone(), motif_tt.t.i((0..slice_i, ..)))
+        ThoTensor::new(motif_tt.id().clone(), motif_tt.t.f_i((0..slice_i, ..))?)
     }).map(|v|(window, v))
 }
 
@@ -437,7 +437,7 @@ where
             motif_id.clone(),
             [channels, resource_ids_slices.values().map(|v| v.len()).sum::<usize>() as i64, window as i64],
             (Float, ThoDevice::from(ctx.device_idx()).into()),
-        ),
+        )?,
         CacheArea::default(),
     ));
 
@@ -462,7 +462,7 @@ where
                     debug!("load_motif_slices_: motif_id={motif_id} slice_i={slice_i} slice={slice:?} size={size:?}");
                     let src = raw_tt.t.f_i((0..channels, slice as i64..(slice + window) as i64))?;
                     let mut dst = motif_tt.t.f_i((0..channels, slice_i, ..))?;
-                    dst.copy_(&src);
+                    dst.f_copy_(&src)?;
                     slice_i += 1;
                 }
             }
