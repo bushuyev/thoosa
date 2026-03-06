@@ -1277,7 +1277,7 @@ mod tests {
         // let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_lin_net_run_configs(Val::Int(100), Val::Int(300), Val::Int(10))));
 
         let input = Arc::new(DevicesWrap::wrap(
-            TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(100, 10))),
+            TrainMotifNetInput::new(thoosa_common::train_nets::MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(100, 10))),
             CacheArea::default(),
         ));
 
