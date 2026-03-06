@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use log::debug;
 use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
@@ -11,14 +11,14 @@ use thoosa_shared::traits::SimpleId;
 use crate::tho_tensor::ThoTensor;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
-pub fn clc_conv1d_out(l_in: u32, kernel: u32, c: ConvConfig) -> Result<u32, ThoError> {
-    debug!("clc_conv1d_out: l_in={l_in} kernel={kernel} padding={} dilation={} stride={}", c.padding, c.dilation, c.stride);
+pub fn clc_conv1d_out<P:Display + ?Sized>(l_in: u32, kernel: u32, c: ConvConfig, path: &P) -> Result<u32, ThoError> {
+    debug!("clc_conv1d_out: path={path} l_in={l_in} kernel={kernel} padding={} dilation={} stride={}", c.padding, c.dilation, c.stride);
 
     if l_in == 0 { //convolution was first layer, num_features is not known
         return  Ok(0);
     }
-    if kernel < 2 {// if kernel is calculated in runtime
-        return Err(ThoError::new(format!("kernel={kernel} should be bigger than 2")))
+    if kernel == 0 {// if kernel is calculated in runtime
+        return Err(ThoError::new(format!("kernel={kernel} should be bigger than 0")))
     }
     if l_in + 2 * (c.padding as u32) < c.dilation as u32  * (kernel - 1) {
         return Err(ThoError::new(format!("l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={} dilation={} should be bigger than 2", kernel, c.dilation)))
@@ -31,7 +31,7 @@ pub fn clc_conv1d_out(l_in: u32, kernel: u32, c: ConvConfig) -> Result<u32, ThoE
 
     let r = (l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) - 1) / c.stride as u32 + 1;
 
-    debug!("clc_conv1d_out: r={r}");
+    debug!("clc_conv1d_out: path={path}  r={r}");
 
     Ok(r)
 }
@@ -55,7 +55,11 @@ pub fn clc_max_pool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, s
 }
 
 pub fn clc_avg_pool1d_out(l_in: u32, kernel: u32, padding: u32, stride: u32) -> u32 {
-    (l_in + 2 * padding - kernel) / stride + 1
+    let r= (l_in + 2 * padding - kernel) / stride + 1;
+
+    debug!("clc_avg_pool1d_out: l_in={l_in} kernel={kernel} padding={padding} stride={stride} r={r}");
+
+    r
 }
 
 #[derive(Clone)]
@@ -470,7 +474,7 @@ impl SeqBuilder {
             init,
         });
 
-        self.num_features = clc_conv1d_out(self.num_features, kernel, config)?;
+        self.num_features = clc_conv1d_out(self.num_features, kernel, config, &path.to_string())?;
         self.kernel = Some(kernel);
 
         Ok(self)
@@ -492,7 +496,7 @@ impl SeqBuilder {
             config,
         });
 
-        self.num_features = clc_conv1d_out(self.num_features, kernel, config)?;
+        self.num_features = clc_conv1d_out(self.num_features, kernel, config, "")?;
         self.kernel = Some(kernel);
 
         Ok(self)
@@ -611,7 +615,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn linear<P:ToString>(&mut self, path: P, #[cfg(debug_assertions)] _descr: String) -> Result<&mut Self, ThoError> {
+    pub fn linear<P:ToString>(&mut self, path: P) -> Result<&mut Self, ThoError> {
         if self.num_features == 0 {
             return Err(ThoError::new(format!("linear, self.num_features > 0: path={}", path.to_string())));
         }
@@ -630,7 +634,6 @@ impl SeqBuilder {
         path: P,
         num_features: u32,
         out_feats: u32,
-        #[cfg(debug_assertions)] _descr: String,
     ) -> Result<&mut Self, ThoError> {
         if num_features == 0 {
             return Err(ThoError::new(format!("linear_feats, num_features > 0: path={}", path.to_string())));
@@ -646,7 +649,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn linear_f<P:ToString>(&mut self, path: P, f: f32, #[cfg(debug_assertions)] _descr: String) -> Result<&mut Self, ThoError> {
+    pub fn linear_f<P:ToString>(&mut self, path: P, f: f32) -> Result<&mut Self, ThoError> {
         if self.num_features == 0 {
             return Err(ThoError::new(format!("linear_f, self.num_features > 0: path={}", path.to_string())));
         }
@@ -658,7 +661,7 @@ impl SeqBuilder {
             out_feats,
             config: None,
         });
-        self.num_features = out_feats as u32;
+        self.num_features = out_feats;
 
         Ok(self)
     }
@@ -666,7 +669,6 @@ impl SeqBuilder {
     pub fn linear_s<P:ToString>(
         &mut self,
         out_feats: u32,
-        #[cfg(debug_assertions)] _descr: String,
         path: P,
     ) -> Result<&mut Self, ThoError> {
         if self.num_features == 0 {
@@ -692,7 +694,6 @@ impl SeqBuilder {
         path: P,
         out_feats: u32,
         config: LinearConfig,
-        #[cfg(debug_assertions)] _descr: &str,
     ) -> Result<&mut Self, ThoError> {
         if self.num_features == 0 {
             return Err(ThoError::new(format!("linear_s_with_conf, self.num_features > 0: path={}", path.to_string())));

@@ -1312,8 +1312,6 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
                     bs_init: None,
                     bias: false,
                 },
-                #[cfg(debug_assertions)]
-                "test",
             )?
             .end_seq()?
             .build_tch_module(path)
