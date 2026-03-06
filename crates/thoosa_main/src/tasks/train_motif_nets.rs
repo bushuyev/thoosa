@@ -26,7 +26,7 @@ use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
-use thoosa_common::train_nets::{opt_train, MotifNetParams, MotifNetTypeArgs, OptConfig, TensorsDataBatch, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields};
+use thoosa_common::train_nets::{opt_train, MotifNetParams, MotifNetTypeArgs, MotifsBy, OptConfig, TensorsDataBatch, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields};
 use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, to_vec_f32, DataBatch, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -86,14 +86,14 @@ where
 #[dummy_data(no_clone)]
 pub struct TrainMotifNetInput{
     id: SynKey,
-    select_motifs_run_id: Vec<RunId>,
+    motifs_by: MotifsBy,
     opt_config:Arc<OptConfig>
 }
 
 impl Input for TrainMotifNetInput {}
 impl TrainMotifNetInput {
-    pub fn new(select_motifs_run_id: Vec<RunId>, opt_config:Arc<OptConfig>) -> Self {
-        Self { id: SynKey::new([mono_key!("TrainMotifNetInput", "stage")]), select_motifs_run_id, opt_config }
+    pub fn new(motifs_by: MotifsBy, opt_config:Arc<OptConfig>) -> Self {
+        Self { id: SynKey::new([mono_key!("TrainMotifNetInput", "stage")]), motifs_by, opt_config }
     }
 }
 
@@ -163,8 +163,8 @@ where
 
         let (device_idx, cache_area) = (ctx.device_idx(), ctx.cache_area());
 
-        let (select_motifs_run_ids, opt_config) = with_data!(ctx.branch(Some("train_motif_nets_input"), false, false), input; |_ctx, input: &TrainMotifNetInput| {
-            Ok::<(Vec<RunId>, Arc<OptConfig>), ThoError>((input.select_motifs_run_id.clone(), input.opt_config.clone()))
+        let (motifs_by, opt_config) = with_data!(ctx.branch(Some("train_motif_nets_input"), false, false), input; |_ctx, input: &TrainMotifNetInput| {
+            Ok::<(MotifsBy, Arc<OptConfig>), ThoError>((input.motifs_by.clone(), input.opt_config.clone()))
         })?;
 
         let channels = thoosa_shared::with_perf_log(
@@ -174,17 +174,40 @@ where
         .channels();
 
 
-        //gpt Expand selection run ids into individual motif ids for training.
-        let mut motifs_rates_selected_motifs_run_ids = Vec::new();
-        for select_motifs_run_id in &select_motifs_run_ids {
-            let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_id, channels).await?;
-            debug!("TrainMotifNets::run: select_motifs_run_id={select_motifs_run_id} selected_motifs={selected_motifs:?}");
-            motifs_rates_selected_motifs_run_ids.extend(
-                selected_motifs
-                    .into_iter()
-                    .flat_map(|channels_motifs| channels_motifs.into_iter().map(move |motif_id_rate| (motif_id_rate, *select_motifs_run_id))),
-            );
-        }
+        let (select_motifs_run_ids, motifs_rates_selected_motifs_run_ids) = match motifs_by {
+            MotifsBy::SelectMotifsRunIds { select_motifs_run_ids } => {
+                let mut motifs_rates_selected_motifs_run_ids = Vec::new();
+                for select_motifs_run_id in &select_motifs_run_ids {
+                    let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_id, channels).await?;
+                    debug!("TrainMotifNets::run: select_motifs_run_id={select_motifs_run_id} selected_motifs={selected_motifs:?}");
+                    motifs_rates_selected_motifs_run_ids.extend(
+                        selected_motifs
+                            .into_iter()
+                            .flat_map(|channels_motifs| channels_motifs.into_iter().map(move |motif_id_rate| (motif_id_rate, *select_motifs_run_id))),
+                    );
+                }
+                (select_motifs_run_ids, motifs_rates_selected_motifs_run_ids)
+            }
+            MotifsBy::MotifId { motif_id, select_motifs_run_ids } => {
+                let (channel, find_motifs_run_id) = self.store.get_motif_meta(motif_id).await?;
+                let select_motifs_run_ids = match select_motifs_run_ids {
+                    Some(select_motifs_run_ids) => select_motifs_run_ids,
+                    None => self.store.list_output_run_ids(find_motifs_run_id).await?,
+                };
+                let mut motifs_rates_selected_motifs_run_ids = Vec::new();
+                for select_motifs_run_id in &select_motifs_run_ids {
+                    let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_id, channels).await?;
+                    let motif_is_selected = selected_motifs
+                        .get(channel)
+                        .map(|channel_motifs| channel_motifs.iter().any(|(selected_motif_id, _)| *selected_motif_id == motif_id))
+                        .unwrap_or(false);
+                    if motif_is_selected {
+                        motifs_rates_selected_motifs_run_ids.push(((motif_id, 1.0f64), *select_motifs_run_id));
+                    }
+                }
+                (select_motifs_run_ids, motifs_rates_selected_motifs_run_ids)
+            }
+        };
         let motifs_rates_selected_motifs_run_ids_len = motifs_rates_selected_motifs_run_ids.len();
         let futures = motifs_rates_selected_motifs_run_ids.into_iter()
         .map(|(motif_id_rate, select_motifs_run_id)|{
@@ -479,7 +502,7 @@ mod tests {
     use thoosa_common::dims::{Batch, MotifProbability, Slice};
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::tch_test_utils;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, OptConfig, ThoModuleWithStore, TrainMotifsNetsResult, TrainMotifsNetsRunConfigFields};
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, MotifsBy, OptConfig, ThoModuleWithStore, TrainMotifsNetsResult, TrainMotifsNetsRunConfigFields};
     use thoosa_common::debug_plot;
     use thoosa_common::utils::{reset_print_options, test_net};
     use thoosa_common::ws::mock_ws_simp;
@@ -543,7 +566,7 @@ mod tests {
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 50, 100, None, None).to_properties_iter(None).collect()),
                 )
-                .with_list_motif_slices(motif_id, None, None, None, Ok((0i64, find_motifs_run_id, motif_intervals, resources_id_map.clone()
+                .with_list_motif_slices(motif_id, Some(vec![select_motifs_run_id]), None, None, Ok((0i64, find_motifs_run_id, motif_intervals, resources_id_map.clone()
 
                 )))
                 .with_list_random_motif_slices(motif_id, motif_width as u32, None, Ok((0i64, find_motifs_run_id, (0..10).flat_map(|i|vec![
@@ -577,7 +600,7 @@ mod tests {
             run_configs
         ));
 
-        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(vec![select_motifs_run_id], Arc::new(OptConfig::new(100, 10))), CacheArea::default()));
+        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(100, 10))), CacheArea::default()));
 
         let mut run_ctx = mock_run_ctx::default(1);
         let run_ctx_branch = run_ctx.branch(Some("train_motif_nets_run"), false, false);

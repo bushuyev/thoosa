@@ -465,7 +465,10 @@ pub fn load_final_model(
 #[derive(Args, Debug, Clone)]
 pub struct TrainMotifsNetsArgs {
     #[arg(long)]
-    pub select_motifs_run_ids: Vec<RunId>,
+    pub select_motifs_run_ids: Option<Vec<RunId>>,
+
+    #[arg(long)]
+    pub motif_id: Option<u32>,
 
     #[command(flatten)]
     pub fixed_config: OptConfig,
@@ -474,9 +477,75 @@ pub struct TrainMotifsNetsArgs {
     pub run_config_cnt: String, //TrainMotifsNetsRunConfig
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, DummyData)]
+pub enum MotifsBy {
+    SelectMotifsRunIds { select_motifs_run_ids: Vec<RunId> },
+    MotifId { motif_id: u32, select_motifs_run_ids: Option<Vec<RunId>> },
+}
+
 impl TrainMotifsNetsArgs {
     pub fn resource_config(&self) -> Empty {
         Empty {}
+    }
+
+    pub fn motifs_by(&self) -> Result<MotifsBy, ThoError> {
+        match (self.motif_id, self.select_motifs_run_ids.clone()) {
+            (Some(motif_id), select_motifs_run_ids) => Ok(MotifsBy::MotifId { motif_id, select_motifs_run_ids }),
+            (None, Some(select_motifs_run_ids)) => Ok(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids }),
+            (None, None) => Err(ThoError::new("TrainMotifsNetsArgs: either --select-motifs-run-ids or --motif-id must be provided")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod train_motifs_nets_args_tests {
+    use super::{MotifsBy, OptConfig, TrainMotifsNetsArgs};
+
+    #[test]
+    fn motifs_by_from_select_run_ids() {
+        let args = TrainMotifsNetsArgs {
+            select_motifs_run_ids: Some(vec![1, 2]),
+            motif_id: None,
+            fixed_config: OptConfig::new(10, 1),
+            run_config_cnt: "{}".to_string(),
+        };
+
+        assert_eq!(
+            args.motifs_by().unwrap(),
+            MotifsBy::SelectMotifsRunIds {
+                select_motifs_run_ids: vec![1, 2],
+            }
+        );
+    }
+
+    #[test]
+    fn motifs_by_from_motif_id_and_optional_select_run_ids() {
+        let args = TrainMotifsNetsArgs {
+            select_motifs_run_ids: Some(vec![10, 11]),
+            motif_id: Some(7),
+            fixed_config: OptConfig::new(10, 1),
+            run_config_cnt: "{}".to_string(),
+        };
+
+        assert_eq!(
+            args.motifs_by().unwrap(),
+            MotifsBy::MotifId {
+                motif_id: 7,
+                select_motifs_run_ids: Some(vec![10, 11]),
+            }
+        );
+    }
+
+    #[test]
+    fn motifs_by_requires_one_source() {
+        let args = TrainMotifsNetsArgs {
+            select_motifs_run_ids: None,
+            motif_id: None,
+            fixed_config: OptConfig::new(10, 1),
+            run_config_cnt: "{}".to_string(),
+        };
+
+        assert!(args.motifs_by().is_err());
     }
 }
 
