@@ -321,6 +321,30 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveMaxPool1d {
             }
         }
         Ok(t.as_ref()
+            .f_adaptive_max_pool1d(self.output_size as i64)?
+            .0.into())
+    }
+}
+
+#[derive(Debug)]
+pub struct AdaptiveAvgPool1d {
+    output_size: u32
+}
+
+impl AdaptiveAvgPool1d {
+    pub fn new(output_size: u32) -> Self {
+        Self { output_size }
+    }
+}
+
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveAvgPool1d {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        if let Some(lengths) = lengths.as_deref_mut() {
+            for len in lengths.iter_mut() {
+                *len = self.output_size as i64;
+            }
+        }
+        Ok(t.as_ref()
             .f_adaptive_avg_pool1d(self.output_size as i64)?
             .into())
     }
@@ -1229,6 +1253,24 @@ mod tch_tests {
         let y_p = net.tho_forward(&Tensor::randn([10, 2], (Float, Cpu)).into(), None, true)?;
 
         assert_eq!(vec![10, 2], y_p.size());
+        Ok(())
+    }
+
+    #[test]
+    pub fn test_adaptive_avg_pool_1d_builder() -> Result<(), ThoError> {
+        let seq = SeqBuilder::new(20, None)?
+            .adaptive_avg_pool(5, 5)?
+            .end_seq()?;
+
+        let vs = nn::VarStore::new(Device::Cpu);
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = seq.build_tch_module(&vs.root())?;
+
+        let mut lengths = vec![20i64];
+        let y_p = net.tho_forward(&Tensor::randn([1, 1, 20], (Float, Cpu)).into(), Some(lengths.as_mut_slice()), true)?;
+
+        assert_eq!(vec![1, 1, 5], y_p.size());
+        assert_eq!(vec![5], lengths);
+
         Ok(())
     }
 
