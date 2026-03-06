@@ -24,7 +24,7 @@ cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logg
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=motif_id:4879426
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=run_id:59791
 cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by=select_motifs_run_ids:'47962, 47856, 48146, 48222'
-
+cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_test_hbac/ plot-data --data-by='motif_net_applied:resource_id=5914;net_path=0/53815959_68127'
 
 cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="group:pure group 1000" --run-config-cnt="{motif_criteria: {'norm_thickness': {'eps':'0.00000001'}}, 'threshold':'0.9'}"
 cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="not_group:pure group 100" --run-config-cnt="{motif_criteria: {'norm_thickness': {'eps':'0.00000001'}}, 'extend_config': {'slices_selector_metric':{EucDist: {}}, 'slices_selector_aggr':{QuantileAggr: {'q':'0.01'}} }, 'threshold':'0.9'}"
@@ -76,38 +76,7 @@ just make sure all compile, the test may still fail
 
 sqlite> insert into selected_motifs (motif_id, run_id, rate) values
  (53606472, 66957, 1.0),
- (53607103, 66957, 1.0),
- (53636874, 66957, 1.0),
- (53636720, 66957, 1.0),
- (53638237, 66957, 1.0),
- (53638445, 66957, 1.0),
- (53638576, 66957, 1.0),
- (53638668, 66957, 1.0),
- (53639003, 66957, 1.0),
- (53639109, 66957, 1.0),
- (53639133, 66957, 1.0),
- (53639284, 66957, 1.0),
- (53640072, 66957, 1.0),
- (53641136, 66957, 1.0),
- (53641268, 66957, 1.0),
- (53642987, 66957, 1.0),
- (53644997, 66957, 1.0),
- (53645303, 66957, 1.0),
- (53645971, 66957, 1.0),
- (53645853, 66957, 1.0),
- (53645877, 66957, 1.0),
- (53646663, 66957, 1.0),
- (53646788, 66957, 1.0),
- (53647447, 66957, 1.0),
- (53647517, 66957, 1.0),
- (53649868, 66957, 1.0),
- (53652160, 66957, 1.0),
- (53657818, 66957, 1.0),
- (53660390, 66957, 1.0),
- (53660380, 66957, 1.0),
- (53660471, 66957, 1.0),
- (53660843, 66957, 1.0),
- (53661358, 66957, 1.0),
- (53661354, 66957, 1.0),
- (53662190, 66957, 1.0),
+ ...
  (53662139, 66957, 1.0);
+
+
