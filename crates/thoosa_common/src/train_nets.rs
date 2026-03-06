@@ -464,7 +464,7 @@ pub fn load_final_model(
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainMotifsNetsArgs {
-    #[arg(long)]
+    #[arg(long, value_delimiter = ',')]
     pub select_motifs_run_ids: Option<Vec<RunId>>,
 
     #[arg(long)]
@@ -861,7 +861,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                     let r = t.unsqueeze(1);
 
-                    debug!("motif_node_2: 0. t.size={:?} r.size={:?}", t.size(), r.size());
+                    debug!("conv_motif_node: 0. t.size={:?} r.size={:?}", t.size(), r.size());
 
                     Ok(r)
                 })),
@@ -870,8 +870,25 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
 
 
         net = net
-            .conv_1d("motif_conv_1", params.kernel, 1, params.channels, nd, None)?
+            .conv_1d("motif_conv_1", params.kernel, 1, params.channels, ConvConfig {
+                stride: 1,
+                padding: 0,
+                ..ConvConfig::default()
+            }, None)?
             .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+
+        let mut net = builder
+            // .batch_norm(BatchNormConfig::default())?
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    let r = t.shallow_clone();
+
+                    debug!("conv_motif_node, after motif_conv_1: t.size={:?} r.size={:?}", t.size(), r.size());
+
+                    Ok(r)
+                })),
+                None,
+            )?;
 
         for i in 0..params.conv_layers as usize {
             net = net
@@ -879,7 +896,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
                 .closure(
                     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
 
-                        debug!("closure after conv_1d motif_{i}_conv, t.size={:?} _lengths={_lengths:?}", t.size());
+                        debug!("conv_motif_node after conv_1d motif_{i}_conv, t.size={:?} _lengths={_lengths:?}", t.size());
 
                         let r = t.shallow_clone();
 
@@ -893,45 +910,65 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
             ;
         }
 
-        net
-            .adaptive_avg_pool(1, params.channels)?
-            // .adaptive_max_pool(1, params.channels)?
+        net = net.conv_1d("score_head", 1, params.channels, 1, ConvConfig::default(), None)?;
 
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    let r = t.squeeze();
+        net = net.avg_pool(params.kernel, 1, params.kernel/2)?;
 
-                    debug!("motif_node_2: 1. input.size={:?}", r);
 
-                    Ok(r)
-                })),
-                None,
-            )?
-            .linear_s(
-                params.channels,
-                #[cfg(debug_assertions)]
-                "motif_node first layer".to_string(),
-                "motif_first_head",
-            )?
-            .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+
+        // net = net.adaptive_avg_pool(1, params.channels)?;
+
+
+  net.closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                let r = t.squeeze();
+
+                // let max = r.f_amax(-1, true)?;
+                // let min = r.f_mean_dim(-1, true, None)?;
+                //
+                // let r1 = Tensor::f_cat(&[max.shallow_clone(), min.shallow_clone()], 1)?;
+                //
+                // debug!("conv_motif_node: 1. t.size={:?} r.size={:?} r1.size={:?} max.size={:?}, min.size={:?}", t.size(), r.size(), r1.size(), max.size(), min.size());
+                debug!("conv_motif_node: 1. t.size={:?}  r.size={:?}", t.size(), r.size());
+
+                Ok(r) //r/max
+            })),
+            None,
+        )?
+        // .linear_feats(
+        //     "motif_first_head",
+        //     2,1
+        // )?
+      .closure(
+          Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+              let r = t.shallow_clone();
+
+              debug!("conv_motif_node, after motif_first_head: t.size={:?} r.size={:?}", t.size(), r.size());
+
+              Ok(r)
+          })),
+          None,
+      )?
+        // .linear("motif_first_head")?
+        .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
 
         for i in 0..params.head_layers as usize {
             net = net
-                .linear_s(
-                    params.channels,
-                    #[cfg(debug_assertions)]
-                    format!("motif_node {i}th layer"),
+                .linear_f(
                     format!("motif_{i}_head"),
+                    if i < 1 + (params.head_layers / 2) as usize {
+                        2.
+                    } else {
+                        0.5
+                    },
                 )?
                 .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?;
         }
 
         net
-            .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?
+            // .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?
             .linear_s(
                 1,
-                #[cfg(debug_assertions)]
-                "motif_node last layer".to_string(),
                 "motif_last_head",
             )?
             .end_seq()
@@ -976,8 +1013,6 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> Result<Node, ThoError> {
             // .batch_norm()
             .linear_s(
                 params.num_features * 2,
-                #[cfg(debug_assertions)]
-                "motif_node first layer".to_string(),
                 "todo",
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
@@ -986,8 +1021,6 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> Result<Node, ThoError> {
             net = net
                 .linear_s(
                     params.num_features * 2,
-                    #[cfg(debug_assertions)]
-                    format!("motif_node  {i}th layer"),
                     "todo",
                 )?
                 .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
@@ -998,8 +1031,6 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> Result<Node, ThoError> {
             // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
             .linear_s(
                 1,
-                #[cfg(debug_assertions)]
-                "motif_node last layer".to_string(),
                 "todo",
             )?
             .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
@@ -1225,8 +1256,6 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                 )?.linear_feats(
                     "cnn_label_head",
                     cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
-                    #[cfg(debug_assertions)]
-                    "cnn_label_head".to_string(),
                 )?
                 .closure(
                     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
@@ -1264,8 +1293,6 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                 .linear_feats(
                     "cnn_label_head",
                     2* cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
-                    #[cfg(debug_assertions)]
-                    "cnn_label_head".to_string(),
                 )?
                     .closure(
                         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
@@ -1280,8 +1307,6 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
         for layer in 0..cnn_params.num_head_layers {
             builder = builder.linear_s(
                 2*cnn_params.num_head_features,
-                #[cfg(debug_assertions)]
-                format!("cnn_label_head_{layer}"),
                 format!("cnn_label_head_{layer}"),
             )?
             .closure(
@@ -1296,8 +1321,6 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
 
         builder.linear_s(
             1,
-            #[cfg(debug_assertions)]
-            "cnn_label_head_last".to_string(),
             "cnn_label_head_last",
         )?
         .closure(
@@ -1341,8 +1364,6 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
                 "self_attention_in_proj",
                 params.motif_nets,
                 sa_params.d_model_heads * sa_params.n_heads,
-                #[cfg(debug_assertions)]
-                "self_attention_in_proj".to_string(),
             )?
             .self_attention(
                 "self_attention_block",
@@ -1360,8 +1381,6 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
             )?
             .linear_s(
                 1,
-                #[cfg(debug_assertions)]
-                "self_attention_label_head_last".to_string(),
                 "self_attention_label_head_last",
             )?
             .closure(
@@ -1412,8 +1431,6 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                 for _ in 0..lin_params.motif_layers {
                     builder = builder.linear_s(
                         num_features,
-                        #[cfg(debug_assertions)]
-                        "lin_label_node 0".to_string(),
                         "todo",
                     )?;
 
@@ -1467,29 +1484,21 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
             // .conv_1d("lin_label_node conv", 1000)
             .linear_s(
                 num_features,
-                #[cfg(debug_assertions)]
-                "lin_label_node 0".to_string(),
                 "todo",
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
             .linear_s(
                 256,
-                #[cfg(debug_assertions)]
-                "lin_label_node 1".to_string(),
                 "todo",
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
             .linear_s(
                 128,
-                #[cfg(debug_assertions)]
-                "lin_label_node 1".to_string(),
                 "todo",
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
             .linear_s(
                 1,
-                #[cfg(debug_assertions)]
-                "lin_label_node 2".to_string(),
                 "todo",
             )?
             // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
@@ -1530,8 +1539,6 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
     let mut net = builder
         .linear_s(
             2 * params.in_features,
-            #[cfg(debug_assertions)]
-            "final_net: first layer".to_string(),
             "final_net_first_layer".to_string(),
         )?
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
@@ -1540,8 +1547,6 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
         net = net
             .linear_s(
                 params.in_features,
-                #[cfg(debug_assertions)]
-                format!("final_net: {i}th layer"),
                 format!("final_net_{i}th_layer"),
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
@@ -1551,8 +1556,6 @@ net
     // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
     .linear_s(
         params.out_features,
-        #[cfg(debug_assertions)]
-        "final_net: last layer".to_string(),
         "final_net_last_layer",
     )?
     .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
@@ -2309,8 +2312,6 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
                 bs_init: None,
                 bias: false,
             },
-            #[cfg(debug_assertions)]
-            descr,
         )?
         .end_seq()?
         .build_tch_module(&vs.root())
@@ -3318,8 +3319,6 @@ mod train_tests {
                     bs_init: None,
                     bias: false,
                 },
-                #[cfg(debug_assertions)]
-                "test_motif_model",
             )?
             .end_seq()?
             .build_tch_module(&vs_0.root())?;

@@ -400,11 +400,11 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 1]> {
                 if *len < 0 {
                     return Err(ThoError::new(format!("MyConv::tho_forward length must be >= 0, got {len}")));
                 }
-                *len = clc_conv1d_out(*len as u32, self.kernel, self.config)? as i64;
+                *len = clc_conv1d_out(*len as u32, self.kernel, self.config, "")? as i64;
             }
         }
         debug!("MyConv::tho_forward lengths={lengths:?}");
-        Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
+        panic_to_err!(Ok::<_, ThoError>(self.conv.forward_t(t.as_ref(), train).into()))//TODO custom conv for errors
     }
 }
 
@@ -458,7 +458,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
                 if *len < 0 {
                     return Err(ThoError::new(format!("MyCosineConv1d::tho_forward length must be >= 0, got {len}")));
                 }
-                *len = clc_conv1d_out(*len as u32, self.l as u32, self.config)? as i64;
+                *len = clc_conv1d_out(*len as u32, self.l as u32, self.config, "")? as i64;
             }
         }
 
@@ -888,8 +888,6 @@ pub fn configure_dense(
         .dropout(0.5)?
         .linear_s(
             6,
-            #[cfg(debug_assertions)]
-            "test".to_string(),
             "todo",
         )?
         .end_seq()
@@ -1033,7 +1031,7 @@ fn self_attention_forward_t(
     let scale = (head_dim as f64).sqrt();
     let mut scores = {
         let tensor = q.f_matmul(&k.f_transpose(-2, -1)?)?;
-        panic_to_err!(tensor.f_div_scalar(scale))?
+        tensor.f_div_scalar(scale)?
     };
     let key_mask_f = key_valid.f_unsqueeze(1)?.f_unsqueeze(2)?.f_to_kind(scores.kind())?;
     let ones = Tensor::f_ones(key_mask_f.size(), (scores.kind(), scores.device()))?;
@@ -1231,7 +1229,7 @@ mod tch_tests {
 
     #[test]
     pub fn test_conv1_out() {
-        let l_out = clc_conv1d_out(50 * 200, 5, ConvConfig::default()).unwrap();
+        let l_out = clc_conv1d_out(50 * 200, 5, ConvConfig::default(), "").unwrap();
 
         assert_eq!(l_out, 9996);
     }
@@ -1239,11 +1237,7 @@ mod tch_tests {
     #[test]
     pub fn test_seq_linear_same_size() -> Result<(), ThoError> {
         let seq = SeqBuilder::new(2, None)?
-            .linear(
-                "todo",
-                #[cfg(debug_assertions)]
-                "test".to_string(),
-            )?
+            .linear("todo")?
             .end_seq()?;
 
         let vs = nn::VarStore::new(Device::Cpu);
@@ -1283,8 +1277,6 @@ mod tch_tests {
         let res_seq = SeqBuilder::new(10, None)?
             .linear_s(
                 1,
-                #[cfg(debug_assertions)]
-                "test".to_string(),
                 "todo",
             )?
             .end_seq()?;
@@ -1293,8 +1285,6 @@ mod tch_tests {
             .conv_1d("conv", 5, 1, 1, ConvConfig::default(), None)?
             .linear_s(
                 1,
-                #[cfg(debug_assertions)]
-                "test".to_string(),
                 "todo",
             )?
             .end_seq()?;
@@ -1394,8 +1384,6 @@ mod tch_tests {
             .conv_1d("conv", num_features / 10, 1, 1, ConvConfig::default(), None)?
             .linear_s(
                 1,
-                #[cfg(debug_assertions)]
-                "test".to_string(),
                 "todo",
             )?
             .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
@@ -1513,37 +1501,21 @@ mod tch_tests {
                     vec![
                         SeqBuilder::new(123, None)?
                             .batch_norm(BatchNormConfig::default(), None)? //3 weight bias running_var
-                            .linear(
-                                "todo",
-                                #[cfg(debug_assertions)]
-                                "test_node".to_string(),
-                            )? //2 weight bias
+                            .linear("todo")? //2 weight bias
                             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-                            .linear(
-                                "todo",
-                                #[cfg(debug_assertions)]
-                                "test_node".to_string(),
-                            )? //2 weight bias
+                            .linear("todo")? //2 weight bias
                             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
                             .linear_s(
                                 1,
-                                #[cfg(debug_assertions)]
-                                "test".to_string(),
                                 "todo",
                             )? //2 weight bias
                             .end_seq()?,
                         SeqBuilder::new(321, None)?
                             .batch_norm(BatchNormConfig::default(), None)? //3 weight bias running_var
-                            .linear(
-                                "todo",
-                                #[cfg(debug_assertions)]
-                                "test_node".to_string(),
-                            )? //2 weight bias
+                            .linear("todo")? //2 weight bias
                             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
                             .linear_s(
                                 1,
-                                #[cfg(debug_assertions)]
-                                "test".to_string(),
                                 "todo",
                             )? //2 weight bias
                             .end_seq()?,
@@ -1553,16 +1525,12 @@ mod tch_tests {
                 )?
                 .linear_s(
                     10,
-                    #[cfg(debug_assertions)]
-                    "test".to_string(),
                     "todo",
                 )? //2 weight bias
                 .conv_1d("conv", 3, 1, 2, ConvConfig::default(), None)? //2 weight bias
                 .conv_1d("conv", 5, 1, 2, ConvConfig::default(), None)? //2 weight bias
                 .linear_s(
                     20,
-                    #[cfg(debug_assertions)]
-                    "test".to_string(),
                     "todo",
                 )? //2 weight bias
                 .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
