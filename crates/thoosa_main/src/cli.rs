@@ -1034,7 +1034,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.02)  }) }),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }) }),//Some((0.05, 2))
-        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.05) }) }),//Some((0.05, 2))
+        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.07) }) }),//Some((0.05, 2))
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
@@ -1117,11 +1117,12 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         // })
 
         net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-            conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 24 }, step: None },
-            head_layers: RangeOrValue::Range { range: Range { start: 3, end: 24 }, step: None },
+            conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
+            head_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
             step: RangeOrValue::Value(10),
             channels: RangeOrValue::Range{ range: Range {start: 8, end: 256}, step: None },
-            kernel: RangeOrValue::Value(10),
+            // kernel: RangeOrValue::Value(10),
+            kernel: RangeOrValue::Range{ range: Range {start: 10, end: 100}, step: None },
         })
 
     };
