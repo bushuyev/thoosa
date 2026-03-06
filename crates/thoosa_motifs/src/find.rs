@@ -715,7 +715,7 @@ mod motif_find_tests {
                 band_hz: 100.0,
                 kernel_size: 10,
                 stride: 1,
-                padding: thoosa_common::transforms::filters::SgPadding::zero(),
+                padding: thoosa_common::transforms::filters::Padding::zero(),
             })]),
             Some(0.01),
         );

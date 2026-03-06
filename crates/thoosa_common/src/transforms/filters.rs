@@ -33,7 +33,7 @@ pub struct BandPassFilterParams {
 
     #[in_map]
     #[run_config]
-    pub padding: SgPadding,
+    pub padding: Padding,
 }
 
 impl InputFilterLengthAdjuster for BandPassFilterParams {
@@ -46,7 +46,7 @@ impl InputFilterLengthAdjuster for BandPassFilterParams {
             assert!(stride > 0, "stride({stride}) must be > 0");
             assert!(l > 0, "l({l}) must be > 0");
             let pad = kernel_size / 2;
-            if let SgPadding::Reflect(_) = padding {
+            if let Padding::Reflect(_) = padding {
                 assert!(pad < l, "reflect padding requires pad({pad}) < l({l})");
             }
             let padded = l as u64 + 2 * pad as u64;
@@ -91,7 +91,7 @@ pub struct SavGolFilterParams {
 
     #[in_map]
     #[run_config]
-    pub padding: SgPadding,
+    pub padding: Padding,
 }
 
 impl InputFilterLengthAdjuster for SavGolFilterParams {
@@ -105,7 +105,7 @@ impl InputFilterLengthAdjuster for SavGolFilterParams {
             assert!(stride > 0, "stride({stride}) must be > 0");
             assert!(l > 0, "l({l}) must be > 0");
             let pad = kernel_size / 2;
-            if let SgPadding::Reflect(_) = padding {
+            if let Padding::Reflect(_) = padding {
                 assert!(pad < l, "reflect padding requires pad({pad}) < l({l})");
             }
             let padded = l as u64 + 2 * pad as u64;
@@ -227,7 +227,7 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor
 
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SgPadding {
+pub enum Padding {
     /// Pad with zeros (uses conv1d's built-in padding).
     Zero(SgZeroPadding),
     /// Mirror the signal at the boundary, **excluding** the edge value (PyTorch "reflect").
@@ -236,7 +236,7 @@ pub enum SgPadding {
     Replicate(SgReplicatePadding),
 }
 
-impl SgPadding {
+impl Padding {
     pub fn zero() -> Self {
         Self::Zero(SgZeroPadding {})
     }
@@ -261,7 +261,7 @@ pub struct SgReplicatePadding {}
 
 
 /// Pad a [N, C, T] tensor along the last dimension by `pad` on both sides.
-fn pad_1d(x: &Tensor, pad: i64, mode: SgPadding) -> Result<Tensor, ThoError> {
+fn pad_1d(x: &Tensor, pad: i64, mode: Padding) -> Result<Tensor, ThoError> {
     if pad == 0 {
         return Ok(x.shallow_clone());
     }
@@ -272,18 +272,18 @@ fn pad_1d(x: &Tensor, pad: i64, mode: SgPadding) -> Result<Tensor, ThoError> {
     let t = sz[2];
 
     match mode {
-        SgPadding::Zero(_) => {
+        Padding::Zero(_) => {
             // handled elsewhere (conv padding), but allow here if needed:
             let zeros_l = Tensor::zeros(&[sz[0], sz[1], pad], (x.kind(), x.device()));
             let zeros_r = Tensor::zeros(&[sz[0], sz[1], pad], (x.kind(), x.device()));
             Ok(Tensor::cat(&[&zeros_l, x, &zeros_r], 2))
         }
-        SgPadding::Replicate(_) => {
+        Padding::Replicate(_) => {
             let left = x.narrow(2, 0, 1).repeat(&[1, 1, pad]);
             let right = x.narrow(2, t - 1, 1).repeat(&[1, 1, pad]);
             Ok(Tensor::cat(&[&left, x, &right], 2))
         }
-        SgPadding::Reflect(_) => {
+        Padding::Reflect(_) => {
             // PyTorch reflect requires pad <= T-1
             if pad >= t {
                 return Err(ThoError::new(format!(
@@ -306,7 +306,7 @@ pub fn savgol_smooth_1d_channels(
     x: &Tensor,
     window_len: i64,
     poly_order: i64,
-    padding: SgPadding,
+    padding: Padding,
 ) -> Result<Tensor, ThoError> {
 
     assert_eq!(x.dim(), 2,  "expected x to have shape [C, T], got dim={} size={:?}", x.dim(), x.size());
@@ -346,11 +346,11 @@ pub fn savgol_smooth_1d_channels(
     let x3 = x.to_kind(kind).unsqueeze(0);
 
     let y3 = match padding {
-        SgPadding::Zero(_) => {
+        Padding::Zero(_) => {
             // conv1d built-in zero padding
             x3.conv1d(&w, None::<Tensor>, 1, pad, 1, c)
         }
-        SgPadding::Reflect(_) | SgPadding::Replicate(_) => {
+        Padding::Reflect(_) | Padding::Replicate(_) => {
             // pre-pad, then conv without padding
             let xpad = pad_1d(&x3, pad, padding)?;
             xpad.conv1d(&w, None::<Tensor>, 1, 0, 1, c)

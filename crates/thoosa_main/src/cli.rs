@@ -71,7 +71,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, SavGolFilter, NotchBandFilter};
-use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, SgPadding, SgPaddingRangeOrValue, SgZeroPaddingRangeOrValue};
+use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, Padding, SgZeroPaddingRangeOrValue, PaddingRangeOrValue};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::{OutId, RunCtx};
@@ -1035,7 +1035,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 // poly_order: RangeOrValue::Range { range: Range { start: 1, end: 11 }, step: Some((3, 0)) },
                 poly_order: RangeOrValue::Value(3),
                 stride: RangeOrValue::Value(5),
-                padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
+                padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             }),
             NotchBandFilter(NotchBandFilterParamsRangeOrValue {
                 low_hz: RangeOrValue::Value(59.0),
@@ -1195,7 +1195,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
             // band_hz:  RangeOrValue::Range { range: Range { start: 5., end: 20. }, step: Some((5., 1)) },
             kernel_size: RangeOrValue::Value(10),
             stride: RangeOrValue::Value(1),
-            padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
+            padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
         })]),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.025) }) }),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))} }) }),
@@ -2314,7 +2314,7 @@ mod cli_tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
-    use thoosa_common::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, SgPadding};
+    use thoosa_common::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding};
     use thoosa_common::debug_plot;
     use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
     use thoosa_common::ws::{mock_ws_simp, FsWorkspace, Workspace};
@@ -2464,7 +2464,7 @@ mod cli_tests {
                                 band_hz: 1.0,
                                 kernel_size: 100,
                                 stride: 1,
-                                padding: SgPadding::zero(),
+                                padding: Padding::zero(),
                             })
                         ], &ws,
                                                                      0)?);
