@@ -583,8 +583,6 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-
-
         let motif_id = input.motif_net.extra().motif_id();
 
         trace!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t=\n{}", self.id, input.batch.t);
@@ -595,41 +593,50 @@ impl <C> SyncStage for ApplyMotifNet<C> where
             return Err(ThoError::oom());
         }
 
-        let c = input.motif_net.extra().channel() as i64;
-        let motif_width = input.motif_net.extra().motif_net_params.num_features() as i64;
-
-        debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={:?} input.t.size={:?} self.slice_step={}", input.batch.id(), input.batch.t.size(), self.slice_step);
-        let t = input.batch.t.f_i((c, ..))?;
-        let t = if t.size()[0] >= motif_width {
-            t
-        } else {
-            debug!("ApplyMotifNet::do_run: 1. motif_id={motif_id} padding t.size={:?} to motif_width={motif_width}", t.size());
-            pad_to(&t, &[motif_width], 0.0)?
-        };
-
-        let slices = t.f_unfold(0, motif_width, self.slice_step as i64)?;
-        debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices={slices:?}");
-
-
         let out_id = self.out_id(input.id());
-        let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
-        let out = input.motif_net.data().tho_forward(&slices_tensor, None, false)?;
-        debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
-
-        let out_t = out.as_ref().squeeze().f_sigmoid()?;
-
-        debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out_t.size={:?}", out_t.size());
-
-        debug_plot!(&t.view((1, -1)), "apply_motif_net_run_input_{}", input.id())?;
-        debug_plot!(&out_t.view((1, -1)/*plot needs [nxm]*/), "apply_motif_net__run_input_{}_motif_applied_{motif_id}", input.id())?;
-
-        let out = ThoTensor::new(out_id, out_t)?;//TODO .f_sigmoid()?
+        let out = apply_motif_net_forward(out_id, input.batch, input.motif_net, self.slice_step, input.id())?;
 
         trace!("ApplyMotifNet::do_run, self.id={:?} out=\n{}", self.id, out.t);
         debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.size={:?}", input.id(), out.size());
 
         Ok(out)
     }
+}
+
+pub fn apply_motif_net_forward(
+    out_id: SynKey,
+    batch: &ThoTensor<ChannelsData2, SynKey>,
+    motif_net: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>,
+    slice_step: u32,
+    input_id: &SynKey,
+) -> Result<ThoTensor<MotifProbability, SynKey>, ThoError> {
+    let motif_id = motif_net.extra().motif_id();
+    let c = motif_net.extra().channel() as i64;
+    let motif_width = motif_net.extra().motif_net_params.num_features() as i64;
+
+    debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={input_id:?} input.t.size={:?} slice_step={slice_step}", batch.t.size());
+    let t = batch.t.f_i((c, ..))?;
+    let t = if t.size()[0] >= motif_width {
+        t
+    } else {
+        debug!("ApplyMotifNet::do_run: 1. motif_id={motif_id} padding t.size={:?} to motif_width={motif_width}", t.size());
+        pad_to(&t, &[motif_width], 0.0)?
+    };
+
+    let slices = t.f_unfold(0, motif_width, slice_step as i64)?;
+    debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices={slices:?}");
+
+    let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
+    let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
+    debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
+
+    let out_t = out.as_ref().squeeze().f_sigmoid()?;
+    debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out_t.size={:?}", out_t.size());
+
+    debug_plot!(&t.view((1, -1)), "apply_motif_net_run_input_{}", input_id)?;
+    debug_plot!(&out_t.view((1, -1)), "apply_motif_net__run_input_{}_motif_applied_{motif_id}", input_id)?;
+
+    ThoTensor::new(out_id, out_t)
 }
 
 

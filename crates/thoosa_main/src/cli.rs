@@ -85,7 +85,9 @@ use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Asy
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
+use crate::tasks::apply_motif_nets::apply_motif_net_forward;
 use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
+use crate::tasks::load_motif_net::MotifNetMeta;
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::SelectMotifsStage;
@@ -1836,29 +1838,29 @@ where
         let ws_guard = ws.read();
         ws_guard.load_motif_net(&net_path, &Cpu)?
     };
-    let motif_width = motif_net_params.num_features() as i64;
-    let motif_slices_step = 5; //motif_net_params.stride() as i64;
+    let motif_slices_step = 5u32; //motif_net_params.stride() as u32;
+    let motif_net = Arc::new(DataWithExtra::new(motif_net, MotifNetMeta::new(motif_id, channel, motif_net_params)));
 
-    filtered_or_raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_apply"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-        let channel_t = tensor.t_ref().f_i((channel as i64, ..))?;
-        let channel_t = if channel_t.size()[0] >= motif_width {
-            channel_t
-        } else {
-            thoosa_common::utils::pad_to(&channel_t, &[motif_width], 0.0)?
-        };
+    filtered_or_raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_apply"), false, false), None, {
+        let motif_net = Arc::clone(&motif_net);
+        move |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+            let out = apply_motif_net_forward(
+                mono_key!(format!("plot_motif_net_applied_resource_{resource_id}"), format!("motif_{motif_id}_channel_{channel}")) + tensor.id(),
+                tensor,
+                motif_net.as_ref(),
+                motif_slices_step,
+                tensor.id(),
+            )?;
 
-        let slices = channel_t.f_unfold(0, motif_width, motif_slices_step)?;
-        let slices_tensor = ThoTensor::<Batch<thoosa_common::dims::Slice>, SimpleId>::from(slices);
-        let out = motif_net.tho_forward(&slices_tensor, None, false)?;
+            plot_single_line_tensor(
+                ws,
+                &format!("resource_{resource_id}_motif_net_applied_{motif_id}_{channel}_{net_path_sfx}"),
+                &format!("Resource {resource_id} motif-net output motif_id={motif_id} channel={channel} find_run_id={find_motifs_run_id} net={net_path:?}"),
+                out.t_ref(),
+            )?;
 
-        plot_single_line_tensor(
-            ws,
-            &format!("resource_{resource_id}_motif_net_applied_{motif_id}_{channel}_{net_path_sfx}"),
-            &format!("Resource {resource_id} motif-net output motif_id={motif_id} channel={channel} find_run_id={find_motifs_run_id} net={net_path:?}"),
-            out.t_ref(),
-        )?;
-
-        Ok(())
+            Ok(())
+        }
     }).await?;
 
     Ok(())
@@ -1927,6 +1929,7 @@ where
                     ))
                 })
                 .collect::<Result<Vec<_>, ThoError>>()?;
+
             plot_series_with_sidebar_values(
                 plot_data,
                 format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len}").as_str(),
