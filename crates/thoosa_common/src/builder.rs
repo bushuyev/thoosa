@@ -6,7 +6,7 @@ use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
 use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, my_linear};
-use thoosa_shared::ThoError;
+use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::traits::SimpleId;
 use crate::tho_tensor::ThoTensor;
 
@@ -240,13 +240,13 @@ impl Node {
                 config,
                 init
             } => {
-                let mut conv = nn::conv1d(
+                let mut conv = panic_to_err!(Ok::<_, ThoError>(nn::conv1d(
                     vs / path,
                     in_channels as i64,
                     out_channels as i64,
                     kernel as i64,
                     config,
-                );
+                )))?;
                 if let Some(init) = init {
                     no_grad(|| {
                         conv.ws.copy_(&init.t.view((1, 1, kernel as i64)));

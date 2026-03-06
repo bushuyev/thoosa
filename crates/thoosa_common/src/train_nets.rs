@@ -464,7 +464,7 @@ pub fn load_final_model(
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainMotifsNetsArgs {
-    #[arg(long)]
+    #[arg(long, value_delimiter = ',')]
     pub select_motifs_run_ids: Option<Vec<RunId>>,
 
     #[arg(long)]
@@ -956,7 +956,11 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
             net = net
                 .linear_f(
                     format!("motif_{i}_head"),
-                    2.,
+                    if i < 1 + (params.head_layers / 2) as usize {
+                        2.
+                    } else {
+                        0.5
+                    },
                 )?
                 .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?;
         }
