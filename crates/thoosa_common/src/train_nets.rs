@@ -869,7 +869,8 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
             )?;
 
 
-        net = net.conv_1d("motif_conv_1", params.kernel, 1, params.channels, nd, None)?
+        net = net
+            .conv_1d("motif_conv_1", params.kernel, 1, params.channels, nd, None)?
             .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
 
         for i in 0..params.conv_layers as usize {
@@ -893,7 +894,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
         }
 
         net
-            .adaptive_max_pool(1, params.channels)?
+            .adaptive_avg_pool(1, params.channels)?
             // .adaptive_max_pool(1, params.channels)?
 
             .closure(
@@ -922,12 +923,10 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
                     format!("motif_node {i}th layer"),
                     format!("motif_{i}_head"),
                 )?
-
                 .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?;
         }
 
         net
-            // .linear_s(180)
             .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?
             .linear_s(
                 1,
@@ -935,7 +934,6 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
                 "motif_node last layer".to_string(),
                 "motif_last_head",
             )?
-            // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
             .end_seq()
     };
 

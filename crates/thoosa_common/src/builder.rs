@@ -5,7 +5,7 @@ use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
 use crate::dims::{AnyDims, Dims};
-use crate::my_tch::{AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, my_linear};
+use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, my_linear};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 use crate::tho_tensor::ThoTensor;
@@ -127,6 +127,9 @@ pub enum Node {
         padding: u32,
     },
     AdaptiveMaxPool {
+        output_size: u32,
+    },
+    AdaptiveAvgPool1d {
         output_size: u32,
     },
     AttnPool1d {
@@ -342,6 +345,10 @@ impl Node {
                 output_size
             )),
 
+            Node::AdaptiveAvgPool1d { output_size } => Box::new(AdaptiveAvgPool1d::new(
+                output_size
+            )),
+
             Node::AvgPool {
                 kernel_size,
                 stride,
@@ -538,6 +545,16 @@ impl SeqBuilder {
         self.num_features = num_features;
 
         self.elts.push(Node::AdaptiveMaxPool {
+            output_size
+        });
+
+        Ok(self)
+    }
+
+    pub fn adaptive_avg_pool(&mut self, output_size:u32, num_features:u32) -> Result<&mut Self, ThoError> {
+        self.num_features = num_features;
+
+        self.elts.push(Node::AdaptiveAvgPool1d {
             output_size
         });
 
