@@ -21,14 +21,14 @@ unsafe impl<'a, D: Dims, Id: Named + Debug + Clone> Sync for ThoTensorView<'a, D
 unsafe impl<'a, D: Dims, Id: Named + Debug + Clone> Send for ThoTensorView<'a, D, Id> {}
 
 impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorView<'a, D, Id> {
-    pub fn select(self, dim: i64, index: i64) -> Self {
-        Self {
-            t: self.t.select(dim, index),
+    pub fn select(self, dim: i64, index: i64) -> Result<Self, ThoError> {
+        Ok(Self {
+            t: self.t.f_select(dim, index)?,
             ..self
-        }
+        })
     }
     pub fn sum(self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
-        ThoTensor::new(self._owner.id().clone(), self.t.sum(k))
+        ThoTensor::new(self._owner.id().clone(), self.t.f_sum(k)?)
     }
 }
 
@@ -679,7 +679,7 @@ mod tests {
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    )
+                    ).expect("single dim output builder")
                 }),
             ),
             Float,
@@ -762,7 +762,7 @@ mod tests {
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    )
+                    ).expect("single dim output builder")
                 }),
             ),
             Float,
@@ -812,7 +812,7 @@ mod tests {
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    )
+                    ).expect("single dim output builder")
                 }),
             ),
             Float,
@@ -860,7 +860,7 @@ mod tests {
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    )
+                    ).expect("single dim output builder")
                 }),
             ),
             Float,
@@ -915,7 +915,7 @@ mod tests {
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    )
+                    ).expect("single dim output builder")
                 }),
             ),
             Float,
@@ -966,7 +966,7 @@ mod tests {
                         &[3, 100],
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    )
+                    ).expect("single dim output builder")
                 }),
             ),
             Float,
@@ -1016,7 +1016,7 @@ mod tests {
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
-                    )
+                    ).expect("single dim output builder")
                 }),
             ),
             Float,
@@ -1166,7 +1166,7 @@ mod tests {
                         &[dim_1, 1],
                         (init_type, Device::Cuda(0)),
                         BuildAs::Sum,
-                    )
+                    ).expect("single dim output builder")
                 }),
             ),
             Kind::Int64,

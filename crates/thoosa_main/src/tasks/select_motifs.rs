@@ -941,7 +941,7 @@ where
                             MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric], slices_selector_aggr),
                             cache_area,
                         ));
-                        let motif_stat = load_and_clc_dist
+                        let motif_stat: f32 = load_and_clc_dist
                             .run(clc_input, ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc"), false, false))
                             .await?
                             .with_data_ref(

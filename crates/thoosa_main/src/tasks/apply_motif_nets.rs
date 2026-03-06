@@ -288,7 +288,7 @@ where
                             Arc::clone(&apply_motif_net_input),
                             apply_motif_net_ctx,
                             Contexts::new(
-                                SplitsAdjusterContextImpl::new(input._size(), SingleDimTensorOutputBuilder::new(out_id.clone(), 0, &[slices + 1/*TODO +1 for padded slice, ApplyMotifNet::run   */, 1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)),
+                                SplitsAdjusterContextImpl::new(input._size(), SingleDimTensorOutputBuilder::new(out_id.clone(), 0, &[slices + 1/*TODO +1 for padded slice, ApplyMotifNet::run   */, 1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)?),
                                 NoopRunnableContext {},
                                 PermitsAndDumpToCpuAdjustableContex::new(
                                     PermitsAdjustContextImpl::new(),
@@ -630,11 +630,13 @@ pub fn apply_motif_net_forward(
     let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 
-    let out_t = out.as_ref().squeeze().f_sigmoid()?;
+    let out_t = out.as_ref().f_squeeze()?.f_sigmoid()?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out_t.size={:?}", out_t.size());
 
-    debug_plot!(&t.view((1, -1)), "apply_motif_net_run_input_{}", input_id)?;
-    debug_plot!(&out_t.view((1, -1)), "apply_motif_net__run_input_{}_motif_applied_{motif_id}", input_id)?;
+    let t_plot = t.f_view((1, -1))?;
+    let out_plot = out_t.f_view((1, -1))?;
+    debug_plot!(&t_plot, "apply_motif_net_run_input_{}", input_id)?;
+    debug_plot!(&out_plot, "apply_motif_net__run_input_{}_motif_applied_{motif_id}", input_id)?;
 
     ThoTensor::new(out_id, out_t)
 }

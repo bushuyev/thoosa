@@ -373,7 +373,7 @@ where
                             &[channels, welch_freq_bins(nperseg)],
                             (Kind::Float, Device::Cpu),
                             BuildAs::Append,
-                        ),
+                        )?,
                     ),
                     NoopRunnableContext {},
                     NoopRunCtxContext {},

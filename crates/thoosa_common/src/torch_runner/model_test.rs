@@ -857,7 +857,7 @@ mod tests {
                             &[1, 1],
                             (Kind::Float, ThoDevice::from(device_idx).deref().clone()),
                             BuildAs::Sum,
-                        ),
+                        )?,
                     ),
                     NoopRunnableContext {},
                     PermitsAdjustContextImpl::new(),

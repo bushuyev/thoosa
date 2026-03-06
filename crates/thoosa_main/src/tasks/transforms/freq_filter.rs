@@ -92,7 +92,7 @@ where
                         band_pass_config.kernel_size as i64,
                         sample_rate,
                         1e-6
-                    )?.repeat([num_channels, 1, 1]).to_device(Cuda(0));//TODO device
+                    )?.f_repeat([num_channels, 1, 1])?.f_to_device(Cuda(0))?;//TODO device
 
                     debug!("FreqFilter::new: band_pass_config={band_pass_config:?} kernel.size={:?}", kernel.size());
 
@@ -121,7 +121,7 @@ where
                         .f_to_kind(tch::Kind::Float)?
                         .f_to_device(Cuda(0))?
                         .f_view([1, 1, sav_gol_config.window_len])?
-                        .repeat([num_channels, 1, 1]);
+                        .f_repeat([num_channels, 1, 1])?;
 
                     filters.push(PreparedFilter::SavGol {
                         weights: ThoTensor::new(
@@ -202,18 +202,18 @@ where
         let output_3d = match padding {
             Padding::Zero(_) => input_t.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, pad, 1, self.num_channels)?,
             Padding::Replicate(_) => {
-                let left = input_t.narrow(2, 0, 1).repeat(&[1, 1, pad]);
-                let right = input_t.narrow(2, t - 1, 1).repeat(&[1, 1, pad]);
-                let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
+                let left = input_t.f_narrow(2, 0, 1)?.f_repeat([1, 1, pad])?;
+                let right = input_t.f_narrow(2, t - 1, 1)?.f_repeat([1, 1, pad])?;
+                let xpad = Tensor::f_cat(&[&left, input_t, &right], 2)?;
                 xpad.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, 0, 1, self.num_channels)?
             }
             Padding::Reflect(_) => {
                 if pad >= t {
                     return Err(ThoError::new(format!("reflect padding requires pad < T, got pad={} T={}", pad, t)));
                 }
-                let left = input_t.narrow(2, 1, pad).flip(&[2]);
-                let right = input_t.narrow(2, t - pad - 1, pad).flip(&[2]);
-                let xpad = Tensor::cat(&[&left, &input_t, &right], 2);
+                let left = input_t.f_narrow(2, 1, pad)?.f_flip([2])?;
+                let right = input_t.f_narrow(2, t - pad - 1, pad)?.f_flip([2])?;
+                let xpad = Tensor::f_cat(&[&left, input_t, &right], 2)?;
                 xpad.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, 0, 1, self.num_channels)?
             }
         };
