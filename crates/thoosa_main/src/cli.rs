@@ -510,7 +510,7 @@ where
         }
 
         Some(TrainMotifsNets(train_motif_nets_args)) => {
-            debug!("TrainMotifsNets2: train_motif_nets_args.run_config_cnt={:?}",train_motif_nets_args.run_config_cnt);
+            debug!("TrainMotifsNets: train_motif_nets_args.run_config_cnt={:?}",train_motif_nets_args.run_config_cnt);
 
             let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = serde_json5::from_str(&train_motif_nets_args.run_config_cnt).expect("TrainMotifsNets2");
             let motifs_by = train_motif_nets_args.motifs_by()?;
@@ -539,6 +539,7 @@ where
                 || root_ctx.branch( Some("train motif nets"), true, false),
             ).await?;
 
+            info!("TrainMotifsNets: run_ids={run_ids:?}");
         }
 
         Some(Commands::TrainLabelNets(train_label_nets_args)) => {
