@@ -1,5 +1,6 @@
 #![allow(unexpected_cfgs)]
 
+use std::future::ready;
 use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
@@ -50,6 +51,12 @@ use crate::tasks::motifs_batch_builder::{make_batch_with, MixupJitterCfg};
 use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::tasks::train_net::{TrainNet, TrainNetInput};
 
+#[derive(Debug, Default)]
+struct CurrentRandomSlices {
+    slices: Option<Arc<DevicesWrap<ThoTensor<MotifSlices, DataId>>>>,
+    uses: u32,
+}
+
 #[derive(Debug)]
 pub struct TrainMotifNets<L, C>
 where
@@ -66,6 +73,7 @@ where
     random_slices_loader:Arc<RandomSlicesLoader<L,C>>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Box<dyn Store>>,
+    epoch_size: u32,
     pd:PhantomData<C>
 
 }
@@ -128,7 +136,9 @@ where
             Vec<NamedRange<TrainMotifsNetsRunConfigFields>>,
             Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>,
             TrainMotifsNetsRunConfigFields,
-        >    ) -> Self {
+        >,
+        epoch_size: u32
+    ) -> Self {
         let motif_loader = Arc::new(MotifLoader::new(
             Arc::clone(&store),
             Arc::clone(&loader),
@@ -147,6 +157,7 @@ where
             run_configs: Arc::new(run_configs),
             ws: Arc::clone(&ws),
             store: Arc::clone(&store),
+            epoch_size,
             pd: PhantomData
         }
     }
@@ -218,6 +229,7 @@ where
             let opt_config = Arc::clone(&opt_config);
             let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
             let store = Arc::clone(&self.store);
+            let epoch_size = self.epoch_size;
             async move {
 
                 let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>> = motif_loader.run(
@@ -237,7 +249,7 @@ where
                         let motif = Arc::clone(&motif);
                         let random_slices_loader = Arc::clone(&random_slices_loader_for_batch);
                         async move {
-                            MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, cache_area, ctx).await
+                            MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, cache_area, ctx, epoch_size).await
                         }.boxed()
                     },
                     move |rc:&TrainMotifsNetsRunConfig, vs: &VarStore| {
@@ -309,49 +321,6 @@ where
 
 }
 
-#[derive(Debug)]
-struct DataWithLabels {
-    slices:ThoBatch<Slice>,
-    labels: ThoTensor<Labels, SynKey>
-}
-
-impl DataWithLabels {
-    pub fn new(slices: ThoBatch<Slice>, labels: ThoTensor<Labels, SynKey>) -> Self {
-        Self { slices, labels }
-    }
-}
-
-#[async_trait]
-impl CopyToDevice for DataWithLabels {
-
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
-        Ok(DataWithLabels {
-            slices: self.slices.copy_to_device(dst_device).await?,
-            labels: self.labels.copy_to_device(dst_device).await?,
-        })
-    }
-}
-
-impl WithId for DataWithLabels {
-    type ID = ();
-
-    fn id(&self) -> &Self::ID {
-        &()
-    }
-}
-
-impl Data for DataWithLabels {
-    type Metrics = <Batch<Slice> as Dims>::Metrics;
-    type M = CpuOrGpu<Self>;
-
-    fn size(&self) -> Self::Metrics {
-        self.slices.size().try_into().unwrap()//TODO unwrap
-    }
-
-    fn device(&self) -> usize {
-        self.slices.device_idx()
-    }
-}
 
 #[derive(Debug)]
 pub struct MotifsBatch<L, C>
@@ -361,11 +330,13 @@ where
 {
     motif_id: DataId,
     batch_size: u32,
+    epoch_size: u32,//number of cycles done on same slices
 
     train_motifs:Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>,
     valid_motifs:Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>,
     
     random_slices_loader: Arc<RandomSlicesLoader<L, C>>,
+    random_slices: Mutex<CurrentRandomSlices>,
     random_slices_limit: u32,
     motif_meta:MotifMeta,
     device_idx:usize,
@@ -385,6 +356,7 @@ where
         device_idx:usize,
         cache_area:u64,
         mut ctx: C,
+        epoch_size: u32,
     ) -> Result<Self, ThoError> {
         debug!("MotifsBatch::new: motif={motif:?}");
 
@@ -413,14 +385,15 @@ where
             let valid_motifs = ThoTensor::new(SynKey::new([mono_key!("valid_motifs", "split")]), valid_motifs)?;
 
             Ok::<_, ThoError>(Self {
-
                 motif_id: motif.id().clone(),
                 train_motifs:  Arc::new(DevicesWrap::wrap(train_motifs, cache_area.into())),
                 valid_motifs: Arc::new(DevicesWrap::wrap(valid_motifs, cache_area.into())),
                 random_slices_loader,
+                random_slices: Mutex::new(CurrentRandomSlices::default()),
                 random_slices_limit: num_motif_slices as u32,
                 motif_meta,
                 batch_size: batch_size as u32,
+                epoch_size,
                 device_idx,
                 ctx: Mutex::new(ctx)
             })
@@ -428,21 +401,7 @@ where
     }
 
     async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id:&DataId) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
-        let random_slices = Arc::clone(&self.random_slices_loader)
-            .run(
-                Arc::new(DevicesWrap::wrap(
-                    SlicesLoaderInput::new(self.motif_id.clone(), self.random_slices_limit),
-                    CacheArea::default(),
-                )),
-                {
-                    let mut guard = thoosa_shared::with_perf_log(
-                        || self.ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                        "TrainMotifNets/make_batch/random_slices_lock_ctx",
-                    );
-                    guard.branch(Some("motifs_batch_random_slices"), false, false)
-                },
-            )
-            .await?;
+        let random_slices = self.current_random_slices().await?;
 
         let num_slices = (self.batch_size / 2) as i64;
 
@@ -469,6 +428,42 @@ where
             Ok::<_, ThoError>((x.into(), y))
         })
     }
+
+    async fn current_random_slices(&self) -> Result<Arc<DevicesWrap<ThoTensor<MotifSlices, DataId>>>, ThoError> {
+        let epoch_size = self.epoch_size.max(1);
+        {
+            let mut current_random_slices = self.random_slices.lock();
+            if let Some(random_slices) = current_random_slices.slices.clone() {
+                if current_random_slices.uses < epoch_size {
+                    current_random_slices.uses += 1;
+                    return Ok(random_slices);
+                }
+                current_random_slices.slices = None;
+                current_random_slices.uses = 0;
+            }
+        }
+
+        let random_slices = Arc::clone(&self.random_slices_loader)
+            .run(
+                Arc::new(DevicesWrap::wrap(
+                    SlicesLoaderInput::new(self.motif_id.clone(), self.random_slices_limit),
+                    CacheArea::default(),
+                )),
+                {
+                    let mut guard = thoosa_shared::with_perf_log(
+                        || self.ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                        "TrainMotifNets/current_random_slices/lock_ctx",
+                    );
+                    guard.branch(Some("motifs_batch_random_slices"), false, false)
+                },
+            )
+            .await?;
+
+        let mut current_random_slices = self.random_slices.lock();
+        current_random_slices.slices = Some(Arc::clone(&random_slices));
+        current_random_slices.uses = 1;
+        Ok(random_slices)
+    }
 }
 
 #[async_trait]
@@ -489,6 +484,7 @@ where
 
     async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
         futures_util::stream::once( self.make_batch(Arc::clone(&self.valid_motifs), &self.motif_id))
+            .take(self.epoch_size as usize)
             .map(|fut_res|{
                 fut_res.map(|v|{
                     (v.0, None, v.1.into())
@@ -615,7 +611,8 @@ mod tests {
             loader,
             &ws,
             &store,
-            run_configs
+            run_configs,
+            10
         ));
 
         let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(100, 10))), CacheArea::default()));
