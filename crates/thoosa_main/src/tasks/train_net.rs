@@ -41,6 +41,7 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{panic_to_err, ThoError};
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::comp_id::SynKey;
 
 fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
@@ -240,13 +241,6 @@ where
 
             let batch = (self.batch)(ctx.branch(Some("train_batch"), false, false), &run_config).await?;
             debug!("TrainNet::run_inner: descr={descr} device={:?} cycles={}", train_step.device(), epochs);
-            {
-                let opt = thoosa_shared::with_perf_log(
-                    || train_step.opt.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "TrainNet/run_inner/lock_opt",
-                );
-                debug!("TrainNet::run_inner: descr={descr}  opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
-            }
 
             let oom_handler = OOMHandler::new(
                 vec![
@@ -266,13 +260,15 @@ where
 
 
             let mut saved_best = false;
-
+            let epochs_eta_guard = CollectEtaInvocationGuard::new(&format!("train_{descr}"), epochs as usize, 1);
             for idx in 1..epochs {
+
                 debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?}",maybe_cuda_mem(&device));
 
                 let mut batches = batch.train_batch_stream().await;
                 debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
+                let epoch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_in_{descr}"), 10/*TODO batch size*/, 1);
                 while let Some(Ok((x_t_0, lengths, expected_y))) = batches.next().await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, lengths, expected_y));
 
@@ -293,6 +289,8 @@ where
                     ).await?;
 
                     debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?}", input.id());
+
+                    collect_eta_record_completion(epoch_eta_guard.id());
 
                 }
 
@@ -350,8 +348,8 @@ where
 
                 }
 
-                
-                std::io::stdout().flush()?;
+
+                collect_eta_record_completion(epochs_eta_guard.id());
             }
             if saved_best {
                 let mut vs_guard = thoosa_shared::with_perf_log(
@@ -669,24 +667,25 @@ where
                 || self.opt.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
                 "TrainStep/do_run/lock_opt",
             );
+            debug!("TrainStep::do_run: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
 
-            debug!("TrainStep::do_run: 2. cuda_mem={:?}",maybe_cuda_mem(&self.device));
-            debug!("TrainStep::do_run: loss={loss}");
+            debug!("TrainStep::do_run: loss={loss} cuda_mem={:?}", maybe_cuda_mem(&self.device));
             trace!("TrainStep::do_run: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
 
             predicted_y.drop();
             drop(expected_y);
             debug!("TrainStep::do_run: 2.1 cuda_mem={:?}",maybe_cuda_mem(&self.device));
+
             let t1 = Instant::now();
 
             panic_to_err!({
                 opt.backward_step(&loss);
-                Ok::<_, ThoError>(())//TODO make panic_to_err to handle void functions
+                Ok::<_, ThoError>(())
             })?;
 
 
-            debug!("trTrainStep::do_runain: 3. cuda_mem={:?}  optimizer_size={}",maybe_cuda_mem(&self.device),optimizer_mem_size(&opt));
-            debug!("TrainStep::do_run: device={:?}  backward_step done in {}",self.device,t1.elapsed().as_millis());
+            debug!("TrainStep::do_run: 2.2 cuda_mem={:?}  optimizer_size={}", maybe_cuda_mem(&self.device),optimizer_mem_size(&opt));
+            debug!("TrainStep::do_run: device={:?}  backward_step done in {}", self.device, t1.elapsed().as_millis());
         }
 
         Ok(())
