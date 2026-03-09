@@ -9,6 +9,7 @@ use tokio::sync::watch;
 use crate::{with_perf_log, LOCK_TIMEOUT};
 
 pub(crate) const COLLECT_ETA_LOG_INTERVAL: Duration = Duration::from_secs(10);
+pub const COLLECT_ETA_PROGRESS_SOCKET_ID: &str = "thoosa-progress";
 
 #[derive(Debug)]
 struct CollectEtaInvocation {

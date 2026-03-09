@@ -1,3 +1,7 @@
+use interprocess::local_socket::{
+    tokio::{prelude::*, Stream},
+    GenericFilePath, GenericNamespaced, Name, ToFsName, ToNsName,
+};
 use std::io;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -13,8 +17,12 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use thoosa_shared::collect_futures_eta::{CollectEtaProgressInvocation, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
 use thoosa_shared::val::Val;
 use thoosa_store::{RunConfigEntry, SqlStore, Store};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 #[derive(Parser, Debug)]
 #[command(name = "thoosa_tui")]
@@ -36,13 +44,37 @@ struct App {
     filter_type: Option<String>,
     run_config_types: Vec<String>,
     type_popup_selected_idx: usize,
+    view_mode: ViewMode,
+    view_popup_selected_idx: usize,
     pending_gg: Option<(SelectedArea, Instant)>,
+    progress_state: CollectEtaProgressState,
+    progress_status: String,
+    progress_last_update: Option<Instant>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectedArea {
     LeftRunConfigs,
+    ProgressView,
     TypeFilterPopup,
+    ViewPopup,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ViewMode {
+    RunConfigs,
+    Progress,
+}
+
+impl ViewMode {
+    const ALL: [Self; 2] = [Self::RunConfigs, Self::Progress];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::RunConfigs => "Run configs",
+            Self::Progress => "Progress",
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -66,7 +98,12 @@ impl App {
             filter_type: None,
             run_config_types: vec![],
             type_popup_selected_idx: 0,
+            view_mode: ViewMode::RunConfigs,
+            view_popup_selected_idx: 0,
             pending_gg: None,
+            progress_state: CollectEtaProgressState::default(),
+            progress_status: "Waiting for progress socket.".to_string(),
+            progress_last_update: None,
         }
     }
 
@@ -76,6 +113,13 @@ impl App {
 
     fn selected_popup_type(&self) -> Option<String> {
         self.run_config_types.get(self.type_popup_selected_idx).cloned()
+    }
+
+    fn selected_view_mode(&self) -> ViewMode {
+        ViewMode::ALL
+            .get(self.view_popup_selected_idx)
+            .copied()
+            .unwrap_or(ViewMode::RunConfigs)
     }
 
     fn sort_order_label(&self) -> &'static str {
@@ -93,6 +137,11 @@ impl App {
     fn popup_page_size(&self) -> usize {
         let rows = terminal::size().map(|(_, r)| r).unwrap_or(24);
         popup_height(rows, self.run_config_types.len()).saturating_sub(2).max(1) as usize
+    }
+
+    fn view_popup_page_size(&self) -> usize {
+        let rows = terminal::size().map(|(_, r)| r).unwrap_or(24);
+        popup_height(rows, ViewMode::ALL.len()).saturating_sub(2).max(1) as usize
     }
 
     fn move_main_down(&mut self, step: usize) -> bool {
@@ -127,6 +176,22 @@ impl App {
         move_to_bottom(&mut self.type_popup_selected_idx, self.run_config_types.len())
     }
 
+    fn move_view_popup_down(&mut self, step: usize) -> bool {
+        move_down(&mut self.view_popup_selected_idx, ViewMode::ALL.len(), step)
+    }
+
+    fn move_view_popup_up(&mut self, step: usize) -> bool {
+        move_up(&mut self.view_popup_selected_idx, ViewMode::ALL.len(), step)
+    }
+
+    fn move_view_popup_to_top(&mut self) -> bool {
+        move_to_top(&mut self.view_popup_selected_idx, ViewMode::ALL.len())
+    }
+
+    fn move_view_popup_to_bottom(&mut self) -> bool {
+        move_to_bottom(&mut self.view_popup_selected_idx, ViewMode::ALL.len())
+    }
+
     fn clear_pending_gg(&mut self) {
         self.pending_gg = None;
     }
@@ -148,6 +213,59 @@ impl App {
         }
         self.pending_gg = Some((area, Instant::now()));
         false
+    }
+
+    fn open_view_popup(&mut self) {
+        self.view_popup_selected_idx = match self.view_mode {
+            ViewMode::RunConfigs => 0,
+            ViewMode::Progress => 1,
+        };
+        self.selected_area = SelectedArea::ViewPopup;
+    }
+
+    fn apply_view_mode_from_popup(&mut self) {
+        self.view_mode = self.selected_view_mode();
+        self.selected_area = match self.view_mode {
+            ViewMode::RunConfigs => SelectedArea::LeftRunConfigs,
+            ViewMode::Progress => SelectedArea::ProgressView,
+        };
+        debug!("apply_view_mode_from_popup: mode={}", self.view_mode.label());
+    }
+
+    fn apply_progress_event(&mut self, event: ProgressClientEvent) {
+        match event {
+            ProgressClientEvent::Snapshot(snapshot) => {
+                self.progress_state = snapshot;
+                self.progress_status = "Connected to progress socket.".to_string();
+                self.progress_last_update = Some(Instant::now());
+            }
+            ProgressClientEvent::Status(status) => {
+                self.progress_status = status;
+            }
+        }
+    }
+
+    fn progress_lines(&self) -> Vec<String> {
+        let mut lines = vec![format!("socket: {}", self.progress_status)];
+        match self.progress_last_update {
+            Some(last_update) => {
+                lines.push(format!("last update: {}ms ago", last_update.elapsed().as_millis()));
+            }
+            None => {
+                lines.push("last update: <none>".to_string());
+            }
+        }
+        lines.push(String::new());
+
+        if self.progress_state.invocations.is_empty() {
+            lines.push("No active progress invocations.".to_string());
+        } else {
+            for invocation in &self.progress_state.invocations {
+                lines.push(format_progress_invocation(invocation));
+            }
+        }
+
+        lines
     }
 
     fn rebuild_visible_run_configs(&mut self, keep_run_id: Option<u32>) {
@@ -308,6 +426,12 @@ impl Drop for TerminalGuard {
     }
 }
 
+#[derive(Debug)]
+enum ProgressClientEvent {
+    Snapshot(CollectEtaProgressState),
+    Status(String),
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logger();
@@ -332,8 +456,11 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let _terminal_guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
+    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<ProgressClientEvent>();
+    let progress_task = spawn_progress_client(COLLECT_ETA_PROGRESS_SOCKET_ID.to_string(), progress_tx);
 
     loop {
+        drain_progress_events(app, &mut progress_rx);
         terminal.draw(|frame| render(frame, app))?;
 
         if event::poll(Duration::from_millis(200))? {
@@ -349,6 +476,11 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
                 if key.code == KeyCode::Char('q') {
                     break;
+                }
+
+                if key.code == KeyCode::Char(' ') && key.modifiers.is_empty() && matches!(app.selected_area, SelectedArea::LeftRunConfigs | SelectedArea::ProgressView) {
+                    app.open_view_popup();
+                    continue;
                 }
 
                 match app.selected_area {
@@ -398,6 +530,7 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                             app.refresh_selected_values().await;
                         }
                     }
+                    SelectedArea::ProgressView => {}
                     SelectedArea::TypeFilterPopup => {
                         match key.code {
                             KeyCode::Esc => {
@@ -436,11 +569,47 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                             _ => {}
                         }
                     }
+                    SelectedArea::ViewPopup => {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.selected_area = match app.view_mode {
+                                    ViewMode::RunConfigs => SelectedArea::LeftRunConfigs,
+                                    ViewMode::Progress => SelectedArea::ProgressView,
+                                };
+                            }
+                            KeyCode::Enter => {
+                                app.apply_view_mode_from_popup();
+                            }
+                            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                                app.move_view_popup_down(1);
+                            }
+                            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                                app.move_view_popup_up(1);
+                            }
+                            KeyCode::Char('d') if is_ctrl_char(&key, 'd') => {
+                                app.move_view_popup_down(app.view_popup_page_size());
+                            }
+                            KeyCode::Char('u') if is_ctrl_char(&key, 'u') => {
+                                app.move_view_popup_up(app.view_popup_page_size());
+                            }
+                            KeyCode::Char('G') if key.modifiers.is_empty() => {
+                                app.move_view_popup_to_bottom();
+                            }
+                            KeyCode::Char('g') if key.modifiers.is_empty() => {
+                                if app.handle_g_press(SelectedArea::ViewPopup) {
+                                    app.move_view_popup_to_top();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
     }
 
+    progress_task.abort();
+    let _ = progress_task.await;
     terminal.show_cursor()?;
     Ok(())
 }
@@ -451,10 +620,36 @@ fn render(frame: &mut Frame<'_>, app: &App) {
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(frame.area());
 
+    match app.view_mode {
+        ViewMode::RunConfigs => render_run_configs_view(frame, app, outer[0]),
+        ViewMode::Progress => render_progress_view(frame, app, outer[0]),
+    }
+
+    if app.selected_area == SelectedArea::TypeFilterPopup {
+        render_type_filter_popup(frame, app);
+    } else if app.selected_area == SelectedArea::ViewPopup {
+        render_view_popup(frame, app);
+    }
+
+    let status_line = match app.selected_area {
+        SelectedArea::LeftRunConfigs => format!(
+            "area: run_configs | sort(run_on): {} (s toggle) | j/k, Up/Down | Ctrl-d/u page | gg top | G bottom | t filter | T reset | r reload | Space panels | q quit",
+            app.sort_order_label()
+        ),
+        SelectedArea::ProgressView => "area: progress | Space panels | q quit".to_string(),
+        SelectedArea::TypeFilterPopup => {
+            "area: type-filter | j/k, Up/Down | Ctrl-d/u page | gg top | G bottom | Enter apply | Esc close | T reset filter".to_string()
+        }
+        SelectedArea::ViewPopup => "area: panels | j/k, Up/Down | Ctrl-d/u page | gg top | G bottom | Enter apply | Esc close".to_string(),
+    };
+    frame.render_widget(Paragraph::new(status_line), outer[1]);
+}
+
+fn render_run_configs_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
-        .split(outer[0]);
+        .split(area);
 
     let left_items = if app.run_configs.is_empty() {
         vec![ListItem::new("No entries in run_configs.")]
@@ -520,21 +715,13 @@ fn render(frame: &mut Frame<'_>, app: &App) {
         .block(Block::default().title("run_config_values").borders(Borders::ALL))
         .wrap(Wrap { trim: false });
     frame.render_widget(right, layout[1]);
+}
 
-    if app.selected_area == SelectedArea::TypeFilterPopup {
-        render_type_filter_popup(frame, app);
-    }
-
-    let status_line = match app.selected_area {
-        SelectedArea::LeftRunConfigs => format!(
-            "area: run_configs | sort(run_on): {} (s toggle) | j/k, Up/Down | Ctrl-d/u page | gg top | G bottom | t filter | T reset | r reload | q quit",
-            app.sort_order_label()
-        ),
-        SelectedArea::TypeFilterPopup => {
-            "area: type-filter | j/k, Up/Down | Ctrl-d/u page | gg top | G bottom | Enter apply | Esc close | T reset filter".to_string()
-        }
-    };
-    frame.render_widget(Paragraph::new(status_line), outer[1]);
+fn render_progress_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let progress = Paragraph::new(app.progress_lines().join("\n"))
+        .block(Block::default().title("progress").borders(Borders::ALL))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(progress, area);
 }
 
 fn render_type_filter_popup(frame: &mut Frame<'_>, app: &App) {
@@ -566,6 +753,34 @@ fn render_type_filter_popup(frame: &mut Frame<'_>, app: &App) {
     if !app.run_config_types.is_empty() {
         state.select(Some(app.type_popup_selected_idx));
     }
+
+    frame.render_widget(Clear, popup_rect);
+    frame.render_stateful_widget(popup, popup_rect, &mut state);
+}
+
+fn render_view_popup(frame: &mut Frame<'_>, app: &App) {
+    let area = frame.area();
+    let popup_h = popup_height(area.height, ViewMode::ALL.len());
+    let popup_w = (area.width.saturating_mul(45) / 100).max(22).min(area.width.saturating_sub(2).max(1));
+    let popup_x = area.x + area.width.saturating_sub(popup_w) / 2;
+    let popup_y = area.y + area.height.saturating_sub(popup_h) / 2;
+    let popup_rect = Rect::new(popup_x, popup_y, popup_w, popup_h);
+
+    let popup_items = ViewMode::ALL
+        .iter()
+        .map(|mode| {
+            let marker = if *mode == app.view_mode { "*" } else { " " };
+            ListItem::new(format!("{marker} {}", mode.label()))
+        })
+        .collect::<Vec<ListItem>>();
+
+    let popup = List::new(popup_items)
+        .block(Block::default().title("Select panel (Enter apply, Esc cancel)").borders(Borders::ALL))
+        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .highlight_symbol(">> ");
+
+    let mut state = ListState::default();
+    state.select(Some(app.view_popup_selected_idx));
 
     frame.render_widget(Clear, popup_rect);
     frame.render_stateful_widget(popup, popup_rect, &mut state);
@@ -621,6 +836,107 @@ fn is_ctrl_char(key: &KeyEvent, c: char) -> bool {
     key.code == KeyCode::Char(c) && key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
+fn format_progress_invocation(invocation: &CollectEtaProgressInvocation) -> String {
+    format!("{:>6} / {:<6} {}", invocation.completed, invocation.total, invocation.descr)
+}
+
+fn drain_progress_events(app: &mut App, rx: &mut mpsc::UnboundedReceiver<ProgressClientEvent>) {
+    while let Ok(event) = rx.try_recv() {
+        app.apply_progress_event(event);
+    }
+}
+
+fn spawn_progress_client(socket_id: String, tx: mpsc::UnboundedSender<ProgressClientEvent>) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        run_progress_client(socket_id, tx).await;
+    })
+}
+
+async fn run_progress_client(socket_id: String, tx: mpsc::UnboundedSender<ProgressClientEvent>) {
+    let mut last_status = None;
+    loop {
+        if !send_progress_status(&tx, &mut last_status, "Connecting to progress socket.".to_string()) {
+            break;
+        }
+
+        match connect_progress_stream(&socket_id).await {
+            Ok(stream) => {
+                if !send_progress_status(&tx, &mut last_status, "Connected to progress socket.".to_string()) {
+                    break;
+                }
+                if let Err(err) = read_progress_stream(stream, &tx, &mut last_status).await {
+                    if !send_progress_status(&tx, &mut last_status, format!("Progress socket error: {err}")) {
+                        break;
+                    }
+                } else if !send_progress_status(&tx, &mut last_status, "Progress socket disconnected.".to_string()) {
+                    break;
+                }
+            }
+            Err(err) => {
+                if !send_progress_status(&tx, &mut last_status, format!("Waiting for progress socket: {err}")) {
+                    break;
+                }
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+async fn read_progress_stream(
+    stream: Stream,
+    tx: &mpsc::UnboundedSender<ProgressClientEvent>,
+    last_status: &mut Option<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut lines = BufReader::new(stream).lines();
+    while let Some(line) = lines.next_line().await? {
+        let snapshot: CollectEtaProgressState = serde_json::from_str(&line)?;
+        if tx.send(ProgressClientEvent::Snapshot(snapshot)).is_err() {
+            return Ok(());
+        }
+        *last_status = Some("Connected to progress socket.".to_string());
+    }
+    Ok(())
+}
+
+fn send_progress_status(
+    tx: &mpsc::UnboundedSender<ProgressClientEvent>,
+    last_status: &mut Option<String>,
+    status: String,
+) -> bool {
+    if last_status.as_deref() == Some(status.as_str()) {
+        return true;
+    }
+    *last_status = Some(status.clone());
+    tx.send(ProgressClientEvent::Status(status)).is_ok()
+}
+
+async fn connect_progress_stream(socket_id: &str) -> io::Result<Stream> {
+    let mut last_err = None;
+    for name in progress_socket_names(socket_id)? {
+        match Stream::connect(name.borrow()).await {
+            Ok(stream) => return Ok(stream),
+            Err(err) => {
+                last_err = Some(err);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| io::Error::other("no local socket names available")))
+}
+
+fn progress_socket_names(socket_id: &str) -> io::Result<Vec<Name<'static>>> {
+    let mut names = Vec::with_capacity(2);
+    if GenericNamespaced::is_supported() {
+        names.push(format!("{socket_id}.sock").to_ns_name::<GenericNamespaced>()?);
+    }
+    if cfg!(windows) {
+        names.push(format!(r"\\.\pipe\{socket_id}").to_fs_name::<GenericFilePath>()?);
+    } else {
+        names.push(format!("/tmp/{socket_id}.sock").to_fs_name::<GenericFilePath>()?);
+    }
+    Ok(names)
+}
+
 fn value_to_string(value: &Val) -> String {
     match value {
         Val::Real(v) => v.to_string(),
@@ -670,6 +986,11 @@ fn run_non_interactive(app: &App) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use interprocess::local_socket::ListenerOptions;
+    use thoosa_store::MockStore;
+    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn test_value_to_string_all_variants() {
@@ -679,4 +1000,85 @@ mod tests {
         assert_eq!("abc", value_to_string(&Val::Str("abc".to_string())));
         assert_eq!("true", value_to_string(&Val::Bool(true)));
     }
+
+    #[test]
+    fn test_apply_view_mode_from_popup_switches_focus() {
+        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let mut app = App::new(store, PathBuf::from("/tmp/test.db3"));
+
+        app.open_view_popup();
+        app.view_popup_selected_idx = 1;
+        app.apply_view_mode_from_popup();
+
+        assert_eq!(app.view_mode, ViewMode::Progress);
+        assert_eq!(app.selected_area, SelectedArea::ProgressView);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_progress_client_receives_snapshot() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        static NEXT_TEST_SOCKET_ID: AtomicU64 = AtomicU64::new(1);
+
+        let socket_id = format!("thoosa-progress-tui-test-{}-{}", process::id(), NEXT_TEST_SOCKET_ID.fetch_add(1, Ordering::Relaxed));
+        let listener = create_test_listener(&socket_id)?;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let client_task = spawn_progress_client(socket_id.clone(), tx);
+        let server_task = tokio::spawn(async move {
+            let stream = listener.accept().await?;
+            let snapshot = CollectEtaProgressState {
+                invocations: vec![CollectEtaProgressInvocation {
+                    descr: "apply_label_nets".to_string(),
+                    total: 9,
+                    completed: 4,
+                }],
+            };
+            let mut writer = &stream;
+            let mut bytes = serde_json::to_vec(&snapshot)?;
+            bytes.push(b'\n');
+            writer.write_all(&bytes).await?;
+            writer.flush().await?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+        });
+
+        let mut received = None;
+        for _ in 0..6 {
+            let Some(event) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await? else {
+                break;
+            };
+            if let ProgressClientEvent::Snapshot(snapshot) = event {
+                received = Some(snapshot);
+                break;
+            }
+        }
+
+        client_task.abort();
+        let _ = client_task.await;
+        server_task.await??;
+
+        assert_eq!(
+            received,
+            Some(CollectEtaProgressState {
+                invocations: vec![CollectEtaProgressInvocation {
+                    descr: "apply_label_nets".to_string(),
+                    total: 9,
+                    completed: 4,
+                }],
+            })
+        );
+
+        Ok(())
+    }
+
+    fn create_test_listener(socket_id: &str) -> io::Result<interprocess::local_socket::tokio::Listener> {
+        let mut last_err = None;
+        for name in progress_socket_names(socket_id)? {
+            match ListenerOptions::new().name(name).try_overwrite(true).create_tokio() {
+                Ok(listener) => return Ok(listener),
+                Err(err) => {
+                    last_err = Some(err);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| io::Error::other("no local socket names available")))
+    }
+
 }

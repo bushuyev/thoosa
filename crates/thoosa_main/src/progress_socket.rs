@@ -5,12 +5,10 @@ use interprocess::local_socket::{
 use log::{debug, warn};
 use std::io;
 use std::time::Duration;
-use thoosa_shared::collect_futures_eta::{collect_eta_subscribe_progress, CollectEtaProgressState};
+use thoosa_shared::collect_futures_eta::{collect_eta_subscribe_progress, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-
-const DEFAULT_SOCKET_ID: &str = "thoosa-progress";
 
 type SocketResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -22,7 +20,7 @@ pub(crate) struct CollectEtaProgressSocketServer {
 
 impl CollectEtaProgressSocketServer {
     pub(crate) fn start_default() -> io::Result<Self> {
-        Self::start_with_socket_id(DEFAULT_SOCKET_ID, collect_eta_subscribe_progress())
+        Self::start_with_socket_id(COLLECT_ETA_PROGRESS_SOCKET_ID, collect_eta_subscribe_progress())
     }
 
     fn start_with_socket_id(
