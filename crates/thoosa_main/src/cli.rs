@@ -543,6 +543,7 @@ where
                         &ws,
                         &store,
                         run_configs,
+                        train_motif_nets_args.epoch_size,
                     )))
                 },
                 || root_ctx.branch( Some("train motif nets"), true, false),
@@ -933,6 +934,7 @@ async fn run_all(
                 &ws,
                 &store,
                 run_configs,
+                10,
             )))
         },
         || root_ctx.branch(Some("train motif nets"), true, false),
