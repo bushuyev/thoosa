@@ -59,7 +59,7 @@ pub mod perf_logging;
 pub mod copy_mode;
 pub mod runner;
 pub mod comp_id;
-mod collect_futures_eta;
+pub mod collect_futures_eta;
 pub mod math;
 
 struct GroupSlicesBuilder<T> {
@@ -263,7 +263,7 @@ pub async fn collect_futures_with_progress<T, F>(
     descr: &str,
 ) -> Vec<T>
 where
-    F: std::future::Future<Output = Result<T, ThoError>>,
+    F: Future<Output = Result<T, ThoError>>,
 {
     let mut results = Vec::with_capacity(len);
     let (mut ok, mut err) = (0usize, 0usize);
@@ -431,6 +431,17 @@ impl ThoError {
             )
         }
     }
+
+    pub fn from_msg(msg: impl Into<String> + Display) -> Self
+    {
+        let msg_str = msg.to_string();
+        if msg_str.contains("out of memory") || msg_str.contains("can't allocate memory") {//TODO same check in few errors constructors
+            ThoError::new_with_error(msg, Cause::OutOfMemory)
+        } else {
+            ThoError::new_with_error(msg, Cause::SomethingElse(msg_str))
+        }
+    }
+
 
     pub fn from_boxed_error(
         msg: impl Into<String> + Display,
@@ -2084,7 +2095,9 @@ pub trait CopyToDevice {
 #[macro_export]
 macro_rules! panic_to_err_async {
     ($expr:expr) => {{
-        let x = std::panic::catch_unwind(core::panic::AssertUnwindSafe(async || $expr));
+
+        // let x = std::panic::catch_unwind(core::panic::AssertUnwindSafe(async || $expr));
+        let x = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {$expr})).await;
 
         match x {
             //no panic
@@ -2104,20 +2117,19 @@ macro_rules! panic_to_err_async {
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
                     log::debug!("panic_to_err_async: String: {msg}");
-                    Err(thoosa_shared::ThoError::new(msg.as_str()))
+                    Err(thoosa_shared::ThoError::from_msg(msg.as_str()))
 
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("panic_to_err_async: str: {msg}");
-                    Err(thoosa_shared::ThoError::new(*msg))
+                    Err(thoosa_shared::ThoError::from_msg(*msg))
                 } else {
                     log::debug!("panic_to_err_async: unknown: {e:?}");
-                    Err(thoosa_shared::ThoError::new(format!("{e:?}")))
+                    Err(thoosa_shared::ThoError::from_msg(format!("{e:?}")))
                 }
             }
         }
     }};
 }
-
 #[macro_export]
 macro_rules! panic_to_err {
     ($expr:expr) => {{
@@ -2131,16 +2143,17 @@ macro_rules! panic_to_err {
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
                     log::debug!("thoosa_err String: {msg}");
-                    Err(ThoError::new(msg.as_str()))
-                //TODO
+                    Err(ThoError::from_msg(msg))
+
                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
                 //     Err(*thoosa_error)
+
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("thoosa_err str: {msg}");
-                    Err(ThoError::new(*msg))
+                    Err(ThoError::from_msg(*msg))
                 } else {
                     log::debug!("thoosa_err unknown: {e:?}");
-                    Err(ThoError::new(format!("{e:?}")))
+                    Err(ThoError::from_msg(format!("{e:?}")))
                 }
             }
         }
