@@ -466,7 +466,7 @@ where
 
 
         match panic_to_err_async!({
-            runner(Arc::clone(&task), Arc::clone(&input), None, device_idx, run_context.branch(Some("oom_handler_run_initial"), false, false)).await
+            runner(Arc::clone(&task), Arc::clone(&input), None, device_idx, run_context.branch(Some("oom_handler_run_initial"), false, false))
         }) {
             Err(te) => {
                 pref_oom_count();
@@ -628,7 +628,6 @@ where
                                         device_idx,
                                         run_context.branch(None, false, true), //looses permits on ctx drop
                                     )
-                                    .await
                                 });
 
                                 match run_result {
@@ -684,7 +683,7 @@ where
                         }
                     }
                     _ => {
-                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  other error 2", os_thread_id());
+                        warn!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={} unexpected error: {te:?}", os_thread_id());
                         return Err(te);
                     }
                 }

@@ -41,6 +41,7 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{panic_to_err, ThoError};
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::comp_id::SynKey;
 
 fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
@@ -259,13 +260,15 @@ where
 
 
             let mut saved_best = false;
-
+            let epochs_eta_guard = CollectEtaInvocationGuard::new(&format!("train_{descr}"), epochs as usize, 1);
             for idx in 1..epochs {
+
                 debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?}",maybe_cuda_mem(&device));
 
                 let mut batches = batch.train_batch_stream().await;
                 debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
+                let epoch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_in_{descr}"), 10/*TODO batch size*/, 1);
                 while let Some(Ok((x_t_0, lengths, expected_y))) = batches.next().await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, lengths, expected_y));
 
@@ -286,6 +289,8 @@ where
                     ).await?;
 
                     debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?}", input.id());
+
+                    collect_eta_record_completion(epoch_eta_guard.id());
 
                 }
 
@@ -343,8 +348,8 @@ where
 
                 }
 
-                
-                std::io::stdout().flush()?;
+
+                collect_eta_record_completion(epochs_eta_guard.id());
             }
             if saved_best {
                 let mut vs_guard = thoosa_shared::with_perf_log(
