@@ -240,13 +240,6 @@ where
 
             let batch = (self.batch)(ctx.branch(Some("train_batch"), false, false), &run_config).await?;
             debug!("TrainNet::run_inner: descr={descr} device={:?} cycles={}", train_step.device(), epochs);
-            {
-                let opt = thoosa_shared::with_perf_log(
-                    || train_step.opt.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "TrainNet/run_inner/lock_opt",
-                );
-                debug!("TrainNet::run_inner: descr={descr}  opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
-            }
 
             let oom_handler = OOMHandler::new(
                 vec![
@@ -669,24 +662,25 @@ where
                 || self.opt.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
                 "TrainStep/do_run/lock_opt",
             );
+            debug!("TrainStep::do_run: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
 
-            debug!("TrainStep::do_run: 2. cuda_mem={:?}",maybe_cuda_mem(&self.device));
-            debug!("TrainStep::do_run: loss={loss}");
+            debug!("TrainStep::do_run: loss={loss} cuda_mem={:?}", maybe_cuda_mem(&self.device));
             trace!("TrainStep::do_run: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
 
             predicted_y.drop();
             drop(expected_y);
             debug!("TrainStep::do_run: 2.1 cuda_mem={:?}",maybe_cuda_mem(&self.device));
+
             let t1 = Instant::now();
 
             panic_to_err!({
                 opt.backward_step(&loss);
-                Ok::<_, ThoError>(())//TODO make panic_to_err to handle void functions
+                Ok::<_, ThoError>(())
             })?;
 
 
-            debug!("trTrainStep::do_runain: 3. cuda_mem={:?}  optimizer_size={}",maybe_cuda_mem(&self.device),optimizer_mem_size(&opt));
-            debug!("TrainStep::do_run: device={:?}  backward_step done in {}",self.device,t1.elapsed().as_millis());
+            debug!("TrainStep::do_run: 2.2 cuda_mem={:?}  optimizer_size={}", maybe_cuda_mem(&self.device),optimizer_mem_size(&opt));
+            debug!("TrainStep::do_run: device={:?}  backward_step done in {}", self.device, t1.elapsed().as_millis());
         }
 
         Ok(())
