@@ -476,6 +476,9 @@ pub struct TrainMotifsNetsArgs {
 
     #[arg(long)]
     pub run_config_cnt: String, //TrainMotifsNetsRunConfig
+
+    #[arg(long, default_value_t = 10)]
+    pub epoch_size: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, DummyData)]
@@ -509,6 +512,7 @@ mod train_motifs_nets_args_tests {
             motif_id: None,
             fixed_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
+            epoch_size: 10,
         };
 
         assert_eq!(
@@ -526,6 +530,7 @@ mod train_motifs_nets_args_tests {
             motif_id: Some(7),
             fixed_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
+            epoch_size: 10,
         };
 
         assert_eq!(
@@ -544,6 +549,7 @@ mod train_motifs_nets_args_tests {
             motif_id: None,
             fixed_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
+            epoch_size: 10,
         };
 
         assert!(args.motifs_by().is_err());
@@ -3108,10 +3114,7 @@ mod train_tests {
     /// If `m >= n` or `fraction <= 0.0` or `fraction >= 1.0`.
     pub fn random_tensor_with_dominant(n: i64, m: i64, fraction: f64, device: Device) -> Tensor {
         assert!(m < n, "m must be < n");
-        assert!(
-            fraction > 0.0 && fraction < 1.0,
-            "fraction must be in (0,1)"
-        );
+        assert!(fraction > 0.0 && fraction < 1.0, "fraction must be in (0,1)");
 
         let remainder = 1.0 - fraction;
 
