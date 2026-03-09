@@ -8,6 +8,7 @@ use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
 use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
 use tch::{IndexOp, Tensor};
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::val::{NamedVal, Val};
 
@@ -530,6 +531,7 @@ where
         let mut best_loss = f32::MAX;
         let mut best_config: Option<Vec<Val>> = None;
 
+        let grids_eta_guard = CollectEtaInvocationGuard::new(&"opt", self.max_evals as usize, 1);
         for i in 0..self.max_evals {
             let eval_config = if i < self.n_init {
                 debug!("TPEOptimizer::optimize: i={i} random sample");
@@ -563,6 +565,8 @@ where
             for (_key, tpe) in &mut self.tpe_samplers {
                 tpe.update_observations(loss, &eval_config, None)
             }
+
+            collect_eta_record_completion(grids_eta_guard.id());
         }
 
         best_config.unwrap_or(vec![]) //TODO
