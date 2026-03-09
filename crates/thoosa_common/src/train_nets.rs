@@ -48,6 +48,7 @@ use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::Output;
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
@@ -1784,6 +1785,7 @@ where
 
     info!("opt_train: running opt train {descr} grid_vals_sets={grid_vals_sets:?}");
 
+    let grids_eta_guard = CollectEtaInvocationGuard::new(&"grid_sets", grid_vals_sets.len(), 1);
     for grid_vals in grid_vals_sets.into_iter() {
         let const_vals = const_vals.clone();
         let grid_vals = grid_vals.clone();
@@ -1845,6 +1847,7 @@ where
         debug!("opt_train: best_config={:?}", best_config);
 
         info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={} min_var_store={min_var_store:?}", min_loss.read());
+        collect_eta_record_completion(grids_eta_guard.id());
     }
     Arc::into_inner(min_var_store)
         .unwrap()
