@@ -1958,7 +1958,7 @@ impl Store for SqlStore {
                     resource: Resource::new(resource_id, import_id, key, length),
                     target_positions: positions,
                     generated_positions: Vec::new(),
-                    length: length as i64, //input_len_adjuster(length) as i64,
+                    length: input_len_adjuster(length) as i64,
                 })
             })
             .collect::<Result<Vec<_>, ThoError>>()?
@@ -1974,7 +1974,7 @@ impl Store for SqlStore {
                         ))
                     })?;
                 contexts.push(RandomResourceCtx {
-                    length: resource.length() as i64, // input_len_adjuster(resource.length()) as i64,
+                    length: input_len_adjuster(resource.length()) as i64,
                     resource,
                     target_positions: positions,
                     generated_positions: Vec::new(),

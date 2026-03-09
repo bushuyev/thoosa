@@ -268,7 +268,7 @@ where
                 let mut batches = batch.train_batch_stream().await;
                 debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
-                let epoch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_in_{descr}"), 10/*TODO batch size*/, 1);
+                let epoch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_in_{descr}"), 10/*TODO size hint*/, 1);
                 while let Some(Ok((x_t_0, lengths, expected_y))) = batches.next().await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, lengths, expected_y));
 

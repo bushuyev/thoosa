@@ -395,6 +395,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                         ConfigurationSpace::new(opt_params),
                         opt_max_evals,
                         opt_num_init,
+                        "n/a",
                     );
 
                     opt.optimize().await;
