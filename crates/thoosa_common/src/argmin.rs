@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 
 use argmin::core::{CostFunction, Error, Gradient};
@@ -17,6 +18,8 @@ use tch::Tensor;
 
 #[cfg(test)]
 use thoosa_shared::ThoError;
+use thoosa_shared::traits::Named;
+use crate::dims::Dims;
 use crate::tho_tensor::ThoTensor;
 
 #[cfg(test)]
@@ -43,8 +46,12 @@ impl std::fmt::Display for ArgminMathError {
 #[cfg(test)]
 impl std::error::Error for ArgminMathError {}
 
-
-impl Clone for ThoTensor {
+//TODO remove
+impl <D, Id> Clone for ThoTensor<D, Id>
+where
+ D: Dims,
+ Id: Named + Debug + Clone
+{
     fn clone(&self) -> Self {
         ThoTensor::new(self.id().clone(), self.t_ref().shallow_clone()).expect("can't clone")
     }

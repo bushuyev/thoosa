@@ -8,6 +8,7 @@ use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
 use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
 use tch::{IndexOp, Tensor};
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::val::{NamedVal, Val};
 
@@ -506,13 +507,14 @@ where
     max_evals: u32,
     tpe_samplers: HashMap<String, TreeStructuredParzenEstimator>,
     _pd: PhantomData<T>,
+    descr: String
 }
 
 impl<F, T: FieldName> AsyncTPEOptimizer<F, T>
 where
     F: AsyncFnMut(&[NamedVal<T>]) -> f32,
 {
-    pub fn new(obj_func: F, cs: ConfigurationSpace<T>, max_evals: u32, n_init: u32) -> Self {
+    pub fn new(obj_func: F, cs: ConfigurationSpace<T>, max_evals: u32, n_init: u32, descr: &str) -> Self {
         debug!("TPEOptimizer:new: cs={cs:?}");
 
         let estimator = TreeStructuredParzenEstimator::new(&cs);
@@ -523,6 +525,7 @@ where
             max_evals,
             tpe_samplers: HashMap::from([("loss".to_string(), estimator)]),
             _pd: PhantomData::default(),
+            descr: descr.to_string()
         }
     }
 
@@ -530,6 +533,7 @@ where
         let mut best_loss = f32::MAX;
         let mut best_config: Option<Vec<Val>> = None;
 
+        let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("opt_{}", self.descr), self.max_evals as usize, 1);
         for i in 0..self.max_evals {
             let eval_config = if i < self.n_init {
                 debug!("TPEOptimizer::optimize: i={i} random sample");
@@ -563,6 +567,8 @@ where
             for (_key, tpe) in &mut self.tpe_samplers {
                 tpe.update_observations(loss, &eval_config, None)
             }
+
+            collect_eta_record_completion(grids_eta_guard.id());
         }
 
         best_config.unwrap_or(vec![]) //TODO
@@ -832,6 +838,7 @@ mod tpe_optimizer_tests {
             ),
             500,
             10,
+            "n/a",
         );
 
         let best_config = opt.optimize().await;
@@ -858,6 +865,7 @@ mod tpe_optimizer_tests {
             ),
             500,
             10,
+            "n/a",
         );
 
         let best_config = opt.optimize().await;
@@ -915,6 +923,7 @@ mod tpe_optimizer_tests {
             ),
             500,
             10,
+            "n/a",
         );
 
         let best_config = opt.optimize().await;
