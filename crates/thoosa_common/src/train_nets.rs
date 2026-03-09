@@ -1791,7 +1791,7 @@ where
 
     info!("opt_train: running opt train {descr} grid_vals_sets={grid_vals_sets:?}");
 
-    let grids_eta_guard = CollectEtaInvocationGuard::new(&"grid_sets", grid_vals_sets.len(), 1);
+    let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("grid_sets_{descr}"), grid_vals_sets.len(), 1);
     for grid_vals in grid_vals_sets.into_iter() {
         let const_vals = const_vals.clone();
         let grid_vals = grid_vals.clone();
@@ -1846,6 +1846,7 @@ where
             ConfigurationSpace::new(run_config_source.opt_params().clone()),
             opt_config.opt_max_evals,
             opt_config.opt_num_init,
+            descr,
         );
         info!("opt_train: wait on optimize ");
         let best_config = opt.optimize().await;
