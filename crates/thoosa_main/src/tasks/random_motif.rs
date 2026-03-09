@@ -109,7 +109,7 @@ impl CopyToDevice for RandomMotifOutput {
         Ok(Self { id: self.id.clone(), motifs })
     }
 }
-
+//TODO remove
 #[derive(Debug, Cached, Named)]
 pub struct RandomMotif<L, C>
 where
