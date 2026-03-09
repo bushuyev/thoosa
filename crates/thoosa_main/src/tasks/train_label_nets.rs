@@ -444,7 +444,7 @@ where
                         |rc:&TrainLabelNetsRunConfig|{
                             rc.common_training_args.cycles
                         },
-                        "label".to_string()
+                        format!("label_{label_}")
                     ));
 
                     let result = train_net.run(
@@ -476,9 +476,8 @@ where
                 labels_tain_and_valid_sets_len,
                 crate::buffer_limits::TRAIN_LABEL_NETS_RUN_BUFFER_UNORDERED_LIMIT,
                 StreamBuffering::Unordered,
-                "train label",
+                "train labels",
             ).await;
-            //gpt TODO!! collect_futures_with_progress drops per-label errors; results may be incomplete without signaling failure.
 
             Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(self.train_motif_nets_run_ids.clone(), results), cache_area.into())))
         }

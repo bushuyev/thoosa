@@ -40,7 +40,9 @@ impl Purger {
                         // match panic_to_err_async!({
                             for purge_cl in &closures {
 
-                                match panic_to_err_async!(Ok::<_, ThoError>(purge_cl().await)) {
+                                match panic_to_err_async!(
+                                    purge_cl()
+                                ) {
                                     Ok(_) => {
                                         trace!("Purger::new, loop: done purging ")
                                     }

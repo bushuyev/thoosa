@@ -2685,7 +2685,7 @@ mod cli_tests {
             ctx,
             &run_all_args,
             all_configs,
-        ).await}){
+        )}){
             Ok(_) => {
                 debug!("ok");
             }

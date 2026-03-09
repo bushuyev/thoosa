@@ -1,4 +1,4 @@
-use log::info;
+use log::{info, warn};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ struct CollectEtaInvocation {
     started_at: Instant,
     last_completion_at: Option<Instant>,
     warmup: usize,
-    ewma_interval_s: Option<f64>,
+    ewma_interval_s: Option<f64>,//Exponentially Weighted Moving Average
     alpha: f64,
 }
 
@@ -156,6 +156,8 @@ impl CollectEtaTracker {
     fn record_completion_at(&self, id: u64, now: Instant) {
         if let Some(invocation) = self.state_guard().invocations.get_mut(&id) {
             invocation.record_completion(now);
+        } else {
+            warn!("No invocation for id={id}");
         }
     }
 
@@ -254,18 +256,18 @@ impl CollectEtaTracker {
 }
 
 #[derive(Debug)]
-pub(crate) struct CollectEtaInvocationGuard {
+pub struct CollectEtaInvocationGuard {
     id: u64,
 }
 
 impl CollectEtaInvocationGuard {
-    pub(crate) fn new(descr: &str, total: usize, concurrency: usize) -> Self {
+    pub fn new(descr: &str, total: usize, concurrency: usize) -> Self {
         Self {
             id: COLLECT_ETA_TRACKER.register(descr, total, concurrency),
         }
     }
 
-    pub(crate) fn id(&self) -> u64 {
+    pub fn id(&self) -> u64 {
         self.id
     }
 }
@@ -278,7 +280,7 @@ impl Drop for CollectEtaInvocationGuard {
 
 static COLLECT_ETA_TRACKER: Lazy<CollectEtaTracker> = Lazy::new(CollectEtaTracker::new);
 
-pub(crate) fn collect_eta_record_completion(id: u64) {
+pub fn collect_eta_record_completion(id: u64) {
     COLLECT_ETA_TRACKER.record_completion(id);
 }
 
