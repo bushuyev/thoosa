@@ -130,12 +130,12 @@ where
         .flatten()
         .collect::<Vec<_>>();
 
-        //TODO all motif nets should have same width/step, handle different ones?
+
         let mut motif_widths = HashSet::new();
         let mut freq_filters_by_find_motifs_run_id: HashMap<RunId, Option<Arc<FreqFilter<C>>>> = HashMap::new();
         let mut loaded_motif_nets_with_filters = Vec::with_capacity(loaded_motif_nets.len());
-        for v in loaded_motif_nets {
-            let (motif_id, motif_width) = with_data!(stage_ctx.branch(Some("apply_motif_nets_meta"), false, false), v; |_ctx, v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+        for motif_net in loaded_motif_nets {
+            let (motif_id, motif_width) = with_data!(stage_ctx.branch(Some("apply_motif_nets_meta"), false, false), motif_net; |_ctx, v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
                 let motif_width = v.extra().motif_net_params.num_features();
                 motif_widths.insert(motif_width);
                 Ok::<_, ThoError>((v.extra().motif_id(), motif_width))
@@ -160,7 +160,7 @@ where
             };
 
             let freq_filter_find_motifs_run_id = if freq_filter.is_some() { Some(find_motifs_run_id) } else { None };
-            loaded_motif_nets_with_filters.push((v, motif_width, freq_filter_find_motifs_run_id, freq_filter));
+            loaded_motif_nets_with_filters.push((motif_net, motif_width, freq_filter_find_motifs_run_id, freq_filter));
         }
 
         if motif_widths.len() > 1 {
@@ -635,8 +635,8 @@ pub fn apply_motif_net_forward(
 
     let t_plot = t.f_view((1, -1))?;
     let out_plot = out_t.f_view((1, -1))?;
-    debug_plot!(&t_plot, "apply_motif_net_run_input_{}", input_id)?;
-    debug_plot!(&out_plot, "apply_motif_net__run_input_{}_motif_applied_{motif_id}", input_id)?;
+    debug_plot!(&t_plot, "apply_motif_net_run_input_{input_id}")?;
+    debug_plot!(&out_plot, "apply_motif_net_run_input_motif_applied_{input_id}_{motif_id}")?;
 
     ThoTensor::new(out_id, out_t)
 }

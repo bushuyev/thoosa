@@ -376,7 +376,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                                     max_chunk_size,
                                     device_idx,
                                     find_and_select_run_find_ctx.branch(Some(format!("{grid_idx}_in_opt").as_str()), false, false)
-                                ).await
+                                )
                             })
                             .unwrap_or_else(|e| {
                                 warn!("FindAndSelectMotifsStage::run: failed run_config={run_config:?}: {e:?}");

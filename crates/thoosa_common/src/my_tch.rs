@@ -1031,7 +1031,7 @@ fn self_attention_forward_t(
     let scale = (head_dim as f64).sqrt();
     let mut scores = {
         let tensor = q.f_matmul(&k.f_transpose(-2, -1)?)?;
-        tensor.f_div_scalar(scale)?
+        panic_to_err!(tensor.f_div_scalar(scale))?
     };
     let key_mask_f = key_valid.f_unsqueeze(1)?.f_unsqueeze(2)?.f_to_kind(scores.kind())?;
     let ones = Tensor::f_ones(key_mask_f.size(), (scores.kind(), scores.device()))?;
