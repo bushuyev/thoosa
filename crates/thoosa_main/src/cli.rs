@@ -4,6 +4,7 @@ use crate::cli::Commands::{
 };
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
+use crate::progress_socket::CollectEtaProgressSocketServer;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::tensor_loader::RawTensorLoader;
@@ -310,6 +311,14 @@ where
         "info",
         perf_path,
     )?;
+
+    let _collect_eta_progress_server = match CollectEtaProgressSocketServer::start_default() {
+        Ok(server) => Some(server),
+        Err(err) => {
+            warn!("run_cli: failed to start collect ETA progress socket server: {err}");
+            None
+        }
+    };
 
     let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
 
