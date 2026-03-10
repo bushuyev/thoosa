@@ -279,7 +279,7 @@ where
                     |rc:&TrainMotifsNetsRunConfig|{
                         rc.common_training_args.cycles
                     },
-                    "motifs".to_string()
+                    format!("motif_{} ({:.4})", motif_id_rate.0, motif_id_rate.1)
                 ));
 
                 let result = Arc::into_inner(train_net.run(
