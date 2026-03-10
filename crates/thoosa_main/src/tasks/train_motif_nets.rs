@@ -360,7 +360,6 @@ where
     ) -> Result<Self, ThoError> {
         debug!("MotifsBatch::new: motif={motif:?}");
 
-
         let ctx_for_split = ctx.branch(Some("motifs_batch_split"), false, false);
         with_data!(ctx_for_split, motif; |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
             let motif_meta = motif.extra().clone();

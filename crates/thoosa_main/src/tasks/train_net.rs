@@ -305,12 +305,12 @@ where
                     let mut valid_loss_sum = 0f32;
                     let mut valid_loss_count = 0u32;
 
-                    while let Some(Ok((x_t_0, lengths, y_t))) = batches.next().await {
+                    while let Some(Ok((x_t_0, mut lengths, y_t))) = batches.next().await {
                         tch::no_grad(||{
 
                             let x_t = (train_step.x_f())(x_t_0);
 
-                            let mut lengths = lengths;
+
                             let pred_y = train_step.forward(&x_t, lengths.as_deref_mut(), false)?;
 
                             let valid_loss = (train_step.loss_fn())(&pred_y.as_ref(), &y_t.as_ref())?;
@@ -323,14 +323,11 @@ where
                     }
                     if valid_loss_count > 0 {
                         let valid_loss = valid_loss_sum / valid_loss_count as f32;
-                        if valid_loss < best_valid_loss - min_delta {
+                        if valid_loss < best_valid_loss - min_delta {//TODO min_delta to * coefficient
                             best_valid_loss = valid_loss;
                             bad_epochs = 0;
                             {
-                                let mut vs_guard = thoosa_shared::with_perf_log(
-                                    || vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                                    "TrainNet/run_inner/lock_vs",
-                                );
+                                let mut vs_guard = thoosa_shared::with_perf_log(|| vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "TrainNet/run_inner/lock_vs");
                                 vs_guard.save(&best_checkpoint_path)?;
                             }
                             saved_best = true;
