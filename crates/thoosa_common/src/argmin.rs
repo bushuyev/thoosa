@@ -482,32 +482,4 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_grad() -> Result<(), ThoError>{
-        let p_1 = ThoTensor::new((), Tensor::from_slice(&[10.]).set_requires_grad(true))?;
-
-        let t2 = ThoTensor::new((), p_1.pow_tensor_scalar(2))?;
-
-        t2.backward();
-
-        debug!("1. grad t1={:?} t1.grad={:?}", p_1, p_1.grad());
-
-        let t2 = p_1.pow_tensor_scalar(2);
-
-        t2.backward();
-
-        debug!("2. grad t1={:?} t1.grad={:?}", p_1, p_1.grad());
-
-        // let p_2:MyTensor = p_1.mul(&MyTensor(Tensor::from_slice(&[1., 2., 3.,]).set_requires_grad(true)));
-        let p_2 = tch::no_grad(|| p_1.mul(&0.1));
-        let _ = p_2.set_requires_grad(true);
-        let t2 = p_2.pow_tensor_scalar(2);
-
-        // p_2.zero_grad();
-        t2.backward();
-
-        debug!("3. grad t1={:?} t1.grad={:?}", p_2, p_2.grad());
-
-        Ok(())
-    }
 }

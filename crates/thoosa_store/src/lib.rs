@@ -195,7 +195,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         ThoError,
     >;
 
-    async fn list_random_motif_slices(
+    async fn list_random_slices_out_of_motif(
         &self,
         motif_id: u32,
         motif_width: u32,
@@ -354,7 +354,7 @@ mock! {
             ),
             ThoError,
         >;
-        async fn list_random_motif_slices(
+        async fn list_random_slices_out_of_motif(
             &self,
             motif_id: u32,
             motif_width: u32,
@@ -1830,7 +1830,7 @@ impl Store for SqlStore {
     }
 
     ///gpt generated, returns slices from same tensors and same channel as target motif but not belonging to the motif
-    async fn list_random_motif_slices(
+    async fn list_random_slices_out_of_motif(
         &self,
         motif_id: u32,
         motif_width: u32,
@@ -4066,7 +4066,7 @@ mod store_tests {
 
         const WIDTH: u32 = 40;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_motif_slices(motif_id, WIDTH, None, Arc::new(|length: u32| length)).await?;
+            store.list_random_slices_out_of_motif(motif_id, WIDTH, None, Arc::new(|length: u32| length)).await?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4122,7 +4122,7 @@ mod store_tests {
         const WIDTH: u32 = 50;
         const MIN_DISTANCE: u32 = 300;
         let (channel, run_id, random_slices, resources_map) =
-            store.list_random_motif_slices(motif_id, WIDTH, Some(MIN_DISTANCE), Arc::new(|length: u32| length)).await?;
+            store.list_random_slices_out_of_motif(motif_id, WIDTH, Some(MIN_DISTANCE), Arc::new(|length: u32| length)).await?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4167,7 +4167,7 @@ mod store_tests {
         const WIDTH: u32 = 40;
         let input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync> = Arc::new(|length: u32| (length - 100) / 5);
         let (channel, _, random_slices, resources_map) =
-            store.list_random_motif_slices(motif_id, WIDTH, None, Arc::clone(&input_len_adjuster)).await?;
+            store.list_random_slices_out_of_motif(motif_id, WIDTH, None, Arc::clone(&input_len_adjuster)).await?;
 
         assert_eq!(channel_id, channel);
         assert_eq!(random_slices.len(), 2);
@@ -4333,14 +4333,14 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_list_random_motif_slices(
+    pub fn with_list_random_slices_out_of_motif(
         mut self,
         motif_id: u32,
         motif_width: u32,
         min_distance: Option<u32>,
         r: Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>
     ) -> Self {
-        self.store.expect_list_random_motif_slices().returning(
+        self.store.expect_list_random_slices_out_of_motif().returning(
             move |p_motif_id, p_width, p_min_distance, _input_len_adjuster| {
                 if p_motif_id == motif_id && p_width == motif_width && p_min_distance == min_distance {
                     r.clone()

@@ -23,7 +23,6 @@ pub mod my_tch;
 mod opt;
 pub mod parzen;
 pub mod runs;
-pub mod simp;
 pub mod tho_tensor;
 pub mod train_nets;
 pub mod transforms;
