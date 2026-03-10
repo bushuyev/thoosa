@@ -1039,15 +1039,7 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
     (0..n).map(|x| x as f32)
 }
 
-use crate::dims::ThoBatch;
 use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
-
-//TODO remove?
-pub trait DataBatch<D: Dims> {
-    /// returns (inputs, labels)
-    fn train_batch(&self) -> (ThoBatch<D>, Tensor);
-    fn valid_batch(&self) -> (ThoBatch<D>, Tensor);
-}
 
 
 pub trait TrainListener: Send + Sync {
@@ -1324,23 +1316,6 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
         Some(builder)
     )))
 
-}
-
-
-pub fn motif_test_net(
-    motif_width: u32,
-    k: f64,
-    device: Device,
-) -> (
-    Box<dyn Fn() -> MotifNetParams + Sync + Send>,
-    Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
-) {
-    (
-        Box::new(move || MotifNetParams::new(motif_width, 1, 1, 100, 32, 10)),
-        Box::new(move || {
-            *test_net(motif_width, k, device, "test_motif_net").unwrap()
-        }),
-    )
 }
 
 pub fn assert_close<A:Into<f64> + Display, B:Into<f64> + Display>(val_a: A, val_b: B, max_diff: f64) {

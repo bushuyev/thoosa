@@ -27,8 +27,8 @@ use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
-use thoosa_common::train_nets::{opt_train, MotifNetParams, MotifNetTypeArgs, MotifsBy, OptConfig, TensorsDataBatch, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields};
-use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, to_vec_f32, DataBatch, DummyListener};
+use thoosa_common::train_nets::{opt_train, MotifNetParams, MotifNetTypeArgs, MotifsBy, OptConfig, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields};
+use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, to_vec_f32, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_run_config_args::OptRunConfigSource;
@@ -265,7 +265,7 @@ where
                     |pred_y: &Tensor, target: &Tensor| {
 
                         // let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean).set_requires_grad(true);
-                        let loss = pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.totype(Float), None, None, Reduction::Mean)?.f_set_requires_grad(true)?;
+                        let loss = pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.totype(Float), None, None, Reduction::Mean)?;
                         debug!("TrainMotifNets::run, loss_fn: pred_y ={pred_y} target={target} loss={loss}");
 
                         Ok(loss)
@@ -279,7 +279,7 @@ where
                     |rc:&TrainMotifsNetsRunConfig|{
                         rc.common_training_args.cycles
                     },
-                    format!("motif_{} ({:.4})", motif_id_rate.0, motif_id_rate.1)
+                    format!("motif_{}", motif_id_rate.0)
                 ));
 
                 let result = Arc::into_inner(train_net.run(
@@ -336,7 +336,7 @@ where
     valid_motifs:Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>,
     
     random_slices_loader: Arc<RandomSlicesLoader<L, C>>,
-    random_slices: Mutex<CurrentRandomSlices>,
+    random_slices: Mutex<CurrentRandomSlices>,//TODO this is unreachable for dumping to CPU
     random_slices_limit: u32,
     motif_meta:MotifMeta,
     device_idx:usize,
@@ -582,7 +582,7 @@ mod tests {
                 .with_list_motif_slices(motif_id, Some(vec![select_motifs_run_id]), None, None, Ok((0i64, find_motifs_run_id, motif_intervals, resources_id_map.clone()
 
                 )))
-                .with_list_random_motif_slices(motif_id, motif_width as u32, None, Ok((0i64, find_motifs_run_id, (0..10).flat_map(|i|vec![
+                .with_list_random_slices_out_of_motif(motif_id, motif_width as u32, None, Ok((0i64, find_motifs_run_id, (0..10).flat_map(|i|vec![
                     TensorIdSliceIdx(i, 100),
                     TensorIdSliceIdx(i, 300),
                     TensorIdSliceIdx(i, 500)

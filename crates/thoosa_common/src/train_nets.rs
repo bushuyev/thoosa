@@ -10,7 +10,7 @@ use crate::my_tch::{BinaryHeadPool, ThoModule};
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
 use crate::utils::{mask_from_lengths, masked_max, masked_mean, tensor_mem_size};
-use crate::utils::{pad_to, plot_series, DataBatch, ListenerResponse, TrainListener};
+use crate::utils::{pad_to, plot_series, ListenerResponse, TrainListener};
 use crate::ws::Workspace;
 use clap::clap_derive::Args;
 use thoosa_shared::{mono_key, panic_to_err_async, CopyToDevice};
@@ -1869,121 +1869,6 @@ pub fn slices_in_all_resources<ResourceId>(slices: Vec<(ResourceId, Vec<Tensor>)
         .collect::<Vec<Tensor>>()
 }
 
-#[derive(Debug)]
-pub struct TensorsDataBatch<D: Dims> {
-    train: Vec<Vec<Tensor>>, //index - class
-    val: Vec<Vec<Tensor>>,
-    batch_size: u32,
-    device: Device,
-    _pd: PhantomData<D>,
-}
-
-impl<D: Dims> TensorsDataBatch<D> {
-    pub fn new(
-        classes_tensors: Vec<Vec<Tensor>>,
-        batch_size: u32,
-        train_valid_split: f32,
-        device: Device,
-    ) -> Self {
-        let classes_len = classes_tensors.len();
-        assert!(classes_len > 0);
-        // assert!(batch_size % classes_len == 0);
-
-        let (train, val) = split_train_val(classes_tensors, train_valid_split);
-
-        Self {
-            train,
-            val,
-            batch_size,
-            device,
-            _pd: PhantomData,
-        }
-    }
-
-    fn choose_for_batch(
-        class_tensors: &Vec<Vec<Tensor>>,
-        batch_size: u32,
-        device: &Device,
-    ) -> (ThoBatch<D>, Tensor) {
-        let mut rng = rand::rng();
-
-        let per_class_len = batch_size / class_tensors.len() as u32; //TODO make balanced
-        debug!(
-            "TensorsDataBatch::choose_for_batch: class_tensors={} per_class_len={per_class_len}",
-            class_tensors.len()
-        );
-
-        let mut x_y_vecs =
-            class_tensors
-                .iter()
-                .enumerate()
-                .fold(vec![], |mut x_y_acc, (class, tensors)| {
-                    assert!(
-                        tensors.len() > 0,
-                        "no tensors for class={class} in ClassTensorsDataBatch"
-                    );
-
-                    tensors
-                        .sample(&mut rng, per_class_len as usize)
-                        .for_each(|t| {
-                            x_y_acc.push((t.shallow_clone(), class as i64));
-                        });
-
-                    x_y_acc
-                });
-
-        x_y_vecs.shuffle(&mut rng);
-
-        debug!(
-            "TensorsDataBatch::choose_for_batch: x_y_vecs.1.len()={} batch_size={batch_size}",
-            x_y_vecs.len()
-        );
-        assert!(x_y_vecs.len() > 0);
-
-        //TODO throw if not enough tensors for batch?
-        (x_y_vecs.len()..batch_size as usize).for_each(|i| {
-            x_y_vecs.push((
-                x_y_vecs[i - x_y_vecs.len()].0.shallow_clone(),
-                x_y_vecs[i - x_y_vecs.len()].1,
-            ));
-        });
-
-        let classes =
-            Tensor::from_slice(x_y_vecs.iter().map(|e| e.1).collect::<Vec<_>>().as_slice())
-                .to_device(*device);
-
-        let tensor = Tensor::stack(
-            x_y_vecs
-                .into_iter()
-                .map(|e| e.0)
-                .collect::<Vec<_>>()
-                .as_slice(),
-            0,
-        )
-        .view((batch_size as i64, -1))
-        .to_device(*device)
-        .set_requires_grad(true);
-
-        debug!(
-            "TensorsDataBatch::choose_for_batch: tensor.size()={:?} tensor.device()={:?}",
-            tensor.size(),
-            tensor.device()
-        );
-
-        (tensor.into(), classes)
-    }
-}
-
-impl<D: Dims> DataBatch<D> for TensorsDataBatch<D> {
-    fn train_batch(&self) -> (ThoBatch<D>, Tensor) {
-        Self::choose_for_batch(&self.train, self.batch_size, &self.device)
-    }
-
-    fn valid_batch(&self) -> (ThoBatch<D>, Tensor) {
-        Self::choose_for_batch(&self.val, self.batch_size, &self.device)
-    }
-}
-
 fn split_train_val<T>(
     classes_tensors: Vec<Vec<T>>,
     train_valid_split: f32,
@@ -2339,16 +2224,15 @@ mod train_tests {
     use crate::find_motifs_run_config::FindMotifsRunConfig;
     use crate::loader::{LoadRunner, OfMemSize, SyncWrapper};
     use crate::my_tch::ThoModule;
-    use crate::simp::DummyDs;
     use crate::tho_tensor::ThoTensor;
     use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, LinNetArgs, ConvNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint};
     use crate::train_nets::{
-        InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore,
+        InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, ThoModuleWithStore,
     };
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use crate::utils::{cuda_mem, from, optimizer_mem_size, pad_stack_with_mask, set_requires_grad_in_subpath, vs_mem_size, TrainListener};
     use crate::utils::{
-        lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size, DataBatch,
+        lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size,
     };
     use crate::ws::mock_ws_simp;
     use crate::ws::{FsWorkspace, Workspace, WsMockBuilder, NET_WEIGHTS_FILE};
@@ -2399,70 +2283,6 @@ mod train_tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-    #[test]
-    fn test_class_tensors_data_batch() -> Result<(), ThoError> {
-        let mut batch: TensorsDataBatch<AnyDims> = TensorsDataBatch::new(
-            vec![
-                vec![
-                    Tensor::from_slice(&[0., 0., 0.]),
-                    Tensor::from_slice(&[0., 0., 1.]),
-                    Tensor::from_slice(&[0., 0., 2.]),
-                    Tensor::from_slice(&[0., 1., 0.]),
-                    Tensor::from_slice(&[0., 1., 1.]),
-                    Tensor::from_slice(&[0., 1., 2.]),
-                    Tensor::from_slice(&[0., 2., 0.]),
-                    Tensor::from_slice(&[0., 2., 1.]),
-                    Tensor::from_slice(&[0., 2., 2.]),
-                    Tensor::from_slice(&[0., 3., 0.]),
-                    Tensor::from_slice(&[0., 3., 1.]),
-                    Tensor::from_slice(&[0., 3., 2.]),
-                ],
-                vec![
-                    Tensor::from_slice(&[1., 0., 0.]),
-                    Tensor::from_slice(&[1., 0., 1.]),
-                    Tensor::from_slice(&[1., 0., 2.]),
-                    Tensor::from_slice(&[1., 1., 0.]),
-                    Tensor::from_slice(&[1., 1., 1.]),
-                    Tensor::from_slice(&[1., 1., 2.]),
-                    Tensor::from_slice(&[1., 2., 0.]),
-                    Tensor::from_slice(&[1., 2., 1.]),
-                    Tensor::from_slice(&[1., 2., 2.]),
-                    Tensor::from_slice(&[1., 3., 0.]),
-                    Tensor::from_slice(&[1., 3., 1.]),
-                    Tensor::from_slice(&[1., 3., 2.]),
-                ],
-            ],
-            10,
-            0.5,
-            Cpu,
-        );
-
-        let train_batch = batch.train_batch();
-
-        debug!(
-            "train_batch: x={:?}",
-            from::<Vec<f32>>(&train_batch.0.as_ref().i((.., 0)))
-        );
-        debug!("train_batch: y={:?}", from::<Vec<f32>>(&train_batch.1));
-
-        assert_eq!(
-            from::<Vec<f32>>(&train_batch.0.as_ref().i((.., 0))),
-            from::<Vec<f32>>(&train_batch.1)
-        );
-
-        // debug!("train_batch: x={:?}, y={:?}", train_batch.0.size(), train_batch.1.size());
-
-        assert_eq!(10, train_batch.0.size()[0]);
-        assert_eq!(5, train_batch.1.iter::<i64>()?.filter(|v| *v == 1).count());
-        assert_eq!(5, train_batch.1.iter::<i64>()?.filter(|v| *v == 0).count());
-
-        let valid_batch = batch.valid_batch();
-        assert_eq!(10, valid_batch.0.size()[0]);
-        assert_eq!(5, valid_batch.1.iter::<i64>()?.filter(|v| *v == 1).count());
-        assert_eq!(5, valid_batch.1.iter::<i64>()?.filter(|v| *v == 0).count());
-
-        Ok(())
-    }
 
 
     #[test]

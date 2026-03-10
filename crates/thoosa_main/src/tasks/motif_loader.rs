@@ -28,7 +28,7 @@ use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_with_data::with_data;
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, MotifSlices};
+use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, ChannelsMotifsSlices, MotifSlices};
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
@@ -286,7 +286,7 @@ where
 
         let motif_id_value = motif_id.clone().0;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
-        let (channel, find_motifs_run_id, slices, resources_map) = self.store.list_random_motif_slices(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster).await?;
+        let (channel, find_motifs_run_id, slices, resources_map) = self.store.list_random_slices_out_of_motif(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster).await?;
 
         let cache_area = ctx.cache_area().into();
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "random loader").await?;
@@ -328,7 +328,6 @@ where
 
     let resource_ids_slices = slices
         .iter()
-        // .take(100)//TODO input/config
         .fold(HashMap::new(), |mut a, slice| {
             a.entry(slice.0.clone()) //TODO clone
                 .or_insert_with(|| vec![])
@@ -382,7 +381,7 @@ where
 
 
     }
-
+    //chop if there were skipped slices
     with_data!(ctx.branch(Some(&format!("motif")), false, false), motif_t; |_ctx, motif_tt:&ThoTensor::<MotifSlices, DataId>|{
         ThoTensor::new(motif_tt.id().clone(), motif_tt.t.f_i((0..slice_i, ..))?)
     }).map(|v|(window, v))
@@ -399,7 +398,7 @@ pub(crate) async fn load_motif_slices_<L, C>(
     mut ctx: C,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     descr: &str
-) -> Result<(u32, ThoTensor<AnyDims, DataId>), ThoError>
+) -> Result<(u32, ThoTensor<ChannelsMotifsSlices, DataId>), ThoError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
@@ -470,7 +469,7 @@ where
             Ok::<_, ThoError>(())
         })?;
     }
-
+    //chop if there were skipped slices
     with_data!(ctx.branch(Some("motif_"), false, false), motif_t; |_ctx, motif_tt:&ThoTensor<AnyDims, DataId>|{
         ThoTensor::new(motif_tt.id().clone(), motif_tt.t.f_i((.., 0..slice_i, ..))?)
     }).map(|v| (window, v))
@@ -707,7 +706,7 @@ mod tests {
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
         let resource_b = Resource::new(2, 1, "tensor_b", 1000);
         let mut store = MockStoreBuilder::new()
-            .with_list_random_motif_slices(motif_id, motif_width, None, Ok((0i64, run_id, vec![
+            .with_list_random_slices_out_of_motif(motif_id, motif_width, None, Ok((0i64, run_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
                 TensorIdSliceIdx(2, 100)
