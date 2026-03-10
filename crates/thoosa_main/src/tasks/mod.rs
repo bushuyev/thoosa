@@ -8,7 +8,6 @@ pub mod slices_iter;
 pub mod tensor_loader;
 pub mod motif_loader;
 pub mod random_slices_stats;
-pub mod random_motif;
 pub mod welch_psd;
 pub mod slices_stats;
 pub mod motif_stats;
