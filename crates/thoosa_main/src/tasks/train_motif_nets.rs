@@ -582,7 +582,7 @@ mod tests {
                 .with_list_motif_slices(motif_id, Some(vec![select_motifs_run_id]), None, None, Ok((0i64, find_motifs_run_id, motif_intervals, resources_id_map.clone()
 
                 )))
-                .with_list_random_motif_slices(motif_id, motif_width as u32, None, Ok((0i64, find_motifs_run_id, (0..10).flat_map(|i|vec![
+                .with_list_random_slices_out_of_motif(motif_id, motif_width as u32, None, Ok((0i64, find_motifs_run_id, (0..10).flat_map(|i|vec![
                     TensorIdSliceIdx(i, 100),
                     TensorIdSliceIdx(i, 300),
                     TensorIdSliceIdx(i, 500)

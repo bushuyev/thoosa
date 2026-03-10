@@ -1217,7 +1217,7 @@ mod tests {
                     None,
                     Ok((0i64, find_motifs_run_id, motif_slices, motif_resources_by_id.clone())),
                 )
-                .with_list_random_motif_slices(
+                .with_list_random_slices_out_of_motif(
                     motif_id,
                     motif_width,
                     None,
