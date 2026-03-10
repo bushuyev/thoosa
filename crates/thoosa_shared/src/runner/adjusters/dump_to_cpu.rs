@@ -1,6 +1,6 @@
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
-use log::debug;
+use log::{debug, warn};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -115,7 +115,10 @@ where
         let ids_to_exclude = adjust_context.ids_to_exclude();
         GlobalCtx::global()
             .dump_all_to_cpu(ids_to_exclude, device_idx)
-            .await.unwrap();
+            .await.map_err(|e|{
+            warn!("DumpToCpu::adjust: dump_all_to_cpu failed: {e:?}");
+            AdjusterError::<A>::SomethingElse
+        })?;
 
         *adjust_context.dump_to_cpu_retry_count_mut() = 10001;//TODO to force false from degrade and proceed to next adjuster
         // adjustable.write().drop_permits(DropIf::Always);

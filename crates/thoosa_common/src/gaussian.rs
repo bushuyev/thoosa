@@ -283,21 +283,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_xxx() {
-        let x = Tensor::from(2.0).set_requires_grad(true);
-        let a = x.pow_tensor_scalar(2).f_set_requires_grad(true).unwrap();
-        let b = x.pow_tensor_scalar(3).f_set_requires_grad(true).unwrap();
-
-        let q = &a + &b;
-
-        q.backward();
-
-        debug!(
-            "x.grad={} a.grad={} b.grad={}",
-            x.grad(),
-            a.grad(),
-            b.grad()
-        );
-    }
 }

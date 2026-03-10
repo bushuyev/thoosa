@@ -14,7 +14,6 @@ use tch::{Device, Kind, Tensor};
 
 use thoosa_common::dims::{Batch, ChannelsData};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::utils::DataBatch;
 use thoosa_main::data::{AllTrainSplitter, Set, Splitter, parquet_to_tensor_by_path};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
@@ -784,27 +783,6 @@ impl EEGs {
         )
     }
 }
-
-impl DataBatch<ChannelsData> for EEGs {
-    fn train_batch(
-        &self,
-    ) -> (
-        ThoTensor<Batch<ChannelsData>, SimpleId>,
-        Tensor,
-    ) {
-        Self::random_subset(self.batch_size, &self.train_set)
-    }
-
-    fn valid_batch(
-        &self,
-    ) -> (
-        ThoTensor<Batch<ChannelsData>, SimpleId>,
-        Tensor,
-    ) {
-        Self::random_subset(self.batch_size, &self.valid_set)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(unused_imports, dead_code, unused_variables)]
