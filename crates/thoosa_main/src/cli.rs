@@ -535,7 +535,6 @@ where
                 input_wrapper,
                 &ws,
                 &store,
-                true,
                 async |run_configs| {
 
                     Ok(Arc::new(TrainMotifNets::<_, RunCtxWithPermits>::new(
@@ -573,7 +572,6 @@ where
                 input_wrapper,
                 &ws,
                 &store,
-                true,
                 async |run_configs| {
 
                     new_train_label_nets(
@@ -615,7 +613,6 @@ where
                 input_wrapper,
                 &ws,
                 &store,
-                true,
                 async |run_configs| {
 
                     new_train_final_net(
@@ -794,7 +791,6 @@ async fn run_all(
         find_and_select_input,
         &ws,
         &store,
-        false,
         async |run_configs| {
             Ok(Arc::new(FindAndSelectMotifsStage::new(
                 Arc::clone(&loader),
@@ -927,7 +923,6 @@ async fn run_all(
         input_wrapper,
         &ws,
         &store,
-        true,
         async |run_configs| {
             Ok(Arc::new(TrainMotifNets::<_, RunCtxWithPermits>::new(
                 Arc::clone(&loader),
@@ -960,7 +955,6 @@ async fn run_all(
         train_labels_input,
         &ws,
         &store,
-        true,
         async move |run_configs| {
             new_train_label_nets(
                 train_motif_nets_run_ids,
@@ -997,7 +991,6 @@ async fn run_all(
         train_final_input,
         &ws,
         &store,
-        true,
         async move |run_configs| {
             new_train_final_net(
                 train_label_nets_run_ids,
@@ -1958,145 +1951,6 @@ where
     Ok(())
 }
 
-pub async fn run_opt_step<RC, RCRV, CC, R, ST>(
-    input_run_ids: Option<Vec<RunId>>,
-    rcrv: RCRV,
-    common_config: &CC,
-    resource_config: &R,
-    opt_step: ST,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn Store>>,
-    loader: &Arc<RwLock<LoadRunner<Tensor>>>,
-    devices: Vec<Device>,
-    _descr: &str,
-) -> Result<Vec<RunId>, ThoError>
-where
-    ST: FnOnce(
-        Option<&Vec<RunId>>,
-        OptRunConfigs<
-            Vec<NamedVal<<RCRV as OptRunConfigSource>::P>>,
-            Vec<NamedRange<<RCRV as OptRunConfigSource>::P>>,
-            Vec<Hyperparameter<<RCRV as OptRunConfigSource>::P>>,
-            <RCRV as OptRunConfigSource>::P,
-        >,
-        &CC,
-        &R,
-        &Arc<RwLock<Box<dyn Workspace>>>,
-        &Arc<Box<dyn Store>>,
-        &Arc<RwLock<LoadRunner<Tensor>>>,
-        Vec<Device>,
-    ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoError>, //TODO remove Option & Vec
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>> + ToHashmap,
-    RCRV: OptRunConfigSource,
-    R: ResourcesConfig,
-{
-    let opt_run_configs_opt = opt_step(
-        input_run_ids.as_ref(),
-        rcrv.opt_run_configs()?,
-        common_config,
-        resource_config,
-        ws,
-        store,
-        loader,
-        devices,
-    )?;
-
-    if let Some(opt_run_configs) = opt_run_configs_opt {
-        debug!(
-            "run_step: saving opt_run_configs.len={}",
-            opt_run_configs.len()
-        );
-        let mut opt_run_config_ids = vec![];
-        for mut opt_run_config in opt_run_configs {
-            debug!("run_step: saving opt_run_config={opt_run_config:?}");
-
-            let opt_run_config_id = opt_run_config.save(store, ws).await?;
-
-            opt_run_config_ids.push(opt_run_config_id);
-        }
-        Ok(opt_run_config_ids)
-    } else {
-        panic!("todo")
-    }
-}
-
-
-pub async fn run_all_grid_step<RC, RCRV, R, FC, ST>(
-    input_run_ids: Option<Vec<RunId>>,
-    rcrv: RCRV,
-    fixed_config: &FC,
-    resource_config: &R,
-    grid_step: ST,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn Store>>,
-    loader: &Arc<RwLock<LoadRunner<Tensor>>>,
-    devices: Vec<Device>,
-    _descr: &str,
-    presave: bool,
-) -> Result<Vec<RunId>, ThoError>
-where
-    ST: FnOnce(
-        Option<&Vec<RunId>>,
-        Vec<RC>,
-        &R,
-        &FC,
-        &Arc<RwLock<Box<dyn Workspace>>>,
-        &Arc<Box<dyn Store>>,
-        &Arc<RwLock<LoadRunner<Tensor>>>,
-        Vec<Device>,
-    ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoError>,
-    RC: RunConfig
-        + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
-        + thoosa_properties_map::ToHashmap,
-    RCRV: GridRunConfigSource,
-    R: ResourcesConfig,
-{
-    let grid_run_configs = rcrv.grid_run_configs()?;
-    debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
-
-    let mut run_configs: Vec<RC> = grid_run_configs.to_run_configs();
-    if presave {
-        save_run_configs(
-            input_run_ids.as_ref().map(|v| v.as_slice()),
-            &store,
-            &mut run_configs,
-            "find motifs",
-        ).await?;
-    }
-    // let run_config_ids = save_run_configs(input_run_ids.as_ref().map(|v|v.as_slice()), &store, &mut run_configs, "find motifs");
-
-    debug!("FindMotifs2: run_configs={run_configs:?}");
-
-    let opt_run_configs_opt = grid_step(
-        input_run_ids.as_ref(),
-        run_configs,
-        resource_config,
-        fixed_config,
-        ws,
-        store,
-        loader,
-        devices,
-    )?;
-
-    if let Some(opt_run_configs) = opt_run_configs_opt {
-        debug!(
-            "run_step: saving opt_run_configs.len={}",
-            opt_run_configs.len()
-        );
-        let mut opt_run_config_ids = vec![];
-        for mut opt_run_config in opt_run_configs {
-            debug!("run_step: saving opt_run_config={opt_run_config:?}");
-
-            let opt_run_config_id = opt_run_config.save(store, ws).await?;
-
-            opt_run_config_ids.push(opt_run_config_id);
-        }
-        Ok(opt_run_config_ids)
-    } else {
-        panic!("todo")
-    }
-}
-
 pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
 
     input_run_ids: Option<Vec<RunId>>,
@@ -2152,15 +2006,12 @@ where
     Ok(run_ids)
 }
 
-pub async fn run_opt</*ResConf, */RCRV, F, RC, ST, CtxF>(
-
+pub async fn run_opt<RCRV, F, RC, ST, CtxF>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
-    // fixed_config: FC,
     input: Arc<DevicesWrap<ST::In<'static>>>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
-    presave: bool,
     init_stage: F,
     ctx_f: CtxF,
 ) -> Result<Vec<RunId>, ThoError>
@@ -2171,10 +2022,10 @@ where
         Vec<Hyperparameter<<RCRV as OptRunConfigSource>::P>>,
         <RCRV as OptRunConfigSource>::P,
     >) -> Result<Arc<ST>, ThoError>,
-    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn Store>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
+    ST: Stage + AsyncStage + Send + Sync,
     RC: RunConfig
     + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
-    + thoosa_properties_map::ToHashmap,
+    + ToHashmap,
     RCRV: OptRunConfigSource,
     for<'c> <ST as Stage>::In<'c>: Data + WithId + Send + Sync,
     for<'c> <<ST as Stage>::In<'c> as Data>::M: DevicesWrapCopyMode<<ST as Stage>::In<'c>>,
@@ -2185,8 +2036,7 @@ where
     let opt_run_configs = rcrv.opt_run_configs()?;
     debug!("run_all_grid_step: run_opt={opt_run_configs:?}");
 
-    // let mut run_configs: Vec<RC> = opt_run_configs.to_run_configs();
-    //gpt TODO!! presave flag is currently unused in run_opt; run_ids always come from the stage output.
+
     let stage = init_stage(opt_run_configs).await?;
 
     //gpt TODO!! Arc::into_inner will panic if the output Arc has multiple owners; consider a fallible path or cloning the inner data.
@@ -2194,9 +2044,7 @@ where
 
     let run_id = savable.save(store, ws).await?;
 
-
     Ok(vec![run_id])//TODO
-
 }
 
 async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
@@ -2295,7 +2143,7 @@ where
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, import_resources_with_pure_sets, run_all, run_all_config_0, run_all_config_test_1, run_all_grid_step, run_grid, run_opt_step, run_plot, Cli, RunAllArgs};
+    use crate::cli::{import_resources, import_resources_with_pure_sets, run_all, run_all_config_0, run_all_config_test_1, run_grid, run_plot, Cli, RunAllArgs};
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Info, Trace, Warn};

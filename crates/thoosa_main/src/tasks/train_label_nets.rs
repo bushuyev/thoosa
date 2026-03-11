@@ -444,6 +444,7 @@ where
                         |rc:&TrainLabelNetsRunConfig|{
                             rc.common_training_args.cycles
                         },
+                        1,
                         format!("label_{label_}")
                     ));
 

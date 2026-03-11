@@ -141,6 +141,7 @@ where
     optimizer:FO,
     x_f:XF,
     epochs:FC,
+    validation_step: u32,
     descr:String,
     pd:PhantomData<(C, DX, DY, BF, P, RC)>
 }
@@ -178,8 +179,8 @@ where
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
-    pub fn new(batch:BF, net:NF, opt_config:Arc<OptConfig>, run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >, loss_fn:LossFp, optimizer:FO, x_f:XF, cycles:FC, descr: String) -> Self {
-        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, epochs: cycles, descr }
+    pub fn new(batch:BF, net:NF, opt_config:Arc<OptConfig>, run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >, loss_fn:LossFp, optimizer:FO, x_f:XF, cycles:FC, validation_step: u32, descr: String) -> Self {
+        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, epochs: cycles, validation_step, descr }
     }
 
     fn run_inner(
@@ -188,6 +189,7 @@ where
         device_idx: usize,
         vs: Arc<Mutex<VarStore>>,
         run_config: RC,
+        validation_step: u32,
         descr:String
     ) -> BoxFuture<'static, Result<(f32, NP), ThoError>> {
         debug!("TrainNet::run_inner: descr={descr}");
@@ -231,7 +233,6 @@ where
         let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
 
 
-        let validation_step = 1;//TODO config
 
         let mut bad_epochs = 0u32;
         let patience = run_config.as_ref().patience;
@@ -414,6 +415,7 @@ where
             let device_idx_for_train = device_idx;
 
             let descr = self.descr.clone();
+            let validation_step = self.validation_step;
             let (var_store, node_params, run_config, loss) = opt_train::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),
                 move |vs: Arc<Mutex<VarStore>>, run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
@@ -421,7 +423,14 @@ where
 
                     let self_arc = Arc::clone(&self_for_train);
 
-                    self_arc.run_inner(ctx.branch(/*TODO impl WithId for RunConfigs*/Some(&format!("train on run_config={run_config:?}")), false, false), device_idx_for_train, vs, run_config, descr.clone())
+                    self_arc.run_inner(
+                        ctx.branch(/*TODO impl WithId for RunConfigs*/Some(&format!("train on run_config={run_config:?}")), false, false),
+                        device_idx_for_train,
+                        vs,
+                        run_config,
+                        validation_step,
+                        descr.clone()
+                    )
                 },
                 run_config_source,
                 ThoDevice::from(device_idx).into(),
@@ -813,7 +822,7 @@ mod tests {
         X_F_CALLS.store(0, Ordering::SeqCst);
         LOSS_FN_CALLS.store(0, Ordering::SeqCst);
 
-        // Avoid double-init panics if other tests already set the global context.
+
         GlobalCtx::init_devices(2);
 
         let net_fn = |_rc: &DummyRunConfig, vs: &VarStore| {
@@ -872,6 +881,7 @@ mod tests {
                 optimizer,
                 mock_x_f,
                 cycles,
+                10,
                 "n/a".to_string(),
             ),
         );
