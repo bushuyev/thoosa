@@ -296,16 +296,13 @@ impl std::fmt::Display for SingleFieldFields {
 }
 impl thoosa_shared::hyperparameter::FieldName for SingleFieldFields {}
 impl SingleFieldRangeOrValue {
-    pub fn fill_run_configs<T: thoosa_shared::hyperparameter::FieldName, F>(
+    fn fill_run_configs_dyn<T: thoosa_shared::hyperparameter::FieldName>(
         &self,
-        append: F,
+        append: &dyn Fn(SingleFieldFields) -> T,
         const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>,
         grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>,
         opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>,
-    )
-    where
-        F: Fn(SingleFieldFields) -> T,
-    {
+    ) {
         thoosa_shared::add_range_or_value::<
             i32,
             T,
@@ -316,6 +313,18 @@ impl SingleFieldRangeOrValue {
             grid_params,
             opt_params,
         );
+    }
+    pub fn fill_run_configs<T: thoosa_shared::hyperparameter::FieldName, F>(
+        &self,
+        append: F,
+        const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>,
+        grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>,
+        opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>,
+    )
+    where
+        F: Fn(SingleFieldFields) -> T,
+    {
+        self.fill_run_configs_dyn(&append, const_params, grid_params, opt_params);
     }
 }
 impl thoosa_run_config_args::OptRunConfigSource for SingleFieldRangeOrValue {

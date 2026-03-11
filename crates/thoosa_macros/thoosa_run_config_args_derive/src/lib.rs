@@ -691,8 +691,26 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                 Vec(Vec<#range_or_value_struct_ident>),
             });
             token_streams.range_or_value_add_calls.push(quote! {
-                #range_or_value_struct_ident::Vec(_variants) => {
-                    todo!("grid search over enum variants is not implemented yet")
+                #range_or_value_struct_ident::Vec(variants) => {
+                    let variant_value_sets = variants.iter().flat_map(|variant| {
+                        let mut variant_const_params = Vec::new();
+                        let mut variant_grid_params = Vec::new();
+                        let mut variant_opt_params = Vec::new();
+
+                        variant.fill_run_configs_dyn(append, &mut variant_const_params, &mut variant_grid_params, &mut variant_opt_params);
+                        assert!(variant_opt_params.is_empty(), "opt params inside enum variant grid search are not supported");
+
+                        thoosa_shared::make_combos(variant_grid_params.iter().map(|gp| gp.value_sets().into_iter()))
+                            .into_iter()
+                            .map(|combo| {
+                                let mut vals = variant_const_params.clone();
+                                vals.extend(combo.into_iter().flatten());
+                                vals
+                            })
+                            .collect::<Vec<_>>()
+                    }).collect::<Vec<_>>();
+
+                    grid_params.push(thoosa_shared::val::NamedRange::from_value_sets(variant_value_sets));
                 }
             });
 
@@ -922,10 +940,14 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
         impl thoosa_shared::hyperparameter::FieldName for #fields_enum_ident {}
 
         impl #range_or_value_struct_ident {
+            fn fill_run_configs_dyn<T:thoosa_shared::hyperparameter::FieldName>(&self, append: &dyn Fn(#fields_enum_ident)->T, const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>) {
+                #range_or_value_add_calls
+            }
+
             pub fn fill_run_configs<T:thoosa_shared::hyperparameter::FieldName, F>(&self, append: F, const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>)
                 where F:Fn(#fields_enum_ident)->T{
 
-                #range_or_value_add_calls
+                self.fill_run_configs_dyn(&append, const_params, grid_params, opt_params);
             }
 
         }

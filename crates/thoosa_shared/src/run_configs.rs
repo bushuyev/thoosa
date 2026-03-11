@@ -39,7 +39,10 @@ impl<T: FieldName> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
     }
 
     pub fn grid_to_vals(&self) -> Vec<Vec<NamedVal<T>>> {
-        make_combos(self.grid_params.iter().map(|gp| gp.clone().into_iter()))
+        make_combos(self.grid_params.iter().map(|gp| gp.value_sets().into_iter()))
+            .into_iter()
+            .map(|combo| combo.into_iter().flatten().collect())
+            .collect()
     }
 
     pub fn to_run_configs<R>(&self) -> Vec<R>
