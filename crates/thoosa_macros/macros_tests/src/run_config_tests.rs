@@ -72,9 +72,18 @@ fn test_cat_range() -> Result<(), ThoError>{
         cat_field: CatEnumRangeOrValue::One(OneRangeOrValue {})
     };
 
+    let enum_variants = CatEnumRangeOrValue::Vec(vec![
+        CatEnumRangeOrValue::One(OneRangeOrValue {}),
+        CatEnumRangeOrValue::Two(TwoRangeOrValue {}),
+    ]);
+    let CatEnumRangeOrValue::Vec(enum_variants) = enum_variants else {
+        unreachable!()
+    };
+    assert_eq!(enum_variants.len(), 2);
+
 
     let opt_configs = test_config.opt_run_configs()?;
-    let grid_vals = opt_configs.grid_to_vals();
+    let _grid_vals = opt_configs.grid_to_vals();
 
     let opt_params = opt_configs.opt_params();
 

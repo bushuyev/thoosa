@@ -687,6 +687,15 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                 }
             }
 
+            token_streams.range_or_value_fields.push(quote! {
+                Vec(Vec<#range_or_value_struct_ident>),
+            });
+            token_streams.range_or_value_add_calls.push(quote! {
+                #range_or_value_struct_ident::Vec(_variants) => {
+                    todo!("grid search over enum variants is not implemented yet")
+                }
+            });
+
             if let Some(err) = default_variant_error {
                 return err.to_compile_error().into();
             }
@@ -970,5 +979,21 @@ mod tests {
         assert!(output.contains("B__Selected"));
         assert!(output.contains("added_any"));
         assert!(output.contains("Val :: Bool"));
+    }
+
+    #[test]
+    fn emits_recursive_vec_variant_for_enum_range_or_value() {
+        let input = quote! {
+            pub enum Choice {
+                A(EmptyConfig),
+                B(EmptyConfig),
+            }
+        };
+
+        let ast = syn::parse2::<syn::DeriveInput>(input).expect("derive input");
+        let output = thoosa_args_derive_impl(ast).to_string();
+        let normalized = output.split_whitespace().collect::<String>();
+
+        assert!(normalized.contains("Vec(Vec<ChoiceRangeOrValue>)"));
     }
 }
