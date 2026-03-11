@@ -5178,6 +5178,7 @@ dependencies = [
  "thoosa_shared",
  "tokio",
  "tokio-rusqlite",
+ "tracing",
  "zstd 0.13.3",
 ]
 

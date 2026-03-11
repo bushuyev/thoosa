@@ -676,7 +676,7 @@ where
             let t1 = Instant::now();
 
             panic_to_err!({
-                opt.backward_step(&loss);
+                opt.backward_step(&loss.set_requires_grad(true));
                 Ok::<_, ThoError>(())
             })?;
 

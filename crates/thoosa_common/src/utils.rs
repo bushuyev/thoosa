@@ -1445,6 +1445,7 @@ pub fn pool_time_max(sims: &Tensor) -> Result<Tensor, TchError> {
 }
 
 /// LogSumExp (soft-max) pooling with temperature tau: [B,1,T’] -> [B,1]
+/// τ≈0.3–1.0 - aggregates several nearby high responses and gives better gradients early in training. As τ→0 it approaches max; as τ grows it approaches mean.
 pub fn pool_time_lse(sims: &Tensor, tau: f64) -> Result<Tensor, TchError> {
     // Stable LSE: m + τ*log(Σ exp((x-m)/τ))
     let (m, _idx) = sims.f_max_dim(2, /*keepdim=*/true)?;           // [B,1,1]
