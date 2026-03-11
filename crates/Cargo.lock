@@ -2453,6 +2453,7 @@ dependencies = [
  "log",
  "macrotest",
  "serde",
+ "serde_json5",
  "thoosa_properties_map",
  "thoosa_properties_map_derive",
  "thoosa_run_config_args",

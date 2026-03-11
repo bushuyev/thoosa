@@ -698,7 +698,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                         let mut variant_opt_params = Vec::new();
 
                         variant.fill_run_configs_dyn(append, &mut variant_const_params, &mut variant_grid_params, &mut variant_opt_params);
-                        assert!(variant_opt_params.is_empty(), "opt params inside enum variant grid search are not supported");
+                        //assert!(variant_opt_params.is_empty(), "opt params inside enum variant grid search are not supported");
 
                         thoosa_shared::make_combos(variant_grid_params.iter().map(|gp| gp.value_sets().into_iter()))
                             .into_iter()

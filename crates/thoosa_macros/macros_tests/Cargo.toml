@@ -20,5 +20,6 @@ ctor.workspace = true
 
 [dev-dependencies]
 macrotest = "1"
+serde_json5.workspace = true
 [lints]
 workspace = true

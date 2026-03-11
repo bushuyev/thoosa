@@ -24,11 +24,15 @@ fn test_cat_range() -> Result<(), ThoError>{
 
     #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
     struct One {
-
+        #[in_map]
+        #[run_config]
+        pub inner_field_one: u32,
     }
     #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
     struct Two{
-
+        #[in_map]
+        #[run_config]
+        pub inner_field_two: u32,
     }
 
     #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -37,13 +41,7 @@ fn test_cat_range() -> Result<(), ThoError>{
         Two(Two)
     }
 
-    pub enum CatEnumRangeOrValue_X {
-        One(OneRangeOrValue),
-        Two(TwoRangeOrValue),
-        Vec(Vec<CatEnumRangeOrValue_X>)
-    }
-
-    #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
+    #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Serialize)]
     #[run_config_opt]
     struct TestRunConfig {
         #[in_map]
@@ -61,7 +59,7 @@ fn test_cat_range() -> Result<(), ThoError>{
 
     impl TestRunConfig {
         pub fn new(id: Option<u32>, num_layers: u32) -> Self {
-            Self { id, simple_field: num_layers, cat_field: CatEnum::One(One{}) }
+            Self { id, simple_field: num_layers, cat_field: CatEnum::One(One{ inner_field_one: 3 }) }
         }
     }
 
@@ -71,10 +69,16 @@ fn test_cat_range() -> Result<(), ThoError>{
 
         // cat_field: CatEnumRangeOrValue::One(OneRangeOrValue {})
         cat_field: CatEnumRangeOrValue::Vec(vec![
-            CatEnumRangeOrValue::One(OneRangeOrValue {}),
-            CatEnumRangeOrValue::Two(TwoRangeOrValue {}),
+            CatEnumRangeOrValue::One(OneRangeOrValue {
+                inner_field_one: RangeOrValue::Range{ range: 0..3, step: None }
+            }),
+            CatEnumRangeOrValue::Two(TwoRangeOrValue {
+                inner_field_two: RangeOrValue::Range{ range: 0..3, step: None }
+            }),
         ])
     };
+
+    debug!("conf={}", serde_json5::to_string(&test_config)?);
 
 
     let opt_configs = test_config.opt_run_configs()?;
