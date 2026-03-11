@@ -2449,11 +2449,15 @@ dependencies = [
 name = "macros_tests"
 version = "0.1.0"
 dependencies = [
+ "ctor 0.2.9",
+ "log",
  "macrotest",
+ "serde",
  "thoosa_properties_map",
  "thoosa_properties_map_derive",
  "thoosa_run_config_args",
  "thoosa_run_config_args_derive",
+ "thoosa_shared",
 ]
 
 [[package]]

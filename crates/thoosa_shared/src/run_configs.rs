@@ -61,7 +61,6 @@ impl<T: FieldName> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
     }
 }
 
-//TODO make VecOptRunConfigs with single T param?
 #[derive(Debug, Clone)]
 pub struct OptRunConfigs<CP, GP, OP, T> {
     grid_run_config_source: GridRunConfigs<CP, GP>,
