@@ -253,8 +253,8 @@ pub fn debug_plot_impl(t_0: &Tensor, label: &str, plot_repeats: u64) -> Result<(
             .map_err(|e| ThoError::new(format!("debug_plot: lock failed: {e}")))?;
         let seen = counts.entry(file_stem.clone()).or_insert(0);
         *seen += 1;
-        
-        if (plot_repeats == 0 && *seen > 1) || *seen % plot_repeats != 0 {
+
+        if (plot_repeats == 0 && *seen > 1) || (plot_repeats > 0 && *seen % plot_repeats != 0) {
             return Ok(());
         }
         let file_name = if *seen == 0 {
