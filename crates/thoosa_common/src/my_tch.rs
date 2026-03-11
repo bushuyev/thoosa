@@ -4,6 +4,7 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use log::{debug, error};
+use serde::{Deserialize, Serialize};
 use tch::{nn, Kind, TchError, Tensor};
 
 use tch::nn::{ConvConfig, Module};
@@ -497,7 +498,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum BinaryHeadPool {
     Max,
     Mean,

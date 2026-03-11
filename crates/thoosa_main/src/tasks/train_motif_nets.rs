@@ -256,7 +256,7 @@ where
                         let params = match &rc.net {
                             MotifNetTypeArgs::ConvNet(net) => MotifNetParams::new_conv(motif_width, net.conv_layers, net.head_layers, net.step, net.channels, net.kernel),
                             MotifNetTypeArgs::LinNet(net) => MotifNetParams::new_lin(motif_width, net.num_layers, net.step),
-                            MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.step, net.channels, net.kernel),
+                            MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.stride, net.channels, net.kernel, (&net.head_pool).into()),
                         };
                         Ok((params.motif_net()?.build_tch_module(&vs.root())?, params))
                     },
@@ -688,7 +688,7 @@ mod tests {
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(10)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
                     // NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Step)), Val::Int(1)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Stride)), Val::Int(1)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Kernel)), Val::Int(100)),
                 ]),
                 vec![
