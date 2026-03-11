@@ -603,7 +603,7 @@ pub struct MotifCosineNetArgs {
 
     #[in_map]
     #[run_config]
-    pub step: u32,//TODO renamed to Conv stride
+    pub stride: u32,//TODO renamed to Conv stride
 
     #[in_map]
     #[run_config]
@@ -611,7 +611,55 @@ pub struct MotifCosineNetArgs {
 
     #[in_map]
     #[run_config]
-    pub kernel: u32
+    pub kernel: u32,
+
+    #[in_map]
+    #[run_config]
+    pub head_pool:BinaryHeadPoolArgs
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct BinaryHeadMax{}
+
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct BinaryHeadMean{}
+
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct BinaryHeadLse{
+    #[in_map]
+    #[run_config]
+    pub tau: f64
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum BinaryHeadPoolArgs {
+    Max(BinaryHeadMax),
+    Mean(BinaryHeadMean),
+    Lse(BinaryHeadLse),
+}
+
+impl From<&BinaryHeadPoolArgs> for BinaryHeadPool {
+    fn from(value: &BinaryHeadPoolArgs) -> Self {
+        match value {
+            BinaryHeadPoolArgs::Max(_) => {
+                BinaryHeadPool::Max
+            }
+            BinaryHeadPoolArgs::Mean(_) => {
+                BinaryHeadPool::Mean
+            }
+            BinaryHeadPoolArgs::Lse(BinaryHeadLse{tau}) => {
+                BinaryHeadPool::Lse {tau: *tau}
+            }
+        }
+    }
+}
+
+impl Default for BinaryHeadPoolArgs {
+    fn default() -> Self {
+        BinaryHeadPoolArgs::Max(BinaryHeadMax{})
+    }
 }
 
 #[allow(non_snake_case, unused_assignments, unused_variables, non_camel_case_types)]
@@ -758,11 +806,12 @@ pub struct MotifCosineNetParams {
     pub stride: u32,//stride within slice
     pub channels: u32,
     pub kernel: u32,
+    pub head_pool: BinaryHeadPool
 }
 
 impl MotifCosineNetParams {
-    pub fn new(num_features: u32, stride: u32, channels: u32, kernel: u32) -> Self {
-        Self { num_features, stride, channels, kernel }
+    pub fn new(num_features: u32, stride: u32, channels: u32, kernel: u32, head_pool: BinaryHeadPool) -> Self {
+        Self { num_features, stride, channels, kernel, head_pool }
     }
 }
 
@@ -802,8 +851,8 @@ impl MotifNetParams {
         Self::new_with_net_type(MotifNetTypeParams::LinNetParams(MotifLinNetParams::new(num_features, num_layers)))
     }
 
-    pub fn new_cosine(num_features: u32, stride: u32, channels: u32, kernel: u32) -> Self {
-        Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, stride, channels, kernel)))
+    pub fn new_cosine(num_features: u32, stride: u32, channels: u32, kernel: u32, head_pool: BinaryHeadPool) -> Self {
+        Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, stride, channels, kernel, head_pool)))
     }
 
     pub fn to_properties_map(&self) -> HashMap<String, Val> {
