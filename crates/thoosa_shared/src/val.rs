@@ -59,23 +59,43 @@ impl<T: FieldName> NamedVal<T> {
 }
 
 #[derive(Clone, Debug)]
-pub struct NamedRange<T: FieldName> {
-    name: T,
-    range: Range<Val>,
-    step: (Val, u32), //for NamedRangeIter step/digits -> round_to_digits(value: f64, digits: u32)
+pub enum NamedRange<T: FieldName> {
+    Range {
+        name: T,
+        range: Range<Val>,
+        step: (Val, u32), //for NamedRangeIter step/digits -> round_to_digits(value: f64, digits: u32)
+    },
+    ValueSets(Vec<Vec<NamedVal<T>>>),
 }
 
 impl<T: FieldName> NamedRange<T> {
     pub fn new(name: T, range: Range<Val>, step: (Val, u32)) -> Self {
-        Self { name, range, step }
+        Self::Range { name, range, step }
+    }
+
+    pub fn from_value_sets(value_sets: Vec<Vec<NamedVal<T>>>) -> Self {
+        Self::ValueSets(value_sets)
     }
 
     pub fn range(&self) -> &Range<Val> {
-        &self.range
+        match self {
+            Self::Range { range, .. } => range,
+            Self::ValueSets(_) => panic!("range() is not available for NamedRange::ValueSets"),
+        }
     }
 
     pub fn step(&self) -> &(Val, u32) {
-        &self.step
+        match self {
+            Self::Range { step, .. } => step,
+            Self::ValueSets(_) => panic!("step() is not available for NamedRange::ValueSets"),
+        }
+    }
+
+    pub fn value_sets(&self) -> Vec<Vec<NamedVal<T>>> {
+        match self {
+            Self::Range { .. } => self.clone().into_iter().map(|v| vec![v]).collect(),
+            Self::ValueSets(value_sets) => value_sets.clone(),
+        }
     }
 }
 
@@ -164,55 +184,50 @@ impl<T: FieldName> Iterator for NamedRangeIter<T> {
 
 impl<T: FieldName> IntoIterator for NamedRange<T> {
     type Item = NamedVal<T>;
-    type IntoIter = NamedRangeIter<T>;
+    type IntoIter = std::vec::IntoIter<NamedVal<T>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let start_val = &self.range.start;
-        let end_val = &self.range.end;
-        let (step_val, digits) = &self.step;
+        match self {
+            NamedRange::Range { name, range, step } => {
+                let start_val = &range.start;
+                let end_val = &range.end;
+                let (step_val, digits) = &step;
 
-        // 1) Convert start/end/step into f64 if possible
-        // 2) Decide iteration_kind from the start type
-        //    (or unify to Real if there's a mismatch).
-        let (start_f, kind_start) = val_to_f64_and_kind(start_val);
-        let (end_f, kind_end) = val_to_f64_and_kind(end_val);
-        let (step_f, _) = val_to_f64_and_kind(step_val);
+                let (start_f, kind_start) = val_to_f64_and_kind(start_val);
+                let (end_f, kind_end) = val_to_f64_and_kind(end_val);
+                let (step_f, _) = val_to_f64_and_kind(step_val);
 
-        // If either is unsupported or there's a mismatch you can't handle:
-        let iteration_kind = if kind_start == IterationKind::Unsupported {
-            IterationKind::Unsupported
-        } else if kind_end == IterationKind::Unsupported {
-            // Alternatively, unify to Real or panic!
-            IterationKind::Unsupported
-        } else {
-            // If the start was Real, we use Real iteration
-            // Otherwise we keep the start's iteration kind
-            match kind_start {
-                IterationKind::Real => IterationKind::Real,
-                _ => {
-                    // If end or step is Real, unify all to Real
-                    // else keep start kind
-                    if kind_end == IterationKind::Real || matches!(step_val, Val::Real(_)) {
-                        IterationKind::Real
-                    } else {
-                        kind_start
+                let iteration_kind = if kind_start == IterationKind::Unsupported {
+                    IterationKind::Unsupported
+                } else if kind_end == IterationKind::Unsupported {
+                    IterationKind::Unsupported
+                } else {
+                    match kind_start {
+                        IterationKind::Real => IterationKind::Real,
+                        _ => {
+                            if kind_end == IterationKind::Real || matches!(step_val, Val::Real(_)) {
+                                IterationKind::Real
+                            } else {
+                                kind_start
+                            }
+                        }
                     }
+                };
+
+                NamedRangeIter {
+                    name,
+                    current: start_f,
+                    end: end_f,
+                    step: step_f,
+                    digits: *digits,
+                    done: false,
+                    forward: start_f < end_f,
+                    iteration_kind,
                 }
+                .collect::<Vec<_>>()
+                .into_iter()
             }
-        };
-
-        // If step_f == 0.0, you might handle that specially (avoid infinite loop).
-        // For demonstration, skip that check.
-
-        NamedRangeIter {
-            name: self.name,
-            current: start_f,
-            end: end_f,
-            step: step_f,
-            digits: *digits,
-            done: false,
-            forward: start_f < end_f,
-            iteration_kind,
+            NamedRange::ValueSets(value_sets) => value_sets.into_iter().flatten().collect::<Vec<_>>().into_iter(),
         }
     }
 }
@@ -239,11 +254,7 @@ impl<T: FieldName> TryFrom<(T, &RangeOrValue<f64>)> for NamedRange<T> {
     fn try_from((name, value): (T, &RangeOrValue<f64>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range { range, step } = value {
             if let Some(step) = step {
-                return Ok(NamedRange {
-                    name,
-                    range: Val::Real(range.start)..Val::Real(range.end),
-                    step: (Val::Real(step.0), step.1),
-                });
+                return Ok(NamedRange::new(name, Val::Real(range.start)..Val::Real(range.end), (Val::Real(step.0), step.1)));
             }
         }
         Err(())
@@ -252,14 +263,19 @@ impl<T: FieldName> TryFrom<(T, &RangeOrValue<f64>)> for NamedRange<T> {
 
 impl From<&NamedRange<String>> for Vec<NamedVal<String>> {
     fn from(value: &NamedRange<String>) -> Self {
-        let start: i64 = value.range.start.to_i64(value.step.1);
-        let end: i64 = value.range.end.to_i64(value.step.1);
-        let step: usize = value.step.0.to_i64(value.step.1) as usize;
+        match value {
+            NamedRange::Range { name, range, step } => {
+                let start: i64 = range.start.to_i64(step.1);
+                let end: i64 = range.end.to_i64(step.1);
+                let step: usize = step.0.to_i64(step.1) as usize;
 
-        (start..end)
-            .step_by(step)
-            .map(|i| (value.name.clone(), <Val as Into<Val>>::into(i.into())).into())
-            .collect::<Vec<NamedVal<String>>>()
+                (start..end)
+                    .step_by(step)
+                    .map(|i| (name.clone(), <Val as Into<Val>>::into(i.into())).into())
+                    .collect::<Vec<NamedVal<String>>>()
+            }
+            NamedRange::ValueSets(value_sets) => value_sets.iter().flat_map(|values| values.clone()).collect(),
+        }
     }
 }
 
@@ -269,11 +285,7 @@ impl<T: FieldName> TryFrom<(T, &RangeOrValue<u32>)> for NamedRange<T> {
     fn try_from((name, value): (T, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range { range, step } = value {
             if let Some(step) = step {
-                return Ok(NamedRange {
-                    name,
-                    range: Val::UInt(range.start)..Val::UInt(range.end),
-                    step: (Val::UInt(step.0), step.1),
-                });
+                return Ok(NamedRange::new(name, Val::UInt(range.start)..Val::UInt(range.end), (Val::UInt(step.0), step.1)));
             }
         }
         Err(())
@@ -626,11 +638,7 @@ mod tests {
 
     #[test]
     fn test_named_range_int_iteration() {
-        let named_range = NamedRange {
-            name: "SomeName".into(),
-            range: Val::Int(-1)..Val::Int(3),
-            step: (Val::Int(1), 0),
-        };
+        let named_range = NamedRange::new("SomeName".into(), Val::Int(-1)..Val::Int(3), (Val::Int(1), 0));
 
         let result: Vec<NamedVal<String>> = named_range.into_iter().collect();
 
@@ -658,11 +666,7 @@ mod tests {
 
     #[test]
     fn test_named_range_float_iteration() {
-        let named_range = NamedRange {
-            name: "FloatRange".into(),
-            range: Val::Real(0.0)..Val::Real(1.0),
-            step: (Val::Real(0.3), 1),
-        };
+        let named_range = NamedRange::new("FloatRange".into(), Val::Real(0.0)..Val::Real(1.0), (Val::Real(0.3), 1));
 
         let result: Vec<NamedVal<String>> = named_range.into_iter().collect();
 
@@ -686,5 +690,27 @@ mod tests {
         ];
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_named_range_value_sets() {
+        let named_range = NamedRange::<String>::from_value_sets(vec![
+            vec![NamedVal::new("ChoiceA".to_string(), Val::Int(1))],
+            vec![
+                NamedVal::new("ChoiceB".to_string(), Val::Int(2)),
+                NamedVal::new("ChoiceBExtra".to_string(), Val::Bool(true)),
+            ],
+        ]);
+
+        assert_eq!(
+            named_range.value_sets(),
+            vec![
+                vec![NamedVal::new("ChoiceA".to_string(), Val::Int(1))],
+                vec![
+                    NamedVal::new("ChoiceB".to_string(), Val::Int(2)),
+                    NamedVal::new("ChoiceBExtra".to_string(), Val::Bool(true)),
+                ],
+            ],
+        );
     }
 }

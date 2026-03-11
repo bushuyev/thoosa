@@ -6,15 +6,20 @@ edition.workspace = true
 
 [dependencies]
 
+thoosa_shared = {path = "../../thoosa_shared" }
+
 thoosa_run_config_args = {path = "../thoosa_run_config_args" }
 thoosa_run_config_args_derive = {path = "../thoosa_run_config_args_derive" }
 
 
 thoosa_properties_map = {path = "../thoosa_properties_map" }
 thoosa_properties_map_derive = {path = "../thoosa_properties_map_derive" }
-
+serde.workspace = true
+log.workspace = true
+ctor.workspace = true
 
 [dev-dependencies]
 macrotest = "1"
+serde_json5.workspace = true
 [lints]
 workspace = true
