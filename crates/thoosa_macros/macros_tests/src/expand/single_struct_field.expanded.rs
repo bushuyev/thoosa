@@ -349,7 +349,15 @@ impl thoosa_run_config_args::OptRunConfigSource for SingleFieldRangeOrValue {
             &mut grid_params,
             &mut opt_params,
         );
-        if opt_params.is_empty() {
+        let has_grid_opt_params = grid_params
+            .iter()
+            .any(|grid_param| {
+                grid_param
+                    .grid_value_sets()
+                    .into_iter()
+                    .any(|value_set| !value_set.opt_params().is_empty())
+            });
+        if opt_params.is_empty() && !has_grid_opt_params {
             return Err(thoosa_shared::ThoError::new("no opt params in run config"));
         }
         Ok(
@@ -782,7 +790,15 @@ impl thoosa_run_config_args::OptRunConfigSource for OuterRangeOrValue {
             &mut grid_params,
             &mut opt_params,
         );
-        if opt_params.is_empty() {
+        let has_grid_opt_params = grid_params
+            .iter()
+            .any(|grid_param| {
+                grid_param
+                    .grid_value_sets()
+                    .into_iter()
+                    .any(|value_set| !value_set.opt_params().is_empty())
+            });
+        if opt_params.is_empty() && !has_grid_opt_params {
             return Err(thoosa_shared::ThoError::new("no opt params in run config"));
         }
         Ok(
