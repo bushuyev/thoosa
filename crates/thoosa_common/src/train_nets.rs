@@ -1836,14 +1836,13 @@ where
 
     let min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
 
-    let grid_vals_sets = run_config_source.grid_to_vals();
+    let grid_runs = run_config_source.grid_to_vals_and_opt_params();
 
-    info!("opt_train: running opt train {descr} grid_vals_sets={grid_vals_sets:?}");
+    info!("opt_train: running opt train {descr} grid_runs={grid_runs:?}");
 
-    let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("grid_sets_{descr}"), grid_vals_sets.len(), 1);
-    for grid_vals in grid_vals_sets.into_iter() {
+    let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("grid_sets_{descr}"), grid_runs.len(), 1);
+    for (grid_vals, opt_params) in grid_runs.into_iter() {
         let const_vals = const_vals.clone();
-        let grid_vals = grid_vals.clone();
         let train_clone = &mut train;
 
         let min_var_store_clone = Arc::clone(&min_var_store);
@@ -1892,7 +1891,7 @@ where
 
                 loss
             },
-            ConfigurationSpace::new(run_config_source.opt_params().clone()),
+            ConfigurationSpace::new(opt_params),
             opt_config.opt_max_evals,
             opt_config.opt_num_init,
             descr,

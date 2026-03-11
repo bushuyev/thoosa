@@ -323,24 +323,22 @@ impl AsyncStage for FindAndSelectMotifsStage {
             .map_err(|e| ThoError::from_boxed_error("FindAndSelectMotifsStage::run parse select_resources", e))?;
 
         let const_vals = self.run_configs.grid_run_config_source().const_params().clone();
-        let grid_vals_sets = self.run_configs.grid_to_vals();
-        let opt_params = self.run_configs.opt_params().clone();
+        let grid_runs = self.run_configs.grid_to_vals_and_opt_params();
         let opt_max_evals = self.opt_config.opt_max_evals;
         let opt_num_init = self.opt_config.opt_num_init;
         let mut find_and_select_run_find_ctx = ctx.branch("find_and_select_run_find".into(), true, false);
         let device_idx = ctx.device_idx();
-        let grid_vals_sets_len = grid_vals_sets.len();
-        info!("FindAndSelectMotifsStage::run: grid_vals_sets_len={grid_vals_sets_len:?} opt_max_evals={opt_max_evals}");
+        let grid_runs_len = grid_runs.len();
+        info!("FindAndSelectMotifsStage::run: grid_runs_len={grid_runs_len:?} opt_max_evals={opt_max_evals}");
 
-        let futures = grid_vals_sets
+        let futures = grid_runs
             .into_iter()
             .enumerate()
-            .map(|(grid_idx, grid_vals)| {
+            .map(|(grid_idx, (grid_vals, opt_params))| {
                 let min_loss = Arc::new(RwLock::new((f32::MAX, None::<FindAndSelectMotifsRunConfig>)));
                 let min_loss_ref = Arc::clone(&min_loss);
 
                 let const_vals = const_vals.clone();
-                let opt_params = opt_params.clone();
                 let ws = Arc::clone(&self.ws);
                 let store = Arc::clone(&self.store);
                 let loader = Arc::clone(&self.loader);
@@ -415,7 +413,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
             });
         let mut indexed_best_configs = collect_futures_with_progress(
             futures,
-            grid_vals_sets_len,
+            grid_runs_len,
             crate::buffer_limits::FIND_AND_SELECT_MOTIFS_RUN_BUFFER_ORDERED_LIMIT,
             StreamBuffering::Unordered,
             "FindAndSelectMotifsStage::run",

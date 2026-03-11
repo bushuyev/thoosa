@@ -1,7 +1,6 @@
 use log::debug;
 use serde::{Deserialize, Serialize};
 use thoosa_shared::hyperparameter::Hyperparameter;
-use thoosa_shared::RangeOrValue::Range;
 use thoosa_shared::test_utils::init_test_logging;
 use thoosa_shared::ThoError;
 
@@ -20,6 +19,7 @@ fn test_cat_range() -> Result<(), ThoError>{
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
     use thoosa_run_config_args::OptRunConfigSource;
+    use thoosa_shared::val::{NamedVal, Val};
     use thoosa_shared::RangeOrValue;
 
     #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -82,17 +82,57 @@ fn test_cat_range() -> Result<(), ThoError>{
 
 
     let opt_configs = test_config.opt_run_configs()?;
-    let grid_vals = opt_configs.grid_to_vals();
-    debug!("grid_vals={grid_vals:?}");
-    assert_eq!(grid_vals.len(), 2);
+    let const_vals = opt_configs.grid_run_config_source().const_params().clone();
+    let grid_runs = opt_configs.grid_to_vals_and_opt_params();
+    debug!("grid_runs={grid_runs:?}");
+    assert_eq!(grid_runs.len(), 2);
+    let (one_grid_vals, one_opt_params) = &grid_runs[0];
+    let (two_grid_vals, two_opt_params) = &grid_runs[1];
 
-    let opt_params = opt_configs.opt_params();
+    assert_eq!(
+        one_opt_params,
+        &vec![
+            Hyperparameter::UniformInt { name: TestRunConfigFields::SimpleField, lower: 0, upper: 10 },
+            Hyperparameter::UniformInt { name: TestRunConfigFields::CatField(CatEnumFields::One(OneFields::InnerFieldOne)), lower: 0, upper: 3 },
+        ]
+    );
+    assert_eq!(
+        two_opt_params,
+        &vec![
+            Hyperparameter::UniformInt { name: TestRunConfigFields::SimpleField, lower: 0, upper: 10 },
+            Hyperparameter::UniformInt { name: TestRunConfigFields::CatField(CatEnumFields::Two(TwoFields::InnerFieldTwo)), lower: 0, upper: 3 },
+        ]
+    );
 
-    assert_eq!(opt_params[0], Hyperparameter::UniformInt { name: TestRunConfigFields::SimpleField, lower: 0, upper: 10 });
-    
+    let one_run_config: TestRunConfig = [
+        const_vals.as_slice(),
+        one_grid_vals.as_slice(),
+        &[
+            NamedVal::new(TestRunConfigFields::SimpleField, Val::Int(7)),
+            NamedVal::new(TestRunConfigFields::CatField(CatEnumFields::One(OneFields::InnerFieldOne)), Val::Int(2)),
+        ],
+    ]
+    .concat()
+    .into_iter()
+    .into();
+    assert_eq!(one_run_config.id, Some(1));
+    assert_eq!(one_run_config.simple_field, 7);
+    assert_eq!(one_run_config.cat_field, CatEnum::One(One { inner_field_one: 2 }));
 
-
-    debug!("opt_params={opt_params:?}");
+    let two_run_config: TestRunConfig = [
+        const_vals.as_slice(),
+        two_grid_vals.as_slice(),
+        &[
+            NamedVal::new(TestRunConfigFields::SimpleField, Val::Int(5)),
+            NamedVal::new(TestRunConfigFields::CatField(CatEnumFields::Two(TwoFields::InnerFieldTwo)), Val::Int(1)),
+        ],
+    ]
+    .concat()
+    .into_iter()
+    .into();
+    assert_eq!(two_run_config.id, Some(1));
+    assert_eq!(two_run_config.simple_field, 5);
+    assert_eq!(two_run_config.cat_field, CatEnum::Two(Two { inner_field_two: 1 }));
 
     Ok(())
 }

@@ -58,6 +58,30 @@ impl<T: FieldName> NamedVal<T> {
     }
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct GridValueSet<T: FieldName> {
+    values: Vec<NamedVal<T>>,
+    opt_params: Vec<Hyperparameter<T>>,
+}
+
+impl<T: FieldName> GridValueSet<T> {
+    pub fn new(values: Vec<NamedVal<T>>, opt_params: Vec<Hyperparameter<T>>) -> Self {
+        Self { values, opt_params }
+    }
+
+    pub fn values(&self) -> &Vec<NamedVal<T>> {
+        &self.values
+    }
+
+    pub fn opt_params(&self) -> &Vec<Hyperparameter<T>> {
+        &self.opt_params
+    }
+
+    pub fn into_parts(self) -> (Vec<NamedVal<T>>, Vec<Hyperparameter<T>>) {
+        (self.values, self.opt_params)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum NamedRange<T: FieldName> {
     Range {
@@ -65,7 +89,7 @@ pub enum NamedRange<T: FieldName> {
         range: Range<Val>,
         step: (Val, u32), //for NamedRangeIter step/digits -> round_to_digits(value: f64, digits: u32)
     },
-    ValueSets(Vec<Vec<NamedVal<T>>>),
+    ValueSets(Vec<GridValueSet<T>>),
 }
 
 impl<T: FieldName> NamedRange<T> {
@@ -74,6 +98,15 @@ impl<T: FieldName> NamedRange<T> {
     }
 
     pub fn from_value_sets(value_sets: Vec<Vec<NamedVal<T>>>) -> Self {
+        Self::ValueSets(
+            value_sets
+                .into_iter()
+                .map(|values| GridValueSet::new(values, vec![]))
+                .collect(),
+        )
+    }
+
+    pub fn from_grid_value_sets(value_sets: Vec<GridValueSet<T>>) -> Self {
         Self::ValueSets(value_sets)
     }
 
@@ -92,8 +125,19 @@ impl<T: FieldName> NamedRange<T> {
     }
 
     pub fn value_sets(&self) -> Vec<Vec<NamedVal<T>>> {
+        self.grid_value_sets()
+            .into_iter()
+            .map(|value_set| value_set.into_parts().0)
+            .collect()
+    }
+
+    pub fn grid_value_sets(&self) -> Vec<GridValueSet<T>> {
         match self {
-            Self::Range { .. } => self.clone().into_iter().map(|v| vec![v]).collect(),
+            Self::Range { .. } => self
+                .clone()
+                .into_iter()
+                .map(|v| GridValueSet::new(vec![v], vec![]))
+                .collect(),
             Self::ValueSets(value_sets) => value_sets.clone(),
         }
     }
@@ -227,7 +271,11 @@ impl<T: FieldName> IntoIterator for NamedRange<T> {
                 .collect::<Vec<_>>()
                 .into_iter()
             }
-            NamedRange::ValueSets(value_sets) => value_sets.into_iter().flatten().collect::<Vec<_>>().into_iter(),
+            NamedRange::ValueSets(value_sets) => value_sets
+                .into_iter()
+                .flat_map(|value_set| value_set.into_parts().0)
+                .collect::<Vec<_>>()
+                .into_iter(),
         }
     }
 }
@@ -274,7 +322,7 @@ impl From<&NamedRange<String>> for Vec<NamedVal<String>> {
                     .map(|i| (name.clone(), <Val as Into<Val>>::into(i.into())).into())
                     .collect::<Vec<NamedVal<String>>>()
             }
-            NamedRange::ValueSets(value_sets) => value_sets.iter().flat_map(|values| values.clone()).collect(),
+            NamedRange::ValueSets(value_sets) => value_sets.iter().flat_map(|value_set| value_set.values().clone()).collect(),
         }
     }
 }
@@ -634,7 +682,8 @@ impl<T: FieldName> TryFrom<&NamedVal<T>> for u32 {
 #[cfg(test)]
 mod tests {
 
-    use crate::val::{NamedRange, NamedVal, Val};
+    use crate::hyperparameter::Hyperparameter;
+    use crate::val::{GridValueSet, NamedRange, NamedVal, Val};
 
     #[test]
     fn test_named_range_int_iteration() {
@@ -694,22 +743,35 @@ mod tests {
 
     #[test]
     fn test_named_range_value_sets() {
-        let named_range = NamedRange::<String>::from_value_sets(vec![
-            vec![NamedVal::new("ChoiceA".to_string(), Val::Int(1))],
-            vec![
-                NamedVal::new("ChoiceB".to_string(), Val::Int(2)),
-                NamedVal::new("ChoiceBExtra".to_string(), Val::Bool(true)),
-            ],
-        ]);
-
         assert_eq!(
-            named_range.value_sets(),
+            NamedRange::<String>::from_grid_value_sets(vec![
+                GridValueSet::new(vec![NamedVal::new("ChoiceA".to_string(), Val::Int(1))], vec![]),
+                GridValueSet::new(
+                    vec![
+                        NamedVal::new("ChoiceB".to_string(), Val::Int(2)),
+                        NamedVal::new("ChoiceBExtra".to_string(), Val::Bool(true)),
+                    ],
+                    vec![Hyperparameter::UniformInt {
+                        name: "ChoiceBOpt".to_string(),
+                        lower: 2,
+                        upper: 5,
+                    }],
+                ),
+            ])
+            .grid_value_sets(),
             vec![
-                vec![NamedVal::new("ChoiceA".to_string(), Val::Int(1))],
-                vec![
-                    NamedVal::new("ChoiceB".to_string(), Val::Int(2)),
-                    NamedVal::new("ChoiceBExtra".to_string(), Val::Bool(true)),
-                ],
+                GridValueSet::new(vec![NamedVal::new("ChoiceA".to_string(), Val::Int(1))], vec![]),
+                GridValueSet::new(
+                    vec![
+                        NamedVal::new("ChoiceB".to_string(), Val::Int(2)),
+                        NamedVal::new("ChoiceBExtra".to_string(), Val::Bool(true)),
+                    ],
+                    vec![Hyperparameter::UniformInt {
+                        name: "ChoiceBOpt".to_string(),
+                        lower: 2,
+                        upper: 5,
+                    }],
+                ),
             ],
         );
     }
