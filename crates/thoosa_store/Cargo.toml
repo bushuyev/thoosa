@@ -20,5 +20,6 @@ zstd = "0.13"
 tokio.workspace = true
 futures-util.workspace = true
 async-trait.workspace = true
+tracing.workspace = true
 [lints]
 workspace = true
