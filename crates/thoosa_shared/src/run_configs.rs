@@ -1,6 +1,6 @@
 use crate::hyperparameter::{FieldName, Hyperparameter};
 use crate::traits::Named;
-use crate::val::{NamedRange, NamedVal};
+use crate::val::{GridValueSet, NamedRange, NamedVal};
 use crate::make_combos;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -38,10 +38,28 @@ impl<T: FieldName> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
         &self.const_config_source.const_params
     }
 
-    pub fn grid_to_vals(&self) -> Vec<Vec<NamedVal<T>>> {
-        make_combos(self.grid_params.iter().map(|gp| gp.value_sets().into_iter()))
+    pub fn grid_value_sets(&self) -> Vec<GridValueSet<T>> {
+        make_combos(self.grid_params.iter().map(|gp| gp.grid_value_sets().into_iter()))
             .into_iter()
-            .map(|combo| combo.into_iter().flatten().collect())
+            .map(|combo| {
+                let mut values = Vec::new();
+                let mut opt_params = Vec::new();
+
+                for value_set in combo {
+                    let (value_set_values, value_set_opt_params) = value_set.into_parts();
+                    values.extend(value_set_values);
+                    opt_params.extend(value_set_opt_params);
+                }
+
+                GridValueSet::new(values, opt_params)
+            })
+            .collect()
+    }
+
+    pub fn grid_to_vals(&self) -> Vec<Vec<NamedVal<T>>> {
+        self.grid_value_sets()
+            .into_iter()
+            .map(|value_set| value_set.into_parts().0)
             .collect()
     }
 
@@ -89,6 +107,19 @@ impl<T: FieldName> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyper
 
     pub fn grid_to_vals(&self) -> Vec<Vec<NamedVal<T>>> {
         self.grid_run_config_source.grid_to_vals()
+    }
+
+    pub fn grid_to_vals_and_opt_params(&self) -> Vec<(Vec<NamedVal<T>>, Vec<Hyperparameter<T>>)> {
+        self.grid_run_config_source
+            .grid_value_sets()
+            .into_iter()
+            .map(|value_set| {
+                let (values, specific_opt_params) = value_set.into_parts();
+                let mut opt_params = self.opt_params.clone();
+                opt_params.extend(specific_opt_params);
+                (values, opt_params)
+            })
+            .collect()
     }
 
     pub fn grid_run_config_source(&self) -> &GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {

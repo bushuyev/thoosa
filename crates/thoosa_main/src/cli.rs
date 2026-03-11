@@ -2124,10 +2124,9 @@ where
 {
     let opt_run_config = find_and_select_run_config.opt_run_configs()?;
     let const_vals = opt_run_config.grid_run_config_source().const_params();
-    let grid_vals_vec = opt_run_config.grid_run_config_source().grid_to_vals();
-    let opt_hps = opt_run_config.opt_params();
+    let grid_runs = opt_run_config.grid_to_vals_and_opt_params();
 
-    for grid_vals in grid_vals_vec {
+    for (grid_vals, opt_hps) in grid_runs {
         let opt_vals = opt_hps.iter().map(|hp| NamedVal::new(hp.name().clone(), hp.random_sample())).collect::<Vec<_>>();
 
         for i in 0..100 {

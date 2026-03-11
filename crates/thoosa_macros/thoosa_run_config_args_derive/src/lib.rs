@@ -698,19 +698,24 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                         let mut variant_opt_params = Vec::new();
 
                         variant.fill_run_configs_dyn(append, &mut variant_const_params, &mut variant_grid_params, &mut variant_opt_params);
-                        //assert!(variant_opt_params.is_empty(), "opt params inside enum variant grid search are not supported");
-
-                        thoosa_shared::make_combos(variant_grid_params.iter().map(|gp| gp.value_sets().into_iter()))
+                        thoosa_shared::make_combos(variant_grid_params.iter().map(|gp| gp.grid_value_sets().into_iter()))
                             .into_iter()
                             .map(|combo| {
                                 let mut vals = variant_const_params.clone();
-                                vals.extend(combo.into_iter().flatten());
-                                vals
+                                let mut opt_params = variant_opt_params.clone();
+
+                                for value_set in combo {
+                                    let (value_set_values, value_set_opt_params) = value_set.into_parts();
+                                    vals.extend(value_set_values);
+                                    opt_params.extend(value_set_opt_params);
+                                }
+
+                                thoosa_shared::val::GridValueSet::new(vals, opt_params)
                             })
                             .collect::<Vec<_>>()
                     }).collect::<Vec<_>>();
 
-                    grid_params.push(thoosa_shared::val::NamedRange::from_value_sets(variant_value_sets));
+                    grid_params.push(thoosa_shared::val::NamedRange::from_grid_value_sets(variant_value_sets));
                 }
             });
 
@@ -815,7 +820,10 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                     let mut opt_params = Vec::new();
 
                     self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
-                    if opt_params.is_empty() {
+                    let has_grid_opt_params = grid_params
+                        .iter()
+                        .any(|grid_param| grid_param.grid_value_sets().into_iter().any(|value_set| !value_set.opt_params().is_empty()));
+                    if opt_params.is_empty() && !has_grid_opt_params {
                         return Err(thoosa_shared::ThoError::new("no opt params in run config"));
                     }
 
