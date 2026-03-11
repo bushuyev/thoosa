@@ -279,6 +279,7 @@ where
                     |rc:&TrainMotifsNetsRunConfig|{
                         rc.common_training_args.cycles
                     },
+                    1,
                     format!("motif_{}", motif_id_rate.0)
                 ));
 

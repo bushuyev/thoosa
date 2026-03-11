@@ -237,6 +237,7 @@ where
                     t
                 },
                 |rc: &TrainFinalNetRunConfig| rc.common_training_args.cycles,
+                1,
                 "final".to_string(),
             ));
 
