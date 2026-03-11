@@ -950,7 +950,7 @@ impl WsMockBuilder {
 mod tests {
     use super::{FsWorkspace, Workspace};
     use crate::dims::AnyDims;
-    use crate::my_tch::{MyCosineConv1d, ThoModule};
+    use crate::my_tch::{BinaryHeadPool, MyCosineConv1d, ThoModule};
     use crate::train_nets::{conv_motif_node, cosine_motif_node, FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams, MotifNetParams, MotifNetTypeParams};
     use log::debug;
     use std::path::{Path, PathBuf};
@@ -1101,7 +1101,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
 
-        let params = MotifNetParams::new_cosine(0, 1, 8, 10);
+        let params = MotifNetParams::new_cosine(0, 1, 8, 10, BinaryHeadPool::Max);
         let mut vs = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> =
             cosine_motif_node(match &params.net_type {
