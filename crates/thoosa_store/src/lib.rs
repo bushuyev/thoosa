@@ -1615,7 +1615,7 @@ impl Store for SqlStore {
                 let t = conn.transaction()?;
                 let (channel, run_id) = Self::_motif_meta(motif_id, &t)?;
                 t.commit()?;
-                info!("get_motif_meta invoked");
+                debug!("get_motif_meta: motif_id={motif_id} channel={channel} run_id={run_id}");
                 Ok::<_, ThoError>((channel as usize, run_id))
             })
             .await

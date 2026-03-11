@@ -8,7 +8,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::{fs, ptr};
-use log::{debug, error, trace};
+use log::{debug, error, info, trace};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
 use plotters::drawing::IntoDrawingArea;
@@ -75,7 +75,7 @@ macro_rules! debug_plot {
         if $crate::utils::debug_plots_enabled() {
             let __label = format!($fmt, $($arg),+);
             if $crate::utils::debug_plot_label_allowed(&__label) {
-                $crate::utils::debug_plot_impl($tensor, &__label, false)
+                $crate::utils::debug_plot_impl($tensor, &__label, 0)
             } else {
                 Ok::<(), thoosa_shared::ThoError>(())
             }
@@ -87,7 +87,7 @@ macro_rules! debug_plot {
         if $crate::utils::debug_plots_enabled() {
             let __label = format!($fmt);
             if $crate::utils::debug_plot_label_allowed(&__label) {
-                $crate::utils::debug_plot_impl($tensor, &__label, false)
+                $crate::utils::debug_plot_impl($tensor, &__label, 0)
             } else {
                 Ok::<(), thoosa_shared::ThoError>(())
             }
@@ -99,7 +99,7 @@ macro_rules! debug_plot {
         if $crate::utils::debug_plots_enabled() {
             let __label = format!("{}", $label);
             if $crate::utils::debug_plot_label_allowed(&__label) {
-                $crate::utils::debug_plot_impl($tensor, &__label, false)
+                $crate::utils::debug_plot_impl($tensor, &__label, 0)
             } else {
                 Ok::<(), thoosa_shared::ThoError>(())
             }
@@ -245,22 +245,24 @@ fn sanitize_debug_plot_label(label: &str) -> String {
 }
 
 #[doc(hidden)]
-pub fn debug_plot_impl(t_0: &Tensor, label: &str, plot_repeats: bool) -> Result<(), ThoError> {
+pub fn debug_plot_impl(t_0: &Tensor, label: &str, plot_repeats: u64) -> Result<(), ThoError> {
     let file_stem = sanitize_debug_plot_label(label);
     let file_name = {
         let mut counts = DEBUG_PLOT_LABEL_COUNTS
             .lock()
             .map_err(|e| ThoError::new(format!("debug_plot: lock failed: {e}")))?;
         let seen = counts.entry(file_stem.clone()).or_insert(0);
-        if !plot_repeats && *seen > 0 {
+        *seen += 1;
+        
+        if (plot_repeats == 0 && *seen > 1) || *seen % plot_repeats != 0 {
             return Ok(());
         }
         let file_name = if *seen == 0 {
             format!("{file_stem}.png")
         } else {
-            format!("{file_stem}_{}.png", *seen - 1)
+            format!("{file_stem}_{}.png", *seen)
         };
-        *seen += 1;
+
         file_name
     };
     let path = debug_plot_dir()?.join(file_name);
@@ -2451,11 +2453,11 @@ pub mod tests {
     #[test]
     fn test_debug_plot_macro_accepts_plot_repeats() -> Result<(), ThoError> {
         let t = Tensor::zeros([1i64, 8], FLOAT_CPU);
-        crate::debug_plot!(&t, "debug_plot_macro_accepts_plot_repeats", plot_repeats = false)?;
+        crate::debug_plot!(&t, "debug_plot_macro_accepts_plot_repeats", plot_repeats = 0)?;
         let suffix = 1;
-        crate::debug_plot!(&t, "debug_plot_macro_accepts_plot_repeats_{suffix}", plot_repeats = true)?;
+        crate::debug_plot!(&t, "debug_plot_macro_accepts_plot_repeats_{suffix}", plot_repeats = 0)?;
         let label = "debug_plot_macro_accepts_plot_repeats_label";
-        crate::debug_plot!(&t, label, plot_repeats = false)?;
+        crate::debug_plot!(&t, label, plot_repeats = 0)?;
         Ok(())
     }
 }
