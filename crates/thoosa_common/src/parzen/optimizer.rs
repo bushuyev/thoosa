@@ -137,7 +137,7 @@ impl TreeStructuredParzenEstimator {
                 Hyperparameter::UniformInt { name, lower, upper } => {
                     Box::new(NumericalParzenEstimator::new(
                         Some(name.to_string()),
-                        *lower as f64, //TODO
+                        *lower as f64,
                         *upper as f64,
                         BandwidthFactor::default(),
                         true,
