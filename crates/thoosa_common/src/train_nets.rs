@@ -1004,7 +1004,7 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams) -> Result<Node, ThoError
                 None,
             )?
             .cosine_conv_1d("cosine_bank", params.kernel, params.channels, params.channels, bank_cfg)?
-            .binary_head("binary_head", BinaryHeadPool::Max)?
+            .binary_head("binary_head", BinaryHeadPool::Lse { tau: 0.9 })?
             .end_seq()
     };
 

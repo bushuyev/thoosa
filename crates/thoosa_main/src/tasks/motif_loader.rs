@@ -5,6 +5,7 @@ use std::fmt::{format, Debug, Formatter};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 use async_trait::async_trait;
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
@@ -269,12 +270,14 @@ where
     where
             for<'a> Self::In<'a>: Send + Sync,
     {
+        let t_0 = Instant::now();
         let (motif_id, limit) = with_data!(ctx.branch(Some("random_slices_input"), false, false), input; |_ctx, input: &SlicesLoaderInput| {
             Ok::<(DataId, u32), ThoError>((input.motif_id.clone(), input.limit))
         })?;
 
 
         let (channel, find_motifs_run_id) = self.store.get_motif_meta(*motif_id).await?;
+
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
             find_motifs_run_id,
@@ -286,7 +289,8 @@ where
 
         let motif_id_value = motif_id.clone().0;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
-        let (channel, find_motifs_run_id, slices, resources_map) = self.store.list_random_slices_out_of_motif(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster).await?;
+        let (channel, find_motifs_run_id, slices, resources_map) = self.store.list_random_slices_out_of_motif(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster, Some(limit as usize)).await?;
+
 
         let cache_area = ctx.cache_area().into();
         let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "random loader").await?;
@@ -294,10 +298,12 @@ where
         // debug_plot!(&motif.as_ref(), "random_motif_{motif_id}")?;
 
 
-        Ok(Arc::new(DevicesWrap::wrap(
+        let arc = Arc::new(DevicesWrap::wrap(
             motif,
             cache_area,
-        )))
+        ));
+
+        Ok(arc)
     }
 }
 
