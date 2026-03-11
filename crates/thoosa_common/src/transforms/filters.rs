@@ -476,17 +476,4 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_0(){
-
-        // let input_t = Tensor::rand(&[1, 20, 12800], FLOAT_CPU);
-
-        // let output_t = hann_window(20).unwrap();
-        //
-        // debug!("output_t.size={:?}", output_t.size())
-
-        let kernel = band_pass_filter(10., 20., 100, 200., 1e-6).unwrap();
-
-        debug!("kernel.size={:?}", kernel.size());
-    }
 }

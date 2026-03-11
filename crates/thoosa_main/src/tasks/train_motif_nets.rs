@@ -399,7 +399,7 @@ where
         })
     }
 
-    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id:&DataId) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
+    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id:&DataId, descr: &str) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
         let random_slices = self.current_random_slices().await?;
 
         let num_slices = (self.batch_size / 2) as i64;
@@ -412,12 +412,13 @@ where
             guard.branch(Some("motifs_batch_make"), false, false)
         }, motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, DataId>|{
 
+            debug!("MotifsBatch::make_batch: descr={descr} num_slices={num_slices}");
+
             let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;//TODO config
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
 
-            debug_plot!(&motifs.as_ref(), "motifs_batch_make_batch_{motif_id}")?;
-            debug_plot!(&random.as_ref(), "motifs_batch_make_batch_random_{motif_id}")?;
-
+            debug_plot!(&motifs.as_ref(), "motifs_batch_make_batch_{motif_id}_{descr}", plot_repeats=11)?;
+            debug_plot!(&random.as_ref(), "motifs_batch_make_batch_random_{motif_id}_{descr}", plot_repeats=11)?;
 
             let (x, _lengths, y) = mix_x_binary_with_labels(&motifs, None, &random, None)?;
 
@@ -472,7 +473,7 @@ where
     C: RunCtx,
 {
     async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
-        futures_util::stream::once( self.make_batch(Arc::clone(&self.train_motifs), &self.motif_id))//TODO this corresponds to number of resources in label training , replace with configurable val?
+        futures_util::stream::once( self.make_batch(Arc::clone(&self.train_motifs), &self.motif_id, "train"))//TODO this corresponds to number of resources in label training , replace with configurable val?
         .map(|fut_res|{
             fut_res.map(|v|{
                 (v.0, None,  v.1.into())
@@ -482,7 +483,7 @@ where
     }
 
     async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
-        futures_util::stream::once( self.make_batch(Arc::clone(&self.valid_motifs), &self.motif_id))
+        futures_util::stream::once( self.make_batch(Arc::clone(&self.valid_motifs), &self.motif_id, "valid"))
             .take(self.epoch_size as usize)
             .map(|fut_res|{
                 fut_res.map(|v|{

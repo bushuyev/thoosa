@@ -3,6 +3,7 @@ export LD_LIBRARY_PATH=$LIBTORCH/lib/ && ...
 cargo nextest run --release   --config 'build.rustflags=["--cfg","tho_debug_plots=\"batch_motif_,batch_random_motif_in_batch_\""]'
 cargo nextest run --release   --config 'build.rustflags=["--cfg","tho_debug_plots=\"apply_motif_net_run_input_motif_applied_\""]'
 cargo nextest run --release   --config 'build.rustflags=["--cfg","tho_debug"]'
+cargo nextest run --release  --config 'build.rustflags=["--cfg","tho_debug_plots=\"motifs_batch_make_batch_\""]'
 
 cargo run --bin thoosa_hbac --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path="/home/bu/tmp/ws_test_hbac" import-resources --source-path=/home/bu/dvl/data/kaggle/hbac
 
