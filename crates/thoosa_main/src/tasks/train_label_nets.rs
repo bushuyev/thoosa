@@ -204,6 +204,10 @@ impl Data for TrainLabelNetsInput {
     fn device(&self) -> usize {
         0
     }
+
+    fn mem_size(&self) -> u64 {
+        0
+    }
 }
 
 

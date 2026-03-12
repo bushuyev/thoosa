@@ -15,7 +15,7 @@ use crate::ws::Workspace;
 use clap::clap_derive::Args;
 use thoosa_shared::{mono_key, panic_to_err_async, CopyToDevice};
 
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
 use rand::seq::{IndexedRandom, SliceRandom};
@@ -28,14 +28,14 @@ use std::{fmt, fs};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
-use tch::nn::{init, BatchNormConfig, ConvConfig, LinearConfig, VarStore};
+use tch::nn::{init, BatchNormConfig, ConvConfig, LinearConfig, VarStore, Variables};
 use tch::Device::Cpu;
 use tch::{nn, Device, Kind, Tensor};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_shared::ThoError;
 
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::sync::{Arc, MutexGuard};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
 
@@ -431,6 +431,17 @@ where
 
     fn device(&self) -> usize {
         ThoDevice::from(self.var_store.device()).ordinal()
+    }
+
+    fn mem_size(&self) -> u64 {
+        if let Ok( guard) = self.var_store.variables_.lock() {
+            guard.trainable_variables.iter().map(|v|tensor_mem_size(&v.tensor) as u64).sum::<u64>()
+          + guard.named_variables.iter().map(|v|tensor_mem_size(v.1) as u64).sum::<u64>()
+
+        } else {
+            error!("ThoModuleWithStore::mem_size: can't get variables");
+            0
+        }
     }
 }
 

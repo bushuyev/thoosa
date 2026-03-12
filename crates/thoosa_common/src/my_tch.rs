@@ -746,10 +746,6 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyDropout {
 
 pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send {
     fn debug(&self) {}
-    fn mem_size(&self) -> usize {
-        //TODO
-        0
-    }
 
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError>;
 }

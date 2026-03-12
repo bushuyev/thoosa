@@ -600,11 +600,11 @@ where
             if let Some(Ok(mut lock)) = wrap.cached_data.get(device_idx).map(|v| v.try_write()) {
                 if timed_tokio_read(&wrap.cached_data[0], "CpuOrGpu::dump_to_cpu cpu read check").await.is_none() {
                     let data = lock.take();
-                    debug!("DataCacheWrapper::dump_to_cpu: 1.0. id={:?} copied to cpu done cached_data[0].device={:?}", wrap.id, timed_tokio_read(&wrap.cached_data[0], "CpuOrGpu::dump_to_cpu debug read 1.0").await.as_ref().map(|v|v.device()));
+                    debug!("DataCacheWrapper::dump_to_cpu: 1.0. id={:?} copied to cpu done device_idx={device_idx}", wrap.id);
 
                     wrap.ensure_copied(device_idx, 0, data.as_ref(), false).await?;
 
-                    debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done cached_data[0].device={:?}", wrap.id, timed_tokio_read(&wrap.cached_data[0], "CpuOrGpu::dump_to_cpu debug read 1.1").await.as_ref().map(|v|v.device()));
+                    debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done device_idx={device_idx}", wrap.id);
                 }
                 drop(lock.take());
             } else {
@@ -657,12 +657,13 @@ where
         Ok(opt.expect(&format!("no data in {to_device_idx} for {:?}", wrap.id)))
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="DevicesWrapCopyMode<O> for CpuOrGpu<O>::is_all_on_cpu"))]
     async fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> bool {
-        debug!("DataCacheWrapper::is_all_on_cpu: self.id={:?}", wrap.id);
+        trace!("DataCacheWrapper::is_all_on_cpu: self.id={:?}", wrap.id);
 
-        for (device_idx, data) in wrap.cached_data.iter().skip(1).enumerate() {
+        for (device_idx, data) in wrap.cached_data.iter().enumerate().skip(1) {
             if timed_tokio_read(data, "CpuOrGpu::is_all_on_cpu read").await.is_some() {
-                debug!("DataCacheWrapper::is_all_on_cpu: device_idx={device_idx}");
+                debug!("DataCacheWrapper::is_all_on_cpu: {:?} is on cpu device_idx={device_idx}", wrap.id);
                 return false;
             }
         }
@@ -678,7 +679,7 @@ where
     O: WithId + Data + Send + Sync,
 {
     id: <O as WithId>::ID,
-   
+
     cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,
     inflights: Box<[Mutex<Option<Arc<Notify>>>]>,
     cache_area: CacheArea,

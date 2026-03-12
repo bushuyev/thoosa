@@ -542,10 +542,7 @@ pub trait Data: Debug {
 
     fn device(&self) -> usize;
 
-    fn mem_size(&self) -> u64 {
-        // let x:CpuOnly<Self> = CpuOnly::new();
-        0
-    }
+    fn mem_size(&self) -> u64;
 }
 
 impl WithId for MockData {
@@ -593,6 +590,10 @@ where
     fn device(&self) -> usize {
         self.as_ref().device()
     }
+
+    fn mem_size(&self) -> u64 {
+        Arc::as_ref(self).mem_size()
+    }
 }
 
 impl Data for (){
@@ -604,6 +605,10 @@ impl Data for (){
     }
 
     fn device(&self) -> usize {
+        0
+    }
+
+    fn mem_size(&self) -> u64 {
         0
     }
 }

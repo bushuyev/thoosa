@@ -74,6 +74,7 @@ impl DropSignal {
             requester_id,
         }
     }
+
 }
 
 impl Debug for RunnerPerm {
@@ -102,6 +103,12 @@ impl RunnerPerm {
         Self {
             inner: Some(inner),
             drop_signal: Some(drop_signal),
+        }
+    }
+
+    pub fn update_requester_id(&mut self, requester_id:Arc<dyn CachableIdTr>){
+        if let Some(drop_signal) = self.drop_signal.as_mut() {
+            drop_signal.requester_id = requester_id;
         }
     }
 }

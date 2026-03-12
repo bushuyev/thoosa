@@ -501,17 +501,15 @@ impl PermitSource for Arbiter {
         if from.eq(to) {
             return;
         }
-        if let Some(mut from_ref) = self.granted_counts.get_mut(&(Arc::new(from.clone()) as Arc<dyn CachableIdTr>)) {
-            let from_val = *from_ref;
-            *from_ref = 0;
-
-            drop(from_ref);
+        if let Some(from_val) = self.granted_counts.remove(&(Arc::new(from.clone()) as Arc<dyn CachableIdTr>)) {
 
             let mut to_ref = self.granted_counts.entry(Arc::new(to.clone()) as Arc<dyn CachableIdTr>).or_insert(0);
-            *to_ref += from_val;
+            *to_ref += from_val.1;
             drop(to_ref);
 
-            debug!("PermitSource::move_permits:  from={from:?} to={to:?} val={from_val}");
+            debug!("PermitSource::move_permits:  from={from:?} to={to:?} val={from_val:?}");
+        } else {
+            warn!("PermitSource::move_permits:  no from={from:?}");
         }
     }
 

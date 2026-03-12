@@ -250,6 +250,10 @@ mod tests {
             fn device(&self) -> usize {
                 self.device
             }
+
+            fn mem_size(&self) -> u64 {
+                0
+            }
         }
 
         impl WithId for TestData {

@@ -100,6 +100,10 @@ impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Data for CrossInput<'a, R> {
     fn device(&self) -> usize {
         0
     }
+
+    fn mem_size(&self) -> u64 {
+        self.tensors.iter().map(|tensor| tensor.mem_size()).sum()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -345,6 +349,10 @@ impl<R: Debug> Data for CrossUnfoldClcOutput<R> {
 
     fn device(&self) -> usize {
         0
+    }
+
+    fn mem_size(&self) -> u64 {
+        0//TODO delegate to Result which should be Data
     }
 }
 impl<R: Debug> Input for CrossUnfoldClcOutput<R> {}

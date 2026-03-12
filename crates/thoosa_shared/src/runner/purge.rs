@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use futures_util::StreamExt;
 use futures_util::future::{BoxFuture, Shared};
 use futures_util::stream;
-use log::{debug, warn};
+use log::{debug, trace, warn};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -107,7 +107,7 @@ where
     }
 
     async fn debug_gpu(&self, device_idx: usize) -> Result<(), ThoError> {
-        warn!("debug_gpu: device_idx={device_idx}");
+        warn!("debug_gpu: device_idx={device_idx} self.len={}", self.len());
         let items: Vec<(K, Arc<DevicesWrap<O>>)> = self
             .iter()
             .filter_map(|entry| {
@@ -123,7 +123,7 @@ where
         for (key, wrapper) in items {
             if !wrapper.is_all_on_cpu().await {
                 let size = wrapper.mem_size();
-                warn!("key={key:?} size={size:?}");
+                trace!("key={key:?} size={size:?}");
                 total_size += size;
             }
         }
@@ -188,6 +188,10 @@ mod tests {
 
         fn device(&self) -> usize {
             1
+        }
+
+        fn mem_size(&self) -> u64 {
+            size_of::<DummyOutput>() as u64
         }
     }
 

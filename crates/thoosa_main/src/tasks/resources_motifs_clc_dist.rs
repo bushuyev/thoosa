@@ -259,6 +259,12 @@ impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
     fn device(&self) -> usize {
         0
     }
+
+    fn mem_size(&self) -> u64 {
+        self.batch.iter().map(|batch| batch.mem_size()).sum::<u64>()
+            + self.stacked_motifs.mem_size()
+            + self.motifs_stats.mem_size()
+    }
 }
 
 impl ClcResourcesMotifsDistInputDeviceWrapper {
@@ -504,6 +510,13 @@ impl Data for ClcResourcesMotifsDistOutput {
 
     fn device(&self) -> usize {
         0
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.channel_masks_dists_ids
+            .iter()
+            .map(|channel_output| channel_output.as_ref().map(|(dists_mask, _)| dists_mask.mem_size()).unwrap_or(0))
+            .sum()
     }
 }
 
