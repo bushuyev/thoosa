@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use tch::Device::Cpu;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigBuilder, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfig, SelectMotifsRunConfigBuilder, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue};
-use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigBuilder, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, MotifCriteria, SelectMotifsRunConfig, SelectMotifsRunConfigBuilder, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue};
+use thoosa_common::parzen::optimizer::{AsyncCTPEOptimizer, ConfigurationSpace};
 use thoosa_common::runs::{SavableResult, Simple};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets::OptConfig;
@@ -95,6 +95,21 @@ impl FindAndSelectMotifsResult {
 }
 
 impl Output for FindAndSelectMotifsResult {}
+
+#[derive(Debug)]
+struct FindAndSelectEvalMetrics {
+    score_sum: f64,
+    constraint_metrics: HashMap<String, f32>,
+}
+
+impl FindAndSelectEvalMetrics {
+    fn failed() -> Self {
+        Self {
+            score_sum: 0.0,
+            constraint_metrics: MotifCriteria::failed_constraint_metrics(),
+        }
+    }
+}
 
 impl WithId for FindAndSelectMotifsResult {
     type ID = RunId;
@@ -216,7 +231,7 @@ impl FindAndSelectMotifsStage {
         max_chunk_size: i64,
         device_idx: usize,
         mut ctx: C
-    ) -> Result<f64, ThoError> {
+    ) -> Result<FindAndSelectEvalMetrics, ThoError> {
         let find_input = Arc::new(DevicesWrap::wrap(
             ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store).await?,
             CacheArea::default(),
@@ -279,13 +294,20 @@ impl FindAndSelectMotifsStage {
             .await?,
         );
 
-        let select_stage_output:Arc<DevicesWrap<SelectMotifsSavableResult>> = select_stage
+        let select_stage_output:Arc<DevicesWrap<SelectMotifsSavableResult>> = Arc::clone(&select_stage)
             .run(select_input, ctx.branch(Some("select_stage_output"), true, false))
             .await?;
 
         let mut select_savable:SelectMotifsSavableResult = Arc::into_inner(select_stage_output)
             .expect("FindAndSelectMotifsStage::run_find_and_select: select output still shared")
             .take_data(device_idx)
+            .await?;
+        let constraint_metrics = select_stage
+            .clc_constraint_metrics(
+                &run_config.select_motifs_run_config,
+                select_savable.selected_motif_ids_scores(),
+                ctx.branch(Some("select_stage_constraint_metrics"), false, false),
+            )
             .await?;
         let score_sum = select_savable.score_sum();
         select_savable.save(store, ws).await?;
@@ -295,7 +317,7 @@ impl FindAndSelectMotifsStage {
         #[cfg(tho_debug_plots)]
         run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![select_run_id] }), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
 
-        Ok(score_sum)
+        Ok(FindAndSelectEvalMetrics { score_sum, constraint_metrics })
     }
 }
 
@@ -350,7 +372,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                 let mut find_and_select_run_find_ctx = find_and_select_run_find_ctx.branch(Some(format!("grid_idx_{grid_idx}").as_str()), false, false);
                 async move {
 
-                    let mut opt = AsyncTPEOptimizer::new(
+                    let mut opt = AsyncCTPEOptimizer::new(
                         async  |opt_vals| {
                             let mut run_config: FindAndSelectMotifsRunConfig = [const_vals.as_slice(), grid_vals.as_slice(), opt_vals].concat().into_iter().into();
 
@@ -362,7 +384,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                             let fixed_find_motifs_config = fixed_find_motifs_config.clone();
                             let min_loss_ref = Arc::clone(&min_loss_ref);
 
-                            let selected_score_sum = panic_to_err_async!({
+                            let mut eval_metrics = panic_to_err_async!({
                                 Self::run_find_and_select(
                                     &ws,
                                     &store,
@@ -378,22 +400,24 @@ impl AsyncStage for FindAndSelectMotifsStage {
                             })
                             .unwrap_or_else(|e| {
                                 warn!("FindAndSelectMotifsStage::run: failed run_config={run_config:?}: {e:?}");
-                                0f64
+                                FindAndSelectEvalMetrics::failed()
                             });
 
-                            let loss = if selected_score_sum == 0.0 { f32::MAX } else { 1.0 / selected_score_sum as f32 };
-                            debug!("FindAndSelectMotifsStage::run: run_config={run_config:?} selected_count={selected_score_sum} loss={loss}");
+                            let loss = if eval_metrics.score_sum == 0.0 { f32::MAX } else { 1.0 / eval_metrics.score_sum as f32 };
+                            let is_satisfied = eval_metrics.constraint_metrics.values().all(|value| *value <= 0.0);
+                            debug!("FindAndSelectMotifsStage::run: run_config={run_config:?} selected_count={} loss={loss} constraint_metrics={:?} is_satisfied={is_satisfied}", eval_metrics.score_sum, eval_metrics.constraint_metrics);
 
-                            if loss < thoosa_shared::with_perf_log(|| min_loss_ref.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/read_min_loss").0 {
+                            if is_satisfied && loss < thoosa_shared::with_perf_log(|| min_loss_ref.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/read_min_loss").0 {
                                 *thoosa_shared::with_perf_log(|| min_loss_ref.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/write_min_loss") = (loss, Some(run_config.clone()));
                             }
 
-                            loss
+                            eval_metrics.constraint_metrics.insert("loss".to_string(), loss);
+                            eval_metrics.constraint_metrics
                         },
                         ConfigurationSpace::new(opt_params),
+                        MotifCriteria::optimizer_constraints(),
                         opt_max_evals,
                         opt_num_init,
-                        "n/a",
                     );
 
                     opt.optimize().await;
