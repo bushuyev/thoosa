@@ -459,7 +459,7 @@ where
 
 
                     let result = Arc::into_inner(result).expect("can't get result from train_net").take_data(0).await?;
-                    info!("TrainLabelNets::run, done: label={label_} min_loss={:?}", result.min_loss);
+                    debug!("TrainLabelNets::run, done: label={label_} min_loss={:?}", result.min_loss);
 
                     Ok::<_, ThoError>(
                         TrainLabelNetsRunConfigResult::new(
