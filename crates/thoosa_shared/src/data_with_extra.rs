@@ -64,6 +64,10 @@ where
     fn device(&self) -> usize {
         self.data.device()
     }
+
+    fn mem_size(&self) -> u64 {
+        self.data.mem_size()
+    }
 }
 
 

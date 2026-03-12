@@ -485,6 +485,11 @@ impl Data for CrossInputSelectorWrap {
     fn device(&self) -> usize {
         0
     }
+
+    fn mem_size(&self) -> u64 {
+        self.batch_0.iter().map(|batch| batch.mem_size()).sum::<u64>()
+            + self.batch_1.iter().map(|batch| batch.mem_size()).sum::<u64>()
+    }
 }
 
 

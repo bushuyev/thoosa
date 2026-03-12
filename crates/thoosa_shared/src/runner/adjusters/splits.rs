@@ -236,13 +236,13 @@ mod tests {
         }
 
         impl Data for TestInput {
-              type Metrics = i64;
+            type Metrics = i64;
 
-                type M = CpuOrGpu<MockTestInput>;
+            type M = CpuOrGpu<MockTestInput>;
 
-                fn size(&self) -> i64;
-                fn device(&self) -> usize;
-
+            fn size(&self) -> i64;
+            fn device(&self) -> usize;
+            fn mem_size(&self) -> u64;
         }
         impl Input for TestInput {}
     }
@@ -265,7 +265,7 @@ mod tests {
 
                 fn size(&self) -> i64;
                 fn device(&self) -> usize;
-
+                fn mem_size(&self) -> u64;
         }
 
         impl WithId for TestOutput {

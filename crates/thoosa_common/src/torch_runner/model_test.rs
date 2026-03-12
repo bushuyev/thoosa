@@ -100,6 +100,10 @@ mod tests {
         fn device(&self) -> usize {
             0
         }
+
+        fn mem_size(&self) -> u64 {
+            0
+        }
     }
 
     fn new_file_input_cache(
@@ -750,6 +754,10 @@ mod tests {
         }
 
         fn device(&self) -> usize {
+            0
+        }
+
+        fn mem_size(&self) -> u64 {
             0
         }
     }

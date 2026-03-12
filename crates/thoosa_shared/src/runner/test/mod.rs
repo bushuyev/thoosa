@@ -405,6 +405,10 @@ pub(crate) mod fixtures {
         fn device(&self) -> usize {
             0
         }
+
+        fn mem_size(&self) -> u64 {
+            0
+        }
     }
 
 
@@ -472,6 +476,10 @@ pub(crate) mod fixtures {
         }
 
         fn device(&self) -> usize {
+            0
+        }
+
+        fn mem_size(&self) -> u64 {
             0
         }
     }
@@ -769,6 +777,10 @@ mod tests {
         }
 
         fn device(&self) -> usize {
+            0
+        }
+
+        fn mem_size(&self) -> u64 {
             0
         }
     }

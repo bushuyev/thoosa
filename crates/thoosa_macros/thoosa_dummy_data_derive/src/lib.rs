@@ -45,6 +45,10 @@ pub fn derive_dummy_data(input: TokenStream) -> TokenStream {
             fn device(&self) -> usize {
                 0
             }
+
+            fn mem_size(&self) -> u64 {
+                size_of::<Self>() as u64
+            }
         }
     };
 

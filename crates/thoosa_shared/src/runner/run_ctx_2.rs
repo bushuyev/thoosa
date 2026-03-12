@@ -39,7 +39,7 @@ pub struct RunCtxWithPermits {
 
 impl Debug for RunCtxWithPermits {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RunCtx2")
+        f.debug_struct("RunCtxWithPermits")
             .field("device_idx", &self.device_idx)
             .field("cache_area", &self.cache_area)
             .finish()
@@ -70,7 +70,7 @@ impl RunCtxWithPermits {
         assert_ne!(cache_area, 0);
 
 
-        debug!("RunCtx2::with_cache_area: device_idx={device_idx} branch_name={id:?}");
+        debug!("RunCtxWithPermits::with_cache_area: device_idx={device_idx} branch_name={id:?}");
 
         Self {
             id,
@@ -106,16 +106,16 @@ impl PermitsCtx for RunCtxWithPermits {
             "RunCtxWithPermits/drop_permits/permits",
         );
         let acquired_permits: NumPermits = permits.iter().map(|p| p.num_permits()).sum();
-        debug!("TorchRunCtx: acquired_permits={acquired_permits} ctx.id={:?} drop_if={drop_if:?}",self.id);
+        debug!("RunCtxWithPermits: acquired_permits={acquired_permits} ctx.id={:?} drop_if={drop_if:?}",self.id);
 
         match drop_if {
             DropIf::Always => {
-                debug!("TorchRunCtx: ctx.id={:?} dropping permits", self.id);
+                debug!("RunCtxWithPermits: ctx.id={:?} dropping permits", self.id);
                 permits.clear();
             }
             DropIf::IfNotMax => {
                 if acquired_permits < MAX_PERMITS {
-                    debug!("TorchRunCtx: ctx.id={:?} dropping permits", self.id);
+                    debug!("RunCtxWithPermits: ctx.id={:?} dropping permits", self.id);
                     permits.clear();
                 }
             }
@@ -156,18 +156,18 @@ impl RunCtx for RunCtxWithPermits {
             None => {
                 self.id.clone()
             }
-            Some(_branch_name) => {
-                &self.id + mono_key!(branches, _branch_name)
+            Some(branch_name) => {
+                &self.id + mono_key!(branches, branch_name)
             }
         };
-        debug!("RunCtx2::branch: branch_full_id={branch_full_id:?}");
+        debug!("RunCtxWithPermits::branch: branch_full_id={branch_full_id:?}");
 
         let mut branched_ctx= if with_new_cache_area {
             let new_cache_area = GlobalCtx::global().next_cache_area().expect("ran out of cache areas");
 
             let mut branched_ctx = RunCtxWithPermits::with_cache_area(self.device_idx, branch_full_id, new_cache_area);
 
-            debug!("RunCtx2::branch: branch_name={:?}  new_cache_area={new_cache_area}", branched_ctx.id);
+            debug!("RunCtxWithPermits::branch: branch_name={:?}  new_cache_area={new_cache_area}", branched_ctx.id);
 
             branched_ctx.cache_area = new_cache_area;
             branched_ctx.purge_gpu_closures = Some(Arc::new(Mutex::new(vec![])));//Arc::strong_count == 1 causes it to purge gpu caches on Drop
@@ -188,6 +188,8 @@ impl RunCtx for RunCtxWithPermits {
         branched_ctx.permits = parent_permits;
 
         if give_permits_back_to_parent {
+            debug!("RunCtxWithPermits::branch: set_return_to={:?}  from={}", self.id, branched_ctx.id);
+
             branched_ctx.set_return_to((self.id.clone(), Arc::clone(&self.permits)));
         }
         branched_ctx.device_idx = self.device_idx;
@@ -217,7 +219,7 @@ impl Drop for RunCtxWithPermits {
             let count = Arc::strong_count(&purge_gpu_closures);
 
             debug!(
-                "Drop for RunCtx2::drop: id={:?} count={count} purge_gpu_closures.len={}",
+                "Drop for RunCtxWithPermits::drop: id={:?} count={count} purge_gpu_closures.len={}",
                 self.id,
                 with_perf_log(
                     || purge_gpu_closures.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for purge_gpu_closures lock"),
@@ -229,7 +231,7 @@ impl Drop for RunCtxWithPermits {
             if count == 1 {// it's topmost ctx
                 match Arc::into_inner(purge_gpu_closures) {
                     None => {
-                        warn!("can't get inner from Arc with 1 strong ref in Drop for RunCtx2");
+                        warn!("can't get inner from Arc with 1 strong ref in Drop for RunCtxWithPermits");
                     }
                     Some(m) => {
                         #[cfg(any(test, feature = "mock_global_ctx"))]
@@ -245,7 +247,7 @@ impl Drop for RunCtxWithPermits {
 
         if let Some((return_to_id, return_to_perms)) = self.return_to.take() {
             debug!(
-                "Drop for RunCtx2::drop: id={:?} giving permits back to parent self.perms.permits.len={}",
+                "Drop for RunCtxWithPermits::drop: id={:?} giving permits back to parent self.perms.permits.len={}",
                 self.id,
                 with_perf_log(
                     || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
@@ -261,6 +263,9 @@ impl Drop for RunCtxWithPermits {
                 ),
             );
             if !local_perms.is_empty() {
+                for local_perm in &mut local_perms {
+                    local_perm.update_requester_id(Arc::new(return_to_id.clone()));
+                }
                 with_perf_log(
                     || return_to_perms.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for return_to_perms lock"),
                     "RunCtxWithPermits/drop/return_to_perms",
@@ -277,7 +282,7 @@ impl Drop for RunCtxWithPermits {
 
         } else {
             debug!(
-                "Drop for RunCtx2::drop: id={:?} dropping permits self.perms.permits.len={}",
+                "Drop for RunCtxWithPermits::drop: id={:?} dropping permits self.perms.permits.len={}",
                 self.id,
                 with_perf_log(
                     || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
