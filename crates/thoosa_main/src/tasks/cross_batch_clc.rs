@@ -100,6 +100,7 @@ impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Data for CrossInput<'a, R> {
     fn device(&self) -> usize {
         0
     }
+
 }
 
 #[derive(Debug, Clone, Default)]

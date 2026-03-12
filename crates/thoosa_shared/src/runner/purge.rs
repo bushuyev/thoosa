@@ -107,7 +107,7 @@ where
     }
 
     async fn debug_gpu(&self, device_idx: usize) -> Result<(), ThoError> {
-        warn!("debug_gpu: device_idx={device_idx}");
+        warn!("debug_gpu: device_idx={device_idx} self.len={}", self.len());
         let items: Vec<(K, Arc<DevicesWrap<O>>)> = self
             .iter()
             .filter_map(|entry| {
@@ -188,6 +188,10 @@ mod tests {
 
         fn device(&self) -> usize {
             1
+        }
+
+        fn mem_size(&self) -> u64 {
+            size_of::<DummyOutput>() as u64
         }
     }
 

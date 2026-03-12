@@ -693,7 +693,7 @@ where
                 GlobalCtx::global().debug_caches(device_idx).await;
 
                 Err(Cause::SomethingElse(format!("all failed: task.out_key={out_key:?}")).into())
-                // Err(Cause::SomethingElse(format!("XXX")).into())
+
             }
             Ok(o) => {
                 debug!("OOMHandler::run: ctx_id={ctx_id:?} task={task:?} os_thread_id={} done without oom ", os_thread_id());
@@ -755,6 +755,10 @@ pub mod test_types {
         }
 
         fn device(&self) -> usize {
+            0
+        }
+
+        fn mem_size(&self) -> u64 {
             0
         }
     }
@@ -821,6 +825,10 @@ pub mod test_types {
         }
 
         fn device(&self) -> usize {
+            0
+        }
+
+        fn mem_size(&self) -> u64 {
             0
         }
     }
