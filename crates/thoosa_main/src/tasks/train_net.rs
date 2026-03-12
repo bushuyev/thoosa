@@ -437,7 +437,7 @@ where
                 &self.descr,
             ).await?;
 
-            debug!("TrainNet::run: descr={:?} run_config={:?}", self.descr, run_config);
+            info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
 
             Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")]), var_store, node_params, run_config, loss), CacheArea::default())))
         }

@@ -1146,6 +1146,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             channels: RangeOrValue::Range{ range: Range {start: 8, end: 256}, step: None },
             // kernel: RangeOrValue::Value(10),
             kernel: RangeOrValue::Range{ range: Range {start: 10, end: 100}, step: None },
+            head_pool: None,
         })
 
     };
@@ -1271,10 +1272,8 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         common_training_args: common_training_args.clone(),
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
         net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
-            stride: RangeOrValue::Value(1),
-            channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-            kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-            head_pool: BinaryHeadPoolArgsRangeOrValue::Lse(BinaryHeadLseRangeOrValue{ tau: RangeOrValue::Value(0.9) }),
+            a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
+            b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
         }),
         // num_layers: RangeOrValue::Range { range: Range { start: 2, end: 8 }, step: None },
 
@@ -2687,15 +2686,15 @@ mod cli_tests {
                 debug!("ConvNetParams");
                 todo!()
             }
-            MotifNetTypeParams::CosineNetParams(MotifCosineNetParams{ num_features, stride, channels, kernel, .. }) => {
-                debug!("CosineNetParams: num_features={num_features} stride={stride} channels={channels} kernel={kernel}");
-
-                let out = module.tho_forward(&channel_t.unfold(0, num_features as i64, stride as i64).into(), None, false)?;
-
-                debug!("out.size={:?}", out.size());
-
-                // plot_t(&out.t.softmax(0, Float).view((1, -1)), &format!("{motif_id}_applied_to_{resource}"))?;
-                debug_plot!(&out.t.view((1, -1)), "{motif_id}_applied_to_{resource}")?;
+            MotifNetTypeParams::CosineNetParams(MotifCosineNetParams{ .. }) => {
+                // debug!("CosineNetParams: num_features={num_features} stride={stride}  kernel={kernel}");
+                //
+                // let out = module.tho_forward(&channel_t.unfold(0, num_features as i64, stride as i64).into(), None, false)?;
+                //
+                // debug!("out.size={:?}", out.size());
+                //
+                // // plot_t(&out.t.softmax(0, Float).view((1, -1)), &format!("{motif_id}_applied_to_{resource}"))?;
+                // debug_plot!(&out.t.view((1, -1)), "{motif_id}_applied_to_{resource}")?;
             }
         }
 

@@ -1103,7 +1103,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
 
-        let params = MotifNetParams::new_cosine(0, 1, 8, 1234, BinaryHeadPool::Max);
+        let params = MotifNetParams::new_cosine(0, 5.0, 0.0);
         let mut vs = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> =
             cosine_motif_node(match &params.net_type {

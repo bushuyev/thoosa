@@ -172,10 +172,10 @@ where
         // let slice_step = slice_step.into_iter().next().expect("no slice_step");//TODO shouldn't necessarily be what was used during motif training
         debug!("ApplyMotifNets::new: motif_width(max)={motif_width:?} motif_widths={motif_widths:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets_with_filters.len());
 
-        let mut select_motifs_run_id_sorted = train_motif_nets_run_ids.clone();//TODO move to util CompKey::from Vec
-        select_motifs_run_id_sorted.sort();
+        let mut train_motif_nets_run_ids_sorted = train_motif_nets_run_ids.clone();//TODO move to util CompKey::from Vec
+        train_motif_nets_run_ids_sorted.sort();
         Ok(Self {
-            id: SynKey::new(select_motifs_run_id_sorted.into_iter().map(|run_id| mono_key!(run_id, format!("select_motifs_run_id_{run_id}"))).collect::<Vec<_>>()),
+            id: SynKey::new(train_motif_nets_run_ids_sorted.into_iter().map(|run_id| mono_key!(run_id, format!("train_motif_nets_run_ids_{run_id}"))).collect::<Vec<_>>()),
             ws: Arc::clone(&ws),
             store:Arc::clone(&store),
             pd: PhantomData,

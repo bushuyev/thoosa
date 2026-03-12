@@ -509,7 +509,8 @@ impl PermitSource for Arbiter {
 
             debug!("PermitSource::move_permits:  from={from:?} to={to:?} val={from_val:?}");
         } else {
-            warn!("PermitSource::move_permits:  no from={from:?}");
+            //it may not have requested permits
+            //warn!("PermitSource::move_permits:  no from={from:?}");
         }
     }
 

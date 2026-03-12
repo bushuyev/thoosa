@@ -426,13 +426,12 @@ pub struct MyCosineConv1d {
     /// Learnable logit bias
     pub beta: Tensor,
     l: i64,
-    config: ConvConfig
 }
 
 impl MyCosineConv1d {
 
-    pub fn new(vs: &nn::Path, c: i64, l: i64, config: ConvConfig, init: Option<Arc<ThoTensor<MotifSlices, DataId>>>) -> Result<Self, TchError> {
-        debug!("MyCosineConv1d: c={c} l={l} config={config:?}");
+    pub fn new(vs: &Path, l: i64, init: Option<Arc<ThoTensor<MotifSlices, DataId>>>, a: f64, b: f64) -> Result<Self, TchError> {
+        debug!("MyCosineConv1d: l={l}");
         let kernel = match init {
             None => {
                 vs.var("kernel", &[1, 1, l], nn::Init::Const(0.0))
@@ -442,7 +441,7 @@ impl MyCosineConv1d {
                 let proto = motif_slices.as_ref().as_ref().f_mean_dim(0, false, Kind::Float)?; // [L]
 
 
-                // Optional but usually helpful: zero-mean prototype
+                // zero-mean prototype
                 let proto_mean = proto.f_mean(Kind::Float)?;
                 let proto_zm = proto.f_sub(&proto_mean)?; // [L]
 
@@ -467,15 +466,14 @@ impl MyCosineConv1d {
             }
         };
 
-        let alpha = vs.var("alpha", &[], nn::Init::Const(5.0));
-        let beta = vs.var("beta", &[], nn::Init::Const(0.0));
+        let alpha = vs.var("alpha", &[], nn::Init::Const(a));
+        let beta = vs.var("beta", &[], nn::Init::Const(b));
 
         Ok(Self {
             kernel,
             alpha,
             beta,
             l,
-            config: ConvConfig::default()
         })
     }
 
@@ -493,12 +491,12 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
     fn tho_forward(&self, x_in: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut [i64]>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MyCosineConv1d::tho_forward: x_in.size={:?} lengths={lengths:?}", x_in.size());
 
-        if let Some(lengths) = lengths.as_deref_mut() {
+        if let Some(lengths) = lengths.as_deref_mut() {//this can't be used in with other layers so length update is no needed
             for len in lengths.iter_mut() {
                 if *len < 0 {
                     return Err(ThoError::new(format!("MyCosineConv1d::tho_forward length must be >= 0, got {len}")));
                 }
-                *len = clc_conv1d_out(*len as u32, self.l as u32, self.config, "")? as i64;
+                *len = clc_conv1d_out(*len as u32, self.l as u32, ConvConfig::default(), "")? as i64;
             }
         }
 
@@ -564,20 +562,22 @@ impl BinaryHead {
     }
 
     pub fn forward_max(&self, sims: &Tensor) -> Result<Tensor, ThoError> {
-        let pooled = pool_time_max(sims).map_err(|e| ThoError::from_error("BinaryHead::forward_max", e))?;
+        let pooled = pool_time_max(sims).map_err(|e| ThoError::from_error(format!("BinaryHead::forward_max failed, e={e:?}"), e))?;
         pooled.f_mul(&self.alpha)?.f_add(&self.beta).map_err(|e| e.into())
     }
 
     pub fn forward_lse(&self, sims: &Tensor, tau: f64) -> Result<Tensor, ThoError> {
+        debug!("BinaryHead::forward_lse: sims={sims:?}");
+
         if tau <= 0.0 {
             return Err(ThoError::new(format!("BinaryHead::forward_lse tau must be > 0, got {tau}")));
         }
-        let pooled = pool_time_lse(sims, tau).map_err(|e| ThoError::from_error("BinaryHead::forward_lse", e))?;
+        let pooled = pool_time_lse(sims, tau).map_err(|e| ThoError::from_error(format!("BinaryHead::forward_lse failed, e={e:?}"), e))?;
         pooled.f_mul(&self.alpha)?.f_add(&self.beta).map_err(|e| e.into())
     }
 
     pub fn forward_mean(&self, sims: &Tensor) -> Result<Tensor, ThoError> {
-        let pooled = pool_time_mean(sims).map_err(|e| ThoError::from_error("BinaryHead::forward_mean", e))?;
+        let pooled = pool_time_mean(sims).map_err(|e| ThoError::from_error(format!("BinaryHead::forward_mean failed, e={e:?}"), e))?;
         pooled.f_mul(&self.alpha)?.f_add(&self.beta).map_err(|e| e.into())
     }
 }
@@ -1379,7 +1379,7 @@ mod tch_tests {
                 })),
                 None,
             )?
-            .cosine_conv_1d("cosine", 3, 1, 2, ConvConfig { stride: 1, bias: false, ..ConvConfig::default() }, None)?
+            .cosine_conv_1d("cosine", 3, None, 0.5, 0.0)?
             .end_seq()?;
 
         let vs = nn::VarStore::new(Cpu);

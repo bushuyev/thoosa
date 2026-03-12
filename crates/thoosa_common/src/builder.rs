@@ -89,9 +89,8 @@ pub enum Node {
     CosineConv1d {
         path:String,
         kernel: u32,
-        in_channels: u32,
-        out_channels: u32,
-        config: ConvConfig,
+        a: f64,
+        b: f64,
         init: Option<Arc<ThoTensor<MotifSlices, DataId>>>
     },
     SharpeningHead1d {
@@ -275,16 +274,12 @@ impl Node {
             Node::CosineConv1d {
                 path,
                 kernel,
-                in_channels,
-                out_channels: _out_channels,
-                config,
+                a, b,
                 init,
             } => Box::new(MyCosineConv1d::new(
                 &(vs / path),
-                in_channels as i64,
                 kernel as i64,
-                config,
-                init
+                init, a, b
             )?),
 
             Node::SharpeningHead1d {
@@ -487,22 +482,19 @@ impl SeqBuilder {
         &mut self,
         path: P,
         kernel: u32,
-        in_channels: u32,
-        out_channels: u32,
-        config: ConvConfig,
-        init: Option<Arc<ThoTensor<MotifSlices, DataId>>>
+        init: Option<Arc<ThoTensor<MotifSlices, DataId>>>,
+        a: f64,
+        b: f64
     ) -> Result<&mut Self, ThoError> {
 
         self.elts.push(Node::CosineConv1d {
             path:path.to_string(),
             kernel,
-            in_channels,
-            out_channels,
-            config,
+            a, b,
             init
         });
 
-        self.num_features = clc_conv1d_out(self.num_features, kernel, config, "")?;
+        self.num_features = clc_conv1d_out(self.num_features, kernel, ConvConfig::default(),  "")?;
         self.kernel = Some(kernel);
 
         Ok(self)
