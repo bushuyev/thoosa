@@ -241,7 +241,7 @@ impl Arbiter {
                             Ok(inner) => {
                                 let rq = q.remove(pos).expect("pos valid");
 
-                                debug!("Arbiter::spawn, loop: super_id={sid:?} removed");
+                                debug!("Arbiter::spawn, loop: super_id={sid:?} got inner={inner:?}");
 
                                 grant_req(
                                     rq,
@@ -255,6 +255,7 @@ impl Arbiter {
                                 progressed = true;
                             }
                             Err(TryAcquireError::NoPermits) => {
+                                debug!("Arbiter::spawn, loop: super_id={sid:?} TryAcquireError::NoPermits");
                                 // wait for notify / updated request / drop
                             }
                             Err(e) => {//means Closed
@@ -547,6 +548,8 @@ mod tests {
 
     use log::debug;
     use std::sync::Arc;
+    use tokio::try_join;
+    use tracing::field::debug;
     use crate::mono_key;
     use crate::simple_id;
     use crate::runner::permits::MAX_PERMITS;
@@ -714,58 +717,33 @@ mod tests {
         ));
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_task_keeps_permits() -> Result<(), ThoError>{
-        struct TaskWithPermits {
-            need_permits:u8,//in the real app it's not known how many permits will be needed - depends on the current task and resources available
-            acquired_permits:Vec<RunnerPerm>
-        }
+        let mut arb = Arbiter::new(MAX_PERMITS, 0);
 
-        impl TaskWithPermits {
-            fn do_some_stuff(&self) -> Result<(), ()> {
-                if self.need_permits > self.sum_permits() {
-                    Err(())
-                } else {
-                    Ok(())
+        let mut permit_a = Some(arb.send_acquire_rq(80, Arc::new(simple_id!("a")) as Arc<dyn CachableIdTr>).await?);
+
+
+        for i in 0..3 {
+            match arb.send_acquire_rq(80, Arc::new(simple_id!("b")) as Arc<dyn CachableIdTr>).await {
+                Ok(p) if i < 2 => {
+                    panic!("shouldn't be able to get permits, got permit={p:?} on {i} attempt");
                 }
-            }
-
-            fn sum_permits(&self) -> u8 {
-                self.acquired_permits.iter().map(|p| p.num_permits()).sum()
-            }
-
-            pub fn new(min_permits:u8) -> Self {
-                Self { need_permits: min_permits, acquired_permits: vec![]}
-            }
-        }
-        let arb = Arbiter::new(100, 0);
-
-        let mut task_0 = TaskWithPermits::new(80);
-        let mut ask_for_permits = 0;
-        loop {
-            ask_for_permits+=10;
-            match arb.send_acquire_rq(ask_for_permits, Arc::new(mono_key!(0, "task_0")) as Arc<dyn CachableIdTr>).await {
-                Ok(perms) => {
-                    task_0.acquired_permits.push(perms);//keep permits
-                    match task_0.do_some_stuff() {
-                        Ok(_) => {
-                            //mission accomplished - drop task, permits, etc
-                            return Ok(())
-                        }
-                        Err(_e) => {
-                            //try to grab more permits in the next cycle
-                        }
-                    }
+                Ok(p) => {
+                    debug!("got expected permit: p={p:?}");
                 }
-                Err(_) => {//assume it's OutOfPermits
-                    task_0.acquired_permits.clear(); //let other tasks to run when there's not enough permits for us
-                    ask_for_permits = task_0.sum_permits();//but let's start asking in the next cycle from where we've left
-
-                    //TODO how to avoid going into next cycle immediately and wait for some even on arb telling that there is a chance there will be permits for us
+                Err(e) => {
+                    debug!("got expected error: {e:?}");
                 }
             };
-
+            if i == 1 {
+                drop(permit_a.take());
+            }
         }
 
+
+
+
+        Ok(())
     }
 }
