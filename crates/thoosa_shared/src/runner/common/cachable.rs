@@ -663,7 +663,7 @@ where
 
         for (device_idx, data) in wrap.cached_data.iter().enumerate().skip(1) {
             if timed_tokio_read(data, "CpuOrGpu::is_all_on_cpu read").await.is_some() {
-                debug!("DataCacheWrapper::is_all_on_cpu: {:?} is on cpu device_idx={device_idx}", wrap.id);
+                debug!("DataCacheWrapper::is_all_on_cpu: {:?} is on device_idx={device_idx}", wrap.id);
                 return false;
             }
         }

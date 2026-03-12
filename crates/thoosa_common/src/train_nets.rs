@@ -1881,13 +1881,13 @@ where
 
                 let (loss, node_params) = panic_to_err_async!(
                     train_clone(
-                            Arc::clone(&vs),
-                            run_config.clone(),
-                            &mut listener
+                        Arc::clone(&vs),
+                        run_config.clone(),
+                        &mut listener
                     )
                 ).unwrap_or_else(|e| {
                     warn!("opt_train failed with {e:?} on {run_config:?} ");
-                    (f32::MAX, Default::default())
+                    (1.0, Default::default())
                 });
                 // listener.plot();
 

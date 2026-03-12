@@ -113,19 +113,23 @@ where
         }
 
         let ids_to_exclude = adjust_context.ids_to_exclude();
+        debug!("DumpToCpu::adjust: acquired 100 permits, dumping");
+
+        GlobalCtx::global().debug_caches(device_idx).await;
         GlobalCtx::global()
             .dump_all_to_cpu(ids_to_exclude, device_idx)
             .await.map_err(|e|{
             warn!("DumpToCpu::adjust: dump_all_to_cpu failed: {e:?}");
             AdjusterError::<A>::SomethingElse
         })?;
+        GlobalCtx::global().debug_caches(device_idx).await;
 
         *adjust_context.dump_to_cpu_retry_count_mut() = 10001;//TODO to force false from degrade and proceed to next adjuster
         // adjustable.write().drop_permits(DropIf::Always);
 
         debug!("DumpToCpu::adjust done: is_all_on_cpu={}",GlobalCtx::global().is_all_on_cpu(device_idx));
 
-        Ok(adjustable.branch(Some(""), false, false))
+        Ok(adjustable.branch(None, false, false))
     }
 
     fn degrade(&self, adjust_context: &mut C) -> bool {
