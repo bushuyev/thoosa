@@ -1,4 +1,4 @@
-use crate::tho_tensor::{ThoTensor};
+use crate::tho_tensor::ThoTensor;
 use async_trait::async_trait;
 use std::fmt::Debug;
 use thoosa_shared::{CopyToDevice, ThoError};
@@ -135,4 +135,12 @@ impl From<Vec<i64>> for AnyMetrics {
     fn from(_value: Vec<i64>) -> Self {
         AnyMetrics
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct MotifSlices;
+
+impl Dims for MotifSlices {
+    type Metrics = MonoMetrics<0, 2>; //[i64;2]; // [i64; 2];//slices x window - used to split motif's slices when calculating distances
+
 }

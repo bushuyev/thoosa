@@ -37,13 +37,14 @@ use tokio::task::{JoinError, JoinSet};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_common::cuda_utils::{pack_bits_bool, with_cuda_stream};
+use thoosa_common::dims::MotifSlices;
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use crate::tasks::motif_loader::MotifMeta;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_named_derive::Named;
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, MotifSlices};
+use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::slices_stats::{Aggr as StatsAggr, Metrics};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
@@ -516,7 +517,7 @@ mod tests {
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_with_data::with_data;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-    use crate::tasks::cross_dims::MotifSlices;
+    use thoosa_common::dims::MotifSlices;
     use crate::tasks::random_slices_stats::RANDOM_AVG_DIST_GROUP;
     use crate::tasks::select_motifs::SelectMotifsStage;
 

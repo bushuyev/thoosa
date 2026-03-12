@@ -39,9 +39,7 @@ use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
 
-use crate::dims::{
-    Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, Slice, ThoBatch,
-};
+use crate::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Slice, ThoBatch};
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use thoosa_properties_map::ToHashmap;
@@ -51,10 +49,12 @@ use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
+use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::traits::{Data, SimpleId, WithId};
+use thoosa_shared::runner::common::cachable::DevicesWrap;
+use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -852,7 +852,7 @@ impl MotifNetParams {
     }
 
     pub fn new_cosine(num_features: u32, stride: u32, channels: u32, kernel: u32, head_pool: BinaryHeadPool) -> Self {
-        Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, stride, channels, kernel, head_pool)))
+        Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, stride, channels, num_features, head_pool)))
     }
 
     pub fn to_properties_map(&self) -> HashMap<String, Val> {
@@ -890,11 +890,11 @@ impl MotifNetParams {
     }
 
     //TODO
-    pub fn motif_net(&self) -> Result<Node, ThoError> {
+    pub fn motif_net(&self, motif: Option<Arc<ThoTensor<MotifSlices, DataId>>>) -> Result<Node, ThoError> {
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => lin_motif_node(v),
             MotifNetTypeParams::ConvNetParams(v) => conv_motif_node(v),
-            MotifNetTypeParams::CosineNetParams(v) => cosine_motif_node(v),
+            MotifNetTypeParams::CosineNetParams(v) => cosine_motif_node(v, motif),
         }
     }
 }
@@ -1033,7 +1033,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
     build()
 }
 
-pub fn cosine_motif_node(params: &MotifCosineNetParams) -> Result<Node, ThoError> {
+pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTensor<MotifSlices, DataId>>>) -> Result<Node, ThoError> {
     debug!("cosine_motif_node: params={params:?}");
     let build = || -> Result<Node, ThoError> {
         let mut builder = SeqBuilder::new(params.num_features, None)?;
@@ -1042,6 +1042,11 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams) -> Result<Node, ThoError
             bias: false,
             ..ConvConfig::default()
         };
+        let params =  MotifCosineNetParams{
+            kernel: motif.as_ref().map(|v|v.size().dim_1() as u32).unwrap_or(params.kernel),
+            ..params.clone()
+        };
+
 
         builder
             // .batch_norm(BatchNormConfig::default())?
@@ -1052,8 +1057,8 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams) -> Result<Node, ThoError
                 })),
                 None,
             )?
-            .cosine_conv_1d("cosine_bank", params.kernel, params.channels, params.channels, bank_cfg)?
-            .binary_head("binary_head", BinaryHeadPool::Lse { tau: 0.9 })?
+            .cosine_conv_1d("cosine_bank", params.kernel, params.channels, params.channels, bank_cfg, motif)?
+            // .binary_head("binary_head", BinaryHeadPool::Lse { tau: 0.9 })?
             .end_seq()
     };
 
