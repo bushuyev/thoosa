@@ -32,7 +32,7 @@ use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ComparisonMethod as RunConfigMetrics, ExtendMotifsConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, MotifCriterion, MotifSelector, SelectMotifsRunConfig};
+use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ComparisonMethod as RunConfigMetrics, ExtendMotifsConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, MotifCriteria, MotifCriterion, MotifSelector, SelectMotifsRunConfig};
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
@@ -1260,6 +1260,65 @@ where
         }
     }
 
+    pub(crate) async fn clc_constraint_metrics(
+        &self,
+        select_motifs_run_config: &SelectMotifsRunConfig,
+        motif_ids_scores: &[(u32, f64)],
+        mut ctx: C,
+    ) -> Result<HashMap<String, f32>, ThoError> {
+        let constraints = select_motifs_run_config.motif_criteria.constraints();
+        let mut metrics = MotifCriteria::optimizer_constraints();
+
+        if constraints.is_empty() {
+            return Ok(metrics);
+        }
+
+        if motif_ids_scores.is_empty() {
+            for constraint in constraints {
+                metrics.insert(constraint.key.to_string(), constraint.min);
+            }
+            return Ok(metrics);
+        }
+
+        let select_run_config_id = select_motifs_run_config.id.expect("no select_motifs_run_config");
+        let mut score_sums = constraints
+            .iter()
+            .map(|constraint| (constraint.key, 0.0f64))
+            .collect::<HashMap<_, _>>();
+
+        for (motif_id, _) in motif_ids_scores {
+            let motif_data = Arc::clone(&self.clc_dist.motif_loader)
+                .run_cached(
+                    Arc::new(DevicesWrap::wrap(
+                        MotifLoaderInput::new(DataId(*motif_id), Some(vec![select_run_config_id])),
+                        CacheArea::default(),
+                    )),
+                    ctx.branch(Some("select_motifs_clc_constraint_metrics_loader"), false, false),
+                )
+                .await?;
+
+            let motif_scores = with_data!(ctx.branch(Some("select_motifs_clc_constraint_metrics"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
+                let motif_slices = motif_data.data().t_ref();
+                constraints
+                    .iter()
+                    .map(|constraint| Ok::<_, ThoError>((constraint.key, Self::clc_criterion_score(motif_slices, &constraint.criterion)?)))
+                    .collect::<Result<Vec<_>, ThoError>>()
+            })?;
+
+            for (constraint_key, score) in motif_scores {
+                *score_sums.get_mut(constraint_key).expect("missing criterion score accumulator") += score;
+            }
+        }
+
+        let selected_count = motif_ids_scores.len() as f64;
+        for constraint in constraints {
+            let avg_score = score_sums[constraint.key] / selected_count;
+            metrics.insert(constraint.key.to_string(), (constraint.min as f64 - avg_score) as f32);
+        }
+
+        Ok(metrics)
+    }
+
     async fn filter_motifs_by_criteria(
         &self,
         select_motifs_run_config: &SelectMotifsRunConfig,
@@ -1269,8 +1328,8 @@ where
         assert!((0.0..=1.0).contains(&select_motifs_run_config.threshold), "SelectMotifsRunConfig::threshold must be within 0..1, got {}", select_motifs_run_config.threshold);
         debug!("SelectMotifsStage::run: 0. self.find_motif_run_ids_motif_ids={:?}", self.find_motif_run_ids_motif_ids);
 
-        let motif_criteria: Vec<MotifCriterion> = Vec::from(&select_motifs_run_config.motif_criteria);
-        if motif_criteria.is_empty() {
+        let criteria_constraints = select_motifs_run_config.motif_criteria.constraints();
+        if criteria_constraints.is_empty() {
             debug!("SelectMotifsStage::run: no motif criteria configured");
             return Ok(self.find_motif_run_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).map(|v| (*v, 1.0)).collect::<Vec<_>>());
         }
@@ -1295,7 +1354,7 @@ where
 
             let keep_score = with_data!(ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
                 let motif_slices = motif_data.data().t_ref();
-                debug!("SelectMotifsStage::run: motif_id={motif_id} motif_criteria={motif_criteria:?} threshold={threshold:.6} motif_slices={motif_slices:?}");
+                debug!("SelectMotifsStage::run: motif_id={motif_id} criteria_constraints={criteria_constraints:?} threshold={threshold:.6} motif_slices={motif_slices:?}");
 
                 if motif_slices.size()[0] < min_slices || motif_slices.size()[0] > max_slices {
                     return Ok::<(bool, f64), ThoError>((false, 0.0));
@@ -1304,14 +1363,14 @@ where
                 let mut avg_score = 1.0;
 
 
-                for (idx, criterion) in motif_criteria.iter().enumerate() {
-                    let criterion_score = Self::clc_criterion_score(motif_slices, criterion)?;
-                    if criterion_score < 0.5 {//TODO config
+                for (idx, criterion_constraint) in criteria_constraints.iter().enumerate() {
+                    let criterion_score = Self::clc_criterion_score(motif_slices, &criterion_constraint.criterion)?;
+                    if criterion_score < criterion_constraint.min as f64 {
                         return Ok::<(bool, f64), ThoError>((false, 0.0));
                     }
                     score_sum += criterion_score;
                     avg_score = score_sum / (idx + 1) as f64;
-                    debug!("SelectMotifsStage::run: motif_id={motif_id} criterion={criterion:?} criterion_score={criterion_score:.6} avg_score={avg_score:.6}");
+                    debug!("SelectMotifsStage::run: motif_id={motif_id} criterion_constraint={criterion_constraint:?} criterion_score={criterion_score:.6} avg_score={avg_score:.6}");
                 }
 
                 Ok::<(bool, f64), ThoError>((avg_score >= threshold, avg_score))

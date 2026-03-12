@@ -300,6 +300,11 @@ impl SelectMotifsSavableResult {
         assert_eq!(self.run_config.len(), 1, "expected one run config");
         self.run_config[0].1.iter().map(|v|v.1).sum::<f64>()
     }
+
+    pub fn selected_motif_ids_scores(&self) -> &[(u32, f64)] {
+        assert_eq!(self.run_config.len(), 1, "expected one run config");
+        self.run_config[0].1.as_slice()
+    }
 }
 
 #[async_trait]

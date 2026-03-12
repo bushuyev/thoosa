@@ -736,40 +736,121 @@ pub struct InterestingEntropyBand01RunConfig {
     pub eps: f64,
 }
 
-#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize, Default)]
+#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
 pub struct MotifCriteria {
     #[run_config]
     pub norm_thickness: Option<NormThicknessRunConfig>,
 
     #[run_config]
+    pub norm_thickness_min: f32,
+
+    #[run_config]
     pub inlier_ratioRunConfig: Option<InlierRatioRunConfig>,
+
+    #[run_config]
+    pub inlier_ratio_min: f32,
 
     #[run_config]
     pub coherenceRunConfig: Option<CoherenceRunConfig>,
 
     #[run_config]
+    pub coherence_min: f32,
+
+    #[run_config]
     pub interesting_amp_01: Option<InterestingAmp01RunConfig>,
+
+    #[run_config]
+    pub interesting_amp_01_min: f32,
 
     #[run_config]
     pub interesting_tv_norm_01: Option<InterestingTvNorm01RunConfig>,
 
     #[run_config]
+    pub interesting_tv_norm_01_min: f32,
+
+    #[run_config]
     pub interesting_curvature_norm_01: Option<InterestingCurvatureNorm01RunConfig>,
+
+    #[run_config]
+    pub interesting_curvature_norm_01_min: f32,
 
     #[run_config]
     pub interesting_turning_points_ratio: Option<InterestingTurningPointsRatioRunConfig>,
 
     #[run_config]
+    pub interesting_turning_points_ratio_min: f32,
+
+    #[run_config]
     pub interesting_band_energy_ratio_01: Option<InterestingBandEnergyRatio01RunConfig>,
+
+    #[run_config]
+    pub interesting_band_energy_ratio_01_min: f32,
 
     #[run_config]
     pub interesting_entropy_gauss_01: Option<InterestingEntropyGauss01RunConfig>,
 
     #[run_config]
+    pub interesting_entropy_gauss_01_min: f32,
+
+    #[run_config]
     pub interesting_entropy_band_01: Option<InterestingEntropyBand01RunConfig>,
+
+    #[run_config]
+    pub interesting_entropy_band_01_min: f32,
+}
+
+impl Default for MotifCriteria {
+    fn default() -> Self {
+        Self {
+            norm_thickness: None,
+            norm_thickness_min: Self::DEFAULT_CRITERION_MIN,
+            inlier_ratioRunConfig: None,
+            inlier_ratio_min: Self::DEFAULT_CRITERION_MIN,
+            coherenceRunConfig: None,
+            coherence_min: Self::DEFAULT_CRITERION_MIN,
+            interesting_amp_01: None,
+            interesting_amp_01_min: Self::DEFAULT_CRITERION_MIN,
+            interesting_tv_norm_01: None,
+            interesting_tv_norm_01_min: Self::DEFAULT_CRITERION_MIN,
+            interesting_curvature_norm_01: None,
+            interesting_curvature_norm_01_min: Self::DEFAULT_CRITERION_MIN,
+            interesting_turning_points_ratio: None,
+            interesting_turning_points_ratio_min: Self::DEFAULT_CRITERION_MIN,
+            interesting_band_energy_ratio_01: None,
+            interesting_band_energy_ratio_01_min: Self::DEFAULT_CRITERION_MIN,
+            interesting_entropy_gauss_01: None,
+            interesting_entropy_gauss_01_min: Self::DEFAULT_CRITERION_MIN,
+            interesting_entropy_band_01: None,
+            interesting_entropy_band_01_min: Self::DEFAULT_CRITERION_MIN,
+        }
+    }
 }
 
 impl MotifCriteria {
+    pub const DEFAULT_CRITERION_MIN: f32 = 0.5;
+    pub const NORM_THICKNESS_MIN_KEY: &str = "norm_thickness_min";
+    pub const INLIER_RATIO_MIN_KEY: &str = "inlier_ratio_min";
+    pub const COHERENCE_MIN_KEY: &str = "coherence_min";
+    pub const INTERESTING_AMP_01_MIN_KEY: &str = "interesting_amp_01_min";
+    pub const INTERESTING_TV_NORM_01_MIN_KEY: &str = "interesting_tv_norm_01_min";
+    pub const INTERESTING_CURVATURE_NORM_01_MIN_KEY: &str = "interesting_curvature_norm_01_min";
+    pub const INTERESTING_TURNING_POINTS_RATIO_MIN_KEY: &str = "interesting_turning_points_ratio_min";
+    pub const INTERESTING_BAND_ENERGY_RATIO_01_MIN_KEY: &str = "interesting_band_energy_ratio_01_min";
+    pub const INTERESTING_ENTROPY_GAUSS_01_MIN_KEY: &str = "interesting_entropy_gauss_01_min";
+    pub const INTERESTING_ENTROPY_BAND_01_MIN_KEY: &str = "interesting_entropy_band_01_min";
+    pub const CONSTRAINT_KEYS: [&str; 10] = [
+        Self::NORM_THICKNESS_MIN_KEY,
+        Self::INLIER_RATIO_MIN_KEY,
+        Self::COHERENCE_MIN_KEY,
+        Self::INTERESTING_AMP_01_MIN_KEY,
+        Self::INTERESTING_TV_NORM_01_MIN_KEY,
+        Self::INTERESTING_CURVATURE_NORM_01_MIN_KEY,
+        Self::INTERESTING_TURNING_POINTS_RATIO_MIN_KEY,
+        Self::INTERESTING_BAND_ENERGY_RATIO_01_MIN_KEY,
+        Self::INTERESTING_ENTROPY_GAUSS_01_MIN_KEY,
+        Self::INTERESTING_ENTROPY_BAND_01_MIN_KEY,
+    ];
+
     pub fn is_empty(&self) -> bool {
         self.norm_thickness.is_none()
             && self.inlier_ratioRunConfig.is_none()
@@ -782,6 +863,20 @@ impl MotifCriteria {
             && self.interesting_entropy_gauss_01.is_none()
             && self.interesting_entropy_band_01.is_none()
     }
+
+    pub fn optimizer_constraints() -> HashMap<String, f32> {
+        Self::CONSTRAINT_KEYS
+            .into_iter()
+            .map(|key| (key.to_string(), 0.0))
+            .collect()
+    }
+
+    pub fn failed_constraint_metrics() -> HashMap<String, f32> {
+        Self::CONSTRAINT_KEYS
+            .into_iter()
+            .map(|key| (key.to_string(), 1.0))
+            .collect()
+    }
 }
 
 impl ToHashmap for MotifCriteria {
@@ -793,6 +888,7 @@ impl ToHashmap for MotifCriteria {
                 .as_ref()
                 .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "norm_thickness."))))
                 .unwrap_or(Box::new(std::iter::empty()))
+                .chain(std::iter::once((thoosa_shared::conc_str(&prefix, Self::NORM_THICKNESS_MIN_KEY), self.norm_thickness_min.into())))
                 .chain(
                     self
                         .inlier_ratioRunConfig
@@ -800,6 +896,7 @@ impl ToHashmap for MotifCriteria {
                         .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "inlier_ratioRunConfig."))))
                         .unwrap_or(Box::new(std::iter::empty())),
                 )
+                .chain(std::iter::once((thoosa_shared::conc_str(&prefix, Self::INLIER_RATIO_MIN_KEY), self.inlier_ratio_min.into())))
                 .chain(
                     self
                         .coherenceRunConfig
@@ -807,6 +904,7 @@ impl ToHashmap for MotifCriteria {
                         .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "coherenceRunConfig."))))
                         .unwrap_or(Box::new(std::iter::empty())),
                 )
+                .chain(std::iter::once((thoosa_shared::conc_str(&prefix, Self::COHERENCE_MIN_KEY), self.coherence_min.into())))
                 .chain(
                     self
                         .interesting_amp_01
@@ -814,6 +912,7 @@ impl ToHashmap for MotifCriteria {
                         .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "interesting_amp_01."))))
                         .unwrap_or(Box::new(std::iter::empty())),
                 )
+                .chain(std::iter::once((thoosa_shared::conc_str(&prefix, Self::INTERESTING_AMP_01_MIN_KEY), self.interesting_amp_01_min.into())))
                 .chain(
                     self
                         .interesting_tv_norm_01
@@ -821,6 +920,7 @@ impl ToHashmap for MotifCriteria {
                         .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "interesting_tv_norm_01."))))
                         .unwrap_or(Box::new(std::iter::empty())),
                 )
+                .chain(std::iter::once((thoosa_shared::conc_str(&prefix, Self::INTERESTING_TV_NORM_01_MIN_KEY), self.interesting_tv_norm_01_min.into())))
                 .chain(
                     self
                         .interesting_curvature_norm_01
@@ -828,6 +928,7 @@ impl ToHashmap for MotifCriteria {
                         .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "interesting_curvature_norm_01."))))
                         .unwrap_or(Box::new(std::iter::empty())),
                 )
+                .chain(std::iter::once((thoosa_shared::conc_str(&prefix, Self::INTERESTING_CURVATURE_NORM_01_MIN_KEY), self.interesting_curvature_norm_01_min.into())))
                 .chain(
                     self
                         .interesting_turning_points_ratio
@@ -835,6 +936,7 @@ impl ToHashmap for MotifCriteria {
                         .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "interesting_turning_points_ratio."))))
                         .unwrap_or(Box::new(std::iter::empty())),
                 )
+                .chain(std::iter::once((thoosa_shared::conc_str(&prefix, Self::INTERESTING_TURNING_POINTS_RATIO_MIN_KEY), self.interesting_turning_points_ratio_min.into())))
                 .chain(
                     self
                         .interesting_band_energy_ratio_01
@@ -842,6 +944,7 @@ impl ToHashmap for MotifCriteria {
                         .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "interesting_band_energy_ratio_01."))))
                         .unwrap_or(Box::new(std::iter::empty())),
                 )
+                .chain(std::iter::once((thoosa_shared::conc_str(&prefix, Self::INTERESTING_BAND_ENERGY_RATIO_01_MIN_KEY), self.interesting_band_energy_ratio_01_min.into())))
                 .chain(
                     self
                         .interesting_entropy_gauss_01
@@ -849,13 +952,15 @@ impl ToHashmap for MotifCriteria {
                         .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "interesting_entropy_gauss_01."))))
                         .unwrap_or(Box::new(std::iter::empty())),
                 )
+                .chain(std::iter::once((thoosa_shared::conc_str(&prefix, Self::INTERESTING_ENTROPY_GAUSS_01_MIN_KEY), self.interesting_entropy_gauss_01_min.into())))
                 .chain(
                     self
                         .interesting_entropy_band_01
                         .as_ref()
                         .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "interesting_entropy_band_01."))))
                         .unwrap_or(Box::new(std::iter::empty())),
-                ),
+                )
+                .chain(std::iter::once((thoosa_shared::conc_str(&prefix, Self::INTERESTING_ENTROPY_BAND_01_MIN_KEY), self.interesting_entropy_band_01_min.into()))),
         )
     }
 }
@@ -873,6 +978,16 @@ impl FromHashmap for MotifCriteria {
         let interesting_band_energy_ratio_01_prefix = thoosa_shared::conc_str(&prefix, "interesting_band_energy_ratio_01.");
         let interesting_entropy_gauss_01_prefix = thoosa_shared::conc_str(&prefix, "interesting_entropy_gauss_01.");
         let interesting_entropy_band_01_prefix = thoosa_shared::conc_str(&prefix, "interesting_entropy_band_01.");
+        let norm_thickness_min_key = thoosa_shared::conc_str(&prefix, Self::NORM_THICKNESS_MIN_KEY);
+        let inlier_ratio_min_key = thoosa_shared::conc_str(&prefix, Self::INLIER_RATIO_MIN_KEY);
+        let coherence_min_key = thoosa_shared::conc_str(&prefix, Self::COHERENCE_MIN_KEY);
+        let interesting_amp_01_min_key = thoosa_shared::conc_str(&prefix, Self::INTERESTING_AMP_01_MIN_KEY);
+        let interesting_tv_norm_01_min_key = thoosa_shared::conc_str(&prefix, Self::INTERESTING_TV_NORM_01_MIN_KEY);
+        let interesting_curvature_norm_01_min_key = thoosa_shared::conc_str(&prefix, Self::INTERESTING_CURVATURE_NORM_01_MIN_KEY);
+        let interesting_turning_points_ratio_min_key = thoosa_shared::conc_str(&prefix, Self::INTERESTING_TURNING_POINTS_RATIO_MIN_KEY);
+        let interesting_band_energy_ratio_01_min_key = thoosa_shared::conc_str(&prefix, Self::INTERESTING_BAND_ENERGY_RATIO_01_MIN_KEY);
+        let interesting_entropy_gauss_01_min_key = thoosa_shared::conc_str(&prefix, Self::INTERESTING_ENTROPY_GAUSS_01_MIN_KEY);
+        let interesting_entropy_band_01_min_key = thoosa_shared::conc_str(&prefix, Self::INTERESTING_ENTROPY_BAND_01_MIN_KEY);
 
         Ok(Self {
             norm_thickness: if properties.keys().any(|key| key.starts_with(norm_thickness_prefix.as_str())) {
@@ -880,51 +995,61 @@ impl FromHashmap for MotifCriteria {
             } else {
                 None
             },
+            norm_thickness_min: properties.get(norm_thickness_min_key.as_str()).map(|value| value.try_into()).transpose()?.unwrap_or(Self::DEFAULT_CRITERION_MIN),
             inlier_ratioRunConfig: if properties.keys().any(|key| key.starts_with(inlier_ratio_prefix.as_str())) {
                 Some(InlierRatioRunConfig::from_properties_map(Some(inlier_ratio_prefix), properties)?)
             } else {
                 None
             },
+            inlier_ratio_min: properties.get(inlier_ratio_min_key.as_str()).map(|value| value.try_into()).transpose()?.unwrap_or(Self::DEFAULT_CRITERION_MIN),
             coherenceRunConfig: if properties.keys().any(|key| key.starts_with(coherence_prefix.as_str())) {
                 Some(CoherenceRunConfig::from_properties_map(Some(coherence_prefix), properties)?)
             } else {
                 None
             },
+            coherence_min: properties.get(coherence_min_key.as_str()).map(|value| value.try_into()).transpose()?.unwrap_or(Self::DEFAULT_CRITERION_MIN),
             interesting_amp_01: if properties.keys().any(|key| key.starts_with(interesting_amp_01_prefix.as_str())) {
                 Some(InterestingAmp01RunConfig::from_properties_map(Some(interesting_amp_01_prefix), properties)?)
             } else {
                 None
             },
+            interesting_amp_01_min: properties.get(interesting_amp_01_min_key.as_str()).map(|value| value.try_into()).transpose()?.unwrap_or(Self::DEFAULT_CRITERION_MIN),
             interesting_tv_norm_01: if properties.keys().any(|key| key.starts_with(interesting_tv_norm_01_prefix.as_str())) {
                 Some(InterestingTvNorm01RunConfig::from_properties_map(Some(interesting_tv_norm_01_prefix), properties)?)
             } else {
                 None
             },
+            interesting_tv_norm_01_min: properties.get(interesting_tv_norm_01_min_key.as_str()).map(|value| value.try_into()).transpose()?.unwrap_or(Self::DEFAULT_CRITERION_MIN),
             interesting_curvature_norm_01: if properties.keys().any(|key| key.starts_with(interesting_curvature_norm_01_prefix.as_str())) {
                 Some(InterestingCurvatureNorm01RunConfig::from_properties_map(Some(interesting_curvature_norm_01_prefix), properties)?)
             } else {
                 None
             },
+            interesting_curvature_norm_01_min: properties.get(interesting_curvature_norm_01_min_key.as_str()).map(|value| value.try_into()).transpose()?.unwrap_or(Self::DEFAULT_CRITERION_MIN),
             interesting_turning_points_ratio: if properties.keys().any(|key| key.starts_with(interesting_turning_points_ratio_prefix.as_str())) {
                 Some(InterestingTurningPointsRatioRunConfig::from_properties_map(Some(interesting_turning_points_ratio_prefix), properties)?)
             } else {
                 None
             },
+            interesting_turning_points_ratio_min: properties.get(interesting_turning_points_ratio_min_key.as_str()).map(|value| value.try_into()).transpose()?.unwrap_or(Self::DEFAULT_CRITERION_MIN),
             interesting_band_energy_ratio_01: if properties.keys().any(|key| key.starts_with(interesting_band_energy_ratio_01_prefix.as_str())) {
                 Some(InterestingBandEnergyRatio01RunConfig::from_properties_map(Some(interesting_band_energy_ratio_01_prefix), properties)?)
             } else {
                 None
             },
+            interesting_band_energy_ratio_01_min: properties.get(interesting_band_energy_ratio_01_min_key.as_str()).map(|value| value.try_into()).transpose()?.unwrap_or(Self::DEFAULT_CRITERION_MIN),
             interesting_entropy_gauss_01: if properties.keys().any(|key| key.starts_with(interesting_entropy_gauss_01_prefix.as_str())) {
                 Some(InterestingEntropyGauss01RunConfig::from_properties_map(Some(interesting_entropy_gauss_01_prefix), properties)?)
             } else {
                 None
             },
+            interesting_entropy_gauss_01_min: properties.get(interesting_entropy_gauss_01_min_key.as_str()).map(|value| value.try_into()).transpose()?.unwrap_or(Self::DEFAULT_CRITERION_MIN),
             interesting_entropy_band_01: if properties.keys().any(|key| key.starts_with(interesting_entropy_band_01_prefix.as_str())) {
                 Some(InterestingEntropyBand01RunConfig::from_properties_map(Some(interesting_entropy_band_01_prefix), properties)?)
             } else {
                 None
             },
+            interesting_entropy_band_01_min: properties.get(interesting_entropy_band_01_min_key.as_str()).map(|value| value.try_into()).transpose()?.unwrap_or(Self::DEFAULT_CRITERION_MIN),
         })
     }
 }
@@ -1010,6 +1135,90 @@ pub enum MotifCriterion {
     InterestingBandEnergyRatio01(InterestingBandEnergyRatio01),
     InterestingEntropyGauss01(InterestingEntropyGauss01),
     InterestingEntropyBand01(InterestingEntropyBand01),
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct MotifCriterionConstraint {
+    pub key: &'static str,
+    pub criterion: MotifCriterion,
+    pub min: f32,
+}
+
+impl MotifCriteria {
+    pub fn constraints(&self) -> Vec<MotifCriterionConstraint> {
+        let mut constraints = Vec::new();
+        if let Some(v) = self.norm_thickness.as_ref() {
+            constraints.push(MotifCriterionConstraint {
+                key: Self::NORM_THICKNESS_MIN_KEY,
+                criterion: MotifCriterion::NormThickness(NormThickness { k: v.k, eps: v.eps }),
+                min: self.norm_thickness_min,
+            });
+        }
+        if let Some(v) = self.inlier_ratioRunConfig.as_ref() {
+            constraints.push(MotifCriterionConstraint {
+                key: Self::INLIER_RATIO_MIN_KEY,
+                criterion: MotifCriterion::InlierRatio(InlierRatio { k: v.k, eps: v.eps }),
+                min: self.inlier_ratio_min,
+            });
+        }
+        if let Some(v) = self.coherenceRunConfig.as_ref() {
+            constraints.push(MotifCriterionConstraint {
+                key: Self::COHERENCE_MIN_KEY,
+                criterion: MotifCriterion::Coherence(Coherence { k: v.k, eps: v.eps }),
+                min: self.coherence_min,
+            });
+        }
+        if let Some(v) = self.interesting_amp_01.as_ref() {
+            constraints.push(MotifCriterionConstraint {
+                key: Self::INTERESTING_AMP_01_MIN_KEY,
+                criterion: MotifCriterion::InterestingAmp01(InterestingAmp01 { q_lo: v.q_lo, q_hi: v.q_hi, a0: v.a0, eps: v.eps }),
+                min: self.interesting_amp_01_min,
+            });
+        }
+        if let Some(v) = self.interesting_tv_norm_01.as_ref() {
+            constraints.push(MotifCriterionConstraint {
+                key: Self::INTERESTING_TV_NORM_01_MIN_KEY,
+                criterion: MotifCriterion::InterestingTvNorm01(InterestingTvNorm01 { amp_q_lo: v.amp_q_lo, amp_q_hi: v.amp_q_hi, tv0: v.tv0, eps: v.eps }),
+                min: self.interesting_tv_norm_01_min,
+            });
+        }
+        if let Some(v) = self.interesting_curvature_norm_01.as_ref() {
+            constraints.push(MotifCriterionConstraint {
+                key: Self::INTERESTING_CURVATURE_NORM_01_MIN_KEY,
+                criterion: MotifCriterion::InterestingCurvatureNorm01(InterestingCurvatureNorm01 { amp_q_lo: v.amp_q_lo, amp_q_hi: v.amp_q_hi, curv0: v.curv0, eps: v.eps }),
+                min: self.interesting_curvature_norm_01_min,
+            });
+        }
+        if let Some(v) = self.interesting_turning_points_ratio.as_ref() {
+            constraints.push(MotifCriterionConstraint {
+                key: Self::INTERESTING_TURNING_POINTS_RATIO_MIN_KEY,
+                criterion: MotifCriterion::InterestingTurningPointsRatio(InterestingTurningPointsRatio { peak: v.peak }),
+                min: self.interesting_turning_points_ratio_min,
+            });
+        }
+        if let Some(v) = self.interesting_band_energy_ratio_01.as_ref() {
+            constraints.push(MotifCriterionConstraint {
+                key: Self::INTERESTING_BAND_ENERGY_RATIO_01_MIN_KEY,
+                criterion: MotifCriterion::InterestingBandEnergyRatio01(InterestingBandEnergyRatio01 { fs: v.fs, f_lo: v.f_lo, f_hi: v.f_hi, eps: v.eps }),
+                min: self.interesting_band_energy_ratio_01_min,
+            });
+        }
+        if let Some(v) = self.interesting_entropy_gauss_01.as_ref() {
+            constraints.push(MotifCriterionConstraint {
+                key: Self::INTERESTING_ENTROPY_GAUSS_01_MIN_KEY,
+                criterion: MotifCriterion::InterestingEntropyGauss01(InterestingEntropyGauss01 { h0: v.h0, sigma: v.sigma, eps: v.eps }),
+                min: self.interesting_entropy_gauss_01_min,
+            });
+        }
+        if let Some(v) = self.interesting_entropy_band_01.as_ref() {
+            constraints.push(MotifCriterionConstraint {
+                key: Self::INTERESTING_ENTROPY_BAND_01_MIN_KEY,
+                criterion: MotifCriterion::InterestingEntropyBand01(InterestingEntropyBand01 { h_min: v.h_min, h_max: v.h_max, eps: v.eps }),
+                min: self.interesting_entropy_band_01_min,
+            });
+        }
+        constraints
+    }
 }
 
 impl From<&MotifCriteria> for Vec<MotifCriterion> {
