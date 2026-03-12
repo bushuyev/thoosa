@@ -90,6 +90,7 @@ impl RunnerPerm {
         self.inner.as_ref().map(|v|v.num_permits()).unwrap_or(0) as NumPermits
     }
 
+    #[cfg(test)]
     pub fn new(inner: OwnedSemaphorePermit) -> Self {
         Self {
             inner: Some(inner),
