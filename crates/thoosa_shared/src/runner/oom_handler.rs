@@ -667,7 +667,7 @@ where
                                                             last_context_adjuster.replace(v);
                                                         }
                                                     }
-                                                    debug!("OOMHandler::run, error: on oom moving to nexty adjuster adjust_result ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+                                                    debug!("OOMHandler::run, error: on oom moving to next adjuster ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                     break;
                                                 }

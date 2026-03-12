@@ -137,6 +137,35 @@ impl Arbiter {
             const SUPERTASK_FAIL_THRESHOLD: u32 = 3;
 
             let (drop_tx, mut drop_rx) = mpsc::unbounded_channel::<(Arc<dyn CachableIdTr>, u8)>();
+            let granted_counts_for_drop_loop = Arc::clone(&granted_counts);
+            tokio::spawn(async move {
+
+                while let Some(dropped) = drop_rx.recv().await {
+                    let id = &dropped.0;
+                    let n = dropped.1 as usize;
+
+                    debug!("Arbiter::spawn, drop loop: {id:?} dropped {n} permits");
+
+                    if let Some(mut vref) = granted_counts_for_drop_loop.get_mut(id) {
+                        if *vref >= n {
+                            *vref -= n;
+                        } else {
+                            warn!("Arbiter::spawn, drop loop: removing {n} which is more than currently granted {} for id={id:?}", *vref);
+                            *vref = 0;
+                        }
+
+                        let now = *vref;
+                        drop(vref);
+                        if now == 0 {
+                            debug!("Arbiter::spawn, drop loop: removing {id:?}");
+
+                            granted_counts_for_drop_loop.remove(id);
+                        }
+                    } else {
+                        warn!("Arbiter::spawn, drop loop: drop for unknown id={id:?}");
+                    }
+                }
+            });
 
             let mut rx_closed = false;
 
@@ -342,26 +371,6 @@ impl Arbiter {
 
                 // 2) Wait for events.
                 tokio::select! {
-                    Some(dropped) = drop_rx.recv() => {
-                        let id = &dropped.0;
-                        let n = dropped.1 as usize;
-
-                        debug!("Arbiter::spawn: {id:?} dropped {n} permits");
-
-
-                        if let Some(mut vref) = granted_counts.get_mut(id) {
-                            if *vref >= n { *vref -= n; } else { *vref = 0; }
-                            let now = *vref;
-                            drop(vref);
-                            if now == 0 {
-                                granted_counts.remove(id);
-                            }
-                        } else {
-                            warn!("Arbiter::spawn: drop for unknown id={id:?}");
-                        }
-
-                    }
-
                     opt = rx.recv() => {
                         match opt {
                             Some(req) => {
@@ -721,16 +730,19 @@ mod tests {
     async fn test_task_keeps_permits() -> Result<(), ThoError>{
         let mut arb = Arbiter::new(MAX_PERMITS, 0);
 
-        let mut permit_a = Some(arb.send_acquire_rq(80, Arc::new(simple_id!("a")) as Arc<dyn CachableIdTr>).await?);
+        let root_key:SynKey = mono_key!(0, "root").into();
 
+        let mut permit_a = Some(arb.send_acquire_rq(80, Arc::new(&root_key + mono_key!(0, "a")) as Arc<dyn CachableIdTr>).await?);
 
+        let mut permits_b = vec![];
         for i in 0..3 {
-            match arb.send_acquire_rq(80, Arc::new(simple_id!("b")) as Arc<dyn CachableIdTr>).await {
+            match arb.send_acquire_rq(80, Arc::new(&root_key + mono_key!(1, "b")) as Arc<dyn CachableIdTr>).await {
                 Ok(p) if i < 2 => {
                     panic!("shouldn't be able to get permits, got permit={p:?} on {i} attempt");
                 }
                 Ok(p) => {
                     debug!("got expected permit: p={p:?}");
+                    permits_b.push(p);
                 }
                 Err(e) => {
                     debug!("got expected error: {e:?}");
@@ -741,8 +753,20 @@ mod tests {
             }
         }
 
+        debug!("0. arb={arb:?}");
 
+        permits_b.push(arb.send_acquire_rq(20, Arc::new(&root_key + mono_key!(1, "b")) as Arc<dyn CachableIdTr>).await?);
 
+        debug!("1, permits_b={permits_b:?}");
+        debug!("1, arb={arb:?}");
+
+        drop(permits_b);
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        debug!("2. arb={arb:?}");
+
+        assert!(arb.granted_counts.is_empty());
 
         Ok(())
     }
