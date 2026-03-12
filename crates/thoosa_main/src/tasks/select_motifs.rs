@@ -320,6 +320,12 @@ impl Data for SelectMotifsInputSelectorWrap {
     fn device(&self) -> usize {
         0
     }
+
+    fn mem_size(&self) -> u64 {
+        self.batch.iter().map(|batch| batch.mem_size()).sum::<u64>()
+            + self.stacked_motifs.mem_size()
+            + self.motifs_stats.mem_size()
+    }
 }
 
 impl WithId for SelectMotifsInputSelectorWrap {

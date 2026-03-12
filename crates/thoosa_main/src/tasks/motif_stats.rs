@@ -144,6 +144,13 @@ impl Data for MotifStatsInput {
     fn device(&self) -> usize {
         0
     }
+
+    fn mem_size(&self) -> u64 {
+        match &self.source {
+            MotifStatsSource::Motif(_) | MotifStatsSource::Random { .. } => 0,
+            MotifStatsSource::ChannelsMotifsSlices(channels_motifs_slices) => channels_motifs_slices.mem_size(),
+        }
+    }
 }
 
 impl Select<()> for MotifStatsInput {

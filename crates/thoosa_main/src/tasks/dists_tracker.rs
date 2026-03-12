@@ -15,6 +15,7 @@ use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::loader::rayon_pool;
 use thoosa_common::tho_device::ThoDevice;
+use thoosa_common::utils::tensor_mem_size;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_common::ws::Workspace;
@@ -467,6 +468,15 @@ impl Data for DistsMask {
             Cuda(idx) => idx as usize,
             _ => 0,
         }
+    }
+
+    fn mem_size(&self) -> u64 {
+        (self.mask.numel() * self.mask.kind().elt_size_in_bytes()) as u64
+            + self
+                .dists
+                .as_ref()
+                .map(|dists| tensor_mem_size(dists) as u64)
+                .unwrap_or(0)
     }
 }
 

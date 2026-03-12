@@ -110,6 +110,10 @@ impl Data for StackedMotifsOutput {
     fn device(&self) -> usize {
         self.motifs.device()
     }
+
+    fn mem_size(&self) -> u64 {
+        self.motifs.mem_size()
+    }
 }
 
 impl WithId for StackedMotifsOutput {

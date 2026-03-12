@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use futures_util::StreamExt;
 use futures_util::future::{BoxFuture, Shared};
 use futures_util::stream;
-use log::{debug, warn};
+use log::{debug, trace, warn};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -123,7 +123,7 @@ where
         for (key, wrapper) in items {
             if !wrapper.is_all_on_cpu().await {
                 let size = wrapper.mem_size();
-                warn!("key={key:?} size={size:?}");
+                trace!("key={key:?} size={size:?}");
                 total_size += size;
             }
         }
