@@ -678,8 +678,7 @@ where
     O: WithId + Data + Send + Sync,
 {
     id: <O as WithId>::ID,
-    //cpu_only
-    //gpu_copied
+   
     cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,
     inflights: Box<[Mutex<Option<Arc<Notify>>>]>,
     cache_area: CacheArea,
