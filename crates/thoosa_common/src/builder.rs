@@ -4,10 +4,10 @@ use log::debug;
 use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
-use crate::dims::{AnyDims, Dims};
+use crate::dims::{AnyDims, Dims, MotifSlices};
 use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, my_linear};
 use thoosa_shared::{panic_to_err, ThoError};
-use thoosa_shared::traits::SimpleId;
+use thoosa_shared::traits::{DataId, SimpleId};
 use crate::tho_tensor::ThoTensor;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
@@ -92,6 +92,7 @@ pub enum Node {
         in_channels: u32,
         out_channels: u32,
         config: ConvConfig,
+        init: Option<Arc<ThoTensor<MotifSlices, DataId>>>
     },
     SharpeningHead1d {
         path: String,
@@ -277,11 +278,13 @@ impl Node {
                 in_channels,
                 out_channels: _out_channels,
                 config,
+                init,
             } => Box::new(MyCosineConv1d::new(
                 &(vs / path),
                 in_channels as i64,
                 kernel as i64,
                 config,
+                init
             )?),
 
             Node::SharpeningHead1d {
@@ -487,13 +490,16 @@ impl SeqBuilder {
         in_channels: u32,
         out_channels: u32,
         config: ConvConfig,
+        init: Option<Arc<ThoTensor<MotifSlices, DataId>>>
     ) -> Result<&mut Self, ThoError> {
+
         self.elts.push(Node::CosineConv1d {
             path:path.to_string(),
             kernel,
             in_channels,
             out_channels,
             config,
+            init
         });
 
         self.num_features = clc_conv1d_out(self.num_features, kernel, config, "")?;

@@ -24,10 +24,10 @@ use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_common::debug_plot;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
-use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice, ThoBatch};
+use thoosa_common::dims::{Batch, Dims, MotifProbability, MotifSlices, Slice, ThoBatch};
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
-use thoosa_common::train_nets::{opt_train, MotifNetParams, MotifNetTypeArgs, MotifsBy, OptConfig, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields};
+use thoosa_common::train_nets::{lin_motif_node, opt_train, MotifNetParams, MotifNetTypeArgs, MotifsBy, OptConfig, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields};
 use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, to_vec_f32, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -44,7 +44,7 @@ use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_shared::comp_id::SynKey;
-use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
+use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
 use crate::tasks::motifs_batch_builder::{make_batch_with, MixupJitterCfg};
@@ -238,8 +238,8 @@ where
                 ).await?;
 
 
-                let motif_width = with_data!(ctx.branch(Some("train_motif_nets_motif_width"), false, false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
-                    Ok::<_, ThoError>(motif.extra().window)
+                let (t, motif_width) = with_data!(ctx.branch(Some("train_motif_nets_motif_width"), false, false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
+                    Ok::<_, ThoError>((Arc::new(motif.data().clone())/*TODO clone*/, motif.extra().window))
                 })?;
 
                 let random_slices_loader_for_batch = Arc::clone(&random_slices_loader);
@@ -258,7 +258,7 @@ where
                             MotifNetTypeArgs::LinNet(net) => MotifNetParams::new_lin(motif_width, net.num_layers, net.step),
                             MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.stride, net.channels, net.kernel, (&net.head_pool).into()),
                         };
-                        Ok((params.motif_net()?.build_tch_module(&vs.root())?, params))
+                        Ok((params.motif_net(Some(Arc::clone(&t)))?.build_tch_module(&vs.root())?, params))
                     },
                     opt_config.clone(), //TODO clone
                     train_motifs_nodes_run_configs.clone(), //TODO clone
@@ -532,7 +532,7 @@ mod tests {
     use thoosa_with_data::with_data;
     use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_shared::test_utils::MotifKind;
-    use crate::tasks::cross_dims::MotifSlices;
+    use thoosa_common::dims::MotifSlices;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 
@@ -623,7 +623,7 @@ mod tests {
         let r:Arc<DevicesWrap<TrainMotifsNetsResult>> = train_motif_net.run(input, run_ctx_branch).await?;
 
         fn run_test_net(params:&MotifNetParams, vs:&VarStore)->Result<(), ThoError>{
-            let net = params.motif_net()?.build_tch_module::<MotifSlices, MotifProbability>(&vs.root())?;
+            let net = params.motif_net(None)?.build_tch_module::<MotifSlices, MotifProbability>(&vs.root())?;
 
             let (t, intervals) = tch_test_utils::resource_tensor(1000usize, &[
                 vec![(2, 100, MotifKind::Pulse)],

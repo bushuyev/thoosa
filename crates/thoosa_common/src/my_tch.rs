@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
-use tch::{nn, Kind, TchError, Tensor};
+use tch::{nn, no_grad, Kind, TchError, Tensor};
 
 use tch::nn::{ConvConfig, Module};
 use tch::nn::{
@@ -13,11 +13,11 @@ use tch::nn::{
 };
 
 use thoosa_shared::{panic_to_err, ThoError};
-use thoosa_shared::traits::SimpleId;
+use thoosa_shared::traits::{DataId, SimpleId};
 use crate::builder::{clc_avg_pool1d_out, clc_conv1d_out, clc_max_pool1d_out, Node};
 // use crate::{data, utils};
 use crate::builder::SeqBuilder;
-use crate::dims::{AnyDims, Dims};
+use crate::dims::{AnyDims, Dims, MotifSlices};
 use crate::tho_tensor::ThoTensor;
 use crate::utils::*;
 
@@ -418,26 +418,65 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 2]> {
 
 #[derive(Debug)]
 pub struct MyCosineConv1d {
-    pub w: Tensor,       // [K, C, L] learnable filters
-    ones: Tensor,        // [1, 1, L] buffer for sliding energy
-    _k: i64,             // out_channels (num filters)
-    _c: i64,             // in_channels
+    pub kernel: Tensor,
+
+    /// Learnable logit scale
+    pub alpha: Tensor,
+
+    /// Learnable logit bias
+    pub beta: Tensor,
     l: i64,
     config: ConvConfig
 }
 
 impl MyCosineConv1d {
-    /// Create a cosine-conv bank with K filters, C input channels, kernel length L.
-    /// Weights are N(0, 0.02).
-    pub fn new(vs: &nn::Path, c: i64, l: i64, config: ConvConfig) -> Result<Self, TchError> {
+
+    pub fn new(vs: &nn::Path, c: i64, l: i64, config: ConvConfig, init: Option<Arc<ThoTensor<MotifSlices, DataId>>>) -> Result<Self, TchError> {
         debug!("MyCosineConv1d: c={c} l={l} config={config:?}");
-        let c = 1;//for single motif
-        let k =c ;
-        let device = vs.device();
-        let w = vs.var("W", &[k, c, l], nn::Init::Randn { mean: 0.0, stdev: 0.02 });
-        // fixed boxcar (sum over L) to build window norms; kept as a (non-trainable) buffer
-        let ones = Tensor::ones([1, 1, l], (Kind::Float, device));
-        Ok(Self { w, ones, _k: k, _c: c, l, config })
+        let kernel = match init {
+            None => {
+                vs.var("kernel", &[1, 1, l], nn::Init::Const(0.0))
+            }
+            Some(motif_slices) => {
+                let l = motif_slices.size()[1];
+                let proto = motif_slices.as_ref().as_ref().f_mean_dim(0, false, Kind::Float)?; // [L]
+
+
+                // Optional but usually helpful: zero-mean prototype
+                let proto_mean = proto.f_mean(Kind::Float)?;
+                let proto_zm = proto.f_sub(&proto_mean)?; // [L]
+
+                // Normalize to unit norm for cosine similarity init
+                let proto_sq = proto_zm.f_mul(&proto_zm)?;
+                let proto_norm = proto_sq
+                    .f_sum(Kind::Float)?
+                    .f_sqrt()?
+                    .f_clamp_min(1e-12)?;
+                let proto_unit = proto_zm.f_div(&proto_norm)?; // [L]
+
+                // Learnable kernel [1,1,L], initialized with prototype
+                let mut kernel = vs.var("kernel", &[1, 1, l], nn::Init::Const(0.0))
+                    .set_requires_grad(false);//TODO use tch::no_grad
+
+
+                kernel.f_copy_(&proto_unit.f_view([1, 1, l])?)?;
+
+                debug!("MyCosineConv1d::new: kernel={kernel:?}");
+
+                kernel.set_requires_grad(true)
+            }
+        };
+
+        let alpha = vs.var("alpha", &[], nn::Init::Const(5.0));
+        let beta = vs.var("beta", &[], nn::Init::Const(0.0));
+
+        Ok(Self {
+            kernel,
+            alpha,
+            beta,
+            l,
+            config: ConvConfig::default()
+        })
     }
 
     /// Ensure input is 3D [B, C, T] (adds singleton channel if needed).
@@ -464,37 +503,42 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
         }
 
         let x = Self::ensure_3d(x_in.as_ref());
+        let size = x.size();
+        // Normalize kernel each forward so it stays unit-ish during training
+        let k_sq = self.kernel.f_mul(&self.kernel)?;
+        let k_norm = k_sq
+            .f_sum_dim_intlist(&[1, 2][..], true, Kind::Float)? // [1,1,1]
+            .f_sqrt()?
+            .f_clamp_min(1e-12)?;
+        let k_unit = self.kernel.f_div(&k_norm)?; // [1,1,L]
 
-        // ---- Normalize filters per out-channel: Wn = W / ||W||_2 (over C,L) ----
-        // denom: [K, 1, 1]
-        let w2      = self.w.f_mul(&self.w)?;                                  // [K,C,L]
-        let sum_cl  = w2.f_sum_dim_intlist(&[1, 2][..], true, Kind::Float)?;       // [K,1,1]
-        let denom_w = sum_cl.f_sqrt()?.f_clamp_min(1e-12)?;                    // [K,1,1]
-        let w_norm  = self.w.f_div(&denom_w)?;                                  // [K,C,L]
-
-        // ---- Numerator: standard cross-correlation with normalized kernels ----
-        // y_num: [B, K, T-L+1]
-        let y_num = x.f_conv1d(
-            &w_norm,              // weight [K,C,L]
-            None::<Tensor>,                // bias
-            &[1],                 // stride
-            &[0],                 // padding
-            &[1],                 // dilation
-            1,                    // groups
+        // Numerator = full-width conv => [B,1,1]
+        let num = x.f_conv1d(
+            &k_unit,
+            None::<Tensor>,
+            &[1], // stride
+            &[0], // padding
+            &[1], // dilation
+            1,    // groups
         )?;
 
-        // ---- Denominator: sliding L2 norm of the window across *all* channels ----
-        // energy over channels: sum_c x^2 -> [B,1,T]
-        let x2        = x.f_mul(&x)?;                                          // [B,C,T]
-        let x2_sum_c  = x2.f_sum_dim_intlist(1, true, Kind::Float)?;        // [B,1,T]
-        // convolve with ones to get sum of squares per window: [B,1,T-L+1]
-        let win_energy = x2_sum_c.f_conv1d(&self.ones, None::<Tensor>, &[1], &[0], &[1], 1)?;
-        let denom_x    = win_energy.f_sqrt()?.f_clamp_min(1e-12)?;             // [B,1,T-L+1]
+        // Denominator = ||x||
+        let x_sq = x.f_mul(&x)?;
+        let x_norm = x_sq
+            .f_sum_dim_intlist(&[1, 2][..], true, Kind::Float)? // [B,1,1]
+            .f_sqrt()?
+            .f_clamp_min(1e-12)?;
 
-        // ---- Cosine similarity: divide per-position ----
-        // broadcasting: [B,K,T’] / [B,1,T’]
-        let y = y_num.f_div(&denom_x)?;
-        Ok(y.into())
+        // Cosine similarity in [-1,1], shape [B,1,1]
+        let score = num.f_div(&x_norm)?;
+
+        // Logit = alpha * score + beta
+        let logits = score
+            .f_mul(&self.alpha)?
+            .f_add(&self.beta)?
+            .f_squeeze_dim(2)?; // [B,1]
+
+        Ok(logits.into())
     }
 }
 
@@ -1339,7 +1383,7 @@ mod tch_tests {
                 })),
                 None,
             )?
-            .cosine_conv_1d("cosine", 3, 1, 2, ConvConfig { stride: 1, bias: false, ..ConvConfig::default() })?
+            .cosine_conv_1d("cosine", 3, 1, 2, ConvConfig { stride: 1, bias: false, ..ConvConfig::default() }, None)?
             .end_seq()?;
 
         let vs = nn::VarStore::new(Cpu);

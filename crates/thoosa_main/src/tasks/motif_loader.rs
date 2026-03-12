@@ -19,7 +19,7 @@ use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::tmp_cache::TmpCached;
 use thoosa_common::debug_plot;
-use thoosa_common::dims::{AnyDims, Dims};
+use thoosa_common::dims::{AnyDims, Dims, MotifSlices};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
@@ -29,7 +29,7 @@ use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_with_data::with_data;
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, ChannelsMotifsSlices, MotifSlices};
+use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, ChannelsMotifsSlices};
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
@@ -502,17 +502,14 @@ pub mod mock_motif_loader {
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use thoosa_shared::ThoError;
     use thoosa_shared::traits::DataId;
-    use thoosa_named_derive::Named;
     use thoosa_shared::traits::WithId;
     use thoosa_common::tho_tensor::ThoTensor;
     use dashmap::DashMap;
-    use mockall::predicate::always;
-    use parking_lot::RwLock;
     use tch::Tensor;
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
     use thoosa_shared::data_with_extra::DataWithExtra;
-    use crate::tasks::cross_dims::MotifSlices;
+    use thoosa_common::dims::MotifSlices;
     use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
     mock! {
         #[derive(Debug, Named)]
@@ -617,7 +614,7 @@ mod tests {
     use crate::tasks::motif_loader::{MotifLoader, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::cross_dims::MotifSlices;
+    use thoosa_common::dims::MotifSlices;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_motifs::distance::average_euclidean_distance;

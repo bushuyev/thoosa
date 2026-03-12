@@ -8,6 +8,7 @@ use parking_lot::RwLock;
 use tch::Kind::Float;
 use tch::{IndexOp, Tensor};
 use cached_derive::Cached;
+use thoosa_common::dims::MotifSlices;
 use thoosa_named_derive::Named;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_shared::runner::common::{OutId, RunCtx};
@@ -26,7 +27,7 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics,
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
-use crate::tasks::cross_dims::{ChannelsMotifsSlices, MotifSlices};
+use crate::tasks::cross_dims::ChannelsMotifsSlices;
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN;
