@@ -256,7 +256,7 @@ where
                         let params = match &rc.net {
                             MotifNetTypeArgs::ConvNet(net) => MotifNetParams::new_conv(motif_width, net.conv_layers, net.head_layers, net.step, net.channels, net.kernel),
                             MotifNetTypeArgs::LinNet(net) => MotifNetParams::new_lin(motif_width, net.num_layers, net.step),
-                            MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.stride, net.channels, net.kernel, (&net.head_pool).into()),
+                            MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.a, net.b),
                         };
                         Ok((params.motif_net(Some(Arc::clone(&t)))?.build_tch_module(&vs.root())?, params))
                     },
@@ -689,8 +689,8 @@ mod tests {
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(10)),
                     NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
                     // NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Stride)), Val::Int(1)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Kernel)), Val::Int(100)),
+                    // NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::A)), Val::Real(5.0)),
+                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::B)), Val::Real(0.0)),
                 ]),
                 vec![
                     // NamedRange::new(TrainMotifsNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
@@ -699,7 +699,7 @@ mod tests {
             vec![
                 // Hyperparameter::UniformInt{name: TrainMotifsNetsRunConfigFields::NumLayers, lower: 6, upper: 8},
                 Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
-                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Channels)), lower: 2, upper: 32 }
+                Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::A)), lower: 1.0, upper: 10.0 }
             ],
         )
     }

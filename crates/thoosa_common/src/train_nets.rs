@@ -58,7 +58,7 @@ use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
-    #[arg(long)]
+    #[arg(long, value_delimiter = ',')]
     pub train_motif_nets_run_ids: Vec<RunId>,
 
     #[arg(long)]
@@ -587,7 +587,11 @@ pub struct MotifConvNetArgs {
 
     #[in_map]
     #[run_config]
-    pub kernel: u32
+    pub kernel: u32,
+
+    #[in_map]
+    #[run_config]
+    pub head_pool:Option<BinaryHeadPoolArgs>
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -614,19 +618,11 @@ pub struct MotifCosineNetArgs {
 
     #[in_map]
     #[run_config]
-    pub stride: u32,//TODO renamed to Conv stride
+    pub a:f64,
 
     #[in_map]
     #[run_config]
-    pub channels:u32,
-
-    #[in_map]
-    #[run_config]
-    pub kernel: u32,
-
-    #[in_map]
-    #[run_config]
-    pub head_pool:BinaryHeadPoolArgs
+    pub b: f64,
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -791,11 +787,12 @@ pub struct MotifConvNetParams {
     pub stride: u32,//stride within slice
     pub channels: u32,
     pub kernel: u32,
+    pub head_pool: Option<BinaryHeadPool>
 }
 
 impl MotifConvNetParams {
     pub fn new(num_features: u32, conv_layers: u32, head_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
-        Self { num_features, conv_layers, head_layers, stride, channels, kernel }
+        Self { num_features, conv_layers, head_layers, stride, channels, kernel, head_pool:None }
     }
 }
 
@@ -814,15 +811,14 @@ impl MotifLinNetParams {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct MotifCosineNetParams {
     pub num_features: u32,
-    pub stride: u32,//stride within slice
-    pub channels: u32,
-    pub kernel: u32,
-    pub head_pool: BinaryHeadPool
+    pub a:f64,
+    pub b:f64,
+
 }
 
 impl MotifCosineNetParams {
-    pub fn new(num_features: u32, stride: u32, channels: u32, kernel: u32, head_pool: BinaryHeadPool) -> Self {
-        Self { num_features, stride, channels, kernel, head_pool }
+    pub fn new(num_features: u32, a: f64, b: f64) -> Self {
+        Self { num_features, a, b }
     }
 }
 
@@ -854,7 +850,7 @@ impl MotifNetParams {
         Self { net_type }
     }
 
-    pub fn new_conv(num_features: u32, conv_layers: u32, head_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
+    pub fn new_conv(num_features: u32, conv_layers: u32, head_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {//head_pool: BinaryHeadPool
         Self::new_with_net_type(MotifNetTypeParams::ConvNetParams(MotifConvNetParams::new(num_features, conv_layers, head_layers, stride, channels, kernel)))
     }
 
@@ -862,13 +858,10 @@ impl MotifNetParams {
         Self::new_with_net_type(MotifNetTypeParams::LinNetParams(MotifLinNetParams::new(num_features, num_layers)))
     }
 
-    pub fn new_cosine(num_features: u32, stride: u32, channels: u32, kernel: u32, head_pool: BinaryHeadPool) -> Self {
-        Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, stride, channels, num_features, head_pool)))
+    pub fn new_cosine(num_features: u32, a: f64, b: f64) -> Self {
+        Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, a, b)))
     }
 
-    pub fn to_properties_map(&self) -> HashMap<String, Val> {
-        HashMap::from([("num_features".into(), self.num_features().into())])
-    }
 
     pub fn from_properties_map(properties: HashMap<String, Val>) -> Self {
         MotifNetParams::new(
@@ -1048,28 +1041,29 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
     debug!("cosine_motif_node: params={params:?}");
     let build = || -> Result<Node, ThoError> {
         let mut builder = SeqBuilder::new(params.num_features, None)?;
-        let bank_cfg = ConvConfig {
-            stride: params.stride as i64,
-            bias: false,
-            ..ConvConfig::default()
-        };
+
         let params =  MotifCosineNetParams{
-            kernel: motif.as_ref().map(|v|v.size().dim_1() as u32).unwrap_or(params.kernel),
+            num_features: motif.as_ref().map(|v|v.size().dim_1() as u32).unwrap_or(params.num_features),
             ..params.clone()
         };
 
 
         builder
-            // .batch_norm(BatchNormConfig::default())?
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    debug!("cosine_motif_node: t.size={:?}", t.size());
+                    debug!("cosine_motif_node: 1. t.size={:?}", t.size());
                     Ok(t.unsqueeze(1))
                 })),
                 None,
             )?
-            .cosine_conv_1d("cosine_bank", params.kernel, params.channels, params.channels, bank_cfg, motif)?
-            // .binary_head("binary_head", BinaryHeadPool::Lse { tau: 0.9 })?
+            .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b)?
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    debug!("cosine_motif_node: 2. t.size={:?}", t.size());
+                    Ok(t.shallow_clone())
+                })),
+                None,
+            )?
             .end_seq()
     };
 
@@ -1881,13 +1875,13 @@ where
 
                 let (loss, node_params) = panic_to_err_async!(
                     train_clone(
-                            Arc::clone(&vs),
-                            run_config.clone(),
-                            &mut listener
+                        Arc::clone(&vs),
+                        run_config.clone(),
+                        &mut listener
                     )
                 ).unwrap_or_else(|e| {
                     warn!("opt_train failed with {e:?} on {run_config:?} ");
-                    (f32::MAX, Default::default())
+                    (1.0, Default::default())
                 });
                 // listener.plot();
 
@@ -1917,7 +1911,7 @@ where
 
         debug!("opt_train: best_config={:?}", best_config);
 
-        info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={} min_var_store={min_var_store:?}", min_loss.read());
+        debug!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={} min_var_store={min_var_store:?}", min_loss.read());
         collect_eta_record_completion(grids_eta_guard.id());
     }
     Arc::into_inner(min_var_store)

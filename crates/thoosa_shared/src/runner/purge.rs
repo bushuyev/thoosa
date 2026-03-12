@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+use mockall::Any;
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::Output;
@@ -107,7 +108,6 @@ where
     }
 
     async fn debug_gpu(&self, device_idx: usize) -> Result<(), ThoError> {
-        warn!("debug_gpu: device_idx={device_idx} self.len={}", self.len());
         let items: Vec<(K, Arc<DevicesWrap<O>>)> = self
             .iter()
             .filter_map(|entry| {
@@ -128,7 +128,7 @@ where
             }
         }
 
-        warn!("total_size: {total_size}");
+        warn!("debug_gpu: device_idx={device_idx} type_name={:?} self.len={} total_size: {total_size}", self.type_name(), self.len());
 
         Ok(())
     }
