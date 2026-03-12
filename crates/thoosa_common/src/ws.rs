@@ -161,8 +161,8 @@ impl FsWorkspace {
 
         let module = ThoModuleWithStore::load(
             mono_key!("MotifNet", "MotifNet") + &mono_key!(model_path.to_string_lossy().to_string(), "motif_model"),
-            
-            move |path: &nn::Path| params_for_builder.motif_net()?.build_tch_module(path),
+
+            move |path: &nn::Path| params_for_builder.motif_net(None)?.build_tch_module(path),
             model_path,
             *device,
         )?;
@@ -458,7 +458,7 @@ impl Workspace for FsWorkspace {
 
             let module = ThoModuleWithStore::load(
                 mono_key!("MotifNet", "MotifNet") + &mono_key!(motif_id, "motif_id"),
-                move |path: &nn::Path| params_for_builder.motif_net()?.build_tch_module(path),
+                move |path: &nn::Path| params_for_builder.motif_net(None)?.build_tch_module(path),
                 model,
                 device.clone(),
             )?;
@@ -767,6 +767,7 @@ pub trait Workspace: Sync + Send + Debug {
         ThoError,
     >;
 
+    //TODO remove
     fn load_motif_nets<'a>(
         &self,
         channel: u32,
@@ -954,12 +955,13 @@ mod tests {
     use crate::train_nets::{conv_motif_node, cosine_motif_node, FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams, MotifNetParams, MotifNetTypeParams};
     use log::debug;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
     use tch::nn::{ConvConfig, ModuleT, VarStore};
     use tch::Tensor;
     use thoosa_shared::{ThoError, cdt_for_dir, simple_id};
-    use thoosa_shared::traits::SimpleId;
+    use thoosa_shared::traits::{DataId, SimpleId};
     use crate::tho_tensor::ThoTensor;
 
     #[ctor::ctor]
@@ -1101,18 +1103,27 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
 
-        let params = MotifNetParams::new_cosine(0, 1, 8, 10, BinaryHeadPool::Max);
+        let params = MotifNetParams::new_cosine(0, 1, 8, 1234, BinaryHeadPool::Max);
         let mut vs = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> =
             cosine_motif_node(match &params.net_type {
-                MotifNetTypeParams::CosineNetParams(v) => v,
-                _ => unreachable!(),
-            })?.build_tch_module(&vs.root())?;
+                            MotifNetTypeParams::CosineNetParams(v) => v,
+                            _ => unreachable!(),
+                        },
+                              Some(Arc::new(ThoTensor::new(DataId(0), Tensor::rand(
+                                  [
+                                      123,
+                                      1234i64,
+                                  ],
+                                  FLOAT_CPU,
+                              ))?
+                              ))
+            )?.build_tch_module(&vs.root())?;
 
         let out = net.tho_forward(
             &Tensor::rand(
                 [
-                    10,
+                    789,
                     1234i64,
                 ],
                 FLOAT_CPU,

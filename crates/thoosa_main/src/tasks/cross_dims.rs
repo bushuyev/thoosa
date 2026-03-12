@@ -103,19 +103,6 @@ impl ChannelsData2 {
 }
 
 
-
-
-#[derive(Clone, Debug)]
-pub struct MotifSlices;
-
-impl Dims for MotifSlices {
-    type Metrics = MonoMetrics<0, 2>; //[i64;2]; // [i64; 2];//slices x window - used to split motif's slices when calculating distances
-
-}
-
-
-
-
 #[derive(Clone, Debug)]
 pub struct ChannelsMotifsSlices;
 
