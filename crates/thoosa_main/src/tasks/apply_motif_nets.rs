@@ -18,8 +18,9 @@ use cached_derive::Cached;
 use thoosa_named_derive::Named;
 
 use thoosa_shared::runner::global_ctx::GlobalCtx;
-use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopRunnableContext, OOMHandler};
+use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::debug_plot;
+use thoosa_common::batches::BatchLengths;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::builder::SeqBuilder;
 use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
@@ -40,10 +41,9 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
-use thoosa_common::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
-use thoosa_shared::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
+use thoosa_shared::runner::adjusters::splits::SplitsAdjusterContext;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::{DropIf, OutId, RunCtx};
@@ -67,6 +67,188 @@ where
     apply_motif_nets: Vec<Arc<ApplyMotifNet<C>>>,
     pub slice_step: u32,//should be in the input
     pub motif_width:u32,
+}
+
+#[derive(Debug)]
+struct StepAlignedSplitsAdjuster {
+    min_split_len: MonoMetrics<1, 2>,
+    overlap_len: Option<MonoMetrics<1, 2>>,
+    slice_step: i64,
+}
+
+impl StepAlignedSplitsAdjuster {
+    fn new_with_overlap(min_split_len: MonoMetrics<1, 2>, overlap_len: MonoMetrics<1, 2>, slice_step: i64) -> Self {
+        Self {
+            min_split_len,
+            overlap_len: Some(overlap_len),
+            slice_step,
+        }
+    }
+
+    fn align_split_len(&self, split_len: &mut MonoMetrics<1, 2>) {
+        let dims: [i64; 2] = (&*split_len).into();
+        let min_len = self.min_split_len.dim::<1>();
+        let mut aligned_len = dims[1];
+        if aligned_len > min_len {
+            aligned_len = (aligned_len / self.slice_step) * self.slice_step;
+            if aligned_len < min_len {
+                aligned_len = min_len;
+            }
+        }
+        if aligned_len != dims[1] {
+            *split_len = [dims[0], aligned_len].into();
+        }
+    }
+}
+
+fn valid_partial_output_len(
+    input_len: i64,
+    split_start: i64,
+    split_len: i64,
+    motif_width: i64,
+    slice_step: i64,
+) -> i64 {
+    if input_len < motif_width {
+        return if split_start == 0 { 1 } else { 0 };
+    }
+
+    let last_valid_start = input_len - motif_width;
+    if split_start > last_valid_start || split_len <= 0 {
+        return 0;
+    }
+
+    let last_owned_start = (split_start + split_len - 1).min(last_valid_start);
+    ((last_owned_start - split_start) / slice_step) + 1
+}
+
+#[derive(Debug)]
+struct ApplyMotifNetSplitsContext {
+    done_to: MonoMetrics<1, 2>,
+    split_len: MonoMetrics<1, 2>,
+    input_len: MonoMetrics<1, 2>,
+    motif_width: i64,
+    slice_step: i64,
+    output_id: SynKey,
+    output: Tensor,
+    added_partial_output_len: i64,
+}
+
+// Matches the existing `ThoTensor` contract in this codebase: the context is only mutated via `&mut self`.
+unsafe impl Sync for ApplyMotifNetSplitsContext {}
+
+impl ApplyMotifNetSplitsContext {
+    fn new(
+        input_len: MonoMetrics<1, 2>,
+        output_id: SynKey,
+        output_size: i64,
+        options: (Kind, Device),
+        motif_width: i64,
+        slice_step: i64,
+    ) -> Result<Self, ThoError> {
+        Ok(Self {
+            done_to: input_len.default_end(),
+            split_len: input_len.clone(),
+            input_len,
+            motif_width,
+            slice_step,
+            output_id,
+            output: Tensor::f_zeros([output_size], options)?,
+            added_partial_output_len: 0,
+        })
+    }
+}
+
+impl<'a, C> InputContext<'a, ApplyMotifNet<C>> for ApplyMotifNetSplitsContext
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    async fn add_partial_output(&mut self, partial: ThoTensor<MotifProbability, SynKey>) {
+        let input_len = self.input_len.dim::<1>();
+        let split_start = self.done_to.dim::<1>();
+        let split_len = self.split_len.dim::<1>();
+        let valid_len = valid_partial_output_len(input_len, split_start, split_len, self.motif_width, self.slice_step);
+        let partial_len = partial.size()[0];
+
+        debug!("ApplyMotifNetSplitsContext::add_partial_output: input_len={input_len} split_start={split_start} split_len={split_len} motif_width={} slice_step={} partial_len={partial_len} valid_len={valid_len}", self.motif_width, self.slice_step);
+
+        if valid_len > 0 {
+            self.output
+                .narrow(0, self.added_partial_output_len, valid_len)
+                .copy_(&partial.t_ref().narrow(0, 0, valid_len));
+            self.added_partial_output_len += valid_len;
+        }
+
+        self.done_to += self.split_len.clone();
+
+        debug!("ApplyMotifNetSplitsContext::add_partial_output: done_to={:?} split_len={:?}", self.done_to, self.split_len);
+    }
+
+    fn all_done(&self) -> bool {
+        self.done_to >= self.input_len
+    }
+
+    async fn build_final_output(self) -> Result<ThoTensor<MotifProbability, SynKey>, ThoError> {
+        ThoTensor::new(self.output_id, self.output)
+    }
+}
+
+impl SplitsAdjusterContext for ApplyMotifNetSplitsContext {
+    type Metrics = MonoMetrics<1, 2>;
+
+    fn input_len(&self) -> &Self::Metrics {
+        &self.input_len
+    }
+
+    fn split_len(&self) -> &Self::Metrics {
+        &self.split_len
+    }
+
+    fn done_to(&self) -> &Self::Metrics {
+        &self.done_to
+    }
+
+    fn split_len_mut(&mut self) -> &mut Self::Metrics {
+        &mut self.split_len
+    }
+}
+
+#[async_trait]
+impl<AC> Adjuster<AC> for StepAlignedSplitsAdjuster
+where
+    AC: SplitsAdjusterContext<Metrics = MonoMetrics<1, 2>> + Send + Sync,
+{
+    type A = ChannelsData2Selector;
+
+    async fn adjust(
+        &self,
+        _adjustable: Self::A,
+        adjust_context: &mut AC,
+    ) -> Result<Self::A, AdjusterError<Self::A>> {
+        let split_start = adjust_context.done_to();
+        let mut split_end = split_start.clone();
+        split_end += adjust_context.split_len().clone();
+
+        if let Some(overlap_len) = self.overlap_len.as_ref() {
+            split_end += overlap_len.clone();
+        }
+        adjust_context.input_len().cap(&mut split_end);
+
+        debug!("StepAlignedSplitsAdjuster::adjust: split_start={split_start:?} split_end={split_end:?} input_len={:?}", adjust_context.input_len());
+
+        Ok((split_start.clone()..split_end).into())
+    }
+
+    fn degrade(&self, adjust_context: &mut AC) -> bool {
+        let prev_len = adjust_context.split_len().dim::<1>();
+        (*adjust_context.split_len_mut()) /= 2;
+        self.align_split_len(adjust_context.split_len_mut());
+        let next_len = adjust_context.split_len().dim::<1>();
+        let can_degrade = next_len >= self.min_split_len.dim::<1>() && next_len < prev_len;
+
+        debug!("StepAlignedSplitsAdjuster::degrade: prev_len={prev_len} next_len={next_len} min_split_len={:?} can_degrade={can_degrade}", self.min_split_len);
+
+        can_degrade
+    }
 }
 
 impl <C> ApplyMotifNets<C>
@@ -207,7 +389,7 @@ where
 {
     type Ctx = C;
     type In<'a> = ThoTensor<ChannelsData2, SynKey>;
-    type Out = ThoTensor<MotifProbability, SynKey>;//TODO it should be MotifsProbabilities - for many motifs
+    type Out = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;//TODO it should be MotifsProbabilities - for many motifs
 }
 
 
@@ -255,7 +437,8 @@ where
                 let input = inputs_by_filter_group.get(&group_key).cloned().expect("filtered input for group must exist");
                 let motif_width = apply_motif_net.motif_width;
                 let motif_width_i64 = motif_width as i64;
-                let min_split_len = motif_width_i64;
+                let step_aligned_min_split_len = ((motif_width_i64 + self.slice_step as i64 - 1) / self.slice_step as i64) * self.slice_step as i64;
+                let min_split_len = step_aligned_min_split_len.max(motif_width_i64);
                 let overlap_len = motif_width.saturating_sub(self.slice_step) as i64;
                 let input_len = input.size().dim::<1>() as i64;
                 let slices = if input_len >= motif_width_i64 {
@@ -279,9 +462,10 @@ where
                         vec![
                             Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
                             Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                            Adjusters::Input(Box::new(SplitsAdjuster::<ChannelsData2Selector, MonoMetrics<1, 2>>::new_with_overlap(
+                            Adjusters::Input(Box::new(StepAlignedSplitsAdjuster::new_with_overlap(
                                 [-1, min_split_len].into(),
-                                [-1, overlap_len].into()
+                                [-1, overlap_len].into(),
+                                slice_step as i64,
                             ))),
                         ], None)
                         .run(
@@ -289,7 +473,14 @@ where
                             Arc::clone(&apply_motif_net_input),
                             apply_motif_net_ctx,
                             Contexts::new(
-                                SplitsAdjusterContextImpl::new(input._size(), SingleDimTensorOutputBuilder::new(out_id.clone(), 0, &[slices + 1/*TODO +1 for padded slice, ApplyMotifNet::run   */, 1], (Float, ThoDevice::from(device_idx).into()), BuildAs::Append)?),
+                                ApplyMotifNetSplitsContext::new(
+                                    input._size(),
+                                    out_id.clone(),
+                                    slices,
+                                    (Float, ThoDevice::from(device_idx).into()),
+                                    motif_width_i64,
+                                    slice_step as i64,
+                                )?,
                                 NoopRunnableContext {},
                                 PermitsAndDumpToCpuAdjustableContex::new(
                                     PermitsAdjustContextImpl::new(),
@@ -349,7 +540,7 @@ where
             res_t, //.f_transpose(0, 1)?,
         )?;
 
-        Ok(Arc::new(DevicesWrap::wrap(motif_nets_applied, cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_nets_applied, match_lens), cache_area.into())))
 
     }
 
@@ -625,7 +816,7 @@ pub fn apply_motif_net_forward(
     let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 
-    let out_t = out.as_ref().f_squeeze()?.f_sigmoid()?;
+    let out_t = out.as_ref().f_view([-1])?.f_sigmoid()?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out_t.size={:?}", out_t.size());
 
     let t_plot = t.f_view((1, -1))?;
@@ -684,7 +875,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 
     let node = SeqBuilder::new(num_features, None)?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
 
                 let r = t.unsqueeze(1);//dummy channel
 
@@ -699,14 +890,14 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
                 SeqBuilder::new(num_features, None)?.conv_1d("conv", l as u32, 1, 1, cfg, Some(Arc::clone(&tho_tensor)))?.end_seq()?,
                 SeqBuilder::new(num_features, None)?
                     .closure(
-                        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                             Ok(t.f_pow_tensor_scalar(2)?)
                         })),
                         None,
                     )?
                     .conv_1d("energy", l as u32, 1, 1, cfg, Some(Arc::clone(&ones)))?
                     .closure(
-                        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                             Ok(t.f_clamp_min(1e-12)?) //.sqrt()
                         })),
                         None,
@@ -726,7 +917,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
             }),
         )?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
 
                 // debug!("dummy_motif_net: out=\n{t}");
 
@@ -782,6 +973,7 @@ pub(crate) mod tests {
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_common::tch_test_utils::Interval;
     use thoosa_properties_map::ToHashmap;
+    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
@@ -792,8 +984,17 @@ pub(crate) mod tests {
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
-    use crate::tasks::apply_motif_nets::{dummy_motif_net, motif_test_net_, ApplyMotifNets};
+    use crate::tasks::apply_motif_nets::{dummy_motif_net, motif_test_net_, valid_partial_output_len, ApplyMotifNets};
     use crate::tasks::tensor_loader::mock_tensor_loader;
+
+    #[test]
+    fn test_valid_partial_output_len_trims_last_chunk_and_short_input() {
+        assert_eq!(valid_partial_output_len(4000, 0, 999, 100, 3), 333);
+        assert_eq!(valid_partial_output_len(4000, 2997, 999, 100, 3), 302);
+        assert_eq!(valid_partial_output_len(4000, 3996, 999, 100, 3), 0);
+        assert_eq!(valid_partial_output_len(50, 0, 25, 100, 3), 1);
+        assert_eq!(valid_partial_output_len(50, 25, 25, 100, 3), 0);
+    }
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -934,12 +1135,14 @@ pub(crate) mod tests {
         let motif_width = motif_0_0.t_ref().size()[1] as i64;
         let slices = ((input_n_0 as i64 - motif_width) / slice_step as i64) + 1;
         let ctx_for_data = mock_run_ctx::default(1);
-        with_data!(ctx_for_data, out; |_ctx, r:&ThoTensor<MotifProbability, SynKey>|{
+        with_data!(ctx_for_data, out; |_ctx, r:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
+            assert_eq!(r.extra().as_slice(), &[slices, slices, slices]);
+            assert_eq!(r.data().t_ref().size(), vec![3, slices]);
 
-            let (pulse_matches_vals, pulse_matches_idx) = &r.t.i((0, 0..slices)).topk(1i64, 0, true, true);
-            let (triangle_matches_vals, triangle_matches_idx) = &r.t.i((1, 0..slices)).topk(1i64, 0, true, true);
-            let (sin_matches_vals, sin_matches_idx) = &r.t.i((2, 0..slices)).topk(1i64, 0, true, true);
+            let (pulse_matches_vals, pulse_matches_idx) = &r.data().t_ref().i((0, 0..slices)).topk(1i64, 0, true, true);
+            let (triangle_matches_vals, triangle_matches_idx) = &r.data().t_ref().i((1, 0..slices)).topk(1i64, 0, true, true);
+            let (sin_matches_vals, sin_matches_idx) = &r.data().t_ref().i((2, 0..slices)).topk(1i64, 0, true, true);
 
             assert_close(pulse_interval_starts_in_resources_a as f64, step as f64 * pulse_matches_idx.double_value(&[0]), step as f64 * 3.);
             assert_close(triangle_interval_starts_in_resources_a as f64, step as f64 * triangle_matches_idx.double_value(&[0]), step as f64 * 3.);
@@ -964,6 +1167,99 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_single_net_1_channel_1_motif_with_oom() -> Result<(), ThoError> {
         test_apply_motif_single_net_1_channel_1_motif(Some(1000), 4000, 3).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_apply_motif_nets_mixed_widths_return_real_lengths() -> Result<(), ThoError> {
+        thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
+        log::set_max_level(Debug);
+        reset_print_options();
+        GlobalCtx::init_devices(2);
+
+        let find_motifs_run_id: RunId = 1;
+        let select_motifs_run_id: RunId = 2;
+        let train_motifs_run_id: RunId = 3;
+        let step = 3;
+        let input_len = 400usize;
+
+        let motif_0_0_id = 0;
+        let motif_0_1_id = 1;
+        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("mixed_motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Pulse).f_mul_scalar(0.2)?)?);
+        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("mixed_motif_0_1", "motif_id")]), tch_test_utils::motifs_tensor_fixed(60, 3, MotifKind::Triangle).f_mul_scalar(0.2)?)?);
+
+        let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_id));
+        let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_id));
+        let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step);
+        let (params_0_1, module_0_1) = motif_test_net_(Cpu, Arc::clone(&motif_0_1), step);
+
+        let ws = Arc::new(RwLock::new(
+            WsMockBuilder::new(None, 1, 100, input_len as u32)
+                .with_load_motif_net(vec![
+                    (net_id_0_0.clone(), params_0_0, module_0_0),
+                    (net_id_0_1.clone(), params_0_1, module_0_1),
+                ])
+                .build(),
+        ));
+
+        let store = Arc::new(
+            MockStoreBuilder::new()
+                .with_list_run_config_values(
+                    find_motifs_run_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
+                )
+                .with_get_input_run_ids([
+                    (train_motifs_run_id, Ok(vec![select_motifs_run_id])),
+                    (select_motifs_run_id, Ok(vec![find_motifs_run_id])),
+                ])
+                .with_get_motif_meta([
+                    (motif_0_0_id, Ok((0usize, find_motifs_run_id))),
+                    (motif_0_1_id, Ok((0usize, find_motifs_run_id))),
+                ])
+                .with_list_selected_motifs([
+                    (select_motifs_run_id, Ok(vec![vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)]])),
+                ])
+                .with_list_selected_nets([
+                    (select_motifs_run_id, Some(0.3), None, Ok(vec![
+                        (net_id_0_0.clone(), 0.1f32),
+                        (net_id_0_1.clone(), 0.2f32),
+                    ])),
+                ])
+                .build(),
+        );
+
+        let apply_motif_nets = Arc::new(ApplyMotifNets::new(
+            &ws,
+            &store,
+            vec![select_motifs_run_id],
+            mock_run_ctx::default(1),
+            Some(0.3),
+            None,
+            step,
+            None,
+        ).await?);
+
+        let input = ThoTensor::new(
+            SynKey::new([mono_key!("mixed_motif_input", "test_batch")]),
+            Tensor::f_zeros([1, input_len as i64], FLOAT_CPU)?,
+        )?;
+        let out = apply_motif_nets.run(
+            Arc::new(DevicesWrap::wrap(input, CacheArea::default())),
+            mock_run_ctx::default(1),
+        ).await?;
+
+        let expected_lengths = vec![
+            ((input_len as i64 - motif_0_0.t_ref().size()[1]) / step as i64) + 1,
+            ((input_len as i64 - motif_0_1.t_ref().size()[1]) / step as i64) + 1,
+        ];
+        let max_len = *expected_lengths.iter().max().expect("no max len");
+
+        with_data!(mock_run_ctx::default(1), out; |_ctx, out:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>| {
+            assert_eq!(out.extra().as_slice(), expected_lengths.as_slice());
+            assert_eq!(out.data().t_ref().size(), vec![2, max_len]);
+            Ok::<_, ThoError>(())
+        })?;
+
+        Ok(())
     }
 
 
@@ -1061,10 +1357,12 @@ pub(crate) mod tests {
 
         let ctx_for_data = run_ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("apply_motif_nets_assert"), false, false);
 
-        with_data!(ctx_for_data, out; |_ctx, r:&ThoTensor<MotifProbability, SynKey>|{
+        with_data!(ctx_for_data, out; |_ctx, r:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
+            assert_eq!(r.extra().as_slice(), &[slices]);
+            assert_eq!(r.data().t_ref().size(), vec![1, slices]);
 
-            let (pulse_matches_vals, pulse_matches_idx) = &r.t.i((0, 0..slices)).topk(1i64, 0, true, true);
+            let (pulse_matches_vals, pulse_matches_idx) = &r.data().t_ref().i((0, 0..slices)).topk(1i64, 0, true, true);
 
             assert_close(pulse_interval_starts_in_resources_a as f64, step as f64 * pulse_matches_idx.double_value(&[0]), step as f64 * 3.);
 

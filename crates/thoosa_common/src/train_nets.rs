@@ -6,6 +6,7 @@ pub use crate::find_motifs_run_config::{FindMotifsRunConfigRangeOrValue, InputFi
 pub use thoosa_shared::RangeOrValue;
 
 use crate::builder::{Node, SeqBuilder};
+use crate::batches::BatchLengths;
 use crate::my_tch::{BinaryHeadPool, ThoModule};
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
@@ -332,7 +333,7 @@ unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO>
     for ThoModuleWithStore<DI, DO>
 {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut [i64]>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         self.module.tho_forward(t, lengths, train)
     }
 }
@@ -921,7 +922,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
     let mut net = builder
         // .batch_norm(BatchNormConfig::default())?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 let r = t.unsqueeze(1);
 
                 debug!("conv_motif_node: 0. t.size={:?} r.size={:?}", t.size(), r.size());
@@ -943,7 +944,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
     let mut net = builder
         // .batch_norm(BatchNormConfig::default())?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 let r = t.shallow_clone();
 
                 debug!("conv_motif_node, after motif_conv_1: t.size={:?} r.size={:?}", t.size(), r.size());
@@ -957,7 +958,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
         net = net
             .conv_1d(format!("motif_{i}_conv"), params.kernel, params.channels, params.channels, hidden_config, None)?
             .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
 
                     debug!("conv_motif_node after conv_1d motif_{i}_conv, t.size={:?} _lengths={_lengths:?}", t.size());
 
@@ -983,7 +984,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
 
 
 net.closure(
-        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
             let r = t.squeeze();
 
             // let max = r.f_amax(-1, true)?;
@@ -1003,7 +1004,7 @@ net.closure(
     //     2,1
     // )?
   .closure(
-      Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+      Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
           let r = t.shallow_clone();
 
           debug!("conv_motif_node, after motif_first_head: t.size={:?} r.size={:?}", t.size(), r.size());
@@ -1051,7 +1052,7 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
 
     builder
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("cosine_motif_node: 1. t.size={:?}", t.size());
                 Ok(t.unsqueeze(1))
             })),
@@ -1059,7 +1060,7 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
         )?
         .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b)?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("cosine_motif_node: 2. t.size={:?}", t.size());
                 Ok(t.shallow_clone())
             })),
@@ -1236,13 +1237,13 @@ impl LabelNetParams {
 
 }
 
-fn self_attention_masked_mean(h: &Tensor, lengths: Option<&[i64]>) -> Result<Tensor, ThoError> {
+fn self_attention_masked_mean(h: &Tensor, lengths: Option<&BatchLengths>) -> Result<Tensor, ThoError> {
     let h_size = h.size();
     if h_size.len() != 3 {
         return Err(ThoError::new(format!("self_attention_masked_mean expected [B,L,D], got {:?}", h_size)));
     }
     if let Some(lengths) = lengths {
-        let mask = mask_from_lengths(lengths, h_size[1], h.device())?.f_squeeze_dim(1)?;
+        let mask = mask_from_lengths(lengths.as_slice(), h_size[1], h.device())?.f_squeeze_dim(1)?;
         let mask_f = mask.f_to_kind(Kind::Float)?.f_unsqueeze(-1)?;
         let sum = h.f_mul(&mask_f)?.f_sum_dim_intlist([1].as_slice(), false, Kind::Float)?;
         let denom = mask_f.f_sum_dim_intlist([1].as_slice(), false, Kind::Float)?.f_clamp_min(1.0)?;
@@ -1250,6 +1251,49 @@ fn self_attention_masked_mean(h: &Tensor, lengths: Option<&[i64]>) -> Result<Ten
     } else {
         h.f_mean_dim(1, false, None).map_err(|e| e.into())
     }
+}
+
+const SELF_ATTENTION_MISSING_MOTIF_VALUE: f64 = -1.0;
+
+fn mark_missing_motif_values(t: &Tensor, lengths: Option<&BatchLengths>) -> Result<Tensor, ThoError> {
+    let Some(motif_net_time) = lengths.and_then(BatchLengths::motif_net_time) else {
+        return Ok(t.shallow_clone());
+    };
+
+    let size = t.size();
+    if size.len() != 3 {
+        return Err(ThoError::new(format!("mark_missing_motif_values expected [B,M,L], got {:?}", size)));
+    }
+
+    let batch = size[0] as usize;
+    let motif_nets = size[1] as usize;
+    let max_len = size[2];
+    if motif_net_time.len() != batch {
+        return Err(ThoError::new(format!(
+            "mark_missing_motif_values batch mismatch: tensor_batch={} lengths_batch={}",
+            batch,
+            motif_net_time.len()
+        )));
+    }
+
+    let mut flat_lengths = Vec::with_capacity(batch * motif_nets);
+    for sample_lengths in motif_net_time {
+        if sample_lengths.len() != motif_nets {
+            return Err(ThoError::new(format!(
+                "mark_missing_motif_values motif count mismatch: tensor_motif_nets={} lengths_motif_nets={}",
+                motif_nets,
+                sample_lengths.len()
+            )));
+        }
+        flat_lengths.extend(sample_lengths.iter().map(|len| (*len).min(max_len)));
+    }
+
+    let lengths_t = Tensor::f_from_slice(flat_lengths.as_slice())?.f_to_device(t.device())?.f_view([batch as i64, motif_nets as i64, 1])?;
+    let range = Tensor::f_arange(max_len, (Kind::Int64, t.device()))?.f_view([1, 1, max_len])?;
+    let valid = range.f_lt_tensor(&lengths_t)?;
+    let valid_f = valid.f_to_kind(t.kind())?;
+    let invalid_f = valid_f.f_ones_like()?.f_subtract(&valid_f)?;
+    t.f_mul(&valid_f)?.f_add(&invalid_f.f_mul_scalar(SELF_ATTENTION_MISSING_MOTIF_VALUE)?).map_err(|e| e.into())
 }
 
 pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
@@ -1263,7 +1307,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
     let mut seq_builder = SeqBuilder::new(0, None)?;
     let mut builder = seq_builder
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("cnn_label_node: input={t:?}");
                 Ok(t.shallow_clone())
             })),
@@ -1278,7 +1322,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
         ConvConfig::default(),
         None,
     )?.closure(
-        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
             debug!("cnn_label_node: cnn_label_conv_1d output={t:?}");
             Ok(t.shallow_clone())
         })),
@@ -1295,7 +1339,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
             None,
         )?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("cnn_label_node: cnn_label_conv_1d_{layer} output={t:?}");
                 Ok(t.shallow_clone())
             })),
@@ -1311,7 +1355,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                 2*cnn_params.hidden_conv_channels
             )?
             .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                     debug!("cnn_label_node: attn_pool output={t:?}");
                     Ok(t.shallow_clone())
                 })),
@@ -1321,7 +1365,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                 cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
             )?
             .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                     debug!("cnn_label_node: cnn_label_head output={t:?}");
                     Ok(t.shallow_clone())
                 })),
@@ -1331,9 +1375,9 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
 
         ConvNetJoint::MinMax => {
             builder.closure(
-                Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
+                Arc::new(Box::new(move |t: &Tensor, lengths: Option<&BatchLengths>| {
                     debug!("cnn_label_node: MinMax leaner input={t:?} lengths={lengths:?}");
-                    let lengths = lengths.unwrap_or(&[]);//TODO
+                    let lengths = lengths.map(BatchLengths::as_slice).unwrap_or(&[]);//TODO
                     let mask = mask_from_lengths(lengths, *lengths.iter().max().unwrap_or(&0), t.device())?;
 
                     let mean = t.f_mean_dim(2, false, None)?;
@@ -1347,7 +1391,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                 None,
             )?
             .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                     debug!("cnn_label_node: MinMax output={t:?}");
                     Ok(t.shallow_clone())
                 })),
@@ -1358,7 +1402,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                 2* cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
             )?
                 .closure(
-                    Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                         debug!("cnn_label_node: cnn_label_head output={t:?}");
                         Ok(t.shallow_clone())
                     })),
@@ -1373,7 +1417,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
             format!("cnn_label_head_{layer}"),
         )?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("cnn_label_node: cnn_label_head_{layer} output={t:?}");
                 Ok(t.shallow_clone())
             })),
@@ -1387,7 +1431,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
         "cnn_label_head_last",
     )?
     .closure(
-        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
             debug!("cnn_label_node: cnn_label_head_last={t:?}");
             Ok(t.shallow_clone())
         })),
@@ -1407,14 +1451,14 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
 
     SeqBuilder::new(0, None)?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                debug!("self_attention_label_node: input={t:?}");
-                Ok(t.shallow_clone())
+            Arc::new(Box::new(move |t: &Tensor, lengths: Option<&BatchLengths>| {
+                debug!("self_attention_label_node: input={t:?} lengths={lengths:?}");
+                mark_missing_motif_values(t, lengths)
             })),
             None,
         )?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("self_attention_label_node: transpose input={:?}", t.size());
                 Ok(t.transpose(1, 2))
             })),
@@ -1433,7 +1477,7 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
             sa_params.dropout,
         )?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, lengths: Option<&BatchLengths>| {
                 debug!("self_attention_label_node: pooling input={:?} lengths={lengths:?}", t.size());
                 self_attention_masked_mean(t, lengths)
             })),
@@ -1444,7 +1488,7 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
             "self_attention_label_head_last",
         )?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("self_attention_label_node: self_attention_label_head_last={t:?}");
                 Ok(t.shallow_clone())
             })),
@@ -1468,7 +1512,7 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
 
     SeqBuilder::new(num_features/*30000*/, None)?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("lin_label_node: input={t:?}");
                 Ok(t.shallow_clone())
             })),
@@ -2233,7 +2277,7 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 
     SeqBuilder::new(num_features, None)?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!(
                         "test_label_net: merged final in flatten t.size()={:?}",
                         t.size()
@@ -2266,6 +2310,8 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, unused_mut, dead_code)]
 mod train_tests {
+    use super::mark_missing_motif_values;
+    use crate::batches::BatchLengths;
     use crate::builder::{Node, SeqBuilder};
     use crate::dims::{
         AnyDims, Batch, Dims, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice,
@@ -2517,15 +2563,15 @@ mod train_tests {
         let target_eval = y_eval.unsqueeze(1);
         let lengths_eval = lengths_eval.iter().map(|v| *v as i64).collect::<Vec<_>>();
 
-        let mut eval_lengths_before = lengths_eval.clone();
-        let logits_eval_before = net.tho_forward(&x_eval.as_ref().into(), Some(eval_lengths_before.as_mut_slice()), false)?;
+        let mut eval_lengths_before = BatchLengths::new(lengths_eval.clone());
+        let logits_eval_before = net.tho_forward(&x_eval.as_ref().into(), Some(&mut eval_lengths_before), false)?;
         let eval_loss_before = logits_eval_before.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
 
         let mut first_loss = None;
         let mut last_loss = 0.0;
         for _ in 0..50 {
-            let mut batch_lengths = lengths_train.clone();
-            let logits = net.tho_forward(&x_train.as_ref().into(), Some(batch_lengths.as_mut_slice()), true)?;
+            let mut batch_lengths = BatchLengths::new(lengths_train.clone());
+            let logits = net.tho_forward(&x_train.as_ref().into(), Some(&mut batch_lengths), true)?;
             let loss = logits.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_train, None, None, Reduction::Mean);
             if first_loss.is_none() {
                 first_loss = Some(loss.double_value(&[]));
@@ -2534,8 +2580,8 @@ mod train_tests {
             opt.backward_step(&loss);
         }
 
-        let mut lengths_eval = lengths_eval.clone();
-        let logits_eval = net.tho_forward(&x_eval.as_ref().into(), Some(lengths_eval.as_mut_slice()), false)?;
+        let mut lengths_eval = BatchLengths::new(lengths_eval.clone());
+        let logits_eval = net.tho_forward(&x_eval.as_ref().into(), Some(&mut lengths_eval), false)?;
         let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
 
         debug!(
@@ -2575,8 +2621,8 @@ mod train_tests {
         let target_eval = y_eval.unsqueeze(1);
         let lengths_eval = lengths_eval.iter().map(|v| *v as i64).collect::<Vec<_>>();
 
-        let mut eval_lengths_before = lengths_eval.clone();
-        let logits_eval_before = net.tho_forward(&x_eval.as_ref().into(), Some(eval_lengths_before.as_mut_slice()), false)?;
+        let mut eval_lengths_before = BatchLengths::new(lengths_eval.clone());
+        let logits_eval_before = net.tho_forward(&x_eval.as_ref().into(), Some(&mut eval_lengths_before), false)?;
         let eval_loss_before = logits_eval_before.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
 
         let mut first_loss = None;
@@ -2591,8 +2637,8 @@ mod train_tests {
                 Some(1_000 + step as u64),
             )?;
             let target_train = y_train.unsqueeze(1);
-            let mut batch_lengths = lengths_train.iter().map(|v| *v as i64).collect::<Vec<_>>();
-            let logits = net.tho_forward(&x_train.as_ref().into(), Some(batch_lengths.as_mut_slice()), true)?;
+            let mut batch_lengths = BatchLengths::new(lengths_train.iter().map(|v| *v as i64).collect::<Vec<_>>());
+            let logits = net.tho_forward(&x_train.as_ref().into(), Some(&mut batch_lengths), true)?;
             let loss = logits.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_train, None, None, Reduction::Mean);
             if first_loss.is_none() {
                 first_loss = Some(loss.double_value(&[]));
@@ -2601,8 +2647,8 @@ mod train_tests {
             opt.backward_step(&loss);
         }
 
-        let mut lengths_eval = lengths_eval.clone();
-        let logits_eval = net.tho_forward(&x_eval.as_ref().into(), Some(lengths_eval.as_mut_slice()), false)?;
+        let mut lengths_eval = BatchLengths::new(lengths_eval.clone());
+        let logits_eval = net.tho_forward(&x_eval.as_ref().into(), Some(&mut lengths_eval), false)?;
         let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
 
         debug!(
@@ -2612,6 +2658,22 @@ mod train_tests {
 
         assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
         assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_mark_missing_motif_values_uses_per_net_lengths() -> Result<(), ThoError> {
+        let x = Tensor::f_from_slice(&[
+            0.1f32, 0.2, 0.3, 0.4,
+            0.5, 0.6, 0.0, 0.0,
+        ])?.f_view([1, 2, 4])?;
+        let lengths = BatchLengths::with_motif_net_time(vec![4], vec![vec![4, 2]])?;
+
+        let masked = mark_missing_motif_values(&x, Some(&lengths))?;
+        let masked_vals: Vec<f32> = masked.f_view([-1])?.try_into().map_err(|e| ThoError::from_error("test_mark_missing_motif_values_uses_per_net_lengths", e))?;
+
+        assert_eq!(masked_vals, vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, -1.0, -1.0]);
 
         Ok(())
     }
@@ -2636,7 +2698,7 @@ mod train_tests {
         vs_0.freeze();
 
         for slices in all_slices {
-            let mut lengths = vec![*slices as i64; batch as usize];
+            let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);
             let _ = net.tho_forward(
                 &Tensor::rand(
                     [
@@ -2647,7 +2709,7 @@ mod train_tests {
                     FLOAT_CPU,
                 ).into(),
 
-                Some(lengths.as_mut_slice()),
+                Some(&mut lengths),
                 false,
             )?;
         }
@@ -2672,7 +2734,7 @@ mod train_tests {
 
         let cuda_net = loaded_module.copy_to_device(1).await?;
         for slices in all_slices {
-            let mut lengths = vec![*slices as i64; batch as usize];
+            let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);
             let _ = cuda_net.tho_forward(
                 &Tensor::rand(
                     [
@@ -2683,7 +2745,7 @@ mod train_tests {
                     FLOAT_CUDA,
                 ).into(),
 
-                Some(lengths.as_mut_slice()),
+                Some(&mut lengths),
                 false,
             )?;
         }
@@ -2712,7 +2774,7 @@ mod train_tests {
         vs_0.freeze();
 
         for slices in all_slices {
-            let mut lengths = vec![*slices as i64; batch as usize];
+            let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);
             let _ = net.tho_forward(
                 &Tensor::rand(
                     [
@@ -2722,7 +2784,7 @@ mod train_tests {
                     ],
                     FLOAT_CPU,
                 ).into(),
-                Some(lengths.as_mut_slice()),
+                Some(&mut lengths),
                 false,
             )?;
         }
@@ -2747,7 +2809,7 @@ mod train_tests {
         if matches!(Device::cuda_if_available(), Cuda(_)) {
             let cuda_net = loaded_module.copy_to_device(1).await?;
             for slices in all_slices {
-                let mut lengths = vec![*slices as i64; batch as usize];
+                let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);
                 let _ = cuda_net.tho_forward(
                     &Tensor::rand(
                         [
@@ -2757,7 +2819,7 @@ mod train_tests {
                         ],
                         FLOAT_CUDA,
                     ).into(),
-                    Some(lengths.as_mut_slice()),
+                    Some(&mut lengths),
                     false,
                 )?;
             }
@@ -2790,13 +2852,14 @@ mod train_tests {
 
         debug!("batch_refs_vec={batch_refs_vec:?}");
 
-        let (batch, mut lengths) = pad_stack_with_mask(batch_refs_vec.as_slice(), motif_nets as i64, batch_max_len)?;
+        let (batch, lengths) = pad_stack_with_mask(batch_refs_vec.as_slice(), motif_nets as i64, batch_max_len)?;
+        let mut lengths = BatchLengths::new(lengths);
 
         debug!("batch=\n{batch} lengths={lengths:?}");
         let _ = net.tho_forward(
             &batch.into(),
 
-            Some(lengths.as_mut_slice()),
+            Some(&mut lengths),
             false,
         )?;
 
