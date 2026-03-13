@@ -1050,7 +1050,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             // }),
             SavGolFilter(SavGolFilterParamsRangeOrValue {
                 // window_len: RangeOrValue::Value(111),
-                window_len: RangeOrValue::Range { range: Range { start: 101, end: 1001 }, step: Some((200, 0)) },
+                window_len: RangeOrValue::Range { range: Range { start: 101, end: 1001 }, step: None },//Some((200, 0))
                 // poly_order: RangeOrValue::Range { range: Range { start: 1, end: 11 }, step: Some((3, 0)) },
                 poly_order: RangeOrValue::Value(1),
                 stride: RangeOrValue::Value(5),

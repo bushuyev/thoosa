@@ -101,6 +101,7 @@ impl StepAlignedSplitsAdjuster {
     }
 }
 
+/// Computes how many motif scores from an overlapped split still belong to that split's non-overlapped core.
 fn valid_partial_output_len(
     input_len: i64,
     split_start: i64,
@@ -122,6 +123,7 @@ fn valid_partial_output_len(
 }
 
 #[derive(Debug)]
+/// Reassembles split motif-net outputs while dropping scores that only come from overlap or impossible tail windows.
 struct ApplyMotifNetSplitsContext {
     done_to: MonoMetrics<1, 2>,
     split_len: MonoMetrics<1, 2>,
@@ -137,6 +139,7 @@ struct ApplyMotifNetSplitsContext {
 unsafe impl Sync for ApplyMotifNetSplitsContext {}
 
 impl ApplyMotifNetSplitsContext {
+    /// Preallocates the exact final output shape for one motif net so OOM split chunks can be appended safely.
     fn new(
         input_len: MonoMetrics<1, 2>,
         output_id: SynKey,

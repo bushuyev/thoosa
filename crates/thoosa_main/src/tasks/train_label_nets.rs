@@ -78,6 +78,7 @@ where
 
 }
 
+/// Combines outer batch padding lengths with the per-motif real lengths emitted by `ApplyMotifNets`.
 fn build_motif_batch_lengths(
     tensors: &[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>],
     time_lengths: Vec<i64>,
