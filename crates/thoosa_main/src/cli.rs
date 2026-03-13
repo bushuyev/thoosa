@@ -151,6 +151,9 @@ pub struct RunAllArgs {
     #[arg(long, default_value = "0.3")]
     pub max_motif_net_loss: f32, //FixedFindMotifsConfig::max_chunk_size
 
+    #[arg(long)]
+    pub selected_motif_nets_limit: Option<usize>,
+
     #[arg(long, default_value = "100")]
     pub motif_slices_step: u32,
 
@@ -587,6 +590,7 @@ where
                         opt_config,
                         labels_filter.clone(),
                         train_label_nets_args.max_motif_net_loss,
+                        train_label_nets_args.selected_motif_nets_limit,
                         train_label_nets_args.motif_slices_step.unwrap() //TODO or take from find motifs
                     ).await.map(|v|Arc::new(v))
                 },
@@ -626,7 +630,8 @@ where
                         &store,
                         init_ctx,
                         opt_config,
-                        10//TODO
+                        10,//TODO
+                        train_final_net_args.selected_motif_nets_limit,
                     ).await.map(|v|Arc::new(v))
 
                 },
@@ -969,6 +974,7 @@ async fn run_all(
                 opt_config_in_train_labels,
                 labels_filter.clone(),
                 Some(run_all_args.max_motif_net_loss), //to RunAll args,
+                run_all_args.selected_motif_nets_limit,
                 run_all_args.motif_slices_step
             ).await.map(|v| Arc::new(v))
         },
@@ -1003,7 +1009,8 @@ async fn run_all(
                 &store_in_train_final,
                 init_ctx_in_train_final,
                 Arc::clone(&all_config.train_opt_config),
-                10 //TODO
+                10, //TODO
+                run_all_args.selected_motif_nets_limit,
             ).await.map(|v| Arc::new(v))
         },
         || root_ctx.branch(Some("train final nets"), true, false),
@@ -2587,6 +2594,7 @@ mod cli_tests {
             valid_resource_group: "pure group 10".to_string(),
             run_config_cnt: "".to_string(),
             max_motif_net_loss: 0.4,
+            selected_motif_nets_limit: None,
             motif_slices_step: 10,
             with_plots: false,
             resolution: Resolution::Normal,

@@ -50,6 +50,7 @@ where
         train_label_nets_run_ids: Vec<RunId>,
         stage_ctx: R,
         slices_step: u32,
+        selected_motif_nets_limit: Option<usize>,
     ) -> Result<Self, ThoError>
     where
         R: RunCtx + Adjustable + 'static,
@@ -82,6 +83,7 @@ where
                     train_motif_nets_run_ids.clone(),
                     stage_ctx,
                     Some(0.3),//TODO add motifs net selections
+                    selected_motif_nets_limit,
                     slices_step,
                     None,
                 )
@@ -95,6 +97,7 @@ where
                     train_motif_nets_run_ids.clone(),
                     stage_ctx,
                     Some(0.3),//TODO
+                    selected_motif_nets_limit,
                     slices_step,
                 )
                 .await?
@@ -370,7 +373,6 @@ mod tests {
     use thoosa_common::dims::{Batch, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice};
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets;
     use thoosa_common::train_nets::{LinLenNetParams, ConvNetParams, LabelNetParams, LabelNetTypeParams, MotifNetParams, ThoModuleWithStore};
     use thoosa_common::utils::{assert_close, to_vec_f32};
     use thoosa_common::ws::WsMockBuilder;
@@ -513,6 +515,7 @@ mod tests {
                     (
                         train_motif_nets_run_id,
                         Some(0.3),
+                        Some(2),
                         Ok(vec![
                             (net_id_0, 0.1f32),
                             (net_id_1, 0.2f32),
@@ -531,6 +534,7 @@ mod tests {
             vec![train_label_nets_run_id],
             mock_run_ctx::default(0),
             step,
+            Some(2),
         ).await?);
 
         let input = ThoTensor::<ChannelsData2, SynKey>::new(

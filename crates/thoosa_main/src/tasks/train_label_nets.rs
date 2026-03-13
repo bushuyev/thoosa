@@ -87,6 +87,7 @@ pub async fn new_train_label_nets<L, C, R>(
     opt_config:Arc<OptConfig>,
     labels: Option<Vec<String>>,
     max_loss: Option<f32>,
+    selected_motif_nets_limit: Option<usize>,
     slices_step: u32
 ) -> Result<TrainLabelNets<L, ABStage<L, ApplyMotifNets<C>, C>, C>, ThoError>
 where
@@ -101,6 +102,7 @@ where
         train_motif_nets_run_ids.clone(),
         stage_ctx,
         max_loss,
+        selected_motif_nets_limit,
         slices_step,
         #[cfg(test)]
         None
@@ -934,6 +936,7 @@ mod tests {
             Arc::new(OptConfig::new(30, 10)),
             None,
             Some(0.3),
+            Some(3),
             10
         ).await?);
 
