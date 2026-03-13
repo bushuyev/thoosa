@@ -1022,7 +1022,7 @@ struct AllConfigs {
 fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+        step: RangeOrValue::Value(7), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Range { range: Range { start: 100, end: 2100 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000),
         // window: RangeOrValue::Value(300), //RangeOrValue::Value(1000),
         // freq_filter: None,
@@ -1040,8 +1040,8 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             // }),
             SavGolFilter(SavGolFilterParamsRangeOrValue {
                 window_len: RangeOrValue::Value(111),
-                // poly_order: RangeOrValue::Range { range: Range { start: 1, end: 11 }, step: Some((3, 0)) },
-                poly_order: RangeOrValue::Value(3),
+                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 11 }, step: Some((3, 0)) },
+                // poly_order: RangeOrValue::Value(3),
                 stride: RangeOrValue::Value(5),
                 padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             }),
@@ -1077,25 +1077,24 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         // }),
         extend_config: None,
         motif_criteria: MotifCriteriaRangeOrValue {
-            norm_thickness: Some(NormThicknessRunConfigRangeOrValue {
-                k: RangeOrValue::Value(0.0), //TODO not used RangeOrValue::Range{range: 1.0..10.0, step: None},
-                eps: RangeOrValue::Value(1e-8)
+            norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
+                criterion: NormThicknessRunConfigRangeOrValue {
+                    k: RangeOrValue::Value(0.0), //TODO not used RangeOrValue::Range{range: 1.0..10.0, step: None},
+                    eps: RangeOrValue::Value(1e-8)
+                },
+                min: RangeOrValue::Value(0.8),
             }),
-            norm_thickness_min: RangeOrValue::Value(0.5),
             inlier_ratioRunConfig:None,
-            inlier_ratio_min: RangeOrValue::Value(0.5),
             // inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {
             //     k: RangeOrValue::Value(3.0),
             //     eps: RangeOrValue::Value(1e-8),
             // }),
             coherenceRunConfig:None,
-            coherence_min: RangeOrValue::Value(0.5),
             // coherenceRunConfig: Some(CoherenceRunConfigRangeOrValue {
             //     k: RangeOrValue::Value(10.0),
             //     eps: RangeOrValue::Value(1e-8),
             // }),
             interesting_amp_01: None,
-            interesting_amp_01_min: RangeOrValue::Value(0.5),
             // interesting_amp_01: Some(InterestingAmp01RunConfigRangeOrValue {
             //     q_lo: RangeOrValue::Value(0.05),
             //     q_hi: RangeOrValue::Value(0.95),
@@ -1103,18 +1102,12 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             //     eps: RangeOrValue::Value(1e-8),
             // }),
             interesting_tv_norm_01: None,
-            interesting_tv_norm_01_min: RangeOrValue::Value(0.5),
             interesting_curvature_norm_01: None,
-            interesting_curvature_norm_01_min: RangeOrValue::Value(0.5),
             interesting_turning_points_ratio: None,
-            interesting_turning_points_ratio_min: RangeOrValue::Value(0.5),
             // interesting_turning_points_ratio: Some(InterestingTurningPointsRatioRunConfigRangeOrValue{ peak: RangeOrValue::Value(4), }),
             interesting_band_energy_ratio_01: None,
-            interesting_band_energy_ratio_01_min: RangeOrValue::Value(0.5),
             interesting_entropy_gauss_01: None,
-            interesting_entropy_gauss_01_min: RangeOrValue::Value(0.5),
             interesting_entropy_band_01: None,
-            interesting_entropy_band_01_min: RangeOrValue::Value(0.5),
         },
         threshold: RangeOrValue::Value(0.73), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
         min_slices: Some(RangeOrValue::Value(5)),
@@ -1143,21 +1136,23 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     kernel: RangeOrValue::Value(10),
         // }),
 
-        // net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
-        //     step: RangeOrValue::Value(1),
-        //     channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-        //     kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-        // })
-
-        net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-            conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
-            head_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
-            step: RangeOrValue::Value(10),
-            channels: RangeOrValue::Range{ range: Range {start: 8, end: 256}, step: None },
-            // kernel: RangeOrValue::Value(10),
-            kernel: RangeOrValue::Range{ range: Range {start: 10, end: 100}, step: None },
-            head_pool: None,
+        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
+            // step: RangeOrValue::Value(1),
+            // channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
+            // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+            a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
+            b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
         })
+
+        // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
+        //     conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
+        //     head_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
+        //     step: RangeOrValue::Value(10),
+        //     channels: RangeOrValue::Range{ range: Range {start: 8, end: 256}, step: None },
+        //     // kernel: RangeOrValue::Value(10),
+        //     kernel: RangeOrValue::Range{ range: Range {start: 10, end: 100}, step: None },
+        //     head_pool: None,
+        // })
 
     };
 
@@ -1181,8 +1176,9 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
             // d_model: RangeOrValue::Value(64),
             d_model_heads: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-            ff_mult: RangeOrValue::Value(4),
+            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 4 }, step: None },
+            ff_mult: RangeOrValue::Range { range: Range { start: 4, end: 4 }, step: None },
+            // ff_mult: RangeOrValue::Value(2),
             // dropout: RangeOrValue::Value(0.1),
             dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.1 }, step: None },
         })
@@ -1242,32 +1238,31 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         // }),
         extend_config:None,
         motif_criteria: MotifCriteriaRangeOrValue {
-            norm_thickness: Some(NormThicknessRunConfigRangeOrValue { k: RangeOrValue::Value(5.0), eps: RangeOrValue::Value(1e-8) }),
-            norm_thickness_min: RangeOrValue::Value(0.5),
-            inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {
-                k: RangeOrValue::Value(3.0),
-                eps: RangeOrValue::Value(1e-8),
+            norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
+                criterion: NormThicknessRunConfigRangeOrValue { k: RangeOrValue::Value(5.0), eps: RangeOrValue::Value(1e-8) },
+                min: RangeOrValue::Value(0.5),
             }),
-            inlier_ratio_min: RangeOrValue::Value(0.5),
-            coherenceRunConfig: Some(CoherenceRunConfigRangeOrValue {
-                k: RangeOrValue::Value(10.0),
-                eps: RangeOrValue::Value(1e-8),
+            inlier_ratioRunConfig: Some(thoosa_common::find_motifs_run_config::InlierRatioConstraintRangeOrValue {
+                criterion: InlierRatioRunConfigRangeOrValue {
+                    k: RangeOrValue::Value(3.0),
+                    eps: RangeOrValue::Value(1e-8),
+                },
+                min: RangeOrValue::Value(0.5),
             }),
-            coherence_min: RangeOrValue::Value(0.5),
+            coherenceRunConfig: Some(thoosa_common::find_motifs_run_config::CoherenceConstraintRangeOrValue {
+                criterion: CoherenceRunConfigRangeOrValue {
+                    k: RangeOrValue::Value(10.0),
+                    eps: RangeOrValue::Value(1e-8),
+                },
+                min: RangeOrValue::Value(0.5),
+            }),
             interesting_amp_01: None,
-            interesting_amp_01_min: RangeOrValue::Value(0.5),
             interesting_tv_norm_01: None,
-            interesting_tv_norm_01_min: RangeOrValue::Value(0.5),
             interesting_curvature_norm_01: None,
-            interesting_curvature_norm_01_min: RangeOrValue::Value(0.5),
             interesting_turning_points_ratio: None,
-            interesting_turning_points_ratio_min: RangeOrValue::Value(0.5),
             interesting_band_energy_ratio_01: None,
-            interesting_band_energy_ratio_01_min: RangeOrValue::Value(0.5),
             interesting_entropy_gauss_01: None,
-            interesting_entropy_gauss_01_min: RangeOrValue::Value(0.5),
             interesting_entropy_band_01: None,
-            interesting_entropy_band_01_min: RangeOrValue::Value(0.5),
         },
         threshold: RangeOrValue::Value(0.8),
         // threshold: RangeOrValue::Range{range: 0.4..1.1, step: Some((0.1, 1))},

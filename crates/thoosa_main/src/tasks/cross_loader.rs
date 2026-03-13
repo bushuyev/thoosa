@@ -43,6 +43,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::torch_runner::output_builders::SingleDimTensorOutputBuilder;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::run_configs::RunId;
 use thoosa_with_data::{async_with_data, with_data};
@@ -342,6 +343,7 @@ where
 
         let mut skip_0_i = 0;
 
+        let cross_loader_outer = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, outer: run_id={}", self.find_motifs_run_config_id), resources.len(), 1);
         for (i_0, resource_0) in resources.iter().enumerate() {
             debug!("CrossLoader::run: find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
 
@@ -363,6 +365,7 @@ where
             let mut t_1_batch_offsets: Vec<u32> = vec![];
             let mut t_1_batch_len = 0;
 
+            let cross_loader_inner = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, inner: run_id={} i_0={i_0}", self.find_motifs_run_config_id), resources.len(), 1);
             for (i_1, resource_1) in resources
                 .iter()
                 .enumerate()
@@ -446,6 +449,8 @@ where
                 t_1_batch_resources = vec![];
                 t_1_batch_offsets = vec![];
                 t_1_batch_len = 0;
+
+                collect_eta_record_completion(cross_loader_inner.id());
             }
 
             skip_0_i = i_0;
@@ -454,7 +459,7 @@ where
             t_0_batch_offsets.clear();
             t_0_batch_len = 0;
 
-
+            collect_eta_record_completion(cross_loader_outer.id());
         }
 
         (self.on_all_done)(&receiver).await?;
