@@ -78,6 +78,7 @@ where
 
 }
 
+/// Combines outer batch padding lengths with the per-motif real lengths emitted by `ApplyMotifNets`.
 fn build_motif_batch_lengths(
     tensors: &[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>],
     time_lengths: Vec<i64>,
@@ -409,7 +410,10 @@ where
                                    Arc::clone(&resources_0_valid),
                                    Box::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
                                        async move {
-                                           let (x, lengths, y) = with_data!(ctx.branch(Some("train_label_nets_batch_data"), false, false), [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>], x_0:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>]|{
+                                           let (x, lengths, y) = with_data!(
+                                               ctx.branch(Some("train_label_nets_batch_data"), false, false),
+                                               [x_1_wrapped], [x_0_wrapped];
+                                               |_ctx, x_1:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>], x_0:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>]|{
                                                debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
 
                                                let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.data().t_ref().size()[1]).max().expect("no max_input");
