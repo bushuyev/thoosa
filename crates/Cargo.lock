@@ -5191,6 +5191,7 @@ dependencies = [
 name = "thoosa_tui"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "crossterm 0.29.0",
  "env_logger",
