@@ -67,6 +67,7 @@ pub async fn new_train_final_net<L, C, R>(
     stage_ctx: R,
     opt_config: Arc<OptConfig>,
     slices_step: u32,
+    selected_motif_nets_limit: Option<usize>,
 ) -> Result<TrainFinalNet<L, ABStage<L, ApplyLabelNets<C>, C>, C>, ThoError>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
@@ -74,7 +75,7 @@ where
     R: RunCtx + Adjustable + 'static,
 {
     //gpt Build a label-net application stage that wraps the raw loader with motif+label inference.
-    let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, train_label_nets_run_ids.clone(), stage_ctx, slices_step).await?);
+    let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, train_label_nets_run_ids.clone(), stage_ctx, slices_step, selected_motif_nets_limit).await?);
 
     let label_loader = Arc::new(ABStage::new(
         SynKey::new([mono_key!("Loader_with_label_nets", "Loader_with_label_nets"), mono_key!(format!("{train_label_nets_run_ids:?}"), "train_label_nets_run_ids")]),
@@ -526,6 +527,7 @@ mod tests {
                     (
                         train_motif_nets_run_id,
                         Some(0.3),
+                        Some(2),
                         Ok(vec![
                             (net_id_0, 0.1f32),
                             (net_id_1, 0.2f32),
@@ -554,7 +556,7 @@ mod tests {
         );
 
         let mut run_ctx = mock_run_ctx::default(1);
-        let train_final_net = Arc::new(new_train_final_net(vec![train_label_nets_run_id], loader, run_configs, &ws, &store, run_ctx.branch(Some("new_train_final_net_with_ml"), false, false), Arc::new(OptConfig::new(10, 3)), step).await?);
+        let train_final_net = Arc::new(new_train_final_net(vec![train_label_nets_run_id], loader, run_configs, &ws, &store, run_ctx.branch(Some("new_train_final_net_with_ml"), false, false), Arc::new(OptConfig::new(10, 3)), step, Some(2)).await?);
 
         let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string()))), CacheArea::default()));
 

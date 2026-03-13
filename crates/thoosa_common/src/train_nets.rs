@@ -77,6 +77,9 @@ pub struct TrainLabelNetsArgs {
     pub max_motif_net_loss: Option<f32>,
 
     #[arg(long)]
+    pub selected_motif_nets_limit: Option<usize>,
+
+    #[arg(long)]
     pub motif_slices_step: Option<u32>,
 
     #[arg(long)]
@@ -1998,6 +2001,9 @@ pub struct TrainFinalNetArgs {
 
     #[arg(long)]
     pub run_config_cnt: String, //TrainLabelNetsRunConfig
+
+    #[arg(long)]
+    pub selected_motif_nets_limit: Option<usize>,
 }
 
 impl TrainFinalNetArgs {

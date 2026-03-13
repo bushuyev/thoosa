@@ -225,7 +225,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn save_selected_net(&self, run_id: RunId, path: PathBuf, loss: f32) -> Result<(), ThoError>;
 
-    async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError>;
+    async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(PathBuf, f32)>, ThoError>;
 
     async fn run_config_descr(&self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError>;
     #[cfg(test)]
@@ -395,6 +395,7 @@ mock! {
             &self,
             run_id: RunId,
             loss: Option<f32>,
+            limit: Option<usize>,
         ) -> Result<Vec<(PathBuf, f32)>, ThoError>;
         async fn run_config_descr(&self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError>;
         #[cfg(test)]
@@ -2305,17 +2306,32 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>) -> Result<Vec<(PathBuf, f32)>, ThoError> {
+    async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(PathBuf, f32)>, ThoError> {
         self.with_reader_conn("list_selected_nets", move |conn| {
             let t = conn.transaction()?;
             let selected_nets = {
-                let (query, params): (&str, Vec<rusqlite::types::Value>) = match loss {
-                    Some(loss) => (
-                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC, net_path ASC LIMIT 100",//TODO limit to params
+                let (query, params): (&str, Vec<rusqlite::types::Value>) = match (loss, limit) {
+                    (Some(loss), Some(limit)) => (
+                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC, net_path ASC LIMIT ?",
+                        vec![
+                            rusqlite::types::Value::Integer(run_id as i64),
+                            rusqlite::types::Value::Real(loss as f64),
+                            rusqlite::types::Value::Integer(limit as i64),
+                        ],
+                    ),
+                    (Some(loss), None) => (
+                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC, net_path ASC",
                         vec![rusqlite::types::Value::Integer(run_id as i64), rusqlite::types::Value::Real(loss as f64)],
                     ),
-                    None => (
-                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC, net_path ASC  LIMIT 100",
+                    (None, Some(limit)) => (
+                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC, net_path ASC LIMIT ?",
+                        vec![
+                            rusqlite::types::Value::Integer(run_id as i64),
+                            rusqlite::types::Value::Integer(limit as i64),
+                        ],
+                    ),
+                    (None, None) => (
+                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC, net_path ASC",
                         vec![rusqlite::types::Value::Integer(run_id as i64)],
                     ),
                 };
@@ -3689,21 +3705,32 @@ mod store_tests {
             HashMap::new(),
         ).await?;
 
-        store.save_selected_net(run_id, PathBuf::from("nets/a"), 0.2).await?;
-        store.save_selected_net(run_id, PathBuf::from("nets/b"), 0.1).await?;
+        for i in 0..105 {
+            store.save_selected_net(run_id, PathBuf::from(format!("nets/{i:03}")), i as f32).await?;
+        }
 
-        let selected = store.list_selected_nets(run_id, None).await?;
+        let selected = store.list_selected_nets(run_id, None, None).await?;
+        assert_eq!(105, selected.len());
+        assert_eq!(PathBuf::from("nets/000"), selected[0].0);
+        assert_eq!(0.0, selected[0].1);
+        assert_eq!(PathBuf::from("nets/104"), selected[104].0);
+        assert_eq!(104.0, selected[104].1);
 
-        assert_eq!(2, selected.len());
-        assert_eq!(PathBuf::from("nets/b"), selected[0].0);
-        assert!((selected[0].1 - 0.1).abs() < 1e-6);
-        assert_eq!(PathBuf::from("nets/a"), selected[1].0);
-        assert!((selected[1].1 - 0.2).abs() < 1e-6);
+        let limited = store.list_selected_nets(run_id, None, Some(3)).await?;
+        assert_eq!(3, limited.len());
+        assert_eq!(PathBuf::from("nets/000"), limited[0].0);
+        assert_eq!(PathBuf::from("nets/001"), limited[1].0);
+        assert_eq!(PathBuf::from("nets/002"), limited[2].0);
 
-        let filtered = store.list_selected_nets(run_id, Some(0.15)).await?;
-        assert_eq!(1, filtered.len());
-        assert_eq!(PathBuf::from("nets/b"), filtered[0].0);
-        assert!((filtered[0].1 - 0.1).abs() < 1e-6);
+        let filtered = store.list_selected_nets(run_id, Some(15.0), None).await?;
+        assert_eq!(15, filtered.len());
+        assert_eq!(PathBuf::from("nets/000"), filtered[0].0);
+        assert_eq!(PathBuf::from("nets/014"), filtered[14].0);
+
+        let filtered_limited = store.list_selected_nets(run_id, Some(15.0), Some(5)).await?;
+        assert_eq!(5, filtered_limited.len());
+        assert_eq!(PathBuf::from("nets/000"), filtered_limited[0].0);
+        assert_eq!(PathBuf::from("nets/004"), filtered_limited[4].0);
 
         Ok(())
     }
@@ -4402,17 +4429,17 @@ impl MockStoreBuilder {
         inputs: I,
     ) -> Self
     where
-        I: IntoIterator<Item = (RunId, Option<f32>, Result<Vec<(PathBuf, f32)>, ThoError>)> + Debug,
+        I: IntoIterator<Item = (RunId, Option<f32>, Option<usize>, Result<Vec<(PathBuf, f32)>, ThoError>)> + Debug,
     {
         let data = inputs.into_iter().collect::<Vec<_>>();
         debug!("with_list_selected_nets: inputs={data:?}");
         let data = Arc::new(data);
         self.store.expect_list_selected_nets().returning(
-            move |run_id, loss| {
+            move |run_id, loss, limit| {
                 data.iter()
-                    .find(|(expected_run_id, expected_loss, _)| *expected_run_id == run_id && *expected_loss == loss)
-                    .map(|(_, _, result)| result.clone())
-                    .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return selected nets for run id {run_id} loss={loss:?}"))))
+                    .find(|(expected_run_id, expected_loss, expected_limit, _)| *expected_run_id == run_id && *expected_loss == loss && *expected_limit == limit)
+                    .map(|(_, _, _, result)| result.clone())
+                    .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return selected nets for run id {run_id} loss={loss:?} limit={limit:?}"))))
             }
         );
         self
