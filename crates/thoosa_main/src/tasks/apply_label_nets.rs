@@ -81,7 +81,7 @@ where
                     store,
                     train_motif_nets_run_ids.clone(),
                     stage_ctx,
-                    Some(0.3),
+                    Some(0.3),//TODO add motifs net selections
                     slices_step,
                     None,
                 )
@@ -94,7 +94,7 @@ where
                     store,
                     train_motif_nets_run_ids.clone(),
                     stage_ctx,
-                    Some(0.3),
+                    Some(0.3),//TODO
                     slices_step,
                 )
                 .await?
