@@ -262,6 +262,23 @@ impl DataBy {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum Resolution {
+    #[default]
+    Normal,
+    High,
+}
+
+impl Resolution {
+    pub fn plot_size(self, normal_size: (u32, u32)) -> (u32, u32) {
+        match self {
+            Self::Normal => normal_size,
+            // Bias the extra pixels toward the X axis so dense time-series details remain visible.
+            Self::High => (normal_size.0.saturating_mul(5), normal_size.1.saturating_mul(2)),
+        }
+    }
+}
+
 impl FromStr for DataBy {
     type Err = String;
 
@@ -308,6 +325,9 @@ pub struct PlotDataArgs {
 
     #[arg(long, value_enum)]
     pub limit: Option<u32>,
+
+    #[arg(long, value_enum, default_value_t = Resolution::Normal)]
+    pub resolution: Resolution,
 }
 
 impl PlotDataArgs {
@@ -315,10 +335,15 @@ impl PlotDataArgs {
         self.data_by.clone()
     }
 
+    pub fn resolution(&self) -> Resolution {
+        self.resolution
+    }
+
     pub fn new(motifs_by: DataBy) -> Self {
         Self {
             data_by: motifs_by,
             limit: None,
+            resolution: Resolution::Normal,
         }
     }
 }
@@ -343,7 +368,7 @@ impl MotifsToTensorArgs {
 
 #[cfg(test)]
 mod motifs_tests {
-    use super::DataBy;
+    use super::{DataBy, PlotDataArgs, Resolution};
     use std::path::PathBuf;
     use thoosa_common::find_motifs_run_config::InputFilter;
     use std::collections::{HashMap, HashSet};
@@ -417,6 +442,21 @@ mod motifs_tests {
 
         let parsed = DataBy::from_str("run_id:1,2,3").unwrap();
         assert_eq!(parsed, DataBy::RunId { find_motifs_run_ids: vec![1, 2, 3], select_motifs_run_ids: None });
+    }
+
+    #[test]
+    fn high_resolution_scales_plot_size_for_finer_detail() {
+        assert_eq!(Resolution::Normal.plot_size((2000, 1000)), (2000, 1000));
+        assert_eq!(Resolution::High.plot_size((2000, 1000)), (10_000, 2_000));
+    }
+
+    #[test]
+    fn plot_data_args_new_defaults_to_normal_resolution() {
+        let args = PlotDataArgs::new(DataBy::MotifId(17));
+
+        assert_eq!(args.motifs_by(), DataBy::MotifId(17));
+        assert_eq!(args.resolution(), Resolution::Normal);
+        assert_eq!(args.limit, None);
     }
 
     #[test]

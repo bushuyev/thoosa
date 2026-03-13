@@ -14,7 +14,7 @@ use thoosa_common::train_nets::OptConfig;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
-use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
+use thoosa_motifs::fragments::{DataBy, PlotDataArgs, Resolution};
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -273,7 +273,7 @@ impl FindAndSelectMotifsStage {
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_ids: vec![run_config.find_motifs_run_config.id.unwrap()], select_motifs_run_ids: None }), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
+        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_ids: vec![run_config.find_motifs_run_config.id.unwrap()], select_motifs_run_ids: None }), Resolution::Normal, &Cpu, ctx.branch(Some("plot"), false, false)).await?;
 
         let select_stage = Arc::new(
             SelectMotifsStage::<
@@ -315,7 +315,7 @@ impl FindAndSelectMotifsStage {
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![select_run_id] }), &Cpu, ctx.branch(Some("plot"), false, false)).await?;
+        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![select_run_id] }), Resolution::Normal, &Cpu, ctx.branch(Some("plot"), false, false)).await?;
 
         Ok(FindAndSelectEvalMetrics { score_sum, constraint_metrics })
     }
