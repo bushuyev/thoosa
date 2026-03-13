@@ -1032,7 +1032,7 @@ struct AllConfigs {
 fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(7), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+        step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         window: RangeOrValue::Range { range: Range { start: 100, end: 2100 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000),
         // window: RangeOrValue::Value(300), //RangeOrValue::Value(1000),
         // freq_filter: None,
@@ -1049,9 +1049,10 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             //     padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             // }),
             SavGolFilter(SavGolFilterParamsRangeOrValue {
-                window_len: RangeOrValue::Value(111),
-                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 11 }, step: Some((3, 0)) },
-                // poly_order: RangeOrValue::Value(3),
+                // window_len: RangeOrValue::Value(111),
+                window_len: RangeOrValue::Range { range: Range { start: 101, end: 1001 }, step: Some((200, 0)) },
+                // poly_order: RangeOrValue::Range { range: Range { start: 1, end: 11 }, step: Some((3, 0)) },
+                poly_order: RangeOrValue::Value(1),
                 stride: RangeOrValue::Value(5),
                 padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             }),
@@ -1092,7 +1093,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                     k: RangeOrValue::Value(0.0), //TODO not used RangeOrValue::Range{range: 1.0..10.0, step: None},
                     eps: RangeOrValue::Value(1e-8)
                 },
-                min: RangeOrValue::Value(0.8),
+                min: RangeOrValue::Value(0.85),
             }),
             inlier_ratioRunConfig:None,
             // inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {

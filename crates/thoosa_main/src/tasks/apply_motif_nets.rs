@@ -511,7 +511,7 @@ where
         let unique_match_lens = match_lens.iter().copied().collect::<HashSet<_>>();
         let max_match_len = match_lens.iter().copied().max().unwrap_or(0);
         let matches = if unique_match_lens.len() > 1 {
-            warn!("ApplyMotifNets::run: mixed motif widths/filters produced different output lengths; lengths={match_lens:?}. Padding to max len={max_match_len} for concat.");
+            debug!("ApplyMotifNets::run: mixed motif widths/filters produced different output lengths; lengths={match_lens:?}. Padding to max len={max_match_len} for concat.");
             matches.into_iter().map(|v| {
                 let size = v.t.size();
                 if size[0] == max_match_len {

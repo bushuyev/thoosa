@@ -1093,10 +1093,8 @@ mod tests {
         )
     }
 
-
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_train_motif_nets_cosine_with_filtered_real_eeg() -> Result<(), ThoError> {
+    async fn heavy_test_train_motif_nets_cosine_with_filtered_real_eeg() -> Result<(), ThoError> {
         if !tch::Cuda::is_available() {
             return Ok(());
         }
