@@ -906,204 +906,198 @@ impl MotifNetParams {
 
 pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
     debug!("motif_node: params={params:?}");
-    let build = || -> Result<Node, ThoError> {
-        let mut builder = SeqBuilder::new(params.num_features, None)?;
-        let nd = ConvConfig {
-            stride: params.stride as i64,
-            ..ConvConfig::default()
-        };
 
-        let hidden_config = ConvConfig::default();
-
-        let mut net = builder
-            // .batch_norm(BatchNormConfig::default())?
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    let r = t.unsqueeze(1);
-
-                    debug!("conv_motif_node: 0. t.size={:?} r.size={:?}", t.size(), r.size());
-
-                    Ok(r)
-                })),
-                None,
-            )?;
-
-
-        net = net
-            .conv_1d("motif_conv_1", params.kernel, 1, params.channels, ConvConfig {
-                stride: 1,
-                padding: 0,
-                ..ConvConfig::default()
-            }, None)?
-            .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
-
-        let mut net = builder
-            // .batch_norm(BatchNormConfig::default())?
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    let r = t.shallow_clone();
-
-                    debug!("conv_motif_node, after motif_conv_1: t.size={:?} r.size={:?}", t.size(), r.size());
-
-                    Ok(r)
-                })),
-                None,
-            )?;
-
-        for i in 0..params.conv_layers as usize {
-            net = net
-                .conv_1d(format!("motif_{i}_conv"), params.kernel, params.channels, params.channels, hidden_config, None)?
-                .closure(
-                    Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-
-                        debug!("conv_motif_node after conv_1d motif_{i}_conv, t.size={:?} _lengths={_lengths:?}", t.size());
-
-                        let r = t.shallow_clone();
-
-                        Ok(r)
-                    })),
-                    None,
-                )?
-                // .batch_norm(BatchNormConfig::default(), Some(params.channels))?
-                .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?
-                // .dropout(0.1)?
-            ;
-        }
-
-        net = net.conv_1d("score_head", 1, params.channels, 1, ConvConfig::default(), None)?;
-
-        net = net.avg_pool(params.kernel, 1, params.kernel/2)?;
-
-
-
-        // net = net.adaptive_avg_pool(1, params.channels)?;
-
-
-  net.closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                let r = t.squeeze();
-
-                // let max = r.f_amax(-1, true)?;
-                // let min = r.f_mean_dim(-1, true, None)?;
-                //
-                // let r1 = Tensor::f_cat(&[max.shallow_clone(), min.shallow_clone()], 1)?;
-                //
-                // debug!("conv_motif_node: 1. t.size={:?} r.size={:?} r1.size={:?} max.size={:?}, min.size={:?}", t.size(), r.size(), r1.size(), max.size(), min.size());
-                debug!("conv_motif_node: 1. t.size={:?}  r.size={:?}", t.size(), r.size());
-
-                Ok(r) //r/max
-            })),
-            None,
-        )?
-        // .linear_feats(
-        //     "motif_first_head",
-        //     2,1
-        // )?
-      .closure(
-          Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-              let r = t.shallow_clone();
-
-              debug!("conv_motif_node, after motif_first_head: t.size={:?} r.size={:?}", t.size(), r.size());
-
-              Ok(r)
-          })),
-          None,
-      )?
-        // .linear("motif_first_head")?
-        .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
-
-        for i in 0..params.head_layers as usize {
-            net = net
-                .linear_f(
-                    format!("motif_{i}_head"),
-                    if i < 1 + (params.head_layers / 2) as usize {
-                        2.
-                    } else {
-                        0.5
-                    },
-                )?
-                .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?;
-        }
-
-        net
-            // .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?
-            .linear_s(
-                1,
-                "motif_last_head",
-            )?
-            .end_seq()
+    let mut builder = SeqBuilder::new(params.num_features, None)?;
+    let nd = ConvConfig {
+        stride: params.stride as i64,
+        ..ConvConfig::default()
     };
 
-    build()
+    let hidden_config = ConvConfig::default();
+
+    let mut net = builder
+        // .batch_norm(BatchNormConfig::default())?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                let r = t.unsqueeze(1);
+
+                debug!("conv_motif_node: 0. t.size={:?} r.size={:?}", t.size(), r.size());
+
+                Ok(r)
+            })),
+            None,
+        )?;
+
+
+    net = net
+        .conv_1d("motif_conv_1", params.kernel, 1, params.channels, ConvConfig {
+            stride: 1,
+            padding: 0,
+            ..ConvConfig::default()
+        }, None)?
+        .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+
+    let mut net = builder
+        // .batch_norm(BatchNormConfig::default())?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                let r = t.shallow_clone();
+
+                debug!("conv_motif_node, after motif_conv_1: t.size={:?} r.size={:?}", t.size(), r.size());
+
+                Ok(r)
+            })),
+            None,
+        )?;
+
+    for i in 0..params.conv_layers as usize {
+        net = net
+            .conv_1d(format!("motif_{i}_conv"), params.kernel, params.channels, params.channels, hidden_config, None)?
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+
+                    debug!("conv_motif_node after conv_1d motif_{i}_conv, t.size={:?} _lengths={_lengths:?}", t.size());
+
+                    let r = t.shallow_clone();
+
+                    Ok(r)
+                })),
+                None,
+            )?
+            // .batch_norm(BatchNormConfig::default(), Some(params.channels))?
+            .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?
+            // .dropout(0.1)?
+        ;
+    }
+
+    net = net.conv_1d("score_head", 1, params.channels, 1, ConvConfig::default(), None)?;
+
+    net = net.avg_pool(params.kernel, 1, params.kernel/2)?;
+
+
+
+    // net = net.adaptive_avg_pool(1, params.channels)?;
+
+
+net.closure(
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            let r = t.squeeze();
+
+            // let max = r.f_amax(-1, true)?;
+            // let min = r.f_mean_dim(-1, true, None)?;
+            //
+            // let r1 = Tensor::f_cat(&[max.shallow_clone(), min.shallow_clone()], 1)?;
+            //
+            // debug!("conv_motif_node: 1. t.size={:?} r.size={:?} r1.size={:?} max.size={:?}, min.size={:?}", t.size(), r.size(), r1.size(), max.size(), min.size());
+            debug!("conv_motif_node: 1. t.size={:?}  r.size={:?}", t.size(), r.size());
+
+            Ok(r) //r/max
+        })),
+        None,
+    )?
+    // .linear_feats(
+    //     "motif_first_head",
+    //     2,1
+    // )?
+  .closure(
+      Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+          let r = t.shallow_clone();
+
+          debug!("conv_motif_node, after motif_first_head: t.size={:?} r.size={:?}", t.size(), r.size());
+
+          Ok(r)
+      })),
+      None,
+  )?
+    // .linear("motif_first_head")?
+    .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+
+    for i in 0..params.head_layers as usize {
+        net = net
+            .linear_f(
+                format!("motif_{i}_head"),
+                if i < 1 + (params.head_layers / 2) as usize {
+                    2.
+                } else {
+                    0.5
+                },
+            )?
+            .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?;
+    }
+
+    net
+        // .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?
+        .linear_s(
+            1,
+            "motif_last_head",
+        )?
+        .end_seq()
+
 }
 
 pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTensor<MotifSlices, DataId>>>) -> Result<Node, ThoError> {
     debug!("cosine_motif_node: params={params:?}");
-    let build = || -> Result<Node, ThoError> {
-        let mut builder = SeqBuilder::new(params.num_features, None)?;
 
-        let params =  MotifCosineNetParams{
-            num_features: motif.as_ref().map(|v|v.size().dim_1() as u32).unwrap_or(params.num_features),
-            ..params.clone()
-        };
+    let mut builder = SeqBuilder::new(params.num_features, None)?;
 
-
-        builder
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    debug!("cosine_motif_node: 1. t.size={:?}", t.size());
-                    Ok(t.unsqueeze(1))
-                })),
-                None,
-            )?
-            .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b)?
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    debug!("cosine_motif_node: 2. t.size={:?}", t.size());
-                    Ok(t.shallow_clone())
-                })),
-                None,
-            )?
-            .end_seq()
+    let params =  MotifCosineNetParams{
+        num_features: motif.as_ref().map(|v|v.size().dim_1() as u32).unwrap_or(params.num_features),
+        ..params.clone()
     };
 
-    build()
+
+    builder
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                debug!("cosine_motif_node: 1. t.size={:?}", t.size());
+                Ok(t.unsqueeze(1))
+            })),
+            None,
+        )?
+        .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b)?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                debug!("cosine_motif_node: 2. t.size={:?}", t.size());
+                Ok(t.shallow_clone())
+            })),
+            None,
+        )?
+        .end_seq()
+
 }
 
 
 pub fn lin_motif_node(params: &MotifLinNetParams) -> Result<Node, ThoError> {
     debug!("motif_node: params={params:?}");
-    let build = || -> Result<Node, ThoError> {
-        let mut builder = SeqBuilder::new(params.num_features, None)?;
-        let mut net = builder
-            // .batch_norm()
+
+    let mut builder = SeqBuilder::new(params.num_features, None)?;
+    let mut net = builder
+        // .batch_norm()
+        .linear_s(
+            params.num_features * 2,
+            "todo",
+        )?
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+
+    for i in 0..params.num_layers as usize {
+        net = net
             .linear_s(
                 params.num_features * 2,
                 "todo",
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+    }
 
-        for i in 0..params.num_layers as usize {
-            net = net
-                .linear_s(
-                    params.num_features * 2,
-                    "todo",
-                )?
-                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
-        }
+    net
+        // .linear_s(180)
+        // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
+        .linear_s(
+            1,
+            "todo",
+        )?
+        .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
+        .end_seq()
 
-        net
-            // .linear_s(180)
-            // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
-            .linear_s(
-                1,
-                "todo",
-            )?
-            .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
-            .end_seq()
-    };
-
-    build()
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1262,67 +1256,104 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
 
     debug!("cnn_label_node: params={params:?}");
 
-    let build = || -> Result<Node, ThoError> {
-        let mut seq_builder = SeqBuilder::new(0, None)?;
-        let mut builder = seq_builder
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    debug!("cnn_label_node: input={t:?}");
-                    Ok(t.shallow_clone())
-                })),
-                None,
-            )?;
 
-        builder = builder.conv_1d(
-            "cnn_label_conv_1d",
-            cnn_params.kernel,
-            params.motif_nets,
-            cnn_params.hidden_conv_channels,
-            ConvConfig::default(),
-            None,
-        )?.closure(
+    let mut seq_builder = SeqBuilder::new(0, None)?;
+    let mut builder = seq_builder
+        .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                debug!("cnn_label_node: cnn_label_conv_1d output={t:?}");
+                debug!("cnn_label_node: input={t:?}");
                 Ok(t.shallow_clone())
             })),
             None,
         )?;
 
-        for layer in 0..cnn_params.num_conv_layers {
-            builder = builder.conv_1d(
-                format!("cnn_label_conv_1d_{layer}"),
-                cnn_params.kernel,
+    builder = builder.conv_1d(
+        "cnn_label_conv_1d",
+        cnn_params.kernel,
+        params.motif_nets,
+        cnn_params.hidden_conv_channels,
+        ConvConfig::default(),
+        None,
+    )?.closure(
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            debug!("cnn_label_node: cnn_label_conv_1d output={t:?}");
+            Ok(t.shallow_clone())
+        })),
+        None,
+    )?;
+
+    for layer in 0..cnn_params.num_conv_layers {
+        builder = builder.conv_1d(
+            format!("cnn_label_conv_1d_{layer}"),
+            cnn_params.kernel,
+            cnn_params.hidden_conv_channels,
+            cnn_params.hidden_conv_channels,
+            ConvConfig::default(),
+            None,
+        )?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                debug!("cnn_label_node: cnn_label_conv_1d_{layer} output={t:?}");
+                Ok(t.shallow_clone())
+            })),
+            None,
+        )?;
+    }
+
+    builder = match &cnn_params.joint{
+        ConvNetJoint::AttnPool1d => {
+            builder.attn_pool1d(
+                "attn_pool",
                 cnn_params.hidden_conv_channels,
-                cnn_params.hidden_conv_channels,
-                ConvConfig::default(),
+                2*cnn_params.hidden_conv_channels
+            )?
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    debug!("cnn_label_node: attn_pool output={t:?}");
+                    Ok(t.shallow_clone())
+                })),
+                None,
+            )?.linear_feats(
+                "cnn_label_head",
+                cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
+            )?
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    debug!("cnn_label_node: cnn_label_head output={t:?}");
+                    Ok(t.shallow_clone())
+                })),
+                None,
+            )?
+        }
+
+        ConvNetJoint::MinMax => {
+            builder.closure(
+                Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
+                    debug!("cnn_label_node: MinMax leaner input={t:?} lengths={lengths:?}");
+                    let lengths = lengths.unwrap_or(&[]);//TODO
+                    let mask = mask_from_lengths(lengths, *lengths.iter().max().unwrap_or(&0), t.device())?;
+
+                    let mean = t.f_mean_dim(2, false, None)?;
+                    let max = t.f_max_dim(2, false)?;
+                    let mean = masked_mean(t, &mask)?;
+                    let max = masked_max(t, &mask)?;
+
+                    Tensor::f_cat(&[mean, max], 1).map_err(|e|e.into())
+
+                })),
                 None,
             )?
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    debug!("cnn_label_node: cnn_label_conv_1d_{layer} output={t:?}");
+                    debug!("cnn_label_node: MinMax output={t:?}");
                     Ok(t.shallow_clone())
                 })),
                 None,
-            )?;
-        }
-
-        builder = match &cnn_params.joint{
-            ConvNetJoint::AttnPool1d => {
-                builder.attn_pool1d(
-                    "attn_pool",
-                    cnn_params.hidden_conv_channels,
-                    2*cnn_params.hidden_conv_channels
-                )?
-                .closure(
-                    Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                        debug!("cnn_label_node: attn_pool output={t:?}");
-                        Ok(t.shallow_clone())
-                    })),
-                    None,
-                )?.linear_feats(
-                    "cnn_label_head",
-                    cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
-                )?
+            )?
+            .linear_feats(
+                "cnn_label_head",
+                2* cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
+            )?
                 .closure(
                     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
                         debug!("cnn_label_node: cnn_label_head output={t:?}");
@@ -1330,77 +1361,37 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                     })),
                     None,
                 )?
-            }
-
-            ConvNetJoint::MinMax => {
-                builder.closure(
-                    Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
-                        debug!("cnn_label_node: MinMax leaner input={t:?} lengths={lengths:?}");
-                        let lengths = lengths.unwrap_or(&[]);//TODO
-                        let mask = mask_from_lengths(lengths, *lengths.iter().max().unwrap_or(&0), t.device())?;
-
-                        let mean = t.f_mean_dim(2, false, None)?;
-                        let max = t.f_max_dim(2, false)?;
-                        let mean = masked_mean(t, &mask)?;
-                        let max = masked_max(t, &mask)?;
-
-                        Tensor::f_cat(&[mean, max], 1).map_err(|e|e.into())
-
-                    })),
-                    None,
-                )?
-                .closure(
-                    Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                        debug!("cnn_label_node: MinMax output={t:?}");
-                        Ok(t.shallow_clone())
-                    })),
-                    None,
-                )?
-                .linear_feats(
-                    "cnn_label_head",
-                    2* cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
-                )?
-                    .closure(
-                        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                            debug!("cnn_label_node: cnn_label_head output={t:?}");
-                            Ok(t.shallow_clone())
-                        })),
-                        None,
-                    )?
-            }
-        };
-
-        for layer in 0..cnn_params.num_head_layers {
-            builder = builder.linear_s(
-                2*cnn_params.num_head_features,
-                format!("cnn_label_head_{layer}"),
-            )?
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    debug!("cnn_label_node: cnn_label_head_{layer} output={t:?}");
-                    Ok(t.shallow_clone())
-                })),
-                None,
-            )?
-            .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
         }
+    };
 
-        builder.linear_s(
-            1,
-            "cnn_label_head_last",
+    for layer in 0..cnn_params.num_head_layers {
+        builder = builder.linear_s(
+            2*cnn_params.num_head_features,
+            format!("cnn_label_head_{layer}"),
         )?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                debug!("cnn_label_node: cnn_label_head_last={t:?}");
+                debug!("cnn_label_node: cnn_label_head_{layer} output={t:?}");
                 Ok(t.shallow_clone())
             })),
             None,
         )?
-        // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
-        .end_seq()
-    };
+        .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+    }
 
-    build()
+    builder.linear_s(
+        1,
+        "cnn_label_head_last",
+    )?
+    .closure(
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+            debug!("cnn_label_node: cnn_label_head_last={t:?}");
+            Ok(t.shallow_clone())
+        })),
+        None,
+    )?
+    // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
+    .end_seq()
 }
 
 pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
@@ -1410,56 +1401,54 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
 
     debug!("self_attention_label_node: params={params:?}");
 
-    let build = || -> Result<Node, ThoError> {
-        SeqBuilder::new(0, None)?
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    debug!("self_attention_label_node: input={t:?}");
-                    Ok(t.shallow_clone())
-                })),
-                None,
-            )?
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    debug!("self_attention_label_node: transpose input={:?}", t.size());
-                    Ok(t.transpose(1, 2))
-                })),
-                Some(params.motif_nets),
-            )?
-            .linear_feats(
-                "self_attention_in_proj",
-                params.motif_nets,
-                sa_params.d_model_heads * sa_params.n_heads,
-            )?
-            .self_attention(
-                "self_attention_block",
-                sa_params.d_model_heads * sa_params.n_heads,
-                sa_params.n_heads,
-                sa_params.ff_mult,
-                sa_params.dropout,
-            )?
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
-                    debug!("self_attention_label_node: pooling input={:?} lengths={lengths:?}", t.size());
-                    self_attention_masked_mean(t, lengths)
-                })),
-                None,
-            )?
-            .linear_s(
-                1,
-                "self_attention_label_head_last",
-            )?
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    debug!("self_attention_label_node: self_attention_label_head_last={t:?}");
-                    Ok(t.shallow_clone())
-                })),
-                None,
-            )?
-            .end_seq()
-    };
 
-    build()
+    SeqBuilder::new(0, None)?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                debug!("self_attention_label_node: input={t:?}");
+                Ok(t.shallow_clone())
+            })),
+            None,
+        )?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                debug!("self_attention_label_node: transpose input={:?}", t.size());
+                Ok(t.transpose(1, 2))
+            })),
+            Some(params.motif_nets),
+        )?
+        .linear_feats(
+            "self_attention_in_proj",
+            params.motif_nets,
+            sa_params.d_model_heads * sa_params.n_heads,
+        )?
+        .self_attention(
+            "self_attention_block",
+            sa_params.d_model_heads * sa_params.n_heads,
+            sa_params.n_heads,
+            sa_params.ff_mult,
+            sa_params.dropout,
+        )?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, lengths: Option<&[i64]>| {
+                debug!("self_attention_label_node: pooling input={:?} lengths={lengths:?}", t.size());
+                self_attention_masked_mean(t, lengths)
+            })),
+            None,
+        )?
+        .linear_s(
+            1,
+            "self_attention_label_head_last",
+        )?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                debug!("self_attention_label_node: self_attention_label_head_last={t:?}");
+                Ok(t.shallow_clone())
+            })),
+            None,
+        )?
+        .end_seq()
+
 }
 
 
@@ -1473,105 +1462,102 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
     let num_features = lin_params.slices_len;//params.motif_nets;
     debug!("lin_label_node: num_features={num_features}");
 
-    let build = || -> Result<Node, ThoError> {
-        SeqBuilder::new(num_features/*30000*/, None)?
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
-                    debug!("lin_label_node: input={t:?}");
+
+    SeqBuilder::new(num_features/*30000*/, None)?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                debug!("lin_label_node: input={t:?}");
+                Ok(t.shallow_clone())
+            })),
+            None,
+        )?
+        .split1(
+
+        {
+            let mut seq_builder = SeqBuilder::new(num_features, None)?;
+            let mut builder = &mut seq_builder
+            /*.closure(
+                Arc::new(Box::new(move |t: &Tensor| {
+                    debug!("lin_label_node: motif input={t:?}");
                     Ok(t.shallow_clone())
                 })),
                 None,
-            )?
-            .split1(
+            )*/;
+            for _ in 0..lin_params.motif_layers {
+                builder = builder.linear_s(
+                    num_features,
+                    "todo",
+                )?;
 
-            {
-                let mut seq_builder = SeqBuilder::new(num_features, None)?;
-                let mut builder = &mut seq_builder
-                /*.closure(
-                    Arc::new(Box::new(move |t: &Tensor| {
-                        debug!("lin_label_node: motif input={t:?}");
-                        Ok(t.shallow_clone())
-                    })),
-                    None,
-                )*/;
-                for _ in 0..lin_params.motif_layers {
-                    builder = builder.linear_s(
-                        num_features,
-                        "todo",
-                    )?;
+            }
+            builder
+                .end_seq()?
+            },
 
-                }
-                builder
-                    .end_seq()?
-                },
-
-                Box::new(move |t: &Tensor| {
-                    debug!("lin_label_node: t.size={:?}", t.size());
-                    let batch_size = t.size()[0];
-                    let motif_nets = t.size()[1];
-                    let dim_size = t.size()[2] as u32;
-                    let ranges = (0..dim_size).step_by(num_features as usize).map(|v|v as i64).collect::<Vec<_>>();
-                    debug!("lin_label_node: ranges={ranges:?}");
+            Box::new(move |t: &Tensor| {
+                debug!("lin_label_node: t.size={:?}", t.size());
+                let batch_size = t.size()[0];
+                let motif_nets = t.size()[1];
+                let dim_size = t.size()[2] as u32;
+                let ranges = (0..dim_size).step_by(num_features as usize).map(|v|v as i64).collect::<Vec<_>>();
+                debug!("lin_label_node: ranges={ranges:?}");
 
 
-                    Ok(ranges.into_iter().map(|start| {
+                Ok(ranges.into_iter().map(|start| {
 
-                        let t = if start as u32 + num_features > dim_size  {
-                            debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?} padding to {:?}", start as u32 + num_features, t.size(), [batch_size, motif_nets, num_features as i64]);
-                            pad_to(&t.f_narrow(2, start, dim_size as i64 - start)?, &[batch_size, motif_nets, num_features as i64], 0.0)?
-                        } else {
-                            debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?}", start as u32 + num_features, t.size());
-                            t.f_narrow(2, start, num_features as i64)?
-                        };
+                    let t = if start as u32 + num_features > dim_size  {
+                        debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?} padding to {:?}", start as u32 + num_features, t.size(), [batch_size, motif_nets, num_features as i64]);
+                        pad_to(&t.f_narrow(2, start, dim_size as i64 - start)?, &[batch_size, motif_nets, num_features as i64], 0.0)?
+                    } else {
+                        debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?}", start as u32 + num_features, t.size());
+                        t.f_narrow(2, start, num_features as i64)?
+                    };
 
-                        Ok(t)
-                    }).collect::<Result<Vec<Tensor>, ThoError>>()?)
-                }),
-                Box::new(move |res: Vec<Tensor>| {
-                    debug!("lin_label_node: res={res:?}");
+                    Ok(t)
+                }).collect::<Result<Vec<Tensor>, ThoError>>()?)
+            }),
+            Box::new(move |res: Vec<Tensor>| {
+                debug!("lin_label_node: res={res:?}");
 
-                    let all = Tensor::f_concat(res.as_slice(), 1)?;
-                    debug!("lin_label_node: all.size={:?}", all.size());
+                let all = Tensor::f_concat(res.as_slice(), 1)?;
+                debug!("lin_label_node: all.size={:?}", all.size());
 
-                    let r = all.f_mean_dim(1, false, None)?;//.i((0, ..num_features as i64)); //
-                    debug!("lin_label_node: r.size={:?}", r.size());
+                let r = all.f_mean_dim(1, false, None)?;//.i((0, ..num_features as i64)); //
+                debug!("lin_label_node: r.size={:?}", r.size());
 
-                    Ok(r)
+                Ok(r)
 
-                })
-            )?
-            // .closure(
-            //     Arc::new(Box::new(move |t: &Tensor| {
-            //         debug!("lin_label_node: final input={t:?}");
-            //         Ok(t.shallow_clone())
-            //     })),
-            //     None,
-            // )
-            // .conv_1d("lin_label_node conv", 1000)
-            .linear_s(
-                num_features,
-                "todo",
-            )?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-            .linear_s(
-                256,
-                "todo",
-            )?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-            .linear_s(
-                128,
-                "todo",
-            )?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-            .linear_s(
-                1,
-                "todo",
-            )?
-            // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
-            .end_seq()
-    };
-
-    build()
+            })
+        )?
+        // .closure(
+        //     Arc::new(Box::new(move |t: &Tensor| {
+        //         debug!("lin_label_node: final input={t:?}");
+        //         Ok(t.shallow_clone())
+        //     })),
+        //     None,
+        // )
+        // .conv_1d("lin_label_node conv", 1000)
+        .linear_s(
+            num_features,
+            "todo",
+        )?
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+        .linear_s(
+            256,
+            "todo",
+        )?
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+        .linear_s(
+            128,
+            "todo",
+        )?
+        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+        .linear_s(
+            1,
+            "todo",
+        )?
+        // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
+        .end_seq()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
