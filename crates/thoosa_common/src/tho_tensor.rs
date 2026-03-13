@@ -136,6 +136,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
     }
 }
 
+//D:Dims - is just a reminder of what dimensions a tensor has. 
 pub struct ThoTensor<D: Dims = AnyDims, Id: Named + Debug + Clone = ()> {
     id: Id,
     pub t: Tensor,

@@ -1,4 +1,4 @@
-use log::{info, warn};
+use log::{debug, info, warn};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -295,10 +295,10 @@ impl CollectEtaTracker {
         let _ = self.progress_tx.send_replace(snapshot.progress_state.clone());
 
         if let Some(max_eta) = snapshot.max_eta {
-            info!("collect_futures_with_progress ETA: active={} completed={} remaining={} max_eta={} slowest=\"{}\" ({}/{})", snapshot.active_collectors, snapshot.total_completed, snapshot.total_remaining, format_duration(max_eta), snapshot.slowest_descr.as_deref().unwrap_or("unknown"), snapshot.slowest_completed, snapshot.slowest_total);
+            debug!("collect_futures_with_progress ETA: active={} completed={} remaining={} max_eta={} slowest=\"{}\" ({}/{})", snapshot.active_collectors, snapshot.total_completed, snapshot.total_remaining, format_duration(max_eta), snapshot.slowest_descr.as_deref().unwrap_or("unknown"), snapshot.slowest_completed, snapshot.slowest_total);
         } else {
             let unknown_reason = if snapshot.total_completed == 0 { "waiting for first completions" } else { "warming up throughput model" };
-            info!("collect_futures_with_progress ETA: active={} completed={} remaining={} max_eta=unknown ({})", snapshot.active_collectors, snapshot.total_completed, snapshot.total_remaining, unknown_reason);
+            debug!("collect_futures_with_progress ETA: active={} completed={} remaining={} max_eta=unknown ({})", snapshot.active_collectors, snapshot.total_completed, snapshot.total_remaining, unknown_reason);
         }
         true
     }
