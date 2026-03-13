@@ -79,6 +79,7 @@ where
         train_motif_nets_run_ids: Vec<RunId>,
         mut stage_ctx:R,
         max_loss: Option<f32>,
+        selected_nets_limit: Option<usize>,
         slice_step: u32,
         #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>
@@ -91,7 +92,7 @@ where
         //gpt Load all selected motif nets for the provided train_motif_nets_run_ids.
         let mut selected_nets = Vec::new();
         for train_motif_nets_run_id in &train_motif_nets_run_ids {
-            selected_nets.extend(store.list_selected_nets(*train_motif_nets_run_id, max_loss).await?);
+            selected_nets.extend(store.list_selected_nets(*train_motif_nets_run_id, max_loss, selected_nets_limit).await?);
         }
         let selected_nets_len = selected_nets.len();
         let futures = selected_nets
@@ -889,7 +890,7 @@ pub(crate) mod tests {
                     ))
                 ])
                 .with_list_selected_nets([
-                    (select_motifs_run_id, Some(0.3), Ok(vec![
+                    (select_motifs_run_id, Some(0.3), None, Ok(vec![
                         (net_id_0_0.clone(), 0.1f32),
                         (net_id_0_1.clone(), 0.2f32),
                         (net_id_1_0.clone(), 0.25f32),
@@ -903,6 +904,7 @@ pub(crate) mod tests {
             &store,
             vec![select_motifs_run_id],
             mock_run_ctx::default(1), Some(0.3),
+            None,
             slice_step,
             trigger_oom_len
         ).await?);
@@ -1016,7 +1018,7 @@ pub(crate) mod tests {
                 ))
             ])
             .with_list_selected_nets([
-                (select_motifs_run_id, Some(0.3), Ok(vec![
+                (select_motifs_run_id, Some(0.3), None, Ok(vec![
                     (net_id_0_0.clone(), 0.1f32),
                 ]))
             ])
@@ -1030,6 +1032,7 @@ pub(crate) mod tests {
             vec![select_motifs_run_id],
             mock_run_ctx::default(1), Some(0.3) //Some(1000)
             ,
+            None,
             step,
             trigger_oom_len
         ).await?);

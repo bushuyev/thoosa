@@ -1222,7 +1222,7 @@ mod tests {
                     Ok((0i64, find_motifs_run_id, random_slices, random_resources_by_id)),
                 )
                 .with_list_selected_nets([
-                    (train_motif_nets_run_id, None, Ok(vec![(selected_net_path.clone(), 0.01)])),
+                    (train_motif_nets_run_id, None, None, Ok(vec![(selected_net_path.clone(), 0.01)])),
                 ])
                 .build(),
         );
@@ -1278,6 +1278,7 @@ mod tests {
             &store,
             vec![train_motif_nets_run_id],
             mock_run_ctx::default(1),
+            None,
             None,
             1,
         ).await?);
