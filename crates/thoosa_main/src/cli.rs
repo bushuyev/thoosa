@@ -51,7 +51,7 @@ use thoosa_common::my_tch::ThoModule;
 use thoosa_motifs::find;
 use thoosa_motifs::find::{FindMotifsArgs, FixedFindMotifsConfig, SelectMotifsArgs};
 use thoosa_motifs::fragments::{
-    DataBy, MotifsToTensorArgs, PlotDataArgs};
+    DataBy, MotifsToTensorArgs, PlotDataArgs, Resolution};
 use thoosa_properties_map::ToHashmap;
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 use thoosa_shared::applicables_runner::Input;
@@ -156,6 +156,9 @@ pub struct RunAllArgs {
 
     #[arg(long, default_value = "false")]
     pub with_plots: bool,
+
+    #[arg(long, value_enum, default_value_t = Resolution::Normal)]
+    pub resolution: Resolution,
 
     #[arg(long)]
     pub labels: Option<String>,
@@ -670,7 +673,7 @@ where
         }
 
         Some(PlotData(plot_slices_params)) => {
-            run_plot(&ws, &store, &loader, &plot_slices_params, &devices[0], root_ctx).await?;
+            run_plot(&ws, &store, &loader, &plot_slices_params, plot_slices_params.resolution(), &devices[0], root_ctx).await?;
         }
 
         Some(MotifsToTensor(choose_fragments_params)) => {
@@ -902,7 +905,7 @@ async fn run_all(
     // #[cfg(tho_debug_plots)]
     if run_all_args.with_plots {
         for select_motifs_run_id in &select_motifs_run_ids {
-            run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![*select_motifs_run_id] }), &Cpu, root_ctx.branch("plot".into(), false, false)).await?;
+            run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![*select_motifs_run_id] }), run_all_args.resolution, &Cpu, root_ctx.branch("plot".into(), false, false)).await?;
         }
     }
 
@@ -1465,6 +1468,7 @@ pub async fn run_plot<C>(
     store: &Arc<Box<dyn Store>>,
     loader: &Arc<RawTensorLoader<C>>,
     plot_params: &PlotDataArgs,
+    resolution: Resolution,
     _device: &Device,
     mut ctx:C
 ) -> Result<(), ThoError>
@@ -1487,17 +1491,17 @@ where
     match plot_params.motifs_by() {
         DataBy::Resource { resource_id, channels, freq_filters } => {
             debug!("run_plot: MotifsBy::Resource resource_id={resource_id} channels={channels:?} freq_filters={freq_filters:?}");
-            plot_resource(ws, store, loader, resource_id, channels, freq_filters, ctx).await?;
+            plot_resource(ws, store, loader, resource_id, channels, freq_filters, resolution, ctx).await?;
             return Ok(());
         }
         DataBy::MotifNetApplied { resource_id, net_path } => {
             debug!("run_plot: MotifsBy::MotifNetApplied resource_id={resource_id} net_path={net_path:?}");
-            plot_motif_net_applied(ws, store, loader, resource_id, net_path, ctx).await?;
+            plot_motif_net_applied(ws, store, loader, resource_id, net_path, resolution, ctx).await?;
             return Ok(());
         }
         DataBy::MotifId(motif_id) => {
             debug!("run_plot: MotifsBy::MotifId run_id={motif_id}");
-            plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None).await?;
+            plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None, resolution).await?;
         }
         DataBy::RunId {
             find_motifs_run_ids,
@@ -1513,6 +1517,7 @@ where
                     &motif_loader_impl,
                     &clc_dist,
                     select_motifs_run_ids.clone(),
+                    resolution,
                     ctx.branch(Some(&format!("find_motifs_run_{find_motifs_run_id}")), true, false),
                 )
                 .await?;
@@ -1527,6 +1532,7 @@ where
                     select_motifs_run_id,
                     &motif_loader_impl,
                     &clc_dist,
+                    resolution,
                     ctx.branch(Some(&format!("selected_motifs_run_{select_motifs_run_id}")), true, false),
                 )
                 .await?;
@@ -1545,6 +1551,7 @@ async fn plot_found_motifs<C>(
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
     clc_dist: &Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
     select_motifs_run_ids: Option<Vec<RunId>>,
+    resolution: Resolution,
     mut ctx: C,
 ) -> Result<(), ThoError>
 where
@@ -1565,7 +1572,7 @@ where
             async move {
                 debug!("run_plot: motif_id={motif_id}");
 
-                if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_ids).await {
+                if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_ids, resolution).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
                 MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();
@@ -1597,6 +1604,7 @@ async fn plot_selected_motifs<C>(
     select_motifs_run_id: RunId,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
     clc_dist: &Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
+    resolution: Resolution,
     mut ctx: C,
 ) -> Result<(), ThoError>
 where
@@ -1633,7 +1641,7 @@ where
             let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true, false);
             async move {
                 debug!("run_plot: motif_id={motif_id}");
-                if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix).await {
+                if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
                 MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();
@@ -1701,6 +1709,7 @@ fn plot_resource_channels<C>(
     caption: &str,
     tensor: &ThoTensor<ChannelsData2, SynKey>,
     channels: Option<&Vec<u32>>,
+    resolution: Resolution,
 ) -> Result<(), ThoError>
 where
     C: RunCtx + Adjustable,
@@ -1732,7 +1741,7 @@ where
     plot_series(
         plot_data,
         caption,
-        (2000, 1000),
+        resolution.plot_size((2000, 1000)),
         &ws.read().plots_path().join("resource").join(format!("resource_{resource_id}_{suffix}.png")),
     )?;
 
@@ -1744,6 +1753,7 @@ fn plot_single_line_tensor(
     path_suffix: &str,
     caption: &str,
     line_t: &Tensor,
+    resolution: Resolution,
 ) -> Result<(), ThoError> {
     let line_t = line_t.f_view([-1])?;
     let points = line_t
@@ -1755,7 +1765,7 @@ fn plot_single_line_tensor(
     plot_series(
         vec![("0".to_string(), BLACK, points)],
         caption,
-        (2000, 1000),
+        resolution.plot_size((2000, 1000)),
         &ws.read().plots_path().join("resource").join(format!("{path_suffix}.png")),
     )?;
 
@@ -1769,6 +1779,7 @@ async fn plot_resource<C>(
     resource_id: ResourceId,
     channels: Option<Vec<u32>>,
     freq_filters: Option<Vec<thoosa_common::find_motifs_run_config::InputFilter>>,
+    resolution: Resolution,
     mut ctx: C,
 ) -> Result<(), ThoError>
 where
@@ -1780,7 +1791,7 @@ where
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
     raw.with_data_ref(0, ctx.branch(Some("plot_resource_raw"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-        plot_resource_channels::<C>(ws, resource_id, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref())
+        plot_resource_channels::<C>(ws, resource_id, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution)
     }).await?;
 
     if let Some(freq_filters) = freq_filters {
@@ -1794,7 +1805,7 @@ where
 
         let filtered_channels = channels.clone();
         filtered.with_data_ref(0, ctx.branch(Some("plot_resource_freq_filter_plot"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-            plot_resource_channels::<C>(ws, resource_id, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref())
+            plot_resource_channels::<C>(ws, resource_id, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution)
         }).await?;
     }
 
@@ -1807,6 +1818,7 @@ async fn plot_motif_net_applied<C>(
     loader: &Arc<RawTensorLoader<C>>,
     resource_id: ResourceId,
     net_path: PathBuf,
+    resolution: Resolution,
     mut ctx: C,
 ) -> Result<(), ThoError>
 where
@@ -1828,7 +1840,7 @@ where
     let net_path_sfx = sanitize_plot_path_segment(&net_path.to_string_lossy());
 
     raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_raw_channel"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-        plot_resource_channels::<C>(ws, resource_id, &format!("motif_net_input_raw_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net input raw channel={channel} net={net_path:?}"), tensor, Some(&channel_only))
+        plot_resource_channels::<C>(ws, resource_id, &format!("motif_net_input_raw_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net input raw channel={channel} net={net_path:?}"), tensor, Some(&channel_only), resolution)
     }).await?;
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
@@ -1846,7 +1858,7 @@ where
 
         let channel_only_filtered = vec![channel];
         filtered.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_prefilter_channel"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-            plot_resource_channels::<C>(ws, resource_id, &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_id={find_motifs_run_id}"), tensor, Some(&channel_only_filtered))
+            plot_resource_channels::<C>(ws, resource_id, &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_id={find_motifs_run_id}"), tensor, Some(&channel_only_filtered), resolution)
         }).await?;
 
         filtered
@@ -1877,6 +1889,7 @@ where
                 &format!("resource_{resource_id}_motif_net_applied_{motif_id}_{channel}_{net_path_sfx}"),
                 &format!("Resource {resource_id} motif-net output motif_id={motif_id} channel={channel} find_run_id={find_motifs_run_id} net={net_path:?}"),
                 out.t_ref(),
+                resolution,
             )?;
 
             Ok(())
@@ -1893,6 +1906,7 @@ async fn plot_motif<C>(
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
     clc_dist: Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
     select_motif_run_ids: Option<Vec<RunId>>,
+    resolution: Resolution,
 ) -> Result<(), ThoError>
 where
     C:RunCtx + Adjustable{
@@ -1953,7 +1967,7 @@ where
             plot_series_with_sidebar_values(
                 plot_data,
                 format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len}").as_str(),
-                (2600, 1200),
+                resolution.plot_size((2600, 1200)),
                 &ws.read().plots_path().join(format!("{run_id}{select_motif_run_ids_sfx}")).join(format!("motif_{}.png", motif_id)),
                 "Motif Metrics",
                 metrics_for_plot_ref.as_slice(),
@@ -2199,6 +2213,7 @@ mod cli_tests {
     use thoosa_common::ws::{mock_ws_simp, FsWorkspace, Workspace};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
+    use thoosa_motifs::fragments::Resolution;
     use thoosa_motifs::find::{
         FixedFindMotifsConfig, SelectMotifsParams};
     use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
@@ -2249,6 +2264,33 @@ mod cli_tests {
     fn test_write_perf_log_file_flag_enables_perf_file_logging() {
         let cli = Cli::parse_from(["thoosa_main", "--write-perf-log-file"]);
         assert!(cli.write_perf_log_file);
+    }
+
+    #[test]
+    fn test_plot_data_resolution_flag_parses_high() {
+        let cli = Cli::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:7", "--resolution", "high"]);
+
+        match cli.command {
+            Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.resolution(), Resolution::High),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_run_all_resolution_flag_parses_high() {
+        let cli = Cli::parse_from([
+            "thoosa_main",
+            "run-all",
+            "--find-resources", "group:find",
+            "--select-resources", "group:select",
+            "--run-config-cnt", "1",
+            "--resolution", "high",
+        ]);
+
+        match cli.command {
+            Some(crate::cli::Commands::RunAll(args)) => assert_eq!(args.resolution, Resolution::High),
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2547,6 +2589,7 @@ mod cli_tests {
             max_motif_net_loss: 0.4,
             motif_slices_step: 10,
             with_plots: false,
+            resolution: Resolution::Normal,
             labels: None,
         };
 
