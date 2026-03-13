@@ -207,7 +207,7 @@ where
 {
     type Ctx = C;
     type In<'a> = ThoTensor<ChannelsData2, SynKey>;
-    type Out = ThoTensor<MotifProbability, SynKey>;
+    type Out = ThoTensor<MotifProbability, SynKey>;//TODO it should be MotifsProbabilities - for many motifs
 }
 
 
@@ -314,7 +314,7 @@ where
         .into_iter()
         .collect::<Vec<_>>();
 
-        debug!("ApplyMotifNets::run: matches={matches:?}");
+        debug!("ApplyMotifNets::run: matches.len={} matches={matches:?}", matches.len());
 
         let match_lens = matches.iter().map(|v| v.t.size()[0]).collect::<Vec<_>>();
         let unique_match_lens = match_lens.iter().copied().collect::<HashSet<_>>();
@@ -353,12 +353,6 @@ where
 
     }
 
-    fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &mut Self::Ctx)
-    where
-        Self: 'a
-    {
-        //TODO
-    }
 }
 
 

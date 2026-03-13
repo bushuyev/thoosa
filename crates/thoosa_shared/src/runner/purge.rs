@@ -119,16 +119,16 @@ where
             })
             .collect();
 
-        let mut total_size = 0;
+        let mut gpu_size = 0;
         for (key, wrapper) in items {
             if !wrapper.is_all_on_cpu().await {
                 let size = wrapper.mem_size();
                 trace!("key={key:?} size={size:?}");
-                total_size += size;
+                gpu_size += size;
             }
         }
 
-        warn!("debug_gpu: device_idx={device_idx} type_name={:?} self.len={} total_size: {total_size}", self.type_name(), self.len());
+        debug!("debug_gpu: device_idx={device_idx} type_name={:?} self.len={} on_gpu: {gpu_size}", self.type_name(), self.len());
 
         Ok(())
     }
