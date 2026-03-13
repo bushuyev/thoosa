@@ -321,13 +321,13 @@ where
             })?;
             let (train_labels_resource_keys, valid_label_resource_keys) = resources_config.to_resources(&self.store).await?;
 
-            let (labels_tain_and_valid_sets, labels_others_train_valid_resources) = Self::build_resource_maps(train_labels_resource_keys, valid_label_resource_keys);
+            let (labels_train_and_valid_sets, labels_others_train_valid_resources) = Self::build_resource_maps(train_labels_resource_keys, valid_label_resource_keys);
             debug!("TrainLabelNets::run: labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
-            debug!("TrainLabelNets::run: labels_tain_and_valid_sets={labels_tain_and_valid_sets:?}");
+            debug!("TrainLabelNets::run: labels_train_and_valid_sets={labels_train_and_valid_sets:?}");
 
-            let labels_tain_and_valid_sets_len = labels_tain_and_valid_sets.len();
+            let labels_train_and_valid_sets_len = labels_train_and_valid_sets.len();
             let labels_filter = self.labels.clone();
-            let futures = labels_tain_and_valid_sets.iter()
+            let futures = labels_train_and_valid_sets.iter()
             .filter(|(label, _)|{
                 labels_filter
                     .as_ref()
@@ -478,7 +478,7 @@ where
 
             let results = collect_futures_with_progress(
                 futures,
-                labels_tain_and_valid_sets_len,
+                labels_train_and_valid_sets_len,
                 crate::buffer_limits::TRAIN_LABEL_NETS_RUN_BUFFER_UNORDERED_LIMIT,
                 StreamBuffering::Unordered,
                 "train labels",
@@ -522,7 +522,7 @@ where
             }
         }
 
-        let labels_tain_and_valid_sets = train_labels_resource_keys.into_iter().zip(valid_label_resource_keys.into_iter()).fold(HashMap::new(), |mut a, (train, valid)| {
+        let labels_train_and_valid_sets = train_labels_resource_keys.into_iter().zip(valid_label_resource_keys.into_iter()).fold(HashMap::new(), |mut a, (train, valid)| {
             assert_eq!(train.0, valid.0); //train and valid labels should come in same order from db
 
             assert!(a.insert(train.0, (train.1, valid.1)).is_none());
@@ -531,7 +531,7 @@ where
 
 
         for (other_label, train_valid_resources) in labels_others_train_valid_resources.iter_mut() {
-            for (label, resources) in &labels_tain_and_valid_sets {
+            for (label, resources) in &labels_train_and_valid_sets {
                 if label.ne(other_label) {
                     train_valid_resources.0.extend(resources.0.iter());
                     train_valid_resources.1.extend(resources.1.iter());
@@ -543,12 +543,12 @@ where
         let labels_others_train_valid_resources = Arc::new(labels_others_train_valid_resources.into_iter().map(|(label, resources)| {
             let mut train_resources = resources.0;
             train_resources.shuffle(&mut rng());
-            train_resources.truncate(labels_tain_and_valid_sets.get(&label).expect(&format!("no {label} for train resources")).0.len());
+            train_resources.truncate(labels_train_and_valid_sets.get(&label).expect(&format!("no {label} for train resources")).0.len());
 
 
             let mut valid_resources = resources.1;
             valid_resources.shuffle(&mut rng());
-            valid_resources.truncate(labels_tain_and_valid_sets.get(&label).expect(&format!("no {label} for valid resources")).1.len());
+            valid_resources.truncate(labels_train_and_valid_sets.get(&label).expect(&format!("no {label} for valid resources")).1.len());
 
             (
                 label,
@@ -558,7 +558,7 @@ where
                 )
             )
         }).collect::<HashMap<String, (Vec<Resource>, Vec<Resource>)>>());
-        (labels_tain_and_valid_sets, labels_others_train_valid_resources)
+        (labels_train_and_valid_sets, labels_others_train_valid_resources)
     }
 }
 
