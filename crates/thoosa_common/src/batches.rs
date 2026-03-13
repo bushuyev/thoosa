@@ -6,6 +6,7 @@ use std::sync::Arc;
 use thoosa_shared::ThoError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Carries the usual per-sample time lengths and, when needed, per-motif-net lengths inside each sample.
 pub struct BatchLengths {
     time: Vec<i64>,
     motif_net_time: Option<Vec<Vec<i64>>>,
@@ -19,6 +20,7 @@ impl BatchLengths {
         }
     }
 
+    /// Builds batch lengths for nested ragged data where each sample contains motif nets with different real lengths.
     pub fn with_motif_net_time(time: Vec<i64>, motif_net_time: Vec<Vec<i64>>) -> Result<Self, ThoError> {
         if time.len() != motif_net_time.len() {
             return Err(ThoError::new(format!(
@@ -41,6 +43,7 @@ impl BatchLengths {
         self.time.as_mut_slice()
     }
 
+    /// Returns the per-sample, per-motif-net lengths when inner padding needs to be reconstructed.
     pub fn motif_net_time(&self) -> Option<&[Vec<i64>]> {
         self.motif_net_time.as_deref()
     }

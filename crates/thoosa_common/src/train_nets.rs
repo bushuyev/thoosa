@@ -1255,6 +1255,7 @@ fn self_attention_masked_mean(h: &Tensor, lengths: Option<&BatchLengths>) -> Res
 
 const SELF_ATTENTION_MISSING_MOTIF_VALUE: f64 = -1.0;
 
+/// Rewrites inner padded motif values before attention so they are not treated like real motif probabilities.
 fn mark_missing_motif_values(t: &Tensor, lengths: Option<&BatchLengths>) -> Result<Tensor, ThoError> {
     let Some(motif_net_time) = lengths.and_then(BatchLengths::motif_net_time) else {
         return Ok(t.shallow_clone());
