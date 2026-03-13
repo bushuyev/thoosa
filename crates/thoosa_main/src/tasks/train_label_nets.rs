@@ -358,12 +358,12 @@ where
                     let resources_1_valid = Arc::new(resources_1.1.clone());
                     let resources_0_train = Arc::new(resources_0.0.clone());
                     let resources_0_valid = Arc::new(resources_0.1.clone());
-                    let label_ = label.clone();
-                    let label_for_batches = label.clone();
+                    let label = label.clone();
+
 
                     let train_net = Arc::new(TrainNet::new(
                         move |ctx_for_batch:C,rc:&TrainLabelNetsRunConfig| {
-                            let label = label_for_batches.clone();
+
                             let applied_motif_loader = Arc::clone(&applied_motif_loader);
 
                             ready(Ok(ResourcesBatch::new(
@@ -449,7 +449,7 @@ where
                             rc.common_training_args.cycles
                         },
                         1,
-                        format!("label_{label_}")
+                        format!("label_{label}")
                     ));
 
                     let result = train_net.run(
@@ -459,12 +459,12 @@ where
 
 
                     let result = Arc::into_inner(result).expect("can't get result from train_net").take_data(0).await?;
-                    debug!("TrainLabelNets::run, done: label={label_} min_loss={:?}", result.min_loss);
+                    debug!("TrainLabelNets::run, done: label={label} min_loss={:?}", result.min_loss);
 
                     Ok::<_, ThoError>(
                         TrainLabelNetsRunConfigResult::new(
                             train_motif_nets_run_ids, //TODO
-                            label_,
+                            label,
                             result.min_loss,
                             result.node_params,
                             result.run_config,
