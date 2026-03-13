@@ -5,7 +5,52 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use thoosa_shared::ThoError;
 
-pub type BatchLengths = Vec<i64>;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchLengths {
+    time: Vec<i64>,
+    motif_net_time: Option<Vec<Vec<i64>>>,
+}
+
+impl BatchLengths {
+    pub fn new(time: Vec<i64>) -> Self {
+        Self {
+            time,
+            motif_net_time: None,
+        }
+    }
+
+    pub fn with_motif_net_time(time: Vec<i64>, motif_net_time: Vec<Vec<i64>>) -> Result<Self, ThoError> {
+        if time.len() != motif_net_time.len() {
+            return Err(ThoError::new(format!(
+                "BatchLengths::with_motif_net_time batch mismatch: time={} motif_net_time={}",
+                time.len(),
+                motif_net_time.len()
+            )));
+        }
+        Ok(Self {
+            time,
+            motif_net_time: Some(motif_net_time),
+        })
+    }
+
+    pub fn as_slice(&self) -> &[i64] {
+        self.time.as_slice()
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [i64] {
+        self.time.as_mut_slice()
+    }
+
+    pub fn motif_net_time(&self) -> Option<&[Vec<i64>]> {
+        self.motif_net_time.as_deref()
+    }
+}
+
+impl From<Vec<i64>> for BatchLengths {
+    fn from(time: Vec<i64>) -> Self {
+        Self::new(time)
+    }
+}
 
 #[async_trait]
 pub trait AsyncDataBatch<DX: Dims, DY: Dims>: Debug + Send + Sync {

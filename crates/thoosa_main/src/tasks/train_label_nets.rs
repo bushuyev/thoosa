@@ -15,10 +15,11 @@ use polars_arrow::io::iterator::StreamingIterator;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Device, Reduction, Tensor};
 use cached_derive::Cached;
-use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode};
 use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
+use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{build_resource_maps, Resource, ResourcesConfig};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use crate::tasks::cross_dims::ChannelsData2;
@@ -57,7 +58,7 @@ use thoosa_shared::comp_id::SynKey;
 pub struct TrainLabelNets<L, LM, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    LM: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<MotifProbability, SynKey>, Ctx=C> + Cached + OutId + 'static,
+    LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     train_motif_nets_run_ids: Vec<RunId>,
@@ -75,6 +76,37 @@ where
     opt_config:Arc<OptConfig>,
     labels: Option<Vec<String>>,
 
+}
+
+fn build_motif_batch_lengths(
+    tensors: &[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>],
+    time_lengths: Vec<i64>,
+    max_input: i64,
+) -> Result<BatchLengths, ThoError> {
+    if tensors.len() != time_lengths.len() {
+        return Err(ThoError::new(format!(
+            "build_motif_batch_lengths batch mismatch: tensors={} time_lengths={}",
+            tensors.len(),
+            time_lengths.len()
+        )));
+    }
+
+    let motif_net_time = tensors
+        .iter()
+        .map(|tensor| {
+            let motif_nets = tensor.data().t_ref().size()[0] as usize;
+            if tensor.extra().len() != motif_nets {
+                return Err(ThoError::new(format!(
+                    "build_motif_batch_lengths motif count mismatch: tensor_motif_nets={} extra_lengths={}",
+                    motif_nets,
+                    tensor.extra().len()
+                )));
+            }
+            Ok(tensor.extra().iter().map(|len| (*len).min(max_input)).collect::<Vec<_>>())
+        })
+        .collect::<Result<Vec<_>, ThoError>>()?;
+
+    BatchLengths::with_motif_net_time(time_lengths, motif_net_time)
 }
 
 pub async fn new_train_label_nets<L, C, R>(
@@ -137,7 +169,7 @@ where
 impl <L, LM, C> TrainLabelNets<L, LM, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    LM: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<MotifProbability, SynKey>, Ctx=C> + Cached + OutId + 'static,
+    LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
 
@@ -289,7 +321,7 @@ impl TrainLabelNetsOutput {
 impl <L, LM, C> Stage for TrainLabelNets<L, LM, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    LM: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<MotifProbability, SynKey>, Ctx=C> + Cached + OutId + 'static,
+    LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     type Ctx = C;
@@ -300,7 +332,7 @@ where
 impl<L, LM, C> AsyncStage for TrainLabelNets<L, LM, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    LM: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<MotifProbability, SynKey>, Ctx=C> + Cached + OutId + 'static,
+    LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainLabelNets::run"))]
@@ -375,21 +407,26 @@ where
                                    Arc::clone(&resources_1_valid),
                                    Arc::clone(&resources_0_train),
                                    Arc::clone(&resources_0_valid),
-                                   Box::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SynKey>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SynKey>>>>, mut ctx: C| {
+                                   Box::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
                                        async move {
-                                           let (x, lengths, y) = with_data!(ctx.branch(Some("train_label_nets_batch_data"), false, false), [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<MotifProbability, SynKey>], x_0:&[&ThoTensor<MotifProbability, SynKey>]|{
+                                           let (x, lengths, y) = with_data!(ctx.branch(Some("train_label_nets_batch_data"), false, false), [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>], x_0:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>]|{
                                                debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
 
-                                               let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.t_ref().size()[1]).max().expect("no max_input");
+                                               let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.data().t_ref().size()[1]).max().expect("no max_input");
 
                                                debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: max_input={max_input}");
 
-                                               let (x_1, lengths_1) = pad_stack_with_mask(x_1, num_nets as i64, max_input)?;
-                                               let (x_0, lengths_0) = pad_stack_with_mask(x_0, num_nets as i64, max_input)?;
+                                               let x_1_refs = x_1.iter().map(|x| x.data()).collect::<Vec<_>>();
+                                               let x_0_refs = x_0.iter().map(|x| x.data()).collect::<Vec<_>>();
 
-                                               debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: x_1.size={:?}, x_0.size={:?}, lengths_1={:?}, lengths_0={:?}", x_1.size(), x_0.size(), lengths_1, lengths_0);
+                                               let (x_1_batch, lengths_1) = pad_stack_with_mask(x_1_refs.as_slice(), num_nets as i64, max_input)?;
+                                               let (x_0_batch, lengths_0) = pad_stack_with_mask(x_0_refs.as_slice(), num_nets as i64, max_input)?;
+                                               let lengths_1 = build_motif_batch_lengths(x_1, lengths_1, max_input)?;
+                                               let lengths_0 = build_motif_batch_lengths(x_0, lengths_0, max_input)?;
 
-                                               mix_x_binary_with_labels(&x_1, Some(lengths_1.as_slice()), &x_0, Some(lengths_0.as_slice()))
+                                               debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: x_1.size={:?}, x_0.size={:?}, lengths_1={:?}, lengths_0={:?}", x_1_batch.size(), x_0_batch.size(), lengths_1, lengths_0);
+
+                                               mix_x_binary_with_labels(&x_1_batch, Some(&lengths_1), &x_0_batch, Some(&lengths_0))
                                            })?;
 
                                            debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: x.size={:?} y.size={:?} lengths={lengths:?}", x.size(), y.size());
@@ -492,19 +529,19 @@ where
 }
 
 #[allow(type_alias_bounds)]
-type BuildBatchFn<LD:Dims+ 'static, X:Dims+ 'static, Y:Dims+ 'static, C> = Box<dyn Fn(
-
-    Vec<Arc<DevicesWrap<ThoTensor<LD, SynKey>>>>,
-    Vec<Arc<DevicesWrap<ThoTensor<LD, SynKey>>>>, C
+type BuildBatchFn<LD:Data + WithId + Send + Sync + 'static, X:Dims+ 'static, Y:Dims+ 'static, C> = Box<dyn Fn(
+    Vec<Arc<DevicesWrap<LD>>>,
+    Vec<Arc<DevicesWrap<LD>>>, C
 
 ) -> BoxFuture<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> + Send + Sync>;
 
 // #[derive(Debug)]
 struct ResourcesBatch<L, C, LD, X, Y>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LD, SynKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + OutId + 'static,
     C:RunCtx+'static,
-    LD:Dims+ 'static,
+    LD:Data + WithId + Send + Sync + 'static,
+    <LD as Data>::M: DevicesWrapCopyMode<LD>,
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
@@ -521,9 +558,10 @@ where
 
 impl <L, C, LD, X, Y> Debug for  ResourcesBatch<L, C, LD, X, Y>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LD, SynKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + OutId + 'static,
     C:RunCtx+'static,
-    LD:Dims+ 'static,
+    LD:Data + WithId + Send + Sync + 'static,
+    <LD as Data>::M: DevicesWrapCopyMode<LD>,
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
@@ -534,9 +572,10 @@ where
 
 impl <L, C, LD, X, Y> ResourcesBatch<L, C, LD, X, Y>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LD, SynKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + OutId + 'static,
     C:RunCtx+'static,
-    LD:Dims+ 'static,
+    LD:Data + WithId + Send + Sync + 'static,
+    <LD as Data>::M: DevicesWrapCopyMode<LD>,
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
@@ -581,9 +620,10 @@ where
 #[async_trait]
 impl <L,C, LD, X, Y> AsyncDataBatch<X, Y> for ResourcesBatch<L, C, LD, X, Y>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LD, SynKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + OutId + 'static,
     C:RunCtx+'static,
-    LD:Dims+ 'static,
+    LD:Data + WithId + Send + Sync + 'static,
+    <LD as Data>::M: DevicesWrapCopyMode<LD>,
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
@@ -624,8 +664,9 @@ where
 impl<L, C, LD, X, Y> ResourcesBatch<L, C, LD, X, Y>
 where
     C: 'static + RunCtx,
-    L: 'static + OutId + for<'i> Cached<In<'i>=Resource, Out=ThoTensor<LD, SynKey>, Ctx=C>+ 'static,
-    LD:Dims+ 'static,
+    L: 'static + OutId + for<'i> Cached<In<'i>=Resource, Out=LD, Ctx=C>+ 'static,
+    LD:Data + WithId + Send + Sync + 'static,
+    <LD as Data>::M: DevicesWrapCopyMode<LD>,
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
@@ -722,13 +763,14 @@ mod tests {
     use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use thoosa_shared::runner::common::PermitsCtx;
     use thoosa_shared::runner::common::runnable::AsyncStage;
+    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::batches::AsyncDataBatch;
-    use thoosa_common::dims::{Batch, LabelProbability};
+    use thoosa_common::dims::{Batch, LabelProbability, MotifProbability};
     use thoosa_common::runs::{Labeled, NetResources};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, LabelNetTypeArgsFields, LinNetArgsFields, OptConfig, TrainLabelNetsRunConfigFields};
-    use thoosa_common::utils::{mix_x_binary_with_labels, reset_print_options};
+    use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, reset_print_options};
     use thoosa_common::ws::{mock_ws_simp, WsMockBuilder};
     use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_shared::resource::Resource;
@@ -1021,7 +1063,7 @@ mod tests {
         );
 
 
-        let resource_batch: ResourcesBatch<_, _, ChannelsData2, ChannelsData2, LabelProbability> = ResourcesBatch::new(
+        let resource_batch: ResourcesBatch<_, _, ThoTensor<ChannelsData2, SynKey>, ChannelsData2, LabelProbability> = ResourcesBatch::new(
             loader,
             6,
             resources_1_train,
@@ -1054,6 +1096,40 @@ mod tests {
         assert!(batch.next().await.is_none()); //should be only one
 
 
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_motif_batch_lengths_preserves_per_net_lengths() -> Result<(), ThoError> {
+        let sample_a = DataWithExtra::new(
+            ThoTensor::<MotifProbability, SynKey>::new(
+                SynKey::new([mono_key!("sample_a", "sample")]),
+                Tensor::f_from_slice(&[
+                    0.1f32, 0.2, 0.3, 0.0, 0.0,
+                    0.4, 0.5, 0.6, 0.7, 0.8,
+                ])?.f_view([2, 5])?,
+            )?,
+            vec![3, 5],
+        );
+        let sample_b = DataWithExtra::new(
+            ThoTensor::<MotifProbability, SynKey>::new(
+                SynKey::new([mono_key!("sample_b", "sample")]),
+                Tensor::f_from_slice(&[
+                    1.1f32, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7,
+                    2.1, 2.2, 2.3, 2.4, 0.0, 0.0, 0.0,
+                ])?.f_view([2, 7])?,
+            )?,
+            vec![7, 4],
+        );
+        let tensors = vec![&sample_a, &sample_b];
+        let tensor_refs = tensors.iter().map(|t| t.data()).collect::<Vec<_>>();
+        let max_input = tensor_refs.iter().map(|t| t.t_ref().size()[1]).max().expect("no max input");
+        let (_batch, outer_lengths) = pad_stack_with_mask(tensor_refs.as_slice(), 2, max_input)?;
+        let lengths = super::build_motif_batch_lengths(tensors.as_slice(), outer_lengths, max_input)?;
+
+        assert_eq!(lengths.as_slice(), &[5, 7]);
+        assert_eq!(lengths.motif_net_time().expect("motif lengths"), &[vec![3, 5], vec![7, 4]]);
 
         Ok(())
     }

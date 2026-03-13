@@ -26,6 +26,7 @@ use tch::{nn, Device, IndexOp, Kind, TchError, Tensor};
 use thoosa_shared::{cdt_for_dir, gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoError};
 use torch_sys::cuda::atc_cuda_device_count;
 
+use crate::batches::BatchLengths;
 use crate::builder::SeqBuilder;
 use crate::dims::{Batch, Dims, MotifProbability, Slice};
 use futures_util::FutureExt;
@@ -1227,7 +1228,7 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
 }
 
 //TODO check GPT
-pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&[i64]>, x_0: &Tensor, lengths_0: Option<&[i64]>) -> Result<(Tensor, Option<Vec<i64>>, Tensor), ThoError> {
+pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&BatchLengths>, x_0: &Tensor, lengths_0: Option<&BatchLengths>) -> Result<(Tensor, Option<BatchLengths>, Tensor), ThoError> {
     let [ma, _na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
     let [mb, _nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
     // assert_eq!((na, nb), (na, na), "X1 and X0 must have same n");
@@ -1263,22 +1264,39 @@ pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&[i64]>, x_0: &T
     let lengths = match (lengths_1, lengths_0) {
         (None, None) => None,
         (Some(lengths_1), Some(lengths_0)) => {
-            if lengths_1.len() != ma as usize {
-                return Err(ThoError::new(format!("lengths_1 len mismatch: expected={ma} got={}", lengths_1.len())));
+            if lengths_1.as_slice().len() != ma as usize {
+                return Err(ThoError::new(format!("lengths_1 len mismatch: expected={ma} got={}", lengths_1.as_slice().len())));
             }
-            if lengths_0.len() != mb as usize {
-                return Err(ThoError::new(format!("lengths_0 len mismatch: expected={mb} got={}", lengths_0.len())));
+            if lengths_0.as_slice().len() != mb as usize {
+                return Err(ThoError::new(format!("lengths_0 len mismatch: expected={mb} got={}", lengths_0.as_slice().len())));
             }
             let mut lengths = Vec::with_capacity((ma + mb) as usize);
-            lengths.extend_from_slice(lengths_1);
-            lengths.extend_from_slice(lengths_0);
+            lengths.extend_from_slice(lengths_1.as_slice());
+            lengths.extend_from_slice(lengths_0.as_slice());
+            let motif_net_time = match (lengths_1.motif_net_time(), lengths_0.motif_net_time()) {
+                (None, None) => None,
+                (Some(lengths_1), Some(lengths_0)) => {
+                    let mut motif_net_time = Vec::with_capacity((ma + mb) as usize);
+                    motif_net_time.extend(lengths_1.iter().cloned());
+                    motif_net_time.extend(lengths_0.iter().cloned());
+                    Some(motif_net_time)
+                }
+                _ => return Err(ThoError::new("lengths_1 and lengths_0 motif_net_time must both be Some or None")),
+            };
             let perm_cpu = perm.to_device(Device::Cpu);
             let perm_vec: Vec<i64> = (&perm_cpu).try_into().map_err(|e| ThoError::from_error("mix_x_binary_with_labels: perm to vec", e))?;
             let mut lengths_perm = Vec::with_capacity(lengths.len());
+            let mut motif_net_time_perm = motif_net_time.as_ref().map(|lengths| Vec::with_capacity(lengths.len()));
             for idx in perm_vec {
                 lengths_perm.push(lengths[idx as usize]);
+                if let (Some(motif_net_time), Some(motif_net_time_perm)) = (motif_net_time.as_ref(), motif_net_time_perm.as_mut()) {
+                    motif_net_time_perm.push(motif_net_time[idx as usize].clone());
+                }
             }
-            Some(lengths_perm)
+            Some(match motif_net_time_perm {
+                Some(motif_net_time_perm) => BatchLengths::with_motif_net_time(lengths_perm, motif_net_time_perm)?,
+                None => BatchLengths::new(lengths_perm),
+            })
         }
         _ => return Err(ThoError::new("lengths_1 and lengths_0 must both be Some or None")),
     };
@@ -1474,6 +1492,7 @@ pub fn test_remove_strobs_by_len(){
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
 pub mod tests {
+    use crate::batches::BatchLengths;
     use crate::bool_iter::BoolTensorIterator;
 
     use crate::utils::{hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_to_2, to_vec_f32, to_vec_i64, TrainListener};
@@ -2380,8 +2399,12 @@ pub mod tests {
         let b = Tensor::from_slice(&[101., 102., 103., 104., 105., 106.]).reshape(&[2, 3]);
         let lengths_a = vec![2, 3];
         let lengths_b = vec![1, 2];
+        let motif_lengths_a = vec![vec![2, 1], vec![3, 2]];
+        let motif_lengths_b = vec![vec![1, 1], vec![2, 2]];
 
-        let (x, lengths, y) = mix_x_binary_with_labels(&a, Some(lengths_a.as_slice()), &b, Some(lengths_b.as_slice()))?;
+        let lengths_a = BatchLengths::with_motif_net_time(lengths_a.clone(), motif_lengths_a.clone())?;
+        let lengths_b = BatchLengths::with_motif_net_time(lengths_b.clone(), motif_lengths_b.clone())?;
+        let (x, lengths, y) = mix_x_binary_with_labels(&a, Some(&lengths_a), &b, Some(&lengths_b))?;
         debug!("x=\n{x}");
         debug!("y=\n{y}");
         let lengths = lengths.expect("lengths");
@@ -2397,10 +2420,26 @@ pub mod tests {
             let label = y_cpu.int64_value(&[i as i64, 0]);
 
             match first_val {
-                1 => { assert_eq!(lengths[i], lengths_a[0]); assert_eq!(label, 1); }
-                4 => { assert_eq!(lengths[i], lengths_a[1]); assert_eq!(label, 1); }
-                101 => { assert_eq!(lengths[i], lengths_b[0]); assert_eq!(label, 0); }
-                104 => { assert_eq!(lengths[i], lengths_b[1]); assert_eq!(label, 0); }
+                1 => {
+                    assert_eq!(lengths.as_slice()[i], lengths_a.as_slice()[0]);
+                    assert_eq!(lengths.motif_net_time().expect("motif lengths")[i], motif_lengths_a[0]);
+                    assert_eq!(label, 1);
+                }
+                4 => {
+                    assert_eq!(lengths.as_slice()[i], lengths_a.as_slice()[1]);
+                    assert_eq!(lengths.motif_net_time().expect("motif lengths")[i], motif_lengths_a[1]);
+                    assert_eq!(label, 1);
+                }
+                101 => {
+                    assert_eq!(lengths.as_slice()[i], lengths_b.as_slice()[0]);
+                    assert_eq!(lengths.motif_net_time().expect("motif lengths")[i], motif_lengths_b[0]);
+                    assert_eq!(label, 0);
+                }
+                104 => {
+                    assert_eq!(lengths.as_slice()[i], lengths_b.as_slice()[1]);
+                    assert_eq!(lengths.motif_net_time().expect("motif lengths")[i], motif_lengths_b[1]);
+                    assert_eq!(label, 0);
+                }
                 _ => panic!("unexpected first_val={first_val}"),
             }
         }

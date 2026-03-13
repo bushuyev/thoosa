@@ -8,6 +8,7 @@ use log::debug;
 use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
 
+use thoosa_common::batches::BatchLengths;
 use thoosa_common::dims::{Batch, LabelProbability, MotifProbability, MotifsNetsSelectionDims};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::tho_device::ThoDevice;
@@ -20,6 +21,7 @@ use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
@@ -307,7 +309,7 @@ where
     C: RunCtx + Adjustable,
 {
     type Ctx = C;
-    type In<'a> = ThoTensor<MotifProbability, SynKey>;
+    type In<'a> = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
     type Out = ThoTensor<LabelProbability, SynKey>;
 }
 
@@ -331,12 +333,16 @@ where
 
             debug!("ApplyLabelNet::run: in async out_id={out_id:?}");
 
-            with_data!(ctx, net_wrapper, input; |mut ctx:Self::Ctx, net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, input:&ThoTensor<MotifProbability, SynKey>|{
+            with_data!(ctx, net_wrapper, input; |mut ctx:Self::Ctx, net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, input:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
 
-                let batch_input = input.t_ref().f_unsqueeze(0)?;
+                let batch_input = input.data().t_ref().f_unsqueeze(0)?;
                 let batch_input: ThoTensor<MotifsNetsSelectionDims, thoosa_shared::traits::SimpleId> = batch_input.into();
+                let mut lengths = BatchLengths::with_motif_net_time(
+                    vec![input.extra().iter().copied().max().unwrap_or(input.data().t_ref().size()[1])],
+                    vec![input.extra().clone()],
+                )?;
                 debug!("ApplyLabelNet::run: batch_input=\n{batch_input}");
-                let out = net.tho_forward(&batch_input, None/*TODO mask*/, false);
+                let out = net.tho_forward(&batch_input, Some(&mut lengths), false);
                 debug!("ApplyLabelNet::run: out={out:?}");
                 let out = out?;
                 debug!("ApplyLabelNet::run: out.t_ref=\n{}", out.t_ref());
@@ -370,7 +376,10 @@ mod tests {
     use parking_lot::RwLock;
     use tch::{Device, Kind, Tensor};
     use tch::nn::{self, VarStore};
+    use thoosa_properties_map::ToHashmap;
+    use thoosa_common::batches::BatchLengths;
     use thoosa_common::dims::{Batch, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice};
+    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{LinLenNetParams, ConvNetParams, LabelNetParams, LabelNetTypeParams, MotifNetParams, ThoModuleWithStore};
@@ -402,7 +411,7 @@ mod tests {
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                         let batch = t.size()[0];
                         let out = Tensor::f_ones(&[batch, 1], (Kind::Float, t.device()))?
                             .f_mul_scalar_(k)?;
@@ -443,7 +452,7 @@ mod tests {
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                         let sum = t.f_sum_dim_intlist(&[1, 2][..], false, None)?;
                         let mut sum = sum.f_unsqueeze(1)?;
                         let out = sum.f_mul_scalar_(k)?;
@@ -470,6 +479,7 @@ mod tests {
         let batch = 3;
         let train_motif_nets_run_id = 10;
         let train_label_nets_run_id = 20;
+        let find_motifs_run_id = 30;
         let motif_width = 4;
         let step = 1;
         let device = Device::Cpu;
@@ -511,6 +521,14 @@ mod tests {
                 .with_get_input_run_ids([
                     (train_label_nets_run_id, Ok(vec![train_motif_nets_run_id])),
                 ])
+                .with_get_motif_meta([
+                    (0, Ok((0usize, find_motifs_run_id))),
+                    (1, Ok((0usize, find_motifs_run_id))),
+                ])
+                .with_list_run_config_values(
+                    find_motifs_run_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
+                )
                 .with_list_selected_nets([
                     (
                         train_motif_nets_run_id,
@@ -548,9 +566,10 @@ mod tests {
         with_data!(run_ctx.branch(Some("apply_label_nets_assert".into()), false, false), out; |_ctx, out:&ThoTensor<LabelProbability, SynKey>|{
             assert_eq!(out.t_ref().size(), vec![3, 1]);
             let vals = to_vec_f32(out.t_ref());
-            assert_close(vals[0], 0.3, 1e-4);
-            assert_close(vals[1], 0.6, 1e-4);
-            assert_close(vals[2], 1.5, 1e-4);
+            let motif_sum = (1.0f32 / (1.0f32 + (-1.0f32).exp())) + (1.0f32 / (1.0f32 + (-2.0f32).exp()));
+            assert_close(vals[0], motif_sum * 0.1, 1e-4);
+            assert_close(vals[1], motif_sum * 0.2, 1e-4);
+            assert_close(vals[2], motif_sum * 0.5, 1e-4);
             Ok::<_, ThoError>(())
         })?;
 

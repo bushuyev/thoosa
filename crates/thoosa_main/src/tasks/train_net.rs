@@ -312,7 +312,7 @@ where
                             let x_t = (train_step.x_f())(x_t_0);
 
 
-                            let pred_y = train_step.forward(&x_t, lengths.as_deref_mut(), false)?;
+                            let pred_y = train_step.forward(&x_t, lengths.as_mut(), false)?;
 
                             let valid_loss = (train_step.loss_fn())(&pred_y.as_ref(), &y_t.as_ref())?;
                             let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
@@ -603,7 +603,7 @@ where
         &self.device
     }
 
-    fn forward(&self, x_t: &ThoBatch<DI>, lengths: Option<&mut [i64]>, train: bool) -> Result<ThoBatch<DO>, ThoError> {
+    fn forward(&self, x_t: &ThoBatch<DI>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoBatch<DO>, ThoError> {
         let net = thoosa_shared::with_perf_log(
             || self.net.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
             "TrainStep/forward/lock_net",
@@ -660,7 +660,7 @@ where
         debug!("TrainStep::do_run: device={:?}  x_t.size={:?}", self.device, x_t.size());
 
         let mut lengths = input.lengths.clone();
-        let predicted_y = self.forward(&x_t, lengths.as_deref_mut(), true)?;
+        let predicted_y = self.forward(&x_t, lengths.as_mut(), true)?;
         debug!("TrainStep::do_run: 1. cuda_mem={:?}",maybe_cuda_mem(&self.device));
         trace!("TrainStep::do_run: x_t=\n{x_t}");
 

@@ -1305,7 +1305,7 @@ mod tests {
             mock_run_ctx::default(1),
         ).await?;
         let out = out.load_from_any_device_(1).await?;
-        let (top_vals, top_idx) = out.t.f_i((0, ..))?.f_topk(2, 0, true, true)?;
+        let (top_vals, top_idx) = out.data().t_ref().f_i((0, ..))?.f_topk(2, 0, true, true)?;
 
         debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: apply top_vals={} top_idx={}", top_vals, top_idx);
 
