@@ -36,13 +36,6 @@ where
     }
 
 
-    //remove, replaced by add_purge_gpu_closure
-    fn on_cached<'a>(&self, _input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, _ctx: &mut Self::Ctx)
-    where
-        Self:'a
-    {
-        //TODO remove default impl
-    }
 
 }
 
