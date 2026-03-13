@@ -207,7 +207,7 @@ where
 {
     type Ctx = C;
     type In<'a> = ThoTensor<ChannelsData2, SynKey>;
-    type Out = ThoTensor<MotifProbability, SynKey>;
+    type Out = ThoTensor<MotifProbability, SynKey>;//TODO it should be MotifsProbabilities - for many motifs
 }
 
 
