@@ -424,6 +424,7 @@ mod tests {
     use std::sync::Arc;
     use tch::nn::{self, VarStore};
     use tch::{Device, Kind, Tensor};
+    use thoosa_common::batches::BatchLengths;
     use thoosa_common::dims::{Batch, LabelProbability, MotifsNetsSelectionDims, Slice};
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
     use thoosa_common::runs::{Logits, NetResources};
@@ -454,7 +455,7 @@ mod tests {
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&[i64]>| {
+                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                         let sum = t.f_sum_dim_intlist(&[1, 2][..], false, None)?;
                         let mut sum = sum.f_unsqueeze(1)?;
                         let out = sum.f_mul_scalar_(k)?;

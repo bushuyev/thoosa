@@ -4,6 +4,7 @@ use log::debug;
 use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
+use crate::batches::BatchLengths;
 use crate::dims::{AnyDims, Dims, MotifSlices};
 use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, my_linear};
 use thoosa_shared::{panic_to_err, ThoError};
@@ -157,7 +158,7 @@ pub enum Node {
         p: f64,
     },
     Closure {
-        cl: Arc<Box<dyn Fn(&Tensor, Option<&[i64]>) -> Result<Tensor, ThoError>>>
+        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> Result<Tensor, ThoError>>>
     },
 }
 
@@ -742,7 +743,7 @@ impl SeqBuilder {
 
     pub fn closure(
         &mut self,
-        cl: Arc<Box<dyn Fn(&Tensor, Option<&[i64]>) -> Result<Tensor, ThoError>>>,
+        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> Result<Tensor, ThoError>>>,
         num_features: Option<u32>,
     ) -> Result<&mut Self, ThoError> {
         self.elts.push(Node::Closure { cl });
