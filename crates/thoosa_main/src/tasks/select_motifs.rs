@@ -1492,7 +1492,7 @@ pub mod tests {
     use thoosa_shared::runner::global_ctx;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::runner::permits::MAX_PERMITS;
-    use thoosa_common::find_motifs_run_config::{ByAvgEucDist, CoherenceRunConfig, FindMotifsRunConfig, InlierRatioRunConfig, MotifCriteria, MotifSelector, NormThicknessRunConfig, SelectMotifsRunConfig};
+    use thoosa_common::find_motifs_run_config::{ByAvgEucDist, CoherenceConstraint, CoherenceRunConfig, FindMotifsRunConfig, InlierRatioConstraint, InlierRatioRunConfig, MotifCriteria, MotifSelector, NormThicknessConstraint, NormThicknessRunConfig, SelectMotifsRunConfig};
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::tch_test_utils;
     use thoosa_common::utils::{draw_function_plot, reset_print_options, to_vec_f32, z_norm, z_norm_2};
@@ -1949,10 +1949,10 @@ pub mod tests {
         let loader = Arc::new(mock_tensor_loader::build().finish());
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[9, 4], (Kind::Float, tch::Device::Cpu)))),
-            (MotifLoaderInput::all_slices(DataId(2)), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[10, 4], (Kind::Float, tch::Device::Cpu)))),
-            (MotifLoaderInput::all_slices(DataId(3)), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[101, 4], (Kind::Float, tch::Device::Cpu)))),
-            (MotifLoaderInput::all_slices(DataId(4)), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[100, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new(DataId(1), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[9, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new(DataId(2), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[10, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new(DataId(3), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[101, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new(DataId(4), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[100, 4], (Kind::Float, tch::Device::Cpu)))),
         ]).finish());
 
         let stage = SelectMotifsStage::new(
@@ -1983,9 +1983,9 @@ pub mod tests {
 
         let mut select_motifs_run_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
         select_motifs_run_config.motif_criteria = MotifCriteria {
-            norm_thickness: Some(NormThicknessRunConfig { k: 5.0, eps: 1e-8 }),
-            inlier_ratioRunConfig: Some(InlierRatioRunConfig { k: 3.0, eps: 1e-8 }),
-            coherenceRunConfig: Some(CoherenceRunConfig { k: 3.0, eps: 1e-8 }),
+            norm_thickness: Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { k: 5.0, eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN }),
+            inlier_ratioRunConfig: Some(InlierRatioConstraint { criterion: InlierRatioRunConfig { k: 3.0, eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN }),
+            coherenceRunConfig: Some(CoherenceConstraint { criterion: CoherenceRunConfig { k: 3.0, eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN }),
             interesting_amp_01: None,
             interesting_tv_norm_01: None,
             interesting_curvature_norm_01: None,
@@ -2001,8 +2001,8 @@ pub mod tests {
         let filtered = stage.filter_motifs_by_criteria(&select_motifs_run_config, mock_run_ctx::default(0)).await?;
 
         assert_eq!(filtered.len(), 1, "filtered={filtered:?}");
-        assert_eq!(filtered[0].0, 2, "filtered={filtered:?}");
-        assert!((filtered[0].1 - 0.3).abs() < 1e-6, "filtered={filtered:?}");
+        assert_eq!(filtered[0].0, 4, "filtered={filtered:?}");
+        assert!((filtered[0].1 - 0.8).abs() < 1e-6, "filtered={filtered:?}");
 
         Ok(())
     }
@@ -2252,14 +2252,23 @@ pub mod tests {
             .view([3, 3]);
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::all_slices(DataId(21)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_21_t)),
-            (MotifLoaderInput::all_slices(DataId(22)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_22_t)),
+            (MotifLoaderInput::new(DataId(21), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_21_t)),
+            (MotifLoaderInput::new(DataId(22), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_22_t)),
         ]).finish());
+
+        let _criteria_mocks = mock_criteria::build()
+            .with_norm_thickness(|x, _k, _eps| {
+                let score = if x.double_value(&[2, 0]) > 1.0 { 0.3 } else { 0.8 };
+                Ok(Tensor::from(score).to_kind(x.kind()).to_device(x.device()))
+            })
+            .install();
 
         let mut select_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
         select_config.extend_config = None;
-        select_config.motif_criteria.norm_thickness = Some(NormThicknessRunConfig { k: 5.0, eps: 1e-8 });
+        select_config.motif_criteria.norm_thickness = Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { k: 5.0, eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN });
         select_config.threshold = 0.5;
+        select_config.min_slices = Some(1);
+        select_config.max_slices = Some(10);
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
             &ws,
