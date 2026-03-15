@@ -481,7 +481,7 @@ where
 
     let scale_x = w_h.0 as f32 / (max_x - min_x);
 
-    debug!("scale_x={scale_x:?} w_h={w_h:?} max_x={max_x} min_x={min_x}");
+    // debug!("scale_x={scale_x:?} w_h={w_h:?} max_x={max_x} min_x={min_x}");
 
     let root = BitMapBackend::new(path, w_h).into_drawing_area();
     root.fill(&WHITE)?;
