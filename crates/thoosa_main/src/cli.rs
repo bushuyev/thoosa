@@ -1032,8 +1032,8 @@ struct AllConfigs {
 fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        window: RangeOrValue::Range { range: Range { start: 100, end: 2100 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000),
+        step: RangeOrValue::Value(5), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 1000, end: 2000 }, step: Some((500, 0)) }, //RangeOrValue::Value(1000), Some((200, 0))
         // window: RangeOrValue::Value(300), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
@@ -1049,11 +1049,11 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             //     padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             // }),
             SavGolFilter(SavGolFilterParamsRangeOrValue {
-                // window_len: RangeOrValue::Value(111),
-                window_len: RangeOrValue::Range { range: Range { start: 101, end: 1001 }, step: None },//Some((200, 0))
-                // poly_order: RangeOrValue::Range { range: Range { start: 1, end: 11 }, step: Some((3, 0)) },
-                poly_order: RangeOrValue::Value(1),
-                stride: RangeOrValue::Value(5),
+                window_len: RangeOrValue::Value(101),
+                // window_len: RangeOrValue::Range { range: Range { start: 101, end: 1001 }, step: Some((200, 0)) },//
+                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 11 }, step:None },//step: Some((3, 0))
+                // poly_order: RangeOrValue::Value(1),
+                stride: RangeOrValue::Value(10),
                 padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             }),
             NotchBandFilter(NotchBandFilterParamsRangeOrValue {
@@ -1093,7 +1093,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                     k: RangeOrValue::Value(0.0), //TODO not used RangeOrValue::Range{range: 1.0..10.0, step: None},
                     eps: RangeOrValue::Value(1e-8)
                 },
-                min: RangeOrValue::Value(0.85),
+                min: RangeOrValue::Value(0.80),
             }),
             inlier_ratioRunConfig:None,
             // inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {
@@ -1125,7 +1125,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         max_slices: Some(RangeOrValue::Value(100)),
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
-    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(100, 10));
+    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(30, 10));
 
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {

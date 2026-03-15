@@ -1,13 +1,14 @@
 #![allow(non_camel_case_types)]
 
 use std::collections::HashMap;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::iter::Map;
 
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::{fs, ptr};
+use std::hash::Hash;
 use log::{debug, error, info, trace};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
@@ -33,6 +34,10 @@ use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use lazy_static::lazy_static;
 use thoosa_shared::colors_iter::DistinctColorIter;
+use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::data_with_extra::DataWithExtra;
+use thoosa_shared::traits::Named;
+use crate::tho_tensor::ThoTensor;
 
 #[macro_export]
 macro_rules! debug_plot {
@@ -1229,10 +1234,9 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
 
 //TODO check GPT
 pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&BatchLengths>, x_0: &Tensor, lengths_0: Option<&BatchLengths>) -> Result<(Tensor, Option<BatchLengths>, Tensor), ThoError> {
-    let [ma, _na, ..] = x_1.size()[0..2] else {panic!("todo")}; //.expect("X1 must be 2D [m, n]");
-    let [mb, _nb, ..] = x_0.size()[0..2] else {panic!("todo")}; //.expect("X0 must be 2D [m, n]");
-    // assert_eq!((na, nb), (na, na), "X1 and X0 must have same n");
-    // assert_eq!(ma, mb, "X1 and X0 must have same m");
+    let [ma, _na, ..] = x_1.size()[0..2] else {panic!("x_1 {:?} must be 2D [m, n]", x_1.size())};
+    let [mb, _nb, ..] = x_0.size()[0..2] else {panic!("x_0 {:?} must be 2D [m, n]", x_0.size())};
+
     assert_eq!(x_0.device(), x_1.device(), "A and B must be on the same device");
 
     let device = x_0.device();
@@ -1270,9 +1274,11 @@ pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&BatchLengths>, 
             if lengths_0.as_slice().len() != mb as usize {
                 return Err(ThoError::new(format!("lengths_0 len mismatch: expected={mb} got={}", lengths_0.as_slice().len())));
             }
+
             let mut lengths = Vec::with_capacity((ma + mb) as usize);
             lengths.extend_from_slice(lengths_1.as_slice());
             lengths.extend_from_slice(lengths_0.as_slice());
+
             let motif_net_time = match (lengths_1.motif_net_time(), lengths_0.motif_net_time()) {
                 (None, None) => None,
                 (Some(lengths_1), Some(lengths_0)) => {
@@ -1286,6 +1292,7 @@ pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&BatchLengths>, 
             let perm_cpu = perm.to_device(Device::Cpu);
             let perm_vec: Vec<i64> = (&perm_cpu).try_into().map_err(|e| ThoError::from_error("mix_x_binary_with_labels: perm to vec", e))?;
             let mut lengths_perm = Vec::with_capacity(lengths.len());
+
             let mut motif_net_time_perm = motif_net_time.as_ref().map(|lengths| Vec::with_capacity(lengths.len()));
             for idx in perm_vec {
                 lengths_perm.push(lengths[idx as usize]);
@@ -1492,10 +1499,11 @@ pub fn test_remove_strobs_by_len(){
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
 pub mod tests {
+    use std::cmp::max;
     use crate::batches::BatchLengths;
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_to_2, to_vec_f32, to_vec_i64, TrainListener};
+    use crate::utils::{build_motif_batch_lengths, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to, pad_to_2, to_vec_f32, to_vec_i64, TrainListener};
     use clap::{Args, Parser, Subcommand};
 
     use log::debug;
@@ -1507,7 +1515,7 @@ pub mod tests {
     use tch::nn::VarStore;
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::{Device, Kind, Tensor};
+    use tch::{Device, IndexOp, Kind, Tensor};
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
@@ -1518,8 +1526,11 @@ pub mod tests {
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ThoError};
-
+    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::traits::SimpleId;
+    use crate::dims::AnyDims;
+    use crate::tho_tensor::ThoTensor;
 
     #[ctor::ctor]
     fn init() {
@@ -1698,7 +1709,7 @@ pub mod tests {
 
         Ok(())
     }
-    
+
     #[test]
     fn test_devices() {
         let devices = vec!["dev1", "dev2"];
@@ -2351,7 +2362,7 @@ pub mod tests {
     }
 
     #[test]
-    fn mix_basic_shapes_and_labels() -> Result<(), ThoError> {
+    fn test_mix_basic_shapes_and_labels() -> Result<(), ThoError> {
         let m = 4i64;
         let n = 3i64;
 
@@ -2389,6 +2400,105 @@ pub mod tests {
                 assert_eq!(label, 1, "Row {i} came from A, expected label 1");
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_mix_masks_align_with_rows_2() -> Result<(), ThoError> {
+        //resource lengths (resources are the net's inputs, i.e. what needs to be classified)
+        let resource_0_len = 100;
+        let resource_1_len = 150;
+
+        let motif_a_width = 20;
+        let motif_b_width = 10;
+
+        //all motif nets are applied using same stride (TrainLabelNetsArgs/RunAllArgs .motif_slices_step )
+        let stride = 2;
+        //motif_a on resource_0_len produces
+        let motif_a_on_resource_0_len = (resource_0_len - motif_a_width) / stride + 1; //
+        let motif_b_on_resource_0_len = (resource_0_len - motif_b_width) / stride + 1; //
+        let motif_a_on_resource_0_t = Tensor::ones(motif_a_on_resource_0_len, FLOAT_CPU); //what is returned by ApplyMotifNets::run
+        let motif_b_on_resource_0_t = Tensor::ones(motif_b_on_resource_0_len, FLOAT_CPU); //what is returned by ApplyMotifNets::run
+        let max_len_0 = max(motif_a_on_resource_0_len, motif_b_on_resource_0_len);
+        let resource_0_t_after_nets_applied = Tensor::f_vstack(
+            &[
+                pad_to(&motif_a_on_resource_0_t, &[max_len_0], 0.0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+                pad_to(&motif_b_on_resource_0_t, &[max_len_0], 0.0)? //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+            ]
+        )?;
+
+        debug!("motif_a_on_resource_0_len={motif_a_on_resource_0_len} motif_b_on_resource_0_len={motif_b_on_resource_0_len} ");
+
+        let motif_a_on_resource_1_len = (resource_1_len - motif_a_width) / stride + 1; //
+        let motif_b_on_resource_1_len = (resource_1_len - motif_b_width) / stride + 1; //
+        let motif_a_on_resource_1_t = Tensor::ones(motif_a_on_resource_1_len, FLOAT_CPU); //what is returned by ApplyMotifNets::run
+        let motif_b_on_resource_1_t = Tensor::ones(motif_b_on_resource_1_len, FLOAT_CPU); //what is returned by ApplyMotifNets::run
+        let max_len_1 = max(motif_a_on_resource_1_len, motif_b_on_resource_1_len);
+        let resource_1_t_after_nets_applied = Tensor::f_vstack(
+            &[
+                pad_to(&motif_a_on_resource_1_t, &[max_len_1], 0.0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+                pad_to(&motif_b_on_resource_1_t, &[max_len_1], 0.0)? //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+            ]
+        )?;
+
+        debug!("motif_a_on_resource_1_len={motif_a_on_resource_1_len} motif_b_on_resource_1_len={motif_b_on_resource_1_len} ");
+
+        debug!("resource_0_t_after_nets_applied=\n{resource_0_t_after_nets_applied}");
+        debug!("resource_1_t_after_nets_applied=\n{resource_1_t_after_nets_applied}");
+        debug!("resource_0_t_after_nets_applied.size={:?}, resource_1_t_after_nets_applied.size={:?}", resource_0_t_after_nets_applied.size(), resource_1_t_after_nets_applied.size());
+
+        ///TrainLabelNets, ResourcesBatch
+        let max_input = max(resource_0_t_after_nets_applied.size()[1], resource_1_t_after_nets_applied.size()[1]);
+        debug!("max_input={max_input}");
+
+        let (x_0_batch, lengths_0) = pad_stack_with_mask(&[&resource_0_t_after_nets_applied], 2i64, max_input)?;
+        let (x_1_batch, lengths_1) = pad_stack_with_mask(&[&resource_1_t_after_nets_applied], 2i64, max_input)?;
+
+        let lengths_0 = build_motif_batch_lengths(&[&DataWithExtra::<ThoTensor<AnyDims, SimpleId>, Vec<i64>>::new(resource_0_t_after_nets_applied.into(), vec![motif_a_on_resource_0_len, motif_b_on_resource_1_len])], lengths_0, max_input)?;
+        let lengths_1 = build_motif_batch_lengths(&[&DataWithExtra::<ThoTensor<AnyDims, SimpleId>, Vec<i64>>::new(resource_1_t_after_nets_applied.into(), vec![motif_a_on_resource_1_len, motif_b_on_resource_0_len])], lengths_1, max_input)?;
+
+        debug!("max_input={max_input}");
+        let (x, lengths, y) = mix_x_binary_with_labels(&x_1_batch, Some(&lengths_1), &x_0_batch, Some(&lengths_0))?;
+
+        let idx_0 = y.eq(0.0).nonzero().double_value(&[0, 0]) as i64;
+        let idx_1 = idx_0 ^ 1;
+
+        debug!("x=\n{x}");
+        debug!("y=\n{y}");
+        debug!("lengths={lengths:?}");
+        debug!("idx_0={idx_0} idx_1={idx_1}");
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
+                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
+                1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,
+                0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,
+                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
+                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
+                1., 1., 1., 1., 1., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,
+                0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.
+            ]).view((2, 71)),
+            x.i((idx_0, .., ..))
+        );
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
+                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
+                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
+                1., 1., 1., 1., 1., 1., 0., 0., 0., 0., 0.,
+                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
+                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
+                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
+                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
+            ]).view((2, 71)),
+            x.i((idx_1, .., ..))
+        );
+        // let umasked
+        //
+        // let masked = mark_missing_motif_values(&x, Some(&lengths))?;
 
         Ok(())
     }
@@ -2499,4 +2609,36 @@ pub mod tests {
         crate::debug_plot!(&t, label, plot_repeats = 0)?;
         Ok(())
     }
+}
+
+/// Combines outer batch padding lengths with the per-motif real lengths emitted by `ApplyMotifNets`.
+pub fn build_motif_batch_lengths<D:Dims, Id: Named + Debug + Clone + Eq + Hash + Send + Sync + 'static>(
+    tensors: &[&DataWithExtra<ThoTensor<D, Id>, Vec<i64>>],
+    time_lengths: Vec<i64>,
+    max_input: i64,
+) -> Result<BatchLengths, ThoError> {
+    if tensors.len() != time_lengths.len() {
+        return Err(ThoError::new(format!(
+            "build_motif_batch_lengths batch mismatch: tensors={} time_lengths={}",
+            tensors.len(),
+            time_lengths.len()
+        )));
+    }
+
+    let motif_net_time = tensors
+        .iter()
+        .map(|tensor| {
+            let motif_nets = tensor.data().t_ref().size()[0] as usize;
+            if tensor.extra().len() != motif_nets {
+                return Err(ThoError::new(format!(
+                    "build_motif_batch_lengths motif count mismatch: tensor_motif_nets={} extra_lengths={}",
+                    motif_nets,
+                    tensor.extra().len()
+                )));
+            }
+            Ok(tensor.extra().iter().map(|len| (*len).min(max_input)).collect::<Vec<_>>())
+        })
+        .collect::<Result<Vec<_>, ThoError>>()?;
+
+    BatchLengths::with_motif_net_time(time_lengths, motif_net_time)
 }
