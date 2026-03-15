@@ -6,7 +6,7 @@ use thoosa_motifs::common_stats::Stats as CommonStatsValue;
 use thoosa_motifs::criteria::{
     coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01,
     interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio_peaked_01,
-    interesting_tv_norm_01, norm_thickness,
+    interesting_tv_norm_01, norm_thickness, periodicity_acf_01,
 };
 use thoosa_motifs::pearson_corr::pearson_corr_distance_matrix_0_2_single as pearson_corr_distance_matrix_0_2_single_matrix;
 use thoosa_shared::{panic_to_err, ThoError};
@@ -39,6 +39,7 @@ pub enum Metrics {
     InterestingBandEnergyRatio01,
     InterestingEntropyGauss01,
     InterestingEntropyBand01,
+    PeriodicityAcf,
 }
 
 impl Default for Metrics {
@@ -76,6 +77,7 @@ impl Metrics {
             Self::InterestingBandEnergyRatio01,
             Self::InterestingEntropyGauss01,
             Self::InterestingEntropyBand01,
+            Self::PeriodicityAcf,
         ]
     }
 
@@ -166,6 +168,7 @@ pub fn metric_scalar_for_motif(motif_slices: &Tensor, metric: Metrics, aggr: Agg
         Metrics::InterestingBandEnergyRatio01 => interesting_band_energy_ratio_01(motif_slices, 250.0, 8.0, 30.0, 1e-8)?,
         Metrics::InterestingEntropyGauss01 => interesting_entropy_gauss_01(motif_slices, 0.6, 0.15, 1e-8)?,
         Metrics::InterestingEntropyBand01 => interesting_entropy_band_01(motif_slices, 0.3, 0.85, 1e-8)?,
+        Metrics::PeriodicityAcf => periodicity_acf_01(motif_slices, 32, 64, 256, 0.2, 0.25, 0.65, 1e-8)?,
     };
 
     let raw = score_t.f_double_value(&[])?;
@@ -253,9 +256,9 @@ fn aggregate_distances(distances: &Tensor, aggr: Aggr) -> Result<f32, ThoError> 
 
 #[cfg(test)]
 mod tests {
-    use tch::Tensor;
+    use tch::{Device, Kind, Tensor};
 
-    use super::{aggregate_distances, Aggr};
+    use super::{aggregate_distances, metric_scalar_for_motif, Aggr, Metrics};
 
     #[test]
     fn test_aggregate_distances() {
@@ -275,5 +278,17 @@ mod tests {
         let distances = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0]);
         let median_lower = aggregate_distances(&distances, Aggr::Quantile(0.0)).unwrap();
         assert!((median_lower - 1.0).abs() < 1e-6, "expected quantile(0.0, lower) for [1,2,3,4] to be 1.0, got {median_lower}");
+    }
+
+    #[test]
+    fn test_metrics_all_includes_periodicity_acf_and_scalar_is_finite() {
+        assert!(Metrics::all().contains(&Metrics::PeriodicityAcf));
+
+        let t = Tensor::arange(1024, (Kind::Float, Device::Cpu)) / 64;
+        let motif = t.sin().view([1, -1]);
+        let score = metric_scalar_for_motif(&motif, Metrics::PeriodicityAcf, Aggr::Mean(1.0)).unwrap();
+
+        assert!(score.is_finite(), "expected finite periodicity score, got {score}");
+        assert!((0.0..=1.0).contains(&score), "expected periodicity score in [0, 1], got {score}");
     }
 }
