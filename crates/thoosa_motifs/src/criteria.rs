@@ -747,12 +747,168 @@ pub fn interesting_entropy_band_01(
     let le = h.f_le(h_max)?.f_to_kind(Kind::Float)?;
     ge.f_mul(&le)?.f_to_kind(x.kind())
 }
+
+
+/// Score in [0,1], where:
+///   1 = structured AND not strongly periodic
+///   0 = strongly periodic OR noise-like
+///
+/// x: [N, L] (batch of slices)
+///
+/// Params:
+/// - struct_lag_max: short-lag window for "structure" (anti-noise), e.g. 16..64
+/// - lag_min..lag_max: lags where periodicity is searched (sub-pattern repeat),
+///                     IMPORTANT: choose lag_min > struct_lag_max.
+/// - struct0: scale for structure squashing: structure01 = s/(s+struct0)
+/// - peak_good/peak_bad: linear ramp for periodic peak:
+///       peak <= peak_good => anti_period=1
+///       peak >= peak_bad  => anti_period=0
+///       else linear in between
+///
+/// eps: small number for stability
+pub fn periodicity_acf_01(
+    x: &Tensor,         // [N, L]
+    struct_lag_max: i64,
+    lag_min: i64,
+    lag_max: i64,
+    struct0: f64,
+    peak_good: f64,
+    peak_bad: f64,
+    eps: f64,
+) -> Result<Tensor, TchError> {
+    let sz = x.size();
+    assert_eq!(sz.len(), 2, "expected [N, L]");
+    let l = sz[1];
+    assert!(l >= 4, "need L>=4");
+    assert!(struct_lag_max >= 1, "struct_lag_max must be >= 1");
+    assert!(lag_min >= 1 && lag_max >= lag_min, "bad lag_min/lag_max");
+    assert!(lag_max < l, "need lag_max < L");
+    assert!(lag_min > struct_lag_max, "choose lag_min > struct_lag_max");
+    assert!(struct0 > 0.0, "struct0 must be > 0");
+    assert!(peak_bad > peak_good, "need peak_bad > peak_good");
+
+    // consensus median across slices: c [L]
+    let c = f_quantile_dim0(x, 0.50)?; // [L]
+
+    // center: c0 = c - mean(c)
+    let mean = c.f_mean_dim(0, false, x.kind())?; // scalar
+    let c0 = c.f_sub(&mean)?;                        // [L]
+
+    // energy = sum c0^2
+    let energy = c0
+        .f_mul(&c0)?
+        .f_sum(x.kind())?
+        .f_add_scalar(eps)?; // scalar
+
+    // rho_raw[tau] for tau=1..=lag_max  (NO abs here)
+    let mut rhos: Vec<Tensor> = Vec::with_capacity(lag_max as usize);
+    for tau in 1..=lag_max {
+        let len = l - tau;
+        let a = c0.f_narrow(0, 0, len)?;
+        let b = c0.f_narrow(0, tau, len)?;
+        let dot = a.f_mul(&b)?.f_sum(x.kind())?; // scalar
+        let rho = dot.f_div(&energy)?;           // scalar (signed)
+        rhos.push(rho);
+    }
+    let rho_raw = Tensor::stack(&rhos, 0); // [lag_max], index i => tau=i+1
+
+    // -------- (1) structure (anti-noise): mean |rho| at small lags
+    let rho_abs = rho_raw.f_abs()?;
+    let s_slice = rho_abs.f_narrow(0, 0, struct_lag_max)?; // tau=1..struct_lag_max
+    let s_mean = s_slice.f_sum(x.kind())?.f_div_scalar(struct_lag_max as f64)?;
+
+    // structure01 = s / (s + struct0)
+    let structure01 = {
+        let denom = s_mean.f_add_scalar(struct0)?.f_add_scalar(eps)?;
+        s_mean.f_div(&denom)?
+    };
+
+    // -------- (2) periodic peak: max of *positive* local maxima of rho_raw in [lag_min..lag_max]
+    // Local max at tau means: rho[tau] > rho[tau-1] AND rho[tau] >= rho[tau+1] AND rho[tau] > 0
+    // We'll build peaks_full[tau] = rho[tau] if local max else 0, for tau=1..lag_max.
+
+    let lag_max_usize = lag_max as i64;
+
+    // interior maxima for tau=2..lag_max-1 (requires lag_max>=3)
+    let one_slot = Tensor::zeros(&[1], (x.kind(), x.device()));
+    let last_slot = {
+        // boundary tau=lag_max: accept if rho[lag_max] > rho[lag_max-1] and >0
+        if lag_max >= 2 {
+            let last = rho_raw.f_select(0, lag_max - 1)?;     // scalar
+            let prev = rho_raw.f_select(0, lag_max - 2)?;     // scalar
+            let m = last.f_gt_tensor(&prev)?
+                .f_bitwise_and_tensor(&last.f_gt(0.0)?)?
+                .f_to_kind(x.kind())?;
+            // make it shape [1]
+            last.f_mul(&m)?.f_unsqueeze(0)?
+        } else {
+            one_slot.shallow_clone()
+        }
+    };
+
+    let peaks_full = if lag_max >= 3 {
+        let r_prev = rho_raw.f_narrow(0, 0, lag_max - 2)?; // tau=1..lag_max-2
+        let r_mid  = rho_raw.f_narrow(0, 1, lag_max - 2)?; // tau=2..lag_max-1
+        let r_next = rho_raw.f_narrow(0, 2, lag_max - 2)?; // tau=3..lag_max
+
+        let m1 = r_mid.f_gt_tensor(&r_prev)?;
+        let m2 = r_mid.f_ge_tensor(&r_next)?;
+        let m3 = r_mid.f_gt(0.0)?;
+        let mask = m1.f_bitwise_and_tensor(&m2)?.f_bitwise_and_tensor(&m3)?.f_to_kind(x.kind())?;
+
+        let peaks_mid = r_mid.f_mul(&mask)?; // [lag_max-2], aligned to tau=2..lag_max-1
+
+        // peaks_full: tau=1 slot is 0, tau=2..lag_max-1 from peaks_mid, tau=lag_max from last_slot
+        Tensor::cat(&[&one_slot, &peaks_mid, &last_slot], 0)
+    } else {
+        // lag_max==1 or 2: no interior maxima; just [0, last_slot?]
+        if lag_max == 2 {
+            Tensor::cat(&[&one_slot, &last_slot], 0)
+        } else {
+            one_slot.shallow_clone() // lag_max==1 => [0]
+        }
+    };
+    // peaks_full has shape [lag_max] (same as rho_raw)
+
+    // slice [lag_min..lag_max] inclusive (indices lag_min-1 .. lag_max-1)
+    let start = lag_min - 1;
+    let len = lag_max - lag_min + 1;
+    let p_slice = peaks_full.f_narrow(0, start, len)?;
+
+    // peak = max local-max value in window; if none, this will be 0
+    let (peak, _idx) = p_slice.f_max_dim(0, false)?; // scalar
+
+    // anti_period01: 1 when peak <= peak_good, 0 when peak >= peak_bad, linear in between.
+    let anti_period01 = {
+        let one = scalar_like(x, 1.0);
+        let zero = scalar_like(x, 0.0);
+        let pg = scalar_like(x, peak_good);
+        let pb = scalar_like(x, peak_bad);
+
+        let m_good = peak.f_le_tensor(&pg)?.f_to_kind(x.kind())?;
+        let m_bad  = peak.f_ge_tensor(&pb)?.f_to_kind(x.kind())?;
+        let m_mid  = one.f_sub(&m_good)?.f_sub(&m_bad)?;
+
+        let mid = pb.f_sub(&peak)?.f_div(&pb.f_sub(&pg)?)?;
+
+        m_good.f_mul(&one)?
+            .f_add(&m_mid.f_mul(&mid)?)?
+            .f_maximum(&zero)?
+            .f_minimum(&one)?
+    };
+
+    let score = structure01.f_mul(&anti_period01)?;
+    let zero = scalar_like(x, 0.0);
+    let one = scalar_like(x, 1.0);
+    score.f_maximum(&zero)?.f_minimum(&one)
+}
 #[cfg(test)]
 mod tests {
     use tch::{Device, Kind, Tensor};
+    use tracing::debug;
     use thoosa_common::transforms::utils::sin_t;
     use thoosa_shared::ThoError;
-    use crate::criteria::{interesting_turning_points_ratio, interesting_turning_points_ratio_trapezoid_01};
+    use crate::criteria::{interesting_turning_points_ratio, interesting_turning_points_ratio_trapezoid_01, periodicity_acf_01};
 
     #[cfg(test)]
     mod tests {
@@ -923,7 +1079,7 @@ mod tests {
             let t = Tensor::arange(1000, (Kind::Float, Device::Cpu)) / 200;
             let t_sin = sin_t(&t, 1.).view((1, -1));
 
-            debug_plot_impl(&t_sin, "/tmp/sinp.png", 0)?;
+            debug_plot_impl(&t_sin, "sinp.png", 0)?;
 
             let r = interesting_turning_points_ratio(&t_sin)?.double_value(&[]);
 
@@ -938,7 +1094,7 @@ mod tests {
             let t = Tensor::arange(1000, (Kind::Float, Device::Cpu)) / 200;
             let t_sin = sin_t(&t, 1.).view((1, -1));
 
-            debug_plot_impl(&t_sin, "/tmp/sinp.png", 0)?;
+            debug_plot_impl(&t_sin, "sinp.png", 0)?;
 
             let r = interesting_turning_points_ratio_peaked_01(&t_sin, 1)?.double_value(&[]);
             assert_close(r, 0., 0.01);
@@ -979,6 +1135,63 @@ mod tests {
         Tensor::from_slice(&data).view([n, l])
     }
 
+    fn make_entropy_signal(width: u32, periods: u32) -> Tensor {
+        let wave_length = width/periods;
+        let t = Tensor::arange(width as i64, (Kind::Float, Device::Cpu)) / wave_length as i64;
+        (sin_t(&t, 1.) + sin_t(&t, 3.) * 0.35 + sin_t(&t, 7.) * 0.15).view((1, -1))
+    }
+
+    #[test]
+    fn test_interesting_entropy_gauss_01_matches_spectral_entropy_gaussian() -> Result<(), ThoError> {
+        for i in 1..=8 {
+            let signal = make_entropy_signal(2048, i);//3 frequencies
+            thoosa_common::utils::debug_plot_impl(&signal, &format!("entropy_gauss_signal_{i}"), 0)?;
+
+            let eps = 1e-8;
+            let entropy = super::interesting_spectral_entropy(&signal, eps)?;
+            let h = f64_of_scalar(&entropy);
+            assert!((0.0..=1.0).contains(&h), "expected normalized entropy, got {h}");
+
+            let h0 = if h <= 0.5 { h + 0.17 } else { h - 0.17 };
+            let sigma = 0.2;
+            let score = super::interesting_entropy_gauss_01(&signal, h0, sigma, eps)?;
+            let score_f64 = f64_of_scalar(&score); //it's always ~0.6 - sig
+
+            debug!("i={i} score_f64={score_f64} h={h:?}");
+
+            let z = (h - h0) / sigma;
+            let expected = (-0.5 * z * z).exp();
+            assert_close(score_f64, expected, 1e-6);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interesting_entropy_band_01_uses_spectral_entropy_and_sorts_bounds() -> Result<(), ThoError> {
+        for i in 1..=8 {
+            let signal = make_entropy_signal(2048, i);
+            thoosa_common::utils::debug_plot_impl(&signal, "entropy_band_signal.png", 0)?;
+
+            let eps = 1e-8;
+            let entropy = super::interesting_spectral_entropy(&signal, eps)?;
+            let h = f64_of_scalar(&entropy);
+            assert!((0.0..=1.0).contains(&h), "expected normalized entropy, got {h}");
+
+            let inside = super::interesting_entropy_band_01(&signal, h + 0.01, h - 0.01, eps)?;
+            let score_f64_inside = f64_of_scalar(&inside);
+            assert_close(score_f64_inside, 1.0, 1e-12);
+
+            let (outside_lo, outside_hi) = if h <= 0.5 { (h + 0.02, h + 0.10) } else { (h - 0.10, h - 0.02) };
+            let outside = super::interesting_entropy_band_01(&signal, outside_lo, outside_hi, eps)?;
+            let score_f64_outside = f64_of_scalar(&outside);
+            assert_close(score_f64_outside, 0.0, 1e-12);
+
+            debug!("i={i} score_f64_inside={score_f64_inside} score_f64_outside={score_f64_outside} h={h:?}");//always 1.0 - 0.0
+        }
+        Ok(())
+    }
+
     #[test]
     fn test_interesting_turning_points_ratio_trapezoid_01() -> Result<(), ThoError> {
         let (a, b, c, d) = (2, 3, 5, 7);
@@ -1000,6 +1213,101 @@ mod tests {
         let x6 = make_batch_from_consensus(&[0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0], 3);
         let s6 = interesting_turning_points_ratio_trapezoid_01(&x6, a, b, c, d)?;
         assert_close(f64_of_scalar(&s6), 0.5, 1e-6);
+
+        Ok(())
+    }
+
+
+    /// Deterministic "periodic motif" with exactly `periods` repeats across `width` samples.
+    /// Shape: [1, width]
+    fn make_periodic_signal(width: i64, periods: i64) -> Tensor {
+        let two_pi = std::f64::consts::TAU; // 2π
+        let k = Tensor::arange(width, (Kind::Float, Device::Cpu)); // [width]
+        let phi = k * (two_pi) * (periods as f64) / (width as f64);
+
+        // x = sin(phi) + 0.35 sin(3phi) + 0.15 sin(7phi)
+        let x = phi.sin()
+            + (&phi * 3.0).sin() * 0.35
+            + (&phi * 7.0).sin() * 0.15;
+
+        x.view([1, width])
+    }
+
+    #[test]
+    fn test_periodicity_acf_01_varies_with_periods_and_penalizes_noise() -> Result<(), ThoError> {
+        let width: i64 = 2048;
+
+        // Parameters: tuned for "reject repeating sub-patterns" but keep single global structure.
+        let struct_lag_max = 32;
+        let lag_min = 64;
+        let lag_max = 1024;
+        let struct0 = 0.20;
+        let peak_good = 0.25;
+        let peak_bad  = 0.65;
+        let eps = 1e-8;
+
+        // Evaluate periodic signals with different repeats.
+        let mut scores = Vec::new();
+        for periods in 1..=8 {
+            let x = make_periodic_signal(width, periods);
+            thoosa_common::utils::debug_plot_impl(&x, &format!("periodic_signal_{periods}"), 0)?;
+
+            let s = periodicity_acf_01(
+                &x,
+                struct_lag_max,
+                lag_min,
+                lag_max,
+                struct0,
+                peak_good,
+                peak_bad,
+                eps,
+            )?;
+            let sf = f64_of_scalar(&s);
+            debug!("test_periodicity_acf_01_varies_with_periods_and_penalizes_noise: periods={periods} sf={sf}");
+            assert!((0.0..=1.0).contains(&sf), "score must be in [0,1], got {sf}");
+            if periods == 1 {
+                assert!((0.8..=1.0).contains(&sf), "score for aperiodic signal must be in [0.8,1], got {sf}");
+            }
+            if periods == 8 {
+                assert!((0.0..=0.1).contains(&sf), "score for periodic signal must be close to 0, got {sf}");
+            }
+            scores.push(sf);
+        }
+
+        // Should not be (almost) constant.
+        let min_s = scores.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_s = scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            (max_s - min_s) > 0.20,
+            "expected noticeable spread across periods, got min={min_s:.4} max={max_s:.4} scores={scores:?}"
+        );
+
+        // Stronger repetition should look "more periodic" => lower score.
+        assert!(
+            scores[0] > scores[7],
+            "expected periods=1 score > periods=8 score, got s1={:.4}, s8={:.4}, scores={scores:?}",
+            scores[0],
+            scores[7]
+        );
+
+        // Noise should score low (unstructured).
+        tch::manual_seed(0);
+        let noise = Tensor::randn(&[1, width], (Kind::Float, Device::Cpu));
+        let s_noise = periodicity_acf_01(
+            &noise,
+            struct_lag_max,
+            lag_min,
+            lag_max,
+            struct0,
+            peak_good,
+            peak_bad,
+            eps,
+        )?;
+        let sn = f64_of_scalar(&s_noise);
+        assert!(
+            sn < 0.25,
+            "expected noise to get low score, got {sn:.4}"
+        );
 
         Ok(())
     }
