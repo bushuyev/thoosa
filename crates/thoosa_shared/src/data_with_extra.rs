@@ -36,7 +36,7 @@ where
 }
 
 #[async_trait]
-impl <D:, E> CopyToDevice for DataWithExtra<D, E>
+impl <D, E> CopyToDevice for DataWithExtra<D, E>
 where
     D: Data + CopyToDevice + WithId + Sync,
     E: Debug + Send + Sync,
