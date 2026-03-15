@@ -109,18 +109,25 @@ where
                     });
                 }
                 InputFilter::SavGolFilter(sav_gol_config) => {
-                    if sav_gol_config.window_len < 3 || sav_gol_config.window_len % 2 == 0 {
-                        return Err(ThoError::new(format!("window_len must be odd and >= 3, got {}", sav_gol_config.window_len)));
-                    }
-                    if sav_gol_config.poly_order < 0 || sav_gol_config.poly_order >= sav_gol_config.window_len {
-                        return Err(ThoError::new(format!("poly_order must be >= 0 and < window_len, got poly_order={} window_len={}", sav_gol_config.poly_order, sav_gol_config.window_len)));
+                    let window_len = if sav_gol_config.window_len % 2 == 0 {
+                        sav_gol_config.window_len + 1 //TODO add constraint in TPE
+                    } else {
+                        sav_gol_config.window_len
+                    };
+
+                    if window_len < 3  {
+                        return Err(ThoError::new(format!("window_len must be odd and >= 3, got {}", window_len)));
                     }
 
-                    let coeffs = sg_smoothing_coeffs(sav_gol_config.window_len as usize, sav_gol_config.poly_order as usize)?;
+                    if sav_gol_config.poly_order < 0 || sav_gol_config.poly_order >= window_len {
+                        return Err(ThoError::new(format!("poly_order must be >= 0 and < window_len, got poly_order={} window_len={}", sav_gol_config.poly_order, window_len)));
+                    }
+
+                    let coeffs = sg_smoothing_coeffs(window_len as usize, sav_gol_config.poly_order as usize)?;
                     let weights = Tensor::from_slice(&coeffs)
                         .f_to_kind(tch::Kind::Float)?
                         .f_to_device(Cuda(0))?
-                        .f_view([1, 1, sav_gol_config.window_len])?
+                        .f_view([1, 1, window_len])?
                         .f_repeat([num_channels, 1, 1])?;
 
                     filters.push(PreparedFilter::SavGol {
@@ -132,7 +139,7 @@ where
                             ]),
                             weights
                         )?,
-                        window_len: sav_gol_config.window_len,
+                        window_len: window_len,
                         stride: sav_gol_config.stride,
                         padding: sav_gol_config.padding,
                     });

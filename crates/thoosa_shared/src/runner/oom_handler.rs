@@ -689,9 +689,9 @@ where
                 }
 
                 warn!("OOMHandler::run, error: ctx_id={ctx_id:?} out_key={out_key:?} os_thread_id={} all failed: input.mem_size={:?} semaphore={:?}", os_thread_id(), input.mem_size(), GlobalCtx::global().debug_semaphore(device_idx));
-
+                #[cfg(tho_debug)]
                 GlobalCtx::global().debug_caches(device_idx).await;
-                // std::process::exit(1);
+                
                 Err(Cause::SomethingElse(format!("all failed: task.out_key={out_key:?}")).into())
 
 

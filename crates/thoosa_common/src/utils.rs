@@ -2642,3 +2642,18 @@ pub fn build_motif_batch_lengths<D:Dims, Id: Named + Debug + Clone + Eq + Hash +
 
     BatchLengths::with_motif_net_time(time_lengths, motif_net_time)
 }
+
+/// Deterministic "periodic motif" with exactly `periods` repeats across `width` samples.
+/// Shape: [1, width]
+pub fn make_periodic_signal(width: i64, periods: i64) -> Tensor {
+    let two_pi = std::f64::consts::TAU; // 2π
+    let k = Tensor::arange(width, (Kind::Float, Device::Cpu)); // [width]
+    let phi = k * (two_pi) * (periods as f64) / (width as f64);
+
+    // x = sin(phi) + 0.35 sin(3phi) + 0.15 sin(7phi)
+    let x = phi.sin()
+        + (&phi * 3.0).sin() * 0.35
+        + (&phi * 7.0).sin() * 0.15;
+
+    x.view([1, width])
+}
