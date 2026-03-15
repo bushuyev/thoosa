@@ -418,6 +418,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                         MotifCriteria::optimizer_constraints(),
                         opt_max_evals,
                         opt_num_init,
+                        &format!("find_and_select_{}", grid_idx),
                     );
 
                     opt.optimize().await;

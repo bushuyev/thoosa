@@ -32,7 +32,7 @@ use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
 use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, self_attention_label_node, CommonTrainingRunConfig, ConvNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinLenNetParams, LinNetArgs, OptConfig, SelfAttentionNetArgs, SelfAttentionNetParams, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
-use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, ListenerResponse, TrainListener};
+use thoosa_common::utils::{build_motif_batch_lengths, mix_x_binary_with_labels, pad_stack_with_mask, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, CopyToDevice, StreamBuffering, ThoError};
@@ -76,38 +76,6 @@ where
     opt_config:Arc<OptConfig>,
     labels: Option<Vec<String>>,
 
-}
-
-/// Combines outer batch padding lengths with the per-motif real lengths emitted by `ApplyMotifNets`.
-fn build_motif_batch_lengths(
-    tensors: &[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>],
-    time_lengths: Vec<i64>,
-    max_input: i64,
-) -> Result<BatchLengths, ThoError> {
-    if tensors.len() != time_lengths.len() {
-        return Err(ThoError::new(format!(
-            "build_motif_batch_lengths batch mismatch: tensors={} time_lengths={}",
-            tensors.len(),
-            time_lengths.len()
-        )));
-    }
-
-    let motif_net_time = tensors
-        .iter()
-        .map(|tensor| {
-            let motif_nets = tensor.data().t_ref().size()[0] as usize;
-            if tensor.extra().len() != motif_nets {
-                return Err(ThoError::new(format!(
-                    "build_motif_batch_lengths motif count mismatch: tensor_motif_nets={} extra_lengths={}",
-                    motif_nets,
-                    tensor.extra().len()
-                )));
-            }
-            Ok(tensor.extra().iter().map(|len| (*len).min(max_input)).collect::<Vec<_>>())
-        })
-        .collect::<Result<Vec<_>, ThoError>>()?;
-
-    BatchLengths::with_motif_net_time(time_lengths, motif_net_time)
 }
 
 pub async fn new_train_label_nets<L, C, R>(
@@ -777,6 +745,7 @@ mod tests {
     use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, reset_print_options};
     use thoosa_common::ws::{mock_ws_simp, WsMockBuilder};
     use thoosa_common::tch_test_utils::resource_tensor;
+    use thoosa_common::utils;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
@@ -1130,7 +1099,7 @@ mod tests {
         let tensor_refs = tensors.iter().map(|t| t.data()).collect::<Vec<_>>();
         let max_input = tensor_refs.iter().map(|t| t.t_ref().size()[1]).max().expect("no max input");
         let (_batch, outer_lengths) = pad_stack_with_mask(tensor_refs.as_slice(), 2, max_input)?;
-        let lengths = super::build_motif_batch_lengths(tensors.as_slice(), outer_lengths, max_input)?;
+        let lengths = utils::build_motif_batch_lengths(tensors.as_slice(), outer_lengths, max_input)?;
 
         assert_eq!(lengths.as_slice(), &[5, 7]);
         assert_eq!(lengths.motif_net_time().expect("motif lengths"), &[vec![3, 5], vec![7, 4]]);

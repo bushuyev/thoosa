@@ -627,6 +627,7 @@ where
     max_evals: u32,
     tpe_samplers: HashMap<String, TreeStructuredParzenEstimator>,
     _pd: PhantomData<T>,
+    descr:String,
 }
 
 impl<F, T: FieldName> AsyncCTPEOptimizer<F, T>
@@ -642,6 +643,7 @@ where
         constraints: HashMap<String, f32>,
         max_evals: u32,
         n_init: u32,
+        descr: &str,
     ) -> Self {
         debug!("AsyncCTPEOptimizer:new: cs={cs:?} constraints={constraints:?}");
 
@@ -669,6 +671,7 @@ where
             n_init,
             max_evals,
             tpe_samplers,
+            descr: descr.to_string(),
             _pd: PhantomData::default(),
         }
     }
@@ -677,6 +680,7 @@ where
         let mut best_loss = f32::MAX;
         let mut best_config: Option<Vec<Val>> = None;
 
+        let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("opt_{}", self.descr), self.max_evals as usize, 1);
         for i in 0..self.max_evals {
             let eval_config = if i < self.n_init {
                 debug!("AsyncCTPEOptimizer::optimize: i={i} random sample");
@@ -727,6 +731,7 @@ where
                     .expect("constraint sampler missing")
                     .update_observations(constraint_loss, &eval_config, None);
             }
+            collect_eta_record_completion(grids_eta_guard.id());
         }
 
         best_config.unwrap_or(vec![]) //TODO
@@ -962,6 +967,7 @@ mod tpe_optimizer_tests {
             HashMap::from([("c1".to_string(), 0.0), ("c2".to_string(), 0.0)]),
             300,
             10,
+            "n/a",
         );
 
         let best_config = opt.optimize().await;

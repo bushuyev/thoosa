@@ -1256,7 +1256,7 @@ fn self_attention_masked_mean(h: &Tensor, lengths: Option<&BatchLengths>) -> Res
 const SELF_ATTENTION_MISSING_MOTIF_VALUE: f64 = -1.0;
 
 /// Rewrites inner padded motif values before attention so they are not treated like real motif probabilities.
-fn mark_missing_motif_values(t: &Tensor, lengths: Option<&BatchLengths>) -> Result<Tensor, ThoError> {
+pub fn mark_missing_motif_values(t: &Tensor, lengths: Option<&BatchLengths>) -> Result<Tensor, ThoError> {
     let Some(motif_net_time) = lengths.and_then(BatchLengths::motif_net_time) else {
         return Ok(t.shallow_clone());
     };
@@ -1288,6 +1288,8 @@ fn mark_missing_motif_values(t: &Tensor, lengths: Option<&BatchLengths>) -> Resu
         }
         flat_lengths.extend(sample_lengths.iter().map(|len| (*len).min(max_len)));
     }
+
+    debug!("flat_lengths={flat_lengths:?}");
 
     let lengths_t = Tensor::f_from_slice(flat_lengths.as_slice())?.f_to_device(t.device())?.f_view([batch as i64, motif_nets as i64, 1])?;
     let range = Tensor::f_arange(max_len, (Kind::Int64, t.device()))?.f_view([1, 1, max_len])?;
