@@ -1033,8 +1033,8 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(5), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        window: RangeOrValue::Range { range: Range { start: 1000, end: 2000 }, step: Some((500, 0)) }, //RangeOrValue::Value(1000), Some((200, 0))
-        // window: RangeOrValue::Value(300), //RangeOrValue::Value(1000),
+        // window: RangeOrValue::Range { range: Range { start: 1000, end: 2001 }, step: Some((1000, 0)) }, //RangeOrValue::Value(1000), Some((200, 0))
+        window: RangeOrValue::Value(2000), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             // BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -1049,9 +1049,9 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             //     padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             // }),
             SavGolFilter(SavGolFilterParamsRangeOrValue {
-                window_len: RangeOrValue::Value(101),
-                // window_len: RangeOrValue::Range { range: Range { start: 101, end: 1001 }, step: Some((200, 0)) },//
-                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 11 }, step:None },//step: Some((3, 0))
+                // window_len: RangeOrValue::Value(2000),
+                window_len: RangeOrValue::Range { range: Range { start: 500, end: 2500 }, step: None },//Some((200, 0))
+                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 3 }, step:None },//step: Some((3, 0))
                 // poly_order: RangeOrValue::Value(1),
                 stride: RangeOrValue::Value(10),
                 padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),

@@ -1,6 +1,6 @@
 use std::sync::{Arc, OnceLock};
 use parking_lot::RwLock;
-use tch::{Kind, Tensor, TchError};
+use tch::{Kind, TchError, Tensor};
 use tch::Kind::Float;
 use tracing::debug;
 
@@ -39,7 +39,7 @@ pub mod mock_criteria {
     use super::{criteria_mocks, CoherenceMockFn, CriteriaMocks, InlierRatioMockFn, NormThicknessMockFn};
     use parking_lot::{Mutex, MutexGuard};
     use std::sync::{Arc, OnceLock};
-    use tch::{Tensor, TchError};
+    use tch::{TchError, Tensor};
 
     fn install_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -907,15 +907,14 @@ mod tests {
     use tch::{Device, Kind, Tensor};
     use tracing::debug;
     use thoosa_common::transforms::utils::sin_t;
+    use thoosa_common::utils;
     use thoosa_shared::ThoError;
     use crate::criteria::{interesting_turning_points_ratio, interesting_turning_points_ratio_trapezoid_01, periodicity_acf_01};
 
     #[cfg(test)]
     mod tests {
-        use log::debug;
         use super::*;
-        use tch::{Tensor, TchError};
-        use thoosa_common::debug_plot;
+        use tch::{TchError, Tensor};
         use thoosa_common::utils::debug_plot_impl;
         use thoosa_shared::ThoError;
         use crate::criteria::{coherence, inlier_ratio, interesting_turning_points_ratio_peaked_01, norm_thickness};
@@ -1218,21 +1217,6 @@ mod tests {
     }
 
 
-    /// Deterministic "periodic motif" with exactly `periods` repeats across `width` samples.
-    /// Shape: [1, width]
-    fn make_periodic_signal(width: i64, periods: i64) -> Tensor {
-        let two_pi = std::f64::consts::TAU; // 2π
-        let k = Tensor::arange(width, (Kind::Float, Device::Cpu)); // [width]
-        let phi = k * (two_pi) * (periods as f64) / (width as f64);
-
-        // x = sin(phi) + 0.35 sin(3phi) + 0.15 sin(7phi)
-        let x = phi.sin()
-            + (&phi * 3.0).sin() * 0.35
-            + (&phi * 7.0).sin() * 0.15;
-
-        x.view([1, width])
-    }
-
     #[test]
     fn test_periodicity_acf_01_varies_with_periods_and_penalizes_noise() -> Result<(), ThoError> {
         let width: i64 = 2048;
@@ -1249,7 +1233,7 @@ mod tests {
         // Evaluate periodic signals with different repeats.
         let mut scores = Vec::new();
         for periods in 1..=8 {
-            let x = make_periodic_signal(width, periods);
+            let x = utils::make_periodic_signal(width, periods);
             thoosa_common::utils::debug_plot_impl(&x, &format!("periodic_signal_{periods}"), 0)?;
 
             let s = periodicity_acf_01(
