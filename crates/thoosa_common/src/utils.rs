@@ -1,14 +1,15 @@
 #![allow(non_camel_case_types)]
 
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt::{Debug, Display};
 use std::iter::Map;
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::{fs, ptr};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use log::{debug, error, info, trace};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
@@ -169,7 +170,11 @@ fn debug_plot_label_allowed_with_mode(mode: &DebugPlotsMode, label: &str) -> boo
 }
 
 pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
-    let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
+    let path = shorten_path_for_fs_limits(Path::new(path));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let root = BitMapBackend::new(&path, (800, 600)).into_drawing_area();
 
     root.fill(&WHITE)?;
 
@@ -202,7 +207,7 @@ pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::E
 
     // To avoid the IO failure being ignored silently, we manually call the present function
     root.present().expect("Unable to write result to file, please make sure 'plotters-doc-data' dir exists under current dir");
-    debug!("Result has been saved to {}", path);
+    debug!("Result has been saved to {}", path.display());
 
     Ok(())
 }
@@ -226,6 +231,9 @@ lazy_static! {
 }
 
 static DEBUG_PLOT_DIR: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+const DEFAULT_MAX_PATH_COMPONENT_BYTES: usize = 255;
+const DEFAULT_MAX_PATH_BYTES: usize = 4096;
+const MIN_SHORTENED_COMPONENT_BYTES: usize = 24;
 
 fn debug_plot_dir() -> Result<&'static PathBuf, ThoError> {
     let path = DEBUG_PLOT_DIR.get_or_init(|| {
@@ -248,6 +256,137 @@ fn sanitize_debug_plot_label(label: &str) -> String {
         })
         .collect::<String>();
     if sanitized.is_empty() { "plot".to_string() } else { sanitized }
+}
+
+fn path_bytes_len(path: &Path) -> usize {
+    path.as_os_str().to_string_lossy().as_bytes().len()
+}
+
+fn take_prefix_by_bytes(value: &str, max_bytes: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in value.chars() {
+        let ch_len = ch.len_utf8();
+        if used + ch_len > max_bytes {
+            break;
+        }
+        out.push(ch);
+        used += ch_len;
+    }
+    out
+}
+
+fn take_suffix_by_bytes(value: &str, max_bytes: usize) -> String {
+    let mut chars = Vec::new();
+    let mut used = 0;
+    for ch in value.chars().rev() {
+        let ch_len = ch.len_utf8();
+        if used + ch_len > max_bytes {
+            break;
+        }
+        chars.push(ch);
+        used += ch_len;
+    }
+    chars.into_iter().rev().collect()
+}
+
+fn short_hash(value: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn shorten_text_for_path(value: &str, max_bytes: usize) -> String {
+    if value.as_bytes().len() <= max_bytes {
+        return value.to_string();
+    }
+    if max_bytes == 0 {
+        return String::new();
+    }
+
+    let hash = short_hash(value);
+    if max_bytes <= hash.len() {
+        return hash[..max_bytes].to_string();
+    }
+
+    let reserved = hash.len() + 2;
+    if max_bytes <= reserved {
+        let prefix_budget = max_bytes.saturating_sub(hash.len());
+        let prefix = take_prefix_by_bytes(value, prefix_budget);
+        let combined = format!("{prefix}{hash}");
+        return take_prefix_by_bytes(&combined, max_bytes);
+    }
+
+    let keep_budget = max_bytes - reserved;
+    let prefix_budget = keep_budget * 2 / 3;
+    let suffix_budget = keep_budget - prefix_budget;
+    let prefix = take_prefix_by_bytes(value, prefix_budget);
+    let suffix = take_suffix_by_bytes(value, suffix_budget);
+    format!("{prefix}_{hash}_{suffix}")
+}
+
+fn shorten_path_component(component: &str, max_bytes: usize, preserve_extension: bool) -> String {
+    if component.as_bytes().len() <= max_bytes {
+        return component.to_string();
+    }
+
+    if preserve_extension {
+        if let Some(dot_idx) = component.rfind('.') {
+            if dot_idx > 0 && dot_idx + 1 < component.len() {
+                let extension = &component[dot_idx..];
+                if extension.as_bytes().len() < max_bytes {
+                    let stem_budget = max_bytes - extension.as_bytes().len();
+                    return format!("{}{}", shorten_text_for_path(&component[..dot_idx], stem_budget), extension);
+                }
+            }
+        }
+    }
+
+    shorten_text_for_path(component, max_bytes)
+}
+
+fn rebuild_path_with_component_limit(path: &Path, max_component_bytes: usize) -> PathBuf {
+    let file_name = path.file_name().map(|name| name.to_string_lossy().into_owned());
+    let mut rebuilt = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => {
+                let name = name.to_string_lossy().into_owned();
+                let preserve_extension = file_name.as_deref() == Some(name.as_str());
+                rebuilt.push(shorten_path_component(&name, max_component_bytes, preserve_extension));
+            }
+            _ => rebuilt.push(component.as_os_str()),
+        }
+    }
+
+    rebuilt
+}
+
+fn shorten_path_for_fs_limits(path: &Path) -> PathBuf {
+    let normal_components = path.components().filter(|component| matches!(component, Component::Normal(_))).count().max(1);
+    let mut component_limit = DEFAULT_MAX_PATH_COMPONENT_BYTES;
+
+    loop {
+        let candidate = rebuild_path_with_component_limit(path, component_limit);
+        if path_bytes_len(&candidate) <= DEFAULT_MAX_PATH_BYTES || component_limit <= MIN_SHORTENED_COMPONENT_BYTES {
+            if candidate != path {
+                debug!("shorten_path_for_fs_limits: {:?} -> {:?}", path, candidate);
+            }
+            return candidate;
+        }
+
+        let overflow = path_bytes_len(&candidate).saturating_sub(DEFAULT_MAX_PATH_BYTES);
+        let reduction = ((overflow + normal_components - 1) / normal_components).max(8);
+        let next_limit = component_limit.saturating_sub(reduction).max(MIN_SHORTENED_COMPONENT_BYTES);
+        if next_limit == component_limit {
+            if candidate != path {
+                debug!("shorten_path_for_fs_limits: {:?} -> {:?}", path, candidate);
+            }
+            return candidate;
+        }
+        component_limit = next_limit;
+    }
 }
 
 #[doc(hidden)]
@@ -347,7 +486,8 @@ pub fn plot_series_with_sidebar_values<S>(
 where
     S: Into<ShapeStyle> + Clone,
 {
-    if let Some(parent) = path.as_ref().parent() {
+    let path = shorten_path_for_fs_limits(path.as_ref());
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
@@ -376,7 +516,7 @@ where
         max_y = min_y + 1.0;
     }
 
-    let root = BitMapBackend::new(path, w_h).into_drawing_area();
+    let root = BitMapBackend::new(&path, w_h).into_drawing_area();
     root.fill(&WHITE)?;
     let total_w = w_h.0 as i32;
     let sidebar_w = ((total_w as f32 * 0.30) as i32).clamp(360, 760).min(total_w - 200);
@@ -451,7 +591,10 @@ fn _plot_series<S>(
 where
     S: Into<ShapeStyle> + Clone,
 {
-    if let Some(parent) = path.as_ref().parent() {
+    let path = shorten_path_for_fs_limits(path.as_ref());
+    debug!("_plot_series: path={:?}", path);
+
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
@@ -483,7 +626,7 @@ where
 
     // debug!("scale_x={scale_x:?} w_h={w_h:?} max_x={max_x} min_x={min_x}");
 
-    let root = BitMapBackend::new(path, w_h).into_drawing_area();
+    let root = BitMapBackend::new(&path, w_h).into_drawing_area();
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
         .caption(caption, ("sans-serif", 50).into_font())
@@ -569,6 +712,7 @@ pub fn draw_function_plot(
     title: &str,
 ) -> Result<(), ThoError> {
     let (width, height) = w_h;
+    let output_path = shorten_path_for_fs_limits(output_path.as_ref());
 
     // ----- Determine ranges (include bands in X range) -----
     let mut xs = xy.iter().map(|(x, _)| *x).collect::<Vec<_>>();
@@ -595,7 +739,10 @@ pub fn draw_function_plot(
     ymin -= pad_y; ymax += pad_y;
 
     // ----- Backend & chart -----
-    let root = BitMapBackend::new(output_path.as_ref(), (width, height)).into_drawing_area();
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let root = BitMapBackend::new(&output_path, (width, height)).into_drawing_area();
     root.fill(&WHITE)?;
 
     let mut chart = ChartBuilder::on(&root)
@@ -1510,6 +1657,7 @@ pub mod tests {
     use std::collections::{HashMap, HashSet};
 
     use std::fmt::Debug;
+    use std::path::PathBuf;
     use serde::Deserialize;
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
@@ -2608,6 +2756,38 @@ pub mod tests {
         let label = "debug_plot_macro_accepts_plot_repeats_label";
         crate::debug_plot!(&t, label, plot_repeats = 0)?;
         Ok(())
+    }
+
+    #[test]
+    fn test_shorten_path_for_fs_limits_shortens_long_filename_and_preserves_extension() {
+        let long_name = format!("resource_{}.png", "freq_filtered_Some_".repeat(20));
+        let path = PathBuf::from("/tmp/ws_test_hbac/plots/resource").join(long_name);
+
+        let shortened = super::shorten_path_for_fs_limits(&path);
+        let file_name = shortened.file_name().unwrap().to_string_lossy().into_owned();
+
+        assert_ne!(shortened, path);
+        assert!(file_name.ends_with(".png"));
+        assert!(file_name.as_bytes().len() <= super::DEFAULT_MAX_PATH_COMPONENT_BYTES);
+        assert!(shortened.as_os_str().to_string_lossy().as_bytes().len() <= super::DEFAULT_MAX_PATH_BYTES);
+    }
+
+    #[test]
+    fn test_shorten_path_for_fs_limits_shortens_when_total_path_is_too_long() {
+        let mut path = PathBuf::from("/tmp");
+        for idx in 0..24 {
+            path.push(format!("segment_{idx}_{}", "abcdefghijklmnop".repeat(12)));
+        }
+        path.push("plot.png");
+
+        let shortened = super::shorten_path_for_fs_limits(&path);
+
+        assert!(shortened.as_os_str().to_string_lossy().as_bytes().len() <= super::DEFAULT_MAX_PATH_BYTES);
+        for component in shortened.components() {
+            if let std::path::Component::Normal(name) = component {
+                assert!(name.to_string_lossy().as_bytes().len() <= super::DEFAULT_MAX_PATH_COMPONENT_BYTES);
+            }
+        }
     }
 }
 
