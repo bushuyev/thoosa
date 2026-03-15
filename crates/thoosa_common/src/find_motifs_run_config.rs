@@ -466,6 +466,7 @@ mod tests {
                 interesting_band_energy_ratio_01: None,
                 interesting_entropy_gauss_01: None,
                 interesting_entropy_band_01: None,
+                periodicity_acf_01: None,
             },
             threshold: RangeOrValue::Range { range: 0.4..0.6, step: Some((0.1, 1)) },
             min_slices: None,
@@ -559,11 +560,23 @@ mod tests {
                 criterion: crate::find_motifs_run_config::InterestingEntropyBand01RunConfig { h_min: 0.2, h_max: 0.8, eps: 1e-8 },
                 min: crate::find_motifs_run_config::MotifCriteria::DEFAULT_CRITERION_MIN,
             }),
+            periodicity_acf_01: Some(crate::find_motifs_run_config::PeriodicityAcfConstraint {
+                criterion: crate::find_motifs_run_config::PeriodicityAcfRunConfig {
+                    struct_lag_max: 32,
+                    lag_min: 64,
+                    lag_max: 128,
+                    struct0: 0.2,
+                    peak_good: 0.25,
+                    peak_bad: 0.65,
+                    eps: 1e-8,
+                },
+                min: crate::find_motifs_run_config::MotifCriteria::DEFAULT_CRITERION_MIN,
+            }),
         };
 
         let variants: Vec<crate::find_motifs_run_config::MotifCriterion> = Vec::from(&criteria);
 
-        assert_eq!(7, variants.len());
+        assert_eq!(8, variants.len());
         assert!(matches!(variants[0], crate::find_motifs_run_config::MotifCriterion::InterestingAmp01(_)));
         assert!(matches!(variants[1], crate::find_motifs_run_config::MotifCriterion::InterestingTvNorm01(_)));
         assert!(matches!(variants[2], crate::find_motifs_run_config::MotifCriterion::InterestingCurvatureNorm01(_)));
@@ -571,6 +584,31 @@ mod tests {
         assert!(matches!(variants[4], crate::find_motifs_run_config::MotifCriterion::InterestingBandEnergyRatio01(_)));
         assert!(matches!(variants[5], crate::find_motifs_run_config::MotifCriterion::InterestingEntropyGauss01(_)));
         assert!(matches!(variants[6], crate::find_motifs_run_config::MotifCriterion::InterestingEntropyBand01(_)));
+        assert!(matches!(variants[7], crate::find_motifs_run_config::MotifCriterion::PeriodicityAcf(_)));
+    }
+
+    #[test]
+    fn test_motif_criteria_periodicity_acf_roundtrips_properties() {
+        let criteria = crate::find_motifs_run_config::MotifCriteria {
+            periodicity_acf_01: Some(crate::find_motifs_run_config::PeriodicityAcfConstraint {
+                criterion: crate::find_motifs_run_config::PeriodicityAcfRunConfig {
+                    struct_lag_max: 32,
+                    lag_min: 64,
+                    lag_max: 128,
+                    struct0: 0.2,
+                    peak_good: 0.25,
+                    peak_bad: 0.65,
+                    eps: 1e-8,
+                },
+                min: crate::find_motifs_run_config::MotifCriteria::DEFAULT_CRITERION_MIN,
+            }),
+            ..Default::default()
+        };
+
+        let properties = criteria.to_properties_iter(None).collect::<std::collections::HashMap<_, _>>();
+        let restored = <crate::find_motifs_run_config::MotifCriteria as thoosa_properties_map::FromHashmap>::from_properties_map(None, &properties).unwrap();
+
+        assert_eq!(criteria, restored);
     }
 }
 
@@ -763,6 +801,37 @@ pub struct InterestingEntropyBand01RunConfig {
     pub eps: f64,
 }
 
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+pub struct PeriodicityAcfRunConfig {
+    #[in_map]
+    #[run_config]
+    pub struct_lag_max: i64,
+
+    #[in_map]
+    #[run_config]
+    pub lag_min: i64,
+
+    #[in_map]
+    #[run_config]
+    pub lag_max: i64,
+
+    #[in_map]
+    #[run_config]
+    pub struct0: f64,
+
+    #[in_map]
+    #[run_config]
+    pub peak_good: f64,
+
+    #[in_map]
+    #[run_config]
+    pub peak_bad: f64,
+
+    #[in_map]
+    #[run_config]
+    pub eps: f64,
+}
+
 #[derive(Clone, PartialEq, Debug, Deserialize, Default)]
 pub struct Constraint<T> {
     pub criterion: T,
@@ -812,6 +881,7 @@ define_constraint_run_config!(InterestingTurningPointsRatioConstraint, Interesti
 define_constraint_run_config!(InterestingBandEnergyRatio01Constraint, InterestingBandEnergyRatio01RunConfig);
 define_constraint_run_config!(InterestingEntropyGauss01Constraint, InterestingEntropyGauss01RunConfig);
 define_constraint_run_config!(InterestingEntropyBand01Constraint, InterestingEntropyBand01RunConfig);
+define_constraint_run_config!(PeriodicityAcfConstraint, PeriodicityAcfRunConfig);
 
 #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize, Default)]
 pub struct MotifCriteria {
@@ -844,6 +914,9 @@ pub struct MotifCriteria {
 
     #[run_config]
     pub interesting_entropy_band_01: Option<InterestingEntropyBand01Constraint>,
+
+    #[run_config]
+    pub periodicity_acf_01: Option<PeriodicityAcfConstraint>,
 }
 
 impl MotifCriteria {
@@ -858,7 +931,8 @@ impl MotifCriteria {
     pub const INTERESTING_BAND_ENERGY_RATIO_01_MIN_KEY: &str = "interesting_band_energy_ratio_01_min";
     pub const INTERESTING_ENTROPY_GAUSS_01_MIN_KEY: &str = "interesting_entropy_gauss_01_min";
     pub const INTERESTING_ENTROPY_BAND_01_MIN_KEY: &str = "interesting_entropy_band_01_min";
-    pub const CONSTRAINT_KEYS: [&str; 10] = [
+    pub const PERIODICITY_ACF_01_MIN_KEY: &str = "periodicity_acf_01_min";
+    pub const CONSTRAINT_KEYS: [&str; 11] = [
         Self::NORM_THICKNESS_MIN_KEY,
         Self::INLIER_RATIO_MIN_KEY,
         Self::COHERENCE_MIN_KEY,
@@ -869,6 +943,7 @@ impl MotifCriteria {
         Self::INTERESTING_BAND_ENERGY_RATIO_01_MIN_KEY,
         Self::INTERESTING_ENTROPY_GAUSS_01_MIN_KEY,
         Self::INTERESTING_ENTROPY_BAND_01_MIN_KEY,
+        Self::PERIODICITY_ACF_01_MIN_KEY,
     ];
 
     pub fn is_empty(&self) -> bool {
@@ -882,6 +957,7 @@ impl MotifCriteria {
             && self.interesting_band_energy_ratio_01.is_none()
             && self.interesting_entropy_gauss_01.is_none()
             && self.interesting_entropy_band_01.is_none()
+            && self.periodicity_acf_01.is_none()
     }
 
     pub fn optimizer_constraints() -> HashMap<String, f32> {
@@ -964,6 +1040,13 @@ impl ToHashmap for MotifCriteria {
                         .as_ref()
                         .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "interesting_entropy_band_01."))))
                         .unwrap_or(Box::new(std::iter::empty())),
+                )
+                .chain(
+                    self
+                        .periodicity_acf_01
+                        .as_ref()
+                        .map(|cfg| cfg.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "periodicity_acf_01."))))
+                        .unwrap_or(Box::new(std::iter::empty())),
                 ),
         )
     }
@@ -982,6 +1065,7 @@ impl FromHashmap for MotifCriteria {
         let interesting_band_energy_ratio_01_prefix = thoosa_shared::conc_str(&prefix, "interesting_band_energy_ratio_01.");
         let interesting_entropy_gauss_01_prefix = thoosa_shared::conc_str(&prefix, "interesting_entropy_gauss_01.");
         let interesting_entropy_band_01_prefix = thoosa_shared::conc_str(&prefix, "interesting_entropy_band_01.");
+        let periodicity_acf_01_prefix = thoosa_shared::conc_str(&prefix, "periodicity_acf_01.");
 
         Ok(Self {
             norm_thickness: if properties.keys().any(|key| key.starts_with(norm_thickness_prefix.as_str())) {
@@ -1031,6 +1115,11 @@ impl FromHashmap for MotifCriteria {
             },
             interesting_entropy_band_01: if properties.keys().any(|key| key.starts_with(interesting_entropy_band_01_prefix.as_str())) {
                 Some(InterestingEntropyBand01Constraint::from_properties_map(Some(interesting_entropy_band_01_prefix), properties)?)
+            } else {
+                None
+            },
+            periodicity_acf_01: if properties.keys().any(|key| key.starts_with(periodicity_acf_01_prefix.as_str())) {
+                Some(PeriodicityAcfConstraint::from_properties_map(Some(periodicity_acf_01_prefix), properties)?)
             } else {
                 None
             },
@@ -1108,6 +1197,17 @@ pub struct InterestingEntropyBand01 {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PeriodicityAcf {
+    pub struct_lag_max: i64,
+    pub lag_min: i64,
+    pub lag_max: i64,
+    pub struct0: f64,
+    pub peak_good: f64,
+    pub peak_bad: f64,
+    pub eps: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum MotifCriterion {
     NormThickness(NormThickness),
     InlierRatio(InlierRatio),
@@ -1119,6 +1219,7 @@ pub enum MotifCriterion {
     InterestingBandEnergyRatio01(InterestingBandEnergyRatio01),
     InterestingEntropyGauss01(InterestingEntropyGauss01),
     InterestingEntropyBand01(InterestingEntropyBand01),
+    PeriodicityAcf(PeriodicityAcf),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1201,6 +1302,21 @@ impl MotifCriteria {
                 min: v.min,
             });
         }
+        if let Some(v) = self.periodicity_acf_01.as_ref() {
+            constraints.push(MotifCriterionConstraint {
+                key: Self::PERIODICITY_ACF_01_MIN_KEY,
+                criterion: MotifCriterion::PeriodicityAcf(PeriodicityAcf {
+                    struct_lag_max: v.criterion.struct_lag_max,
+                    lag_min: v.criterion.lag_min,
+                    lag_max: v.criterion.lag_max,
+                    struct0: v.criterion.struct0,
+                    peak_good: v.criterion.peak_good,
+                    peak_bad: v.criterion.peak_bad,
+                    eps: v.criterion.eps,
+                }),
+                min: v.min,
+            });
+        }
         constraints
     }
 }
@@ -1237,6 +1353,17 @@ impl From<&MotifCriteria> for Vec<MotifCriterion> {
         }
         if let Some(v) = value.interesting_entropy_band_01.as_ref() {
             criteria.push(MotifCriterion::InterestingEntropyBand01(InterestingEntropyBand01 { h_min: v.criterion.h_min, h_max: v.criterion.h_max, eps: v.criterion.eps }));
+        }
+        if let Some(v) = value.periodicity_acf_01.as_ref() {
+            criteria.push(MotifCriterion::PeriodicityAcf(PeriodicityAcf {
+                struct_lag_max: v.criterion.struct_lag_max,
+                lag_min: v.criterion.lag_min,
+                lag_max: v.criterion.lag_max,
+                struct0: v.criterion.struct0,
+                peak_good: v.criterion.peak_good,
+                peak_bad: v.criterion.peak_bad,
+                eps: v.criterion.eps,
+            }));
         }
         criteria
     }
