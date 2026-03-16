@@ -3,7 +3,7 @@ use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use log::{debug, error};
+use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
 use tch::{nn, no_grad, Kind, TchError, Tensor};
 
@@ -1039,6 +1039,8 @@ fn self_attention_forward_t(
         (s[0], s[1], s[2])
     };
 
+    trace!("SelfAttention::tho_forward: key_valid=\n{key_valid}");
+
     debug!("SelfAttention::tho_forward: \
         x.size={:?}, \
         key_valid.size={:?}, \
@@ -1076,6 +1078,7 @@ fn self_attention_forward_t(
         panic_to_err!(tensor.f_div_scalar(scale))?
     };
     let key_mask_f = key_valid.f_unsqueeze(1)?.f_unsqueeze(2)?.f_to_kind(scores.kind())?;
+    
     let ones = Tensor::f_ones(key_mask_f.size(), (scores.kind(), scores.device()))?;
     let inv = ones.f_sub(&key_mask_f)?;
     scores = scores.f_add(&inv.f_mul_scalar(-1e9)?)?;
@@ -1141,7 +1144,7 @@ pub struct SelfAttention {
     ff1: nn::Linear,
     ff2: nn::Linear,
     n_heads: i64,
-    head_dim: i64,
+    head_size: i64,
     dropout: f64,
 }
 
@@ -1165,7 +1168,7 @@ impl SelfAttention {
             return Err(ThoError::new(format!("SelfAttention::new dropout must be in [0,1), got {dropout}")));
         }
 
-        let head_dim = d_model / n_heads;
+        let head_size = d_model / n_heads;
         let lin = |name: &str| nn::linear(vs / name, d_model, d_model, Default::default());
         let ln_cfg = nn::LayerNormConfig { eps: 1e-5, ..Default::default() };
 
@@ -1179,7 +1182,7 @@ impl SelfAttention {
             ff1: nn::linear(vs / "ff1", d_model, d_model * ff_mult, Default::default()),
             ff2: nn::linear(vs / "ff2", d_model * ff_mult, d_model, Default::default()),
             n_heads,
-            head_dim,
+            head_size,
             dropout,
         })
     }
@@ -1210,10 +1213,10 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
         let b = s[0];
         let l = s[1];
         let d = s[2];
-        if d != self.n_heads * self.head_dim {
+        if d != self.n_heads * self.head_size {
             return Err(ThoError::new(format!(
                 "SelfAttention::tho_forward d_model mismatch, expected {}, got {d}",
-                self.n_heads * self.head_dim
+                self.n_heads * self.head_size
             )));
         }
 
@@ -1241,7 +1244,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
             &self.ff1,
             &self.ff2,
             self.n_heads,
-            self.head_dim,
+            self.head_size,
             self.dropout,
             train,
         )?;

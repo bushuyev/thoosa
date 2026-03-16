@@ -16,7 +16,7 @@ use crate::ws::Workspace;
 use clap::clap_derive::Args;
 use thoosa_shared::{mono_key, panic_to_err_async, CopyToDevice};
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
 use rand::seq::{IndexedRandom, SliceRandom};
@@ -1165,15 +1165,15 @@ pub struct ConvNetParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelfAttentionNetParams {
-    d_model_heads: u32, //d_model- times n_heads
+    head_size: u32, //d_model- times n_heads
     n_heads: u32,
     ff_mult: u32,
     dropout: f64,
 }
 
 impl SelfAttentionNetParams {
-    pub fn new(d_model_heads: u32, n_heads: u32, ff_mult: u32, dropout: f64) -> Self {
-        Self { d_model_heads, n_heads, ff_mult, dropout }
+    pub fn new(head_size: u32, n_heads: u32, ff_mult: u32, dropout: f64) -> Self {
+        Self { head_size, n_heads, ff_mult, dropout }
     }
 }
 
@@ -1289,14 +1289,25 @@ pub fn mark_missing_motif_values(t: &Tensor, lengths: Option<&BatchLengths>) -> 
         flat_lengths.extend(sample_lengths.iter().map(|len| (*len).min(max_len)));
     }
 
-    debug!("flat_lengths={flat_lengths:?}");
+    debug!("mark_missing_motif_values: flat_lengths={flat_lengths:?} max_len={max_len}");
 
     let lengths_t = Tensor::f_from_slice(flat_lengths.as_slice())?.f_to_device(t.device())?.f_view([batch as i64, motif_nets as i64, 1])?;
+    trace!("mark_missing_motif_values: lengths_t=\n{lengths_t}");
+
     let range = Tensor::f_arange(max_len, (Kind::Int64, t.device()))?.f_view([1, 1, max_len])?;
-    let valid = range.f_lt_tensor(&lengths_t)?;
-    let valid_f = valid.f_to_kind(t.kind())?;
+    trace!("mark_missing_motif_values: range=\n{range}");
+
+    let valid_f = range.f_lt_tensor(&lengths_t)?.f_to_kind(t.kind())?;
+    trace!("mark_missing_motif_values: valid_f=\n{valid_f}");
+
     let invalid_f = valid_f.f_ones_like()?.f_subtract(&valid_f)?;
-    t.f_mul(&valid_f)?.f_add(&invalid_f.f_mul_scalar(SELF_ATTENTION_MISSING_MOTIF_VALUE)?).map_err(|e| e.into())
+    trace!("mark_missing_motif_values: invalid_f=\n{invalid_f}");
+
+    let r= t.f_mul(&valid_f)?.f_add(&invalid_f.f_mul_scalar(SELF_ATTENTION_MISSING_MOTIF_VALUE)?).map_err(|e| Into::<ThoError>::into(e))?;
+
+    trace!("mark_missing_motif_values: r=\n{r}");
+
+    Ok(r)
 }
 
 pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
@@ -1462,7 +1473,7 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
         )?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("self_attention_label_node: transpose input={:?}", t.size());
+                debug!("self_attention_label_node: transpose input={:?} _lengths={_lengths:?}", t.size());
                 Ok(t.transpose(1, 2))
             })),
             Some(params.motif_nets),
@@ -1470,11 +1481,11 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
         .linear_feats(
             "self_attention_in_proj",
             params.motif_nets,
-            sa_params.d_model_heads * sa_params.n_heads,
+            sa_params.head_size * sa_params.n_heads,
         )?
         .self_attention(
             "self_attention_block",
-            sa_params.d_model_heads * sa_params.n_heads,
+            sa_params.head_size * sa_params.n_heads,
             sa_params.n_heads,
             sa_params.ff_mult,
             sa_params.dropout,
@@ -2240,7 +2251,7 @@ pub struct LinNetArgs {
 pub struct SelfAttentionNetArgs {
     #[in_map]
     #[run_config]
-    pub d_model_heads: u32,
+    pub head_size: u32,
     #[in_map]
     #[run_config]
     pub n_heads: u32,
@@ -2265,7 +2276,7 @@ impl LinNetArgs {
 
 impl SelfAttentionNetArgs {
     pub fn new(d_model: u32, n_heads: u32, ff_mult: u32, dropout: f64) -> Self {
-        Self { d_model_heads: d_model, n_heads, ff_mult, dropout }
+        Self { head_size: d_model, n_heads, ff_mult, dropout }
     }
 }
 
@@ -2801,9 +2812,9 @@ mod train_tests {
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-                                                                                             move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-                                                                                             model_base_path.join(NET_WEIGHTS_FILE),
-                                                                                             Cpu,
+             move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
+             model_base_path.join(NET_WEIGHTS_FILE),
+             Cpu,
         )?;
 
         assert!(vs_0.variables().len() > 0);

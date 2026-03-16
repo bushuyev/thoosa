@@ -562,9 +562,9 @@ mod tests {
             }),
             periodicity_acf_01: Some(crate::find_motifs_run_config::PeriodicityAcfConstraint {
                 criterion: crate::find_motifs_run_config::PeriodicityAcfRunConfig {
-                    struct_lag_max: 32,
-                    lag_min: 64,
-                    lag_max: 128,
+                    struct_lag_max: 1./64.0,
+                    lag_min: 1./32.0,
+                    lag_max: 0.5,
                     struct0: 0.2,
                     peak_good: 0.25,
                     peak_bad: 0.65,
@@ -592,9 +592,9 @@ mod tests {
         let criteria = crate::find_motifs_run_config::MotifCriteria {
             periodicity_acf_01: Some(crate::find_motifs_run_config::PeriodicityAcfConstraint {
                 criterion: crate::find_motifs_run_config::PeriodicityAcfRunConfig {
-                    struct_lag_max: 32,
-                    lag_min: 64,
-                    lag_max: 128,
+                    struct_lag_max: 1./64.,
+                    lag_min: 1./32.,
+                    lag_max: 0.5,
                     struct0: 0.2,
                     peak_good: 0.25,
                     peak_bad: 0.65,
@@ -805,15 +805,15 @@ pub struct InterestingEntropyBand01RunConfig {
 pub struct PeriodicityAcfRunConfig {
     #[in_map]
     #[run_config]
-    pub struct_lag_max: i64,
+    pub struct_lag_max: f64,
 
     #[in_map]
     #[run_config]
-    pub lag_min: i64,
+    pub lag_min: f64,
 
     #[in_map]
     #[run_config]
-    pub lag_max: i64,
+    pub lag_max: f64,
 
     #[in_map]
     #[run_config]
@@ -1198,9 +1198,9 @@ pub struct InterestingEntropyBand01 {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct PeriodicityAcf {
-    pub struct_lag_max: i64,
-    pub lag_min: i64,
-    pub lag_max: i64,
+    pub struct_lag_max: f64,
+    pub lag_min: f64,
+    pub lag_max: f64,
     pub struct0: f64,
     pub peak_good: f64,
     pub peak_bad: f64,
