@@ -1502,7 +1502,14 @@ pub fn assert_close<A:Into<f64> + Display, B:Into<f64> + Display>(val_a: A, val_
     );
 }
 
-pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], channels: i64, max_input: i64) -> Result<(Tensor, Vec<i64>), ThoError> {
+fn assert_tensor_eq(a: &Tensor, b: &Tensor) {
+    assert_eq!(a.size(), b.size(), "size mismatch");
+    assert_eq!(a.kind(), b.kind(), "dtype mismatch");
+    let ok = a.eq_tensor(b).all().int64_value(&[]) != 0;
+    assert!(ok, "tensor values differ:\nleft: {a:?}\nright: {b:?}");
+}
+
+pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], dim_0: i64, max_input: i64) -> Result<(Tensor, Vec<i64>), ThoError> {
     let mut stack = Vec::with_capacity(tensors.len());
     let mut lengths = Vec::with_capacity(tensors.len());
 
@@ -1512,8 +1519,8 @@ pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], channels: i64, max_i
         if size.len() != 2 {
             return Err(ThoError::new(format!("pad_stack_with_mask expects 2D tensors, got size={size:?}")));
         }
-        if size[0] != channels {
-            return Err(ThoError::new(format!("pad_stack_with_mask channels mismatch: expected={channels} got={}", size[0])));
+        if size[0] != dim_0 {
+            return Err(ThoError::new(format!("pad_stack_with_mask dim_0 mismatch: expected={dim_0} got={}", size[0])));
         }
 
         let mut t = t.shallow_clone();
@@ -1529,7 +1536,7 @@ pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], channels: i64, max_i
         lengths.push(len);
     }
 
-    let stack = Tensor::f_stack(stack.as_slice(), 0)?;
+    let stack = Tensor::f_stack(stack.as_slice(), 0)?;//copies to new storage
 
     Ok((stack, lengths))
 }
@@ -1637,11 +1644,56 @@ pub fn pool_time_mean(sims: &Tensor) -> Result<Tensor, TchError> {
     sum.f_div_scalar(tprime)
 }
 
-#[test]
-pub fn test_remove_strobs_by_len(){
+
+/// Proportionally stretches (or shrinks) a tensor along `dim` using
+/// nearest-neighbor style indexing.
+///
+/// Mapping rule:
+///   out[j] = in[floor(j * in_len / out_len)]
+///
+/// Examples:
+///   [0,1,1,2] -> len 8 => [0,0,1,1,1,1,2,2]
+///   [0,1,2,3] -> len 6 => [0,0,1,2,2,3]
+///
+/// This works for any dimensionality and preserves autograd w.r.t. the source tensor.
+pub fn stretch<T: AsRef<Tensor>>(
+    t: T,
+    stretch_to: usize,
+    dim: u32,
+) -> Result<Tensor, ThoError> {
+    let t = t.as_ref();
+    let sizes = t.size();
+
+    let dim = dim as usize;
+
+    assert!(dim< sizes.len(), "stretch: dim {dim} out of range for tensor with sizes={sizes:?}");
+
+    let in_len = sizes[dim];
+    assert!(in_len > 0, "stretch: in_len({in_len}) should be > 0");
+    assert!(stretch_to > 0, "stretch: stretch_to({stretch_to}) should be > 0");
+
+    let in_len = in_len as usize;
+
+    // Same length: return a shallow clone.
+    if in_len == stretch_to {
+        return Ok(t.shallow_clone());
+    }
 
 
+    // Build output->input index mapping:
+    // idx[j] = floor(j * in_len / stretch_to)
+    //
+    // Use u128 to avoid overflow for large lengths.
+    let mut idx = Vec::with_capacity(stretch_to);
+    for j in 0..stretch_to {
+        let src = ((j as u128) * (in_len as u128) / (stretch_to as u128)) as i64;
+        idx.push(src);
+    }
+
+    let index = Tensor::from_slice(&idx).to_device(t.device());
+    Ok(t.f_index_select(dim as i64, &index)?)
 }
+
 
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
@@ -1650,14 +1702,15 @@ pub mod tests {
     use crate::batches::BatchLengths;
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{build_motif_batch_lengths, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to, pad_to_2, to_vec_f32, to_vec_i64, TrainListener};
+    use crate::utils::{assert_tensor_eq, build_motif_batch_lengths, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to, pad_to_2, stretch, to_vec_f32, to_vec_i64, TrainListener};
     use clap::{Args, Parser, Subcommand};
 
-    use log::debug;
+    use log::{debug, set_max_level};
     use std::collections::{HashMap, HashSet};
 
     use std::fmt::Debug;
     use std::path::PathBuf;
+    use log::LevelFilter::Trace;
     use serde::Deserialize;
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
@@ -1678,7 +1731,9 @@ pub mod tests {
     use thoosa_shared::run_configs::RunId;
     use thoosa_shared::traits::SimpleId;
     use crate::dims::AnyDims;
+    use crate::my_tch::ThoModule;
     use crate::tho_tensor::ThoTensor;
+    use crate::train_nets::{mark_missing_motif_values, self_attention_label_node, LabelNetParams, LabelNetTypeParams, SelfAttentionNetParams};
 
     #[ctor::ctor]
     fn init() {
@@ -2554,43 +2609,56 @@ pub mod tests {
 
     #[test]
     fn test_mix_masks_align_with_rows_2() -> Result<(), ThoError> {
+        set_max_level(Trace);
         //resource lengths (resources are the net's inputs, i.e. what needs to be classified)
         let resource_0_len = 100;
         let resource_1_len = 150;
 
+        let num_motif_nets = 3i64;
         let motif_a_width = 20;
         let motif_b_width = 10;
+        let motif_c_width = 30;
 
         //all motif nets are applied using same stride (TrainLabelNetsArgs/RunAllArgs .motif_slices_step )
         let stride = 2;
         //motif_a on resource_0_len produces
         let motif_a_on_resource_0_len = (resource_0_len - motif_a_width) / stride + 1; //
         let motif_b_on_resource_0_len = (resource_0_len - motif_b_width) / stride + 1; //
-        let motif_a_on_resource_0_t = Tensor::ones(motif_a_on_resource_0_len, FLOAT_CPU); //what is returned by ApplyMotifNets::run
-        let motif_b_on_resource_0_t = Tensor::ones(motif_b_on_resource_0_len, FLOAT_CPU); //what is returned by ApplyMotifNets::run
-        let max_len_0 = max(motif_a_on_resource_0_len, motif_b_on_resource_0_len);
+        let motif_c_on_resource_0_len = (resource_0_len - motif_c_width) / stride + 1; //
+
+        let motif_a_on_resource_0_t = Tensor::ones(motif_a_on_resource_0_len, FLOAT_CPU) * 0.1; //what is returned by ApplyMotifNets::run
+        let motif_b_on_resource_0_t = Tensor::ones(motif_b_on_resource_0_len, FLOAT_CPU) * 0.2; //what is returned by ApplyMotifNets::run
+        let motif_c_on_resource_0_t = Tensor::ones(motif_c_on_resource_0_len, FLOAT_CPU) * 0.3; //what is returned by ApplyMotifNets::run
+
+        let max_len_0 = *[motif_a_on_resource_0_len, motif_b_on_resource_0_len, motif_c_on_resource_0_len].iter().max().unwrap();
         let resource_0_t_after_nets_applied = Tensor::f_vstack(
             &[
-                pad_to(&motif_a_on_resource_0_t, &[max_len_0], 0.0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
-                pad_to(&motif_b_on_resource_0_t, &[max_len_0], 0.0)? //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+                stretch(&motif_a_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+                stretch(&motif_b_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+                stretch(&motif_c_on_resource_0_t, max_len_0 as usize, 0)? //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
             ]
         )?;
 
-        debug!("motif_a_on_resource_0_len={motif_a_on_resource_0_len} motif_b_on_resource_0_len={motif_b_on_resource_0_len} ");
+        debug!("motif_a_on_resource_0_len={motif_a_on_resource_0_len} motif_b_on_resource_0_len={motif_b_on_resource_0_len} motif_c_on_resource_0_len={motif_c_on_resource_0_len}");
 
         let motif_a_on_resource_1_len = (resource_1_len - motif_a_width) / stride + 1; //
         let motif_b_on_resource_1_len = (resource_1_len - motif_b_width) / stride + 1; //
-        let motif_a_on_resource_1_t = Tensor::ones(motif_a_on_resource_1_len, FLOAT_CPU); //what is returned by ApplyMotifNets::run
-        let motif_b_on_resource_1_t = Tensor::ones(motif_b_on_resource_1_len, FLOAT_CPU); //what is returned by ApplyMotifNets::run
-        let max_len_1 = max(motif_a_on_resource_1_len, motif_b_on_resource_1_len);
+        let motif_c_on_resource_1_len = (resource_1_len - motif_c_width) / stride + 1; //
+
+        let motif_a_on_resource_1_t = Tensor::ones(motif_a_on_resource_1_len, FLOAT_CPU) * 1.1; //what is returned by ApplyMotifNets::run
+        let motif_b_on_resource_1_t = Tensor::ones(motif_b_on_resource_1_len, FLOAT_CPU) * 1.2; //what is returned by ApplyMotifNets::run
+        let motif_c_on_resource_1_t = Tensor::ones(motif_c_on_resource_1_len, FLOAT_CPU) * 1.3; //what is returned by ApplyMotifNets::run
+
+        let max_len_1 = *[motif_a_on_resource_1_len, motif_b_on_resource_1_len, motif_c_on_resource_1_len].iter().max().unwrap();
         let resource_1_t_after_nets_applied = Tensor::f_vstack(
             &[
-                pad_to(&motif_a_on_resource_1_t, &[max_len_1], 0.0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
-                pad_to(&motif_b_on_resource_1_t, &[max_len_1], 0.0)? //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+                stretch(&motif_a_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+                stretch(&motif_b_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+                stretch(&motif_c_on_resource_1_t, max_len_1 as usize, 0)? //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
             ]
         )?;
 
-        debug!("motif_a_on_resource_1_len={motif_a_on_resource_1_len} motif_b_on_resource_1_len={motif_b_on_resource_1_len} ");
+        debug!("motif_a_on_resource_1_len={motif_a_on_resource_1_len} motif_b_on_resource_1_len={motif_b_on_resource_1_len} motif_c_on_resource_1_len={motif_c_on_resource_1_len}");
 
         debug!("resource_0_t_after_nets_applied=\n{resource_0_t_after_nets_applied}");
         debug!("resource_1_t_after_nets_applied=\n{resource_1_t_after_nets_applied}");
@@ -2600,14 +2668,20 @@ pub mod tests {
         let max_input = max(resource_0_t_after_nets_applied.size()[1], resource_1_t_after_nets_applied.size()[1]);
         debug!("max_input={max_input}");
 
-        let (x_0_batch, lengths_0) = pad_stack_with_mask(&[&resource_0_t_after_nets_applied], 2i64, max_input)?;
-        let (x_1_batch, lengths_1) = pad_stack_with_mask(&[&resource_1_t_after_nets_applied], 2i64, max_input)?;
 
-        let lengths_0 = build_motif_batch_lengths(&[&DataWithExtra::<ThoTensor<AnyDims, SimpleId>, Vec<i64>>::new(resource_0_t_after_nets_applied.into(), vec![motif_a_on_resource_0_len, motif_b_on_resource_1_len])], lengths_0, max_input)?;
-        let lengths_1 = build_motif_batch_lengths(&[&DataWithExtra::<ThoTensor<AnyDims, SimpleId>, Vec<i64>>::new(resource_1_t_after_nets_applied.into(), vec![motif_a_on_resource_1_len, motif_b_on_resource_0_len])], lengths_1, max_input)?;
+        let (x_0_batch, lengths_0) = pad_stack_with_mask(&[&resource_0_t_after_nets_applied], num_motif_nets, max_input)?;
+        let (x_1_batch, lengths_1) = pad_stack_with_mask(&[&resource_1_t_after_nets_applied], num_motif_nets, max_input)?;
+
+        let lengths_0 = build_motif_batch_lengths(
+            &[&DataWithExtra::<ThoTensor<AnyDims, SimpleId>, Vec<i64>>::new(resource_0_t_after_nets_applied.into(), vec![motif_a_on_resource_0_len, motif_b_on_resource_0_len, motif_c_on_resource_0_len])],
+            lengths_0, max_input)?;
+
+        let lengths_1 = build_motif_batch_lengths(
+            &[&DataWithExtra::<ThoTensor<AnyDims, SimpleId>, Vec<i64>>::new(resource_1_t_after_nets_applied.into(), vec![motif_a_on_resource_1_len, motif_b_on_resource_1_len, motif_c_on_resource_1_len])],
+            lengths_1, max_input)?;
 
         debug!("max_input={max_input}");
-        let (x, lengths, y) = mix_x_binary_with_labels(&x_1_batch, Some(&lengths_1), &x_0_batch, Some(&lengths_0))?;
+        let (x, mut lengths, y) = mix_x_binary_with_labels(&x_1_batch, Some(&lengths_1), &x_0_batch, Some(&lengths_0))?;
 
         let idx_0 = y.eq(0.0).nonzero().double_value(&[0, 0]) as i64;
         let idx_1 = idx_0 ^ 1;
@@ -2617,36 +2691,28 @@ pub mod tests {
         debug!("lengths={lengths:?}");
         debug!("idx_0={idx_0} idx_1={idx_1}");
 
-        assert_eq!(
-            Tensor::from_slice(&[
-                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
-                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
-                1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,
-                0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,
-                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
-                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
-                1., 1., 1., 1., 1., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,
-                0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.
-            ]).view((2, 71)),
-            x.i((idx_0, .., ..))
-        );
-
-        assert_eq!(
-            Tensor::from_slice(&[
-                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
-                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
-                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
-                1., 1., 1., 1., 1., 1., 0., 0., 0., 0., 0.,
-                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
-                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
-                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
-                1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
-            ]).view((2, 71)),
-            x.i((idx_1, .., ..))
-        );
+      
         // let umasked
         //
-        // let masked = mark_missing_motif_values(&x, Some(&lengths))?;
+        // let masked = mark_missing_motif_values(&x, lengths.as_ref())?;
+        // debug!("masked=\n{masked}");
+        let self_attention_net_params = SelfAttentionNetParams::new(64, 4, 4, 0.1);
+
+        let params = LabelNetParams::new(
+            3,
+            LabelNetTypeParams::SelfAttentionNetParams(self_attention_net_params),
+        );
+
+        let mut vs_0 = VarStore::new(Cpu);
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = self_attention_label_node(&params)?.build_tch_module(&vs_0.root())?;
+        vs_0.freeze();
+
+        let _ = net.tho_forward(
+            &x.into(),
+            lengths.as_mut(),
+            false,
+        )?;
+
 
         Ok(())
     }
@@ -2788,6 +2854,100 @@ pub mod tests {
                 assert!(name.to_string_lossy().as_bytes().len() <= super::DEFAULT_MAX_PATH_COMPONENT_BYTES);
             }
         }
+    }
+
+    #[test]
+    fn test_stretch() -> Result<(), ThoError>{
+        let stretched = stretch(Tensor::from_slice(&[0., 1., 1., 2.]), 8, 0)?;
+
+        assert_eq!(
+            stretched,
+            Tensor::from_slice(&[0., 0.,  1., 1.,  1., 1., 2., 2.])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_stretch_exact_double() -> Result<(), ThoError> {
+        let stretched = stretch(Tensor::from_slice(&[0., 1., 1., 2.]), 8, 0)?;
+
+        let expected = Tensor::from_slice(&[0., 0., 1., 1., 1., 1., 2., 2.]);
+        assert_tensor_eq(&stretched, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_stretch_non_multiple() -> Result<(), ThoError> {
+        let stretched = stretch(Tensor::from_slice(&[0., 1., 2., 3.]), 6, 0)?;
+
+        // floor(j * 4 / 6) => [0,0,1,2,2,3]
+        let expected = Tensor::from_slice(&[0., 0., 1., 2., 2., 3.]);
+        assert_tensor_eq(&stretched, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_stretch_to_plus_one() -> Result<(), ThoError> {
+        let stretched = stretch(Tensor::from_slice(&[10., 20., 30., 40.]), 5, 0)?;
+
+        // floor(j * 4 / 5) => [0,0,1,2,3]
+        let expected = Tensor::from_slice(&[10., 10., 20., 30., 40.]);
+        assert_tensor_eq(&stretched, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_shrink() -> Result<(), ThoError> {
+        let stretched = stretch(Tensor::from_slice(&[0., 1., 2., 3., 4.]), 3, 0)?;
+
+        // floor(j * 5 / 3) => [0,1,3]
+        let expected = Tensor::from_slice(&[0., 1., 3.]);
+        assert_tensor_eq(&stretched, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_stretch_dim_1() -> Result<(), ThoError> {
+        let t = Tensor::from_slice(&[
+            1., 2., 3.,
+            10., 20., 30.,
+        ]).reshape([2, 3]);
+
+        let stretched = stretch(&t, 5, 1)?;
+
+        let expected = Tensor::from_slice(&[
+            1., 1., 2., 2., 3.,
+            10., 10., 20., 20., 30.,
+        ]).reshape([2, 5]);
+
+        assert_tensor_eq(&stretched, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_stretch_to_zero() -> Result<(), ThoError> {
+        let t = Tensor::from_slice(&[1., 2., 3.]);
+        let stretched = stretch(&t, 0, 0)?;
+        assert_eq!(stretched.size(), vec![0]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_stretch_singleton() -> Result<(), ThoError> {
+        let t = Tensor::from_slice(&[7.]);
+        let stretched = stretch(&t, 5, 0)?;
+        let expected = Tensor::from_slice(&[7., 7., 7., 7., 7.]);
+        assert_tensor_eq(&stretched, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_stretch_preserves_kind() -> Result<(), ThoError> {
+        let t = Tensor::from_slice(&[1i64, 2, 3]).to_kind(Kind::Int64);
+        let stretched = stretch(&t, 5, 0)?;
+        assert_eq!(stretched.kind(), Kind::Int64);
+        Ok(())
     }
 }
 

@@ -28,7 +28,7 @@ use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore, TrainMotifsNetsResult};
-use thoosa_common::utils::pad_to;
+use thoosa_common::utils::{pad_to, stretch};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -522,15 +522,16 @@ where
                 }
                 let mut to_size = size.clone();
                 to_size[0] = max_match_len;
-                let t = pad_to(&v.t, to_size.as_slice(), 0.0)?;
-                ThoTensor::new(v.id().clone(), t)
+                // let t = pad_to(&v.t, to_size.as_slice(), 0.0)?;
+                let id = v.id().clone();
+                let t = stretch(v, max_match_len as usize, 0)?;
+                ThoTensor::new(id.clone(), t)
             }).collect::<Result<Vec<_>, ThoError>>()?
         } else {
             matches
         };
 
-        debug!("ApplyMotifNets::run: matches_2={matches:?}");
-
+        trace!("ApplyMotifNets::run: matches_={matches:?}");
 
         let res_t = Tensor::f_vstack(
             &matches.into_iter().map(|v| v.t).collect::<Vec<_>>(),

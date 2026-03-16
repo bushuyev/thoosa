@@ -3,11 +3,7 @@ use tch::Tensor;
 use thoosa_dummy_data_derive::DummyData;
 use tracing::debug;
 use thoosa_motifs::common_stats::Stats as CommonStatsValue;
-use thoosa_motifs::criteria::{
-    coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01,
-    interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio_peaked_01,
-    interesting_tv_norm_01, norm_thickness, periodicity_acf_01,
-};
+use thoosa_motifs::criteria::{coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01, interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio_peaked_01, interesting_tv_norm_01, norm_thickness, periodicity_acf_01, periodicity_acf_01_frac};
 use thoosa_motifs::pearson_corr::pearson_corr_distance_matrix_0_2_single as pearson_corr_distance_matrix_0_2_single_matrix;
 use thoosa_shared::{panic_to_err, ThoError};
 
@@ -168,7 +164,7 @@ pub fn metric_scalar_for_motif(motif_slices: &Tensor, metric: Metrics, aggr: Agg
         Metrics::InterestingBandEnergyRatio01 => interesting_band_energy_ratio_01(motif_slices, 250.0, 8.0, 30.0, 1e-8)?,
         Metrics::InterestingEntropyGauss01 => interesting_entropy_gauss_01(motif_slices, 0.6, 0.15, 1e-8)?,
         Metrics::InterestingEntropyBand01 => interesting_entropy_band_01(motif_slices, 0.3, 0.85, 1e-8)?,
-        Metrics::PeriodicityAcf => periodicity_acf_01(motif_slices, 32, 64, 256, 0.2, 0.25, 0.65, 1e-8)?,
+        Metrics::PeriodicityAcf => periodicity_acf_01_frac(motif_slices, 1./64., 1./32., 0.5,  0.2, 0.25, 0.65, 1e-8)?,
     };
 
     let raw = score_t.f_double_value(&[])?;

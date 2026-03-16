@@ -667,13 +667,13 @@ where
                                                             last_context_adjuster.replace(v);
                                                         }
                                                     }
-                                                    debug!("OOMHandler::run, error: on oom moving to next adjuster ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
+                                                    debug!("OOMHandler::run, inner error: on oom moving to next adjuster ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                     break;
                                                 }
                                             }
                                             _ => {
-                                                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={} other error 1", os_thread_id());
+                                                warn!("OOMHandler::run, inner error: ctx_id={ctx_id:?} task={task:?} os_thread_id={} unexpected error", os_thread_id());
                                                 return Err(te);
                                             }
                                         }
@@ -691,7 +691,7 @@ where
                 warn!("OOMHandler::run, error: ctx_id={ctx_id:?} out_key={out_key:?} os_thread_id={} all failed: input.mem_size={:?} semaphore={:?}", os_thread_id(), input.mem_size(), GlobalCtx::global().debug_semaphore(device_idx));
                 #[cfg(tho_debug)]
                 GlobalCtx::global().debug_caches(device_idx).await;
-                
+
                 Err(Cause::SomethingElse(format!("all failed: task.out_key={out_key:?}")).into())
 
 

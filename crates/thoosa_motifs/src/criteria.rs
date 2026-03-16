@@ -748,6 +748,60 @@ pub fn interesting_entropy_band_01(
     ge.f_mul(&le)?.f_to_kind(x.kind())
 }
 
+pub fn periodicity_acf_01_frac(
+    x: &Tensor,            // [N, L]
+    struct_frac: f64,      // e.g. 1.0/64.0
+    lag_min_frac: f64,     // e.g. 1.0/32.0
+    lag_max_frac: f64,     // e.g. 0.5
+    struct0: f64,
+    peak_good: f64,
+    peak_bad: f64,
+    eps: f64,
+) -> Result<Tensor, TchError> {
+    let sz = x.size();
+    assert_eq!(sz.len(), 2, "expected [N, L]");
+    let l = sz[1];
+    assert!(l >= 4, "need L>=4");
+
+    assert!(struct_frac > 0.0, "struct_frac must be > 0");
+    assert!(lag_min_frac > 0.0, "lag_min_frac must be > 0");
+    assert!(lag_max_frac > 0.0, "lag_max_frac must be > 0");
+    assert!(lag_max_frac >= lag_min_frac, "need lag_max_frac >= lag_min_frac");
+
+    let lf = l as f64;
+
+    let mut struct_lag_max = (struct_frac * lf).round() as i64;
+    let mut lag_min = (lag_min_frac * lf).round() as i64;
+    let mut lag_max = (lag_max_frac * lf).round() as i64;
+
+    // clamp to valid ranges
+    if struct_lag_max < 1 { struct_lag_max = 1; }
+    if lag_min < 1 { lag_min = 1; }
+    if lag_max < lag_min { lag_max = lag_min; }
+    if lag_max > l - 1 { lag_max = l - 1; }
+
+    // ensure periodicity window starts after structure window
+    if lag_min <= struct_lag_max {
+        lag_min = struct_lag_max + 1;
+        if lag_min > lag_max {
+            // minimal fix: push lag_max up if possible, else push lag_min down
+            lag_max = (lag_min).min(l - 1);
+        }
+    }
+
+    // If after adjustments the window is degenerate, you can return "not periodic" or error.
+    // Here we keep it valid and call the integer version.
+    periodicity_acf_01(
+        x,
+        struct_lag_max,
+        lag_min,
+        lag_max,
+        struct0,
+        peak_good,
+        peak_bad,
+        eps,
+    )
+}
 
 /// Score in [0,1], where:
 ///   1 = structured AND not strongly periodic
@@ -777,15 +831,15 @@ pub fn periodicity_acf_01(
     eps: f64,
 ) -> Result<Tensor, TchError> {
     let sz = x.size();
-    assert_eq!(sz.len(), 2, "expected [N, L]");
+    assert_eq!(sz.len(), 2, "expected [N, L], sz={sz:?}");
     let l = sz[1];
-    assert!(l >= 4, "need L>=4");
-    assert!(struct_lag_max >= 1, "struct_lag_max must be >= 1");
-    assert!(lag_min >= 1 && lag_max >= lag_min, "bad lag_min/lag_max");
-    assert!(lag_max < l, "need lag_max < L");
-    assert!(lag_min > struct_lag_max, "choose lag_min > struct_lag_max");
-    assert!(struct0 > 0.0, "struct0 must be > 0");
-    assert!(peak_bad > peak_good, "need peak_bad > peak_good");
+    assert!(l >= 4, "need L({l})>=4");
+    assert!(struct_lag_max >= 1, "struct_lag_max({struct_lag_max}) must be >= 1");
+    assert!(lag_min >= 1 && lag_max >= lag_min, "bad lag_min({lag_min})/lag_max({lag_max})");
+    assert!(lag_max < l, "need lag_max({lag_max} < L{l}");
+    assert!(lag_min > struct_lag_max, "choose lag_min({lag_min}) > struct_lag_max({struct_lag_max})");
+    assert!(struct0 > 0.0, "struct0({struct0}) must be > 0");
+    assert!(peak_bad > peak_good, "need peak_bad({peak_bad}) > peak_good ({peak_good})");
 
     // consensus median across slices: c [L]
     let c = f_quantile_dim0(x, 0.50)?; // [L]
