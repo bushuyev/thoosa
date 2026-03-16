@@ -430,8 +430,8 @@ where
 
                                     Ok((lin_label_node(&net_params)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
-                                LabelNetTypeArgs::SelfAttentionNet(SelfAttentionNetArgs { d_model_heads, n_heads, ff_mult, dropout }) => {
-                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::SelfAttentionNetParams(SelfAttentionNetParams::new(d_model_heads, n_heads, ff_mult, dropout)));
+                                LabelNetTypeArgs::SelfAttentionNet(SelfAttentionNetArgs { head_size: head_size, n_heads, ff_mult, dropout }) => {
+                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::SelfAttentionNetParams(SelfAttentionNetParams::new(head_size, n_heads, ff_mult, dropout)));
                                     Ok((self_attention_label_node(&net_params)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
                             }

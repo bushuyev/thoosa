@@ -1032,9 +1032,9 @@ struct AllConfigs {
 fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(5), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+        step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         // window: RangeOrValue::Range { range: Range { start: 1000, end: 2001 }, step: Some((1000, 0)) }, //RangeOrValue::Value(1000), Some((200, 0))
-        window: RangeOrValue::Value(2000), //RangeOrValue::Value(1000),
+        window: RangeOrValue::Value(200), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             // BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -1050,10 +1050,18 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             // }),
             SavGolFilter(SavGolFilterParamsRangeOrValue {
                 // window_len: RangeOrValue::Value(2000),
-                window_len: RangeOrValue::Range { range: Range { start: 500, end: 2500 }, step: None },//Some((200, 0))
+                window_len: RangeOrValue::Range { range: Range { start: 200, end: 500 }, step: None },//Some((200, 0))
                 poly_order: RangeOrValue::Range { range: Range { start: 1, end: 3 }, step:None },//step: Some((3, 0))
                 // poly_order: RangeOrValue::Value(1),
                 stride: RangeOrValue::Value(10),
+                padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
+            }),
+            SavGolFilter(SavGolFilterParamsRangeOrValue {
+                // window_len: RangeOrValue::Value(2000),
+                window_len: RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },//Some((200, 0))
+                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 3 }, step:None },//step: Some((3, 0))
+                // poly_order: RangeOrValue::Value(1),
+                stride: RangeOrValue::Value(1),
                 padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             }),
             NotchBandFilter(NotchBandFilterParamsRangeOrValue {
@@ -1121,9 +1129,9 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             interesting_entropy_band_01: None,
             periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
                 criterion: PeriodicityAcfRunConfigRangeOrValue {
-                    struct_lag_max: RangeOrValue::Value(64),
-                    lag_min: RangeOrValue::Value(128),
-                    lag_max: RangeOrValue::Value(512),
+                    struct_lag_max: RangeOrValue::Value(1./64.),
+                    lag_min: RangeOrValue::Value(1./32.),
+                    lag_max: RangeOrValue::Value(0.5),
                     struct0: RangeOrValue::Value(0.2),
                     peak_good: RangeOrValue::Value(0.25),
                     peak_bad: RangeOrValue::Value(0.65),
@@ -1198,7 +1206,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         // }),
         net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
             // d_model: RangeOrValue::Value(64),
-            d_model_heads: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+            head_size: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
             n_heads: RangeOrValue::Range { range: Range { start: 4, end: 4 }, step: None },
             ff_mult: RangeOrValue::Range { range: Range { start: 4, end: 4 }, step: None },
             // ff_mult: RangeOrValue::Value(2),
@@ -1335,7 +1343,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         // }),
 
         net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet( SelfAttentionNetArgsRangeOrValue {
-            d_model_heads: RangeOrValue::Value(2),
+            head_size: RangeOrValue::Value(2),
             n_heads: RangeOrValue::Value(4),
             ff_mult: RangeOrValue::Value(2),
             dropout: RangeOrValue::Value(0.1),
