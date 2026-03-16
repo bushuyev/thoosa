@@ -16,27 +16,23 @@ use crate::ws::Workspace;
 use clap::clap_derive::Args;
 use thoosa_shared::{mono_key, panic_to_err_async, CopyToDevice};
 
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, warn};
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
-use rand::seq::{IndexedRandom, SliceRandom};
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::{fmt, fs};
-
-use std::marker::PhantomData;
 use std::path::PathBuf;
 
-use tch::nn::{init, BatchNormConfig, ConvConfig, LinearConfig, VarStore, Variables};
+use tch::nn::{init, ConvConfig, LinearConfig, VarStore};
 use tch::Device::Cpu;
 use tch::{nn, Device, Kind, Tensor};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_shared::ThoError;
 
 use async_trait::async_trait;
-use std::sync::{Arc, MutexGuard};
+use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
 
@@ -50,11 +46,9 @@ use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
-use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::runner::common::cachable::DevicesWrap;
 use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
 
 #[derive(Args, Debug, Clone)]
@@ -1253,63 +1247,6 @@ fn self_attention_masked_mean(h: &Tensor, lengths: Option<&BatchLengths>) -> Res
     }
 }
 
-const SELF_ATTENTION_MISSING_MOTIF_VALUE: f64 = -1.0;
-
-/// Rewrites inner padded motif values before attention so they are not treated like real motif probabilities.
-pub fn mark_missing_motif_values(t: &Tensor, lengths: Option<&BatchLengths>) -> Result<Tensor, ThoError> {
-    let Some(motif_net_time) = lengths.and_then(BatchLengths::motif_net_time) else {
-        return Ok(t.shallow_clone());
-    };
-
-    let size = t.size();
-    if size.len() != 3 {
-        return Err(ThoError::new(format!("mark_missing_motif_values expected [B,M,L], got {:?}", size)));
-    }
-
-    let batch = size[0] as usize;
-    let motif_nets = size[1] as usize;
-    let max_len = size[2];
-    if motif_net_time.len() != batch {
-        return Err(ThoError::new(format!(
-            "mark_missing_motif_values batch mismatch: tensor_batch={} lengths_batch={}",
-            batch,
-            motif_net_time.len()
-        )));
-    }
-
-    let mut flat_lengths = Vec::with_capacity(batch * motif_nets);
-    for sample_lengths in motif_net_time {
-        if sample_lengths.len() != motif_nets {
-            return Err(ThoError::new(format!(
-                "mark_missing_motif_values motif count mismatch: tensor_motif_nets={} lengths_motif_nets={}",
-                motif_nets,
-                sample_lengths.len()
-            )));
-        }
-        flat_lengths.extend(sample_lengths.iter().map(|len| (*len).min(max_len)));
-    }
-
-    debug!("mark_missing_motif_values: flat_lengths={flat_lengths:?} max_len={max_len}");
-
-    let lengths_t = Tensor::f_from_slice(flat_lengths.as_slice())?.f_to_device(t.device())?.f_view([batch as i64, motif_nets as i64, 1])?;
-    trace!("mark_missing_motif_values: lengths_t=\n{lengths_t}");
-
-    let range = Tensor::f_arange(max_len, (Kind::Int64, t.device()))?.f_view([1, 1, max_len])?;
-    trace!("mark_missing_motif_values: range=\n{range}");
-
-    let valid_f = range.f_lt_tensor(&lengths_t)?.f_to_kind(t.kind())?;
-    trace!("mark_missing_motif_values: valid_f=\n{valid_f}");
-
-    let invalid_f = valid_f.f_ones_like()?.f_subtract(&valid_f)?;
-    trace!("mark_missing_motif_values: invalid_f=\n{invalid_f}");
-
-    let r= t.f_mul(&valid_f)?.f_add(&invalid_f.f_mul_scalar(SELF_ATTENTION_MISSING_MOTIF_VALUE)?).map_err(|e| Into::<ThoError>::into(e))?;
-
-    trace!("mark_missing_motif_values: r=\n{r}");
-
-    Ok(r)
-}
-
 pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
     let LabelNetTypeParams::ConvNetParams(cnn_params) = &params.net_type else {
         panic!("Unexpected params type: {:?}", params.net_type);
@@ -1464,13 +1401,6 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
 
 
     SeqBuilder::new(0, None)?
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, lengths: Option<&BatchLengths>| {
-                debug!("self_attention_label_node: input={t:?} lengths={lengths:?}");
-                mark_missing_motif_values(t, lengths)
-            })),
-            None,
-        )?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("self_attention_label_node: transpose input={:?} _lengths={_lengths:?}", t.size());
@@ -2324,7 +2254,6 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, unused_mut, dead_code)]
 mod train_tests {
-    use super::mark_missing_motif_values;
     use crate::batches::BatchLengths;
     use crate::builder::{Node, SeqBuilder};
     use crate::dims::{
@@ -2672,22 +2601,6 @@ mod train_tests {
 
         assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
         assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_mark_missing_motif_values_uses_per_net_lengths() -> Result<(), ThoError> {
-        let x = Tensor::f_from_slice(&[
-            0.1f32, 0.2, 0.3, 0.4,
-            0.5, 0.6, 0.0, 0.0,
-        ])?.f_view([1, 2, 4])?;
-        let lengths = BatchLengths::with_motif_net_time(vec![4], vec![vec![4, 2]])?;
-
-        let masked = mark_missing_motif_values(&x, Some(&lengths))?;
-        let masked_vals: Vec<f32> = masked.f_view([-1])?.try_into().map_err(|e| ThoError::from_error("test_mark_missing_motif_values_uses_per_net_lengths", e))?;
-
-        assert_eq!(masked_vals, vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, -1.0, -1.0]);
 
         Ok(())
     }

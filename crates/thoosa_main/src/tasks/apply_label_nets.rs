@@ -337,10 +337,7 @@ where
 
                 let batch_input = input.data().t_ref().f_unsqueeze(0)?;
                 let batch_input: ThoTensor<MotifsNetsSelectionDims, thoosa_shared::traits::SimpleId> = batch_input.into();
-                let mut lengths = BatchLengths::with_motif_net_time(
-                    vec![input.extra().iter().copied().max().unwrap_or(input.data().t_ref().size()[1])],
-                    vec![input.extra().clone()],
-                )?;
+                let mut lengths = BatchLengths::new(vec![input.data().t_ref().size()[1]]);
                 debug!("ApplyLabelNet::run: batch_input=\n{batch_input}");
                 let out = net.tho_forward(&batch_input, Some(&mut lengths), false);
                 debug!("ApplyLabelNet::run: out={out:?}");
