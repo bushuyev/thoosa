@@ -32,7 +32,7 @@ use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
 use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, self_attention_label_node, CommonTrainingRunConfig, ConvNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinLenNetParams, LinNetArgs, OptConfig, SelfAttentionNetArgs, SelfAttentionNetParams, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
-use thoosa_common::utils::{build_motif_batch_lengths, mix_x_binary_with_labels, pad_stack_with_mask, ListenerResponse, TrainListener};
+use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, CopyToDevice, StreamBuffering, ThoError};
@@ -393,8 +393,8 @@ where
 
                                                let (x_1_batch, lengths_1) = pad_stack_with_mask(x_1_refs.as_slice(), num_nets as i64, max_input)?;
                                                let (x_0_batch, lengths_0) = pad_stack_with_mask(x_0_refs.as_slice(), num_nets as i64, max_input)?;
-                                               let lengths_1 = build_motif_batch_lengths(x_1, lengths_1, max_input)?;
-                                               let lengths_0 = build_motif_batch_lengths(x_0, lengths_0, max_input)?;
+                                               let lengths_1 = BatchLengths::new(lengths_1);
+                                               let lengths_0 = BatchLengths::new(lengths_0);
 
                                                debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: x_1.size={:?}, x_0.size={:?}, lengths_1={:?}, lengths_0={:?}", x_1_batch.size(), x_0_batch.size(), lengths_1, lengths_0);
 
@@ -1069,40 +1069,6 @@ mod tests {
         assert!(batch.next().await.is_none()); //should be only one
 
 
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_build_motif_batch_lengths_preserves_per_net_lengths() -> Result<(), ThoError> {
-        let sample_a = DataWithExtra::new(
-            ThoTensor::<MotifProbability, SynKey>::new(
-                SynKey::new([mono_key!("sample_a", "sample")]),
-                Tensor::f_from_slice(&[
-                    0.1f32, 0.2, 0.3, 0.0, 0.0,
-                    0.4, 0.5, 0.6, 0.7, 0.8,
-                ])?.f_view([2, 5])?,
-            )?,
-            vec![3, 5],
-        );
-        let sample_b = DataWithExtra::new(
-            ThoTensor::<MotifProbability, SynKey>::new(
-                SynKey::new([mono_key!("sample_b", "sample")]),
-                Tensor::f_from_slice(&[
-                    1.1f32, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7,
-                    2.1, 2.2, 2.3, 2.4, 0.0, 0.0, 0.0,
-                ])?.f_view([2, 7])?,
-            )?,
-            vec![7, 4],
-        );
-        let tensors = vec![&sample_a, &sample_b];
-        let tensor_refs = tensors.iter().map(|t| t.data()).collect::<Vec<_>>();
-        let max_input = tensor_refs.iter().map(|t| t.t_ref().size()[1]).max().expect("no max input");
-        let (_batch, outer_lengths) = pad_stack_with_mask(tensor_refs.as_slice(), 2, max_input)?;
-        let lengths = utils::build_motif_batch_lengths(tensors.as_slice(), outer_lengths, max_input)?;
-
-        assert_eq!(lengths.as_slice(), &[5, 7]);
-        assert_eq!(lengths.motif_net_time().expect("motif lengths"), &[vec![3, 5], vec![7, 4]]);
 
         Ok(())
     }

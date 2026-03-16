@@ -1078,7 +1078,7 @@ fn self_attention_forward_t(
         panic_to_err!(tensor.f_div_scalar(scale))?
     };
     let key_mask_f = key_valid.f_unsqueeze(1)?.f_unsqueeze(2)?.f_to_kind(scores.kind())?;
-    
+
     let ones = Tensor::f_ones(key_mask_f.size(), (scores.kind(), scores.device()))?;
     let inv = ones.f_sub(&key_mask_f)?;
     scores = scores.f_add(&inv.f_mul_scalar(-1e9)?)?;

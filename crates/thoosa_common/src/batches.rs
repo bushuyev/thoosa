@@ -6,52 +6,30 @@ use std::sync::Arc;
 use thoosa_shared::ThoError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-/// Carries the usual per-sample time lengths and, when needed, per-motif-net lengths inside each sample.
+/// Carries the per-sample valid time lengths for a padded batch.
 pub struct BatchLengths {
-    time: Vec<i64>,
-    motif_net_time: Option<Vec<Vec<i64>>>,
+    lengths: Vec<i64>,
 }
 
 impl BatchLengths {
-    pub fn new(time: Vec<i64>) -> Self {
+    pub fn new(lengths: Vec<i64>) -> Self {
         Self {
-            time,
-            motif_net_time: None,
+            lengths,
         }
-    }
-
-    /// Builds batch lengths for nested ragged data where each sample contains motif nets with different real lengths.
-    pub fn with_motif_net_time(time: Vec<i64>, motif_net_time: Vec<Vec<i64>>) -> Result<Self, ThoError> {
-        if time.len() != motif_net_time.len() {
-            return Err(ThoError::new(format!(
-                "BatchLengths::with_motif_net_time batch mismatch: time={} motif_net_time={}",
-                time.len(),
-                motif_net_time.len()
-            )));
-        }
-        Ok(Self {
-            time,
-            motif_net_time: Some(motif_net_time),
-        })
     }
 
     pub fn as_slice(&self) -> &[i64] {
-        self.time.as_slice()
+        self.lengths.as_slice()
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [i64] {
-        self.time.as_mut_slice()
-    }
-
-    /// Returns the per-sample, per-motif-net lengths when inner padding needs to be reconstructed.
-    pub fn motif_net_time(&self) -> Option<&[Vec<i64>]> {
-        self.motif_net_time.as_deref()
+        self.lengths.as_mut_slice()
     }
 }
 
 impl From<Vec<i64>> for BatchLengths {
-    fn from(time: Vec<i64>) -> Self {
-        Self::new(time)
+    fn from(lengths: Vec<i64>) -> Self {
+        Self::new(lengths)
     }
 }
 
