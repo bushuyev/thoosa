@@ -392,7 +392,7 @@ where
 {
     type Ctx = C;
     type In<'a> = ThoTensor<ChannelsData2, SynKey>;
-    type Out = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;//TODO it should be MotifsProbabilities - for many motifs
+    type Out = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;// extra carries pre-stretch original lengths per motif net; TODO it should be MotifsProbabilities - for many motifs
 }
 
 
