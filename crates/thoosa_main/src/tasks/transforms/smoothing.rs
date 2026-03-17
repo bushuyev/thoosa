@@ -1,3 +1,4 @@
+use log::debug;
 use tch::{Device, Kind, TchError, Tensor};
 use thoosa_shared::ThoError;
 
@@ -339,11 +340,14 @@ pub fn median(x: &Tensor, window: u32) -> Result<Tensor, ThoError> {
     // Sliding windows: [C, Data, window]
     let windows = padded.f_unfold(1, window, 1)?;
 
+
     // Sort each window and take the middle value.
     let (sorted, _idx) = windows.f_sort(-1, false)?;
     let median = sorted.f_select(-1, radius)?;
 
     debug_assert_eq!(median.size(), vec![c, data_len]);
+
+    debug!("median: x.size={:?}  windows.size={:?}  median.size={:?}", x.size(), windows.size(), median.size());
 
     Ok(median)
 }

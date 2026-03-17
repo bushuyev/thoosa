@@ -24,6 +24,7 @@ use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::transforms::smoothing::median;
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 
 #[derive(Debug, Clone)]
@@ -46,6 +47,9 @@ enum PreparedFilter {
         window_len: i64,
         stride: u32,
         padding: Padding,
+    },
+    Median {
+        window: u32,
     },
 }
 
@@ -144,6 +148,19 @@ where
                         padding: sav_gol_config.padding,
                     });
                 }
+                InputFilter::MedianFilter(median_config) => {
+                    let effective_window = if median_config.window % 2 == 0 {
+                        median_config.window + 1
+                    } else {
+                        median_config.window
+                    };
+                    if effective_window <= 3 {
+                        return Err(ThoError::new(format!("median window must be > 3 after odd normalization, got {}", median_config.window)));
+                    }
+                    filters.push(PreparedFilter::Median {
+                        window: median_config.window,
+                    });
+                }
             }
         }
 
@@ -192,6 +209,11 @@ where
                     debug!("FreqFilter::apply_tho_tensor, SavGol: id={} weights.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), weights.size(), input_t.size(), output.as_ref().map(|v|v.size()));
                     filtered_t = output?
 
+                }
+                PreparedFilter::Median { window } => {
+                    let filtered_t_out = median(&filtered_t, *window)?;
+                    debug!("FreqFilter::apply_tho_tensor, Median: id={} window={} filtered_t.size={:?} filtered_t_out.size={:?}", input_tensor.id(), window, filtered_t.size(), filtered_t_out.size());
+                    filtered_t = filtered_t_out;
                 }
             }
         }
@@ -295,13 +317,15 @@ mod tests {
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
-    use thoosa_common::transforms::filters::{BandPassFilterParams, SavGolFilterParams, Padding};
+    use thoosa_common::transforms::filters::{BandPassFilterParams, MedianFilterParams, Padding, SavGolFilterParams};
     use thoosa_shared::ThoError;
     use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::utils::from;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+    use crate::tasks::transforms::smoothing::median;
     use crate::tasks::transforms::freq_filter::FreqFilter;
     use thoosa_shared::runner::common::RunCtx;
     use thoosa_with_data::with_data;
@@ -347,6 +371,23 @@ mod tests {
 
 
         run_freq_filter(filter_configs).await
+    }
+
+    #[test]
+    fn test_apply_tho_tensor_with_median_filter() -> Result<(), ThoError> {
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let freq_filter = FreqFilter::<RunCtxWithPermits>::new(&[InputFilter::MedianFilter(MedianFilterParams { window: 5 })], &ws, 0)?;
+        let input_t = Tensor::from_slice(&[1.0f32, 10.0, 2.0, 9.0, 3.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
+        let input = ThoTensor::new(SynKey::new([mono_key!("median", "median")]), input_t)?;
+
+        let output = freq_filter.apply_tho_tensor(&input)?;
+        let expected = median(input.as_ref(), 5)?;
+        let output_flat = output.as_ref().f_view([-1])?;
+        let expected_flat = expected.f_view([-1])?;
+
+        assert_eq!(from::<Vec<f32>>(&output_flat), from::<Vec<f32>>(&expected_flat));
+
+        Ok(())
     }
 
 
