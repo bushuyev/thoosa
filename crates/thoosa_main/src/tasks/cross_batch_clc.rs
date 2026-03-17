@@ -610,21 +610,5 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_0(){
-        let t = Tensor::rand(&[20, 1122], FLOAT_CUDA);
-        // let u = t.unfold(1, 914, 100);
-        //
-        // debug!("u={:?}", u.size());
-        //
-        // let t = Tensor::arange(11, FLOAT_CPU);
-        //
-        // let u = t.unfold(0, 3, 3);
-        //
-        debug!("t=\n{t}");
-        // debug!("u=\n{u}");
-
-    }
-
 
 }
