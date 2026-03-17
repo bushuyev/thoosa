@@ -1375,26 +1375,31 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
     }
 }
 
-//TODO check GPT
-pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&BatchLengths>, x_0: &Tensor, lengths_0: Option<&BatchLengths>) -> Result<(Tensor, Option<BatchLengths>, Tensor), ThoError> {
-    let [ma, _na, ..] = x_1.size()[0..2] else {panic!("x_1 {:?} must be 2D [m, n]", x_1.size())};
-    let [mb, _nb, ..] = x_0.size()[0..2] else {panic!("x_0 {:?} must be 2D [m, n]", x_0.size())};
+pub fn mix_x_binary_with_labels(
+    x_1: &Tensor,
+    lengths_1: Option<&BatchLengths>,
+    x_0: &Tensor,
+    lengths_0: Option<&BatchLengths>,
+) -> Result<(Tensor, Option<BatchLengths>, Tensor), ThoError> {
+    let [ma, _na, ..] = x_1.size()[0..2] else {
+        panic!("x_1 {:?} must be 2D [m, n]", x_1.size())
+    };
+    let [mb, _nb, ..] = x_0.size()[0..2] else {
+        panic!("x_0 {:?} must be 2D [m, n]", x_0.size())
+    };
 
     assert_eq!(x_0.device(), x_1.device(), "A and B must be on the same device");
 
     let device = x_0.device();
-    let two_m = ma * 2;
+    let total = ma + mb;
 
-    // X0 = [A; B]
     let x0 = Tensor::f_cat(&[x_1, x_0], 0)?;
 
-    // Choose a reasonable dtype for Y (float if A is floating, else Float)
     let y_kind = match x_0.kind() {
         Kind::Double | Kind::Float | Kind::Half | Kind::BFloat16 => x_0.kind(),
         _ => Kind::Float,
     };
 
-    // Y0 = [ones(m,1); zeros(m,1)]
     let y0 = Tensor::f_cat(
         &[
             Tensor::f_ones(&[ma, 1], (y_kind, device))?,
@@ -1403,8 +1408,15 @@ pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&BatchLengths>, 
         0,
     )?;
 
-    // Single random permutation applied to both X and Y
-    let perm = Tensor::f_randperm(two_m, (Kind::Int64, device))?;
+    // Generate permutation on CPU first.
+    let perm_cpu = Tensor::f_randperm(total, (Kind::Int64, Device::Cpu))?;
+    let perm_vec: Vec<i64> = (&perm_cpu)
+        .try_into()
+        .map_err(|e| ThoError::from_error("mix_x_binary_with_labels: perm to vec", e))?;
+
+    // Copy permutation to target device once for tensor indexing.
+    let perm = perm_cpu.f_to_device(device)?;
+
     let x = x0.f_index_select(0, &perm)?;
     let y = y0.f_index_select(0, &perm)?;
 
@@ -1412,30 +1424,38 @@ pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&BatchLengths>, 
         (None, None) => None,
         (Some(lengths_1), Some(lengths_0)) => {
             if lengths_1.as_slice().len() != ma as usize {
-                return Err(ThoError::new(format!("lengths_1 len mismatch: expected={ma} got={}", lengths_1.as_slice().len())));
+                return Err(ThoError::new(format!(
+                    "lengths_1 len mismatch: expected={ma} got={}",
+                    lengths_1.as_slice().len()
+                )));
             }
             if lengths_0.as_slice().len() != mb as usize {
-                return Err(ThoError::new(format!("lengths_0 len mismatch: expected={mb} got={}", lengths_0.as_slice().len())));
+                return Err(ThoError::new(format!(
+                    "lengths_0 len mismatch: expected={mb} got={}",
+                    lengths_0.as_slice().len()
+                )));
             }
 
-            let mut lengths = Vec::with_capacity((ma + mb) as usize);
-            lengths.extend_from_slice(lengths_1.as_slice());
-            lengths.extend_from_slice(lengths_0.as_slice());
-            let perm_cpu = perm.to_device(Device::Cpu);
-            let perm_vec: Vec<i64> = (&perm_cpu).try_into().map_err(|e| ThoError::from_error("mix_x_binary_with_labels: perm to vec", e))?;
-            let mut lengths_perm = Vec::with_capacity(lengths.len());
+            let mut lengths_all = Vec::with_capacity(total as usize);
+            lengths_all.extend_from_slice(lengths_1.as_slice());
+            lengths_all.extend_from_slice(lengths_0.as_slice());
 
+            let mut lengths_perm = Vec::with_capacity(lengths_all.len());
             for idx in perm_vec {
-                lengths_perm.push(lengths[idx as usize]);
+                lengths_perm.push(lengths_all[idx as usize]);
             }
+
             Some(BatchLengths::new(lengths_perm))
         }
-        _ => return Err(ThoError::new("lengths_1 and lengths_0 must both be Some or None")),
+        _ => {
+            return Err(ThoError::new(
+                "lengths_1 and lengths_0 must both be Some or None",
+            ))
+        }
     };
 
     Ok((x, lengths, y))
 }
-
 
 ///sums and multiplies inputs by k
 pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
