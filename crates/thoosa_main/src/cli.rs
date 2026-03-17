@@ -71,8 +71,8 @@ use tokio::time::MissedTickBehavior;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CopyCtx;
-use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, NotchBandFilter, SavGolFilter};
-use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, SgZeroPaddingRangeOrValue};
+use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, NotchBandFilter, SavGolFilter, MedianFilter};
+use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, SgZeroPaddingRangeOrValue};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::{OutId, RunCtx};
@@ -1034,7 +1034,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         id: None,
         step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
         // window: RangeOrValue::Range { range: Range { start: 100, end: 2001 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000), Some((200, 0))
-        window: RangeOrValue::Value(1900), //RangeOrValue::Value(1000),
+        window: RangeOrValue::Value(200), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             // BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -1048,26 +1048,29 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             //     // stride: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
             //     padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             // }),
-            SavGolFilter(SavGolFilterParamsRangeOrValue {
-                // window_len: RangeOrValue::Value(2000),
-                window_len: RangeOrValue::Range { range: Range { start: 200, end: 500 }, step: None },//Some((200, 0))
-                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step:None },//step: Some((3, 0))
-                // poly_order: RangeOrValue::Value(1),
-                stride: RangeOrValue::Value(10),
-                padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
+            // SavGolFilter(SavGolFilterParamsRangeOrValue {
+            //     // window_len: RangeOrValue::Value(2000),
+            //     window_len: RangeOrValue::Range { range: Range { start: 200, end: 500 }, step: None },//Some((200, 0))
+            //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step:None },//step: Some((3, 0))
+            //     // poly_order: RangeOrValue::Value(1),
+            //     stride: RangeOrValue::Value(10),
+            //     padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
+            // }),
+            MedianFilter(MedianFilterParamsRangeOrValue {
+                window: RangeOrValue::Range { range: Range { start: 500, end: 2000 }, step: None },
             }),
             SavGolFilter(SavGolFilterParamsRangeOrValue {
                 // window_len: RangeOrValue::Value(2000),
                 window_len: RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },//Some((200, 0))
-                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step:None },//step: Some((3, 0))
+                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 3 }, step:None },//step: Some((3, 0))
                 // poly_order: RangeOrValue::Value(1),
-                stride: RangeOrValue::Value(1),
+                stride: RangeOrValue::Value(10),
                 padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
             }),
-            NotchBandFilter(NotchBandFilterParamsRangeOrValue {
-                low_hz: RangeOrValue::Value(59.0),
-                high_hz: RangeOrValue::Value(62.0),
-            })
+            // NotchBandFilter(NotchBandFilterParamsRangeOrValue {
+            //     low_hz: RangeOrValue::Value(59.0),
+            //     high_hz: RangeOrValue::Value(62.0),
+            // })
         ]),
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.0005) }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
