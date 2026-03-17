@@ -58,7 +58,10 @@ pub enum MaskMaker<'a> {
     Gt {
         v: Tensor,
     }, //channels x thresholds
-    LocalMin { dim: i64, radius: u64 },
+    LocalMin {
+        dim: i64,//TODO do in both dims
+        radius: u64
+    },
 }
 
 impl<'a> MaskMaker<'a> {
@@ -371,21 +374,116 @@ fn window_min_along_dim(x: &Tensor, dim: i64, radius: i64) -> Result<Tensor, Tho
     Ok(win_min_perm.f_permute(&inv)?)
 }
 
+fn window_min_2d_last_dims(x_bhw: &Tensor, radius0: i64, radius1: i64) -> Result<Tensor, ThoError> {
+    if radius0 <= 0 && radius1 <= 0 {
+        return Ok(x_bhw.shallow_clone());
+    }
+
+    let k0 = 2 * radius0 + 1;
+    let k1 = 2 * radius1 + 1;
+
+    // [B, H, W] -> [B, 1, H, W]
+    let x4 = x_bhw.f_unsqueeze(1)?;
+
+    // minpool(x) = -maxpool(-x)
+    let win_min4 = x4
+        .f_neg()?
+        .f_max_pool2d(&[k0, k1], &[1, 1], &[radius0, radius1], &[1, 1], false)?
+        .f_neg()?;
+
+    // [B, 1, H, W] -> [B, H, W]
+    Ok(win_min4.f_squeeze_dim(1)?)
+}
+
+/// Exact 2D local-min suppression using pooled minima + pooled tie-break.
+/// Keeps at most one minimum inside every rectangle
+///   [y-radius0 .. y+radius0] x [x-radius1 .. x+radius1]
+///
+/// Tie-break: lexicographically smallest (dim0 first, then dim1).
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="local_min_mask_suppressed_2d_pool"))]
+pub fn local_min_mask_suppressed_2d_pool(
+    distances: &Tensor,
+    dim0: i64,
+    dim1: i64,
+    radius0: i64,
+    radius1: i64,
+) -> Result<Tensor, ThoError> {
+    if radius0 < 0 || radius1 < 0 {
+        return Err(ThoError::new(format!(
+            "local_min_mask_suppressed_2d_pool: negative radius radius0={radius0} radius1={radius1}"
+        )));
+    }
+
+    let sizes = distances.size();
+    let ndim = sizes.len() as i64;
+
+    let dim0 = if dim0 < 0 { dim0 + ndim } else { dim0 };
+    let dim1 = if dim1 < 0 { dim1 + ndim } else { dim1 };
+
+    if dim0 < 0 || dim0 >= ndim || dim1 < 0 || dim1 >= ndim || dim0 == dim1 {
+        return Err(ThoError::new(format!(
+            "local_min_mask_suppressed_2d_pool: invalid dims dim0={dim0} dim1={dim1} ndim={ndim}"
+        )));
+    }
+
+    // Move the two suppressed dims to the end: [*, H, W]
+    let mut perm: Vec<i64> = (0..ndim)
+        .filter(|&d| d != dim0 && d != dim1)
+        .collect();
+    perm.push(dim0);
+    perm.push(dim1);
+
+    let x_perm = distances.f_permute(&perm)?;
+    let perm_sizes = x_perm.size();
+
+    let w = *perm_sizes.last().unwrap();
+    let h = perm_sizes[perm_sizes.len() - 2];
+    let b: i64 = perm_sizes[..perm_sizes.len() - 2].iter().product();
+
+    // Flatten leading dims: [*, H, W] -> [B, H, W]
+    let x_bhw = x_perm.f_reshape(&[b, h, w])?;
+
+    // 1) regional minima over a 2D window
+    let win_min = window_min_2d_last_dims(&x_bhw, radius0, radius1)?;
+    let regional = x_bhw.f_eq_tensor(&win_min)?; // [B, H, W]
+
+    // 2) deterministic tie-break via lexicographic index y*W + x
+    // Use Float64 so +inf is available and index equality is exact enough here.
+    let idx_hw = Tensor::arange(h * w, (Kind::Double, x_bhw.device())).f_reshape(&[1, h, w])?;
+    let idx_bhw = idx_hw.f_expand(&[b, h, w], true)?;
+
+    let regional_not = regional.f_logical_not()?;
+    let idx_masked = idx_bhw.f_masked_fill(&regional_not, f64::INFINITY)?;
+
+    let win_idx = window_min_2d_last_dims(&idx_masked, radius0, radius1)?;
+    let is_first_regional = idx_bhw.f_eq_tensor(&win_idx)?;
+
+    let keep_bhw = regional.f_logical_and(&is_first_regional)?; // [B, H, W]
+
+    // Back to original layout
+    let keep_perm = keep_bhw.f_reshape(&perm_sizes)?;
+
+    let mut inv = vec![0i64; perm.len()];
+    for (i, &p) in perm.iter().enumerate() {
+        inv[p as usize] = i as i64;
+    }
+
+    Ok(keep_perm.f_permute(&inv)?)
+}
+
 /// Keep only "well-separated" local minima:
 /// a point must be a local minimum AND the minimum in its ±radius neighborhood.
 fn local_min_mask_suppressed(distances: &Tensor, dim: i64, radius: i64) -> Result<Tensor, ThoError> {
-    let local = local_min_mask(distances, dim)?;
 
     if radius <= 0 {
-        return Ok(local);
+        local_min_mask(distances, dim)
+    } else {
+        local_min_mask_suppressed_2d_pool(
+            distances,
+            1,2,
+            radius,radius
+        )
     }
-
-    let win_min = window_min_along_dim(distances, dim, radius)?;
-
-    // `win_min` comes from the input values (via pooling), so exact equality is typically fine here.
-    let is_best_in_window = distances.f_eq_tensor(&win_min)?;
-
-    Ok(local.f_logical_and(&is_best_in_window)?)
 }
 
 /// distances - [channels x slices 0 x slices 1]

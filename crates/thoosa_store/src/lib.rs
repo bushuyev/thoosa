@@ -211,6 +211,23 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         ThoError,
     >;
 
+    async fn list_random_slices_out_of_resources(
+        &self,
+        motif_id: u32,
+        motif_width: u32,
+        min_distance: Option<u32>,
+        input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>,
+        desired_count: Option<usize>,
+    ) -> Result<
+        (
+            i64,
+            RunId,
+            Vec<TensorIdSliceIdx>,
+            HashMap<ResourceId, Resource>,
+        ),
+        ThoError,
+    >;
+
     async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
 
     async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
@@ -370,6 +387,22 @@ mock! {
             ),
             ThoError,
         >;
+        async fn list_random_slices_out_of_resources(
+            &self,
+            motif_id: u32,
+            motif_width: u32,
+            min_distance: Option<u32>,
+            input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>,
+            desired_count: Option<usize>
+        ) -> Result<
+            (
+                i64,
+                RunId,
+                Vec<TensorIdSliceIdx>,
+                HashMap<ResourceId, Resource>,
+            ),
+            ThoError,
+        >;
         async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
         async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
         async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError>;
@@ -468,6 +501,13 @@ pub struct SqlStore {
 
 const SQL_STORE_READERS_CNT: usize = 4;
 static IN_MEM_DB_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug)]
+struct RandomSliceResourceCtx {
+    resource: Resource,
+    adjusted_len: i64,
+    target_positions: Vec<i64>,
+}
 
 #[async_trait]
 impl ResourceStore for SqlStore {
@@ -1855,241 +1895,101 @@ impl Store for SqlStore {
     );
 
         assert!(motif_width > 0, "motif_width must be greater than zero");
-
-        #[derive(Debug)]
-        struct ResourceCtx {
-            resource: Resource,
-            adjusted_len: i64,
-            target_positions: Vec<i64>, // sorted
-        }
-
-        fn merge_intervals(mut xs: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
-            if xs.is_empty() {
-                return xs;
-            }
-
-            xs.sort_unstable_by_key(|&(l, _)| l);
-
-            let mut out = Vec::with_capacity(xs.len());
-            let mut cur = xs[0];
-
-            for (l, r) in xs.into_iter().skip(1) {
-                if l <= cur.1 + 1 {
-                    cur.1 = cur.1.max(r);
-                } else {
-                    out.push(cur);
-                    cur = (l, r);
-                }
-            }
-            out.push(cur);
-            out
-        }
-
-        fn subtract_forbidden(
-            allowed_l: i64,
-            allowed_r: i64,
-            forbidden: &[(i64, i64)],
-        ) -> Vec<(i64, i64)> {
-            if allowed_l > allowed_r {
-                return vec![];
-            }
-
-            let mut res = Vec::new();
-            let mut cur = allowed_l;
-
-            for &(l0, r0) in forbidden {
-                let l = l0.max(allowed_l);
-                let r = r0.min(allowed_r);
-
-                if l > r {
-                    continue;
-                }
-
-                if cur < l {
-                    res.push((cur, l - 1));
-                }
-
-                cur = r + 1;
-                if cur > allowed_r {
-                    break;
-                }
-            }
-
-            if cur <= allowed_r {
-                res.push((cur, allowed_r));
-            }
-
-            res
-        }
-
-        fn candidate_starts_from_free_intervals(
-            free: &[(i64, i64)],
-            step: i64,
-        ) -> Vec<i64> {
-            let mut out = Vec::new();
-
-            for &(l, r) in free {
-                let mut x = l;
-                while x <= r {
-                    out.push(x);
-                    x += step;
-                }
-            }
-
-            out
-        }
-
-        self.with_reader_conn("list_random_motif_slices", move |conn| {
-
+        let input_len_adjuster_in_motif = Arc::clone(&input_len_adjuster);
+        let (channel, run_id, mut all_candidates, mut resources_map, desired_count) = self.with_reader_conn("list_random_motif_slices", move |conn| {
             let t = conn.transaction()?;
-
             let (channel, run_id) = Self::_motif_meta(motif_id, &t)?;
-
-            let width_i64 = motif_width as i64;
-            let generated_guard = max(min_distance.unwrap_or(motif_width), motif_width) as i64;
-            let generated_step = generated_guard + 1;
-
-            // 1) Load all motif slice positions and count desired negatives.
-            let mut target_positions_by_res: HashMap<ResourceId, Vec<i64>> = HashMap::new();
-
-            let mut num_motif_slices = 0;
-            {
-                let mut stmt = t.prepare(
-                    "SELECT s.resource_id, s.slice_idx
-                 FROM slices s
-                 WHERE s.motif_id = ?
-                 ORDER BY s.resource_id, s.slice_idx"
-                )?;
-
-                stmt.query_map([motif_id], |row| {
-                    Ok((
-                        row.get::<usize, ResourceId>(0)?,
-                        row.get::<usize, i64>(1)?,
-                    ))
-                })?
-                    .try_for_each(|row| -> Result<(), ThoError> {
-                        let (resource_id, slice_idx) = row?;
-                        target_positions_by_res
-                            .entry(resource_id)
-                            .or_default()
-                            .push(slice_idx);
-                        num_motif_slices += 1;
-                        Ok(())
-                    })?;
+            let (target_positions_by_res, num_motif_slices) = Self::load_motif_target_positions(motif_id, &t)?;
+            let desired_count = desired_count.unwrap_or(num_motif_slices);
+            if desired_count == 0 {
+                t.commit()?;
+                return Ok((channel, run_id, vec![], HashMap::new(), desired_count));
             }
 
-            let desired_count = desired_count.unwrap_or(num_motif_slices);
+            let contexts =
+                Self::load_motif_resource_contexts(motif_id, input_len_adjuster_in_motif.as_ref(), &t, target_positions_by_res)?;
 
+            if contexts.is_empty() {
+                return Err(ThoError::new(format!("no resources found for channel {channel}, run_id={run_id}")));
+            }
+
+            let (all_candidates, resources_map) = Self::build_random_slice_candidates(&contexts, motif_width, min_distance);
+            t.commit()?;
+            Ok((channel, run_id, all_candidates, resources_map, desired_count))
+        }).await?;
+
+        if all_candidates.len() < desired_count {
+            let missing_count = desired_count - all_candidates.len();
+            debug!("list_random_slices_out_of_motif: motif_id={motif_id} fell back to other resources for {missing_count} slices");
+
+            let (fallback_channel, fallback_run_id, mut fallback_candidates, fallback_resources_map) = self
+                .list_random_slices_out_of_resources(
+                    motif_id,
+                    motif_width,
+                    min_distance,
+                    input_len_adjuster,
+                    Some(missing_count),
+                )
+                .await?;
+
+            assert_eq!(channel, fallback_channel, "fallback channel differs for motif_id={motif_id}");
+            assert_eq!(run_id, fallback_run_id, "fallback run_id differs for motif_id={motif_id}");
+
+            all_candidates.append(&mut fallback_candidates);
+            resources_map.extend(fallback_resources_map);
+        }
+
+        Self::shuffle_and_limit_candidates(&mut all_candidates, desired_count);
+        Ok((channel, run_id, all_candidates, resources_map))
+    }
+
+    async fn list_random_slices_out_of_resources(
+        &self,
+        motif_id: u32,
+        motif_width: u32,
+        min_distance: Option<u32>,
+        input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>,
+        desired_count: Option<usize>,
+    ) -> Result<
+        (
+            i64,
+            RunId,
+            Vec<TensorIdSliceIdx>,
+            HashMap<ResourceId, Resource>,
+        ),
+        ThoError,
+    > {
+        debug!(
+        "list_random_slices_out_of_resources: motif_id={motif_id} motif_width={motif_width} min_distance={min_distance:?}"
+    );
+
+        assert!(motif_width > 0, "motif_width must be greater than zero");
+
+        self.with_reader_conn("list_random_slices_out_of_resources", move |conn| {
+            let t = conn.transaction()?;
+            let (channel, run_id) = Self::_motif_meta(motif_id, &t)?;
+            let desired_count = match desired_count {
+                Some(desired_count) => desired_count,
+                None => Self::count_motif_slices(motif_id, &t)?,
+            };
 
             if desired_count == 0 {
                 t.commit()?;
                 return Ok((channel, run_id, vec![], HashMap::new()));
             }
 
-            for xs in target_positions_by_res.values_mut() {
-                xs.sort_unstable();
-            }
-
-
-            // 2) Load all resources from same motif.
-            let mut contexts: Vec<ResourceCtx> = {
-                let mut stmt = t.prepare(
-                    "SELECT DISTINCT r.id, r.import_id, r.key, r.length
-                 FROM slices s
-                 JOIN resources r ON r.id = s.resource_id
-                 WHERE s.motif_id = ?"
-                )?;
-
-                stmt.query_map(params![motif_id as i64], |row| {
-                    Ok((
-                        row.get::<usize, ResourceId>(0)?,
-                        row.get::<usize, u32>(1)?,
-                        row.get::<usize, String>(2)?,
-                        row.get::<usize, u32>(3)?,
-                    ))
-                })?
-                    .map(|row| {
-                        let (resource_id, import_id, key, length) = row?;
-                        let resource = Resource::new(resource_id, import_id, key, length);
-                        let adjusted_len = input_len_adjuster(length) as i64;
-                        let target_positions = target_positions_by_res
-                            .remove(&resource_id)
-                            .unwrap_or_default();
-
-                        Ok(ResourceCtx {
-                            resource,
-                            adjusted_len,
-                            target_positions,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, ThoError>>()?
-            };
-
+            let contexts = Self::load_non_motif_resource_contexts(motif_id, run_id, channel, input_len_adjuster.as_ref(), &t)?;
             if contexts.is_empty() {
-                return Err(ThoError::new(format!(
-                    "no resources found for channel {channel}, run_id={run_id}"
-                )));
+                t.commit()?;
+                return Ok((channel, run_id, vec![], HashMap::new()));
             }
 
-            // 3) Build all valid candidate starts directly.
-            let mut all_candidates = Vec::<TensorIdSliceIdx>::new();
-            let mut resources_map = HashMap::<ResourceId, Resource>::new();
-
-            for ctx in &contexts {
-                if ctx.adjusted_len <= width_i64 + 1 {
-                    continue;
-                }
-
-                let start_min = 1_i64;
-                let start_max = ctx.adjusted_len - width_i64 - 1;
-
-                if start_min > start_max {
-                    continue;
-                }
-
-                // Exclude starts too close to target motif slices.
-                let forbidden = merge_intervals(
-                    ctx.target_positions
-                        .iter()
-                        .map(|&p| (p - width_i64, p + width_i64))
-                        .collect(),
-                );
-
-                let free = subtract_forbidden(start_min, start_max, &forbidden);
-
-                if free.is_empty() {
-                    continue;
-                }
-
-                let starts = candidate_starts_from_free_intervals(&free, generated_step);
-
-                if starts.is_empty() {
-                    continue;
-                }
-
-                resources_map
-                    .entry(ctx.resource.id())
-                    .or_insert_with(|| ctx.resource.clone());
-
-                all_candidates.extend(
-                    starts
-                        .into_iter()
-                        .map(|s| TensorIdSliceIdx(ctx.resource.id(), s as u32))
-                );
-            }
-
-            // 4) Shuffle and take desired_count.
-            let mut rng = rand::rng();
-            all_candidates.shuffle(&mut rng);
-
-            if all_candidates.len() > desired_count {
-                all_candidates.truncate(desired_count);
-            }
+            let (mut all_candidates, resources_map) = Self::build_random_slice_candidates(&contexts, motif_width, min_distance);
+            Self::shuffle_and_limit_candidates(&mut all_candidates, desired_count);
 
             t.commit()?;
             Ok((channel, run_id, all_candidates, resources_map))
-        })
-            .await
+        }).await
     }
     async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError> {
         self.with_reader_conn("list_run_resources", move |conn| {
@@ -2380,6 +2280,237 @@ fn init_sqlite(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
 
 //TODO move all prepare to init
 impl SqlStore {
+    fn count_motif_slices(motif_id: u32, t: &Transaction) -> Result<usize, ThoError> {
+        let count = t.query_row("SELECT count(*) FROM slices WHERE motif_id = ?", [motif_id], |row| {
+            row.get::<usize, i64>(0)
+        })?;
+
+        usize::try_from(count).map_err(|_| ThoError::new(format!("count_motif_slices: invalid count={count} for motif_id={motif_id}")))
+    }
+
+    fn load_motif_target_positions(
+        motif_id: u32,
+        t: &Transaction,
+    ) -> Result<(HashMap<ResourceId, Vec<i64>>, usize), ThoError> {
+        let mut target_positions_by_res: HashMap<ResourceId, Vec<i64>> = HashMap::new();
+        let mut num_motif_slices = 0usize;
+        let mut stmt = t.prepare(
+            "SELECT s.resource_id, s.slice_idx
+             FROM slices s
+             WHERE s.motif_id = ?
+             ORDER BY s.resource_id, s.slice_idx",
+        )?;
+
+        stmt.query_map([motif_id], |row| {
+            Ok((
+                row.get::<usize, ResourceId>(0)?,
+                row.get::<usize, i64>(1)?,
+            ))
+        })?
+        .try_for_each(|row| -> Result<(), ThoError> {
+            let (resource_id, slice_idx) = row?;
+            target_positions_by_res.entry(resource_id).or_default().push(slice_idx);
+            num_motif_slices += 1;
+            Ok(())
+        })?;
+
+        for positions in target_positions_by_res.values_mut() {
+            positions.sort_unstable();
+        }
+
+        Ok((target_positions_by_res, num_motif_slices))
+    }
+
+    fn load_motif_resource_contexts(
+        motif_id: u32,
+        input_len_adjuster: &(dyn Fn(u32) -> u32 + Send + Sync),
+        t: &Transaction,
+        mut target_positions_by_res: HashMap<ResourceId, Vec<i64>>,
+    ) -> Result<Vec<RandomSliceResourceCtx>, ThoError> {
+        let mut stmt = t.prepare(
+            "SELECT DISTINCT r.id, r.import_id, r.key, r.length
+             FROM slices s
+             JOIN resources r ON r.id = s.resource_id
+             WHERE s.motif_id = ?",
+        )?;
+
+        stmt.query_map(params![motif_id as i64], |row| {
+            Ok((
+                row.get::<usize, ResourceId>(0)?,
+                row.get::<usize, u32>(1)?,
+                row.get::<usize, String>(2)?,
+                row.get::<usize, u32>(3)?,
+            ))
+        })?
+        .map(|row| {
+            let (resource_id, import_id, key, length) = row?;
+            let resource = Resource::new(resource_id, import_id, key, length);
+
+            Ok(RandomSliceResourceCtx {
+                resource,
+                adjusted_len: input_len_adjuster(length) as i64,
+                target_positions: target_positions_by_res.remove(&resource_id).unwrap_or_default(),
+            })
+        })
+        .collect::<Result<Vec<_>, ThoError>>()
+    }
+
+    fn load_non_motif_resource_contexts(
+        motif_id: u32,
+        run_id: RunId,
+        channel: i64,
+        input_len_adjuster: &(dyn Fn(u32) -> u32 + Send + Sync),
+        t: &Transaction,
+    ) -> Result<Vec<RandomSliceResourceCtx>, ThoError> {
+        let mut stmt = t.prepare(
+            "SELECT DISTINCT r.id, r.import_id, r.key, r.length
+             FROM slices s
+             JOIN resources r ON r.id = s.resource_id
+             WHERE s.run_id = ? AND s.channel_id = ?
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM slices motif_s
+                 WHERE motif_s.motif_id = ? AND motif_s.resource_id = s.resource_id
+             )
+             ORDER BY r.id",
+        )?;
+
+        stmt.query_map(params![run_id as i64, channel, motif_id as i64], |row| {
+            Ok(RandomSliceResourceCtx {
+                resource: Resource::new(
+                    row.get::<usize, ResourceId>(0)?,
+                    row.get::<usize, u32>(1)?,
+                    row.get::<usize, String>(2)?,
+                    row.get::<usize, u32>(3)?,
+                ),
+                adjusted_len: input_len_adjuster(row.get::<usize, u32>(3)?) as i64,
+                target_positions: vec![],
+            })
+        })?
+        .map(|row| row.map_err(ThoError::from))
+        .collect::<Result<Vec<_>, ThoError>>()
+    }
+
+    fn merge_intervals(mut xs: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
+        if xs.is_empty() {
+            return xs;
+        }
+
+        xs.sort_unstable_by_key(|&(l, _)| l);
+
+        let mut out = Vec::with_capacity(xs.len());
+        let mut cur = xs[0];
+
+        for (l, r) in xs.into_iter().skip(1) {
+            if l <= cur.1 + 1 {
+                cur.1 = cur.1.max(r);
+            } else {
+                out.push(cur);
+                cur = (l, r);
+            }
+        }
+        out.push(cur);
+        out
+    }
+
+    fn subtract_forbidden(allowed_l: i64, allowed_r: i64, forbidden: &[(i64, i64)]) -> Vec<(i64, i64)> {
+        if allowed_l > allowed_r {
+            return vec![];
+        }
+
+        let mut res = Vec::new();
+        let mut cur = allowed_l;
+
+        for &(l0, r0) in forbidden {
+            let l = l0.max(allowed_l);
+            let r = r0.min(allowed_r);
+
+            if l > r {
+                continue;
+            }
+
+            if cur < l {
+                res.push((cur, l - 1));
+            }
+
+            cur = r + 1;
+            if cur > allowed_r {
+                break;
+            }
+        }
+
+        if cur <= allowed_r {
+            res.push((cur, allowed_r));
+        }
+
+        res
+    }
+
+    fn candidate_starts_from_free_intervals(free: &[(i64, i64)], step: i64) -> Vec<i64> {
+        let mut out = Vec::new();
+
+        for &(l, r) in free {
+            let mut x = l;
+            while x <= r {
+                out.push(x);
+                x += step;
+            }
+        }
+
+        out
+    }
+
+    fn build_random_slice_candidates(
+        contexts: &[RandomSliceResourceCtx],
+        motif_width: u32,
+        min_distance: Option<u32>,
+    ) -> (Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>) {
+        let width_i64 = motif_width as i64;
+        let generated_guard = max(min_distance.unwrap_or(motif_width), motif_width) as i64;
+        let generated_step = generated_guard + 1;
+        let mut all_candidates = Vec::<TensorIdSliceIdx>::new();
+        let mut resources_map = HashMap::<ResourceId, Resource>::new();
+
+        for ctx in contexts {
+            if ctx.adjusted_len <= width_i64 + 1 {
+                continue;
+            }
+
+            let start_min = 1_i64;
+            let start_max = ctx.adjusted_len - width_i64 - 1;
+
+            if start_min > start_max {
+                continue;
+            }
+
+            let forbidden = Self::merge_intervals(ctx.target_positions.iter().map(|&p| (p - width_i64, p + width_i64)).collect());
+            let free = Self::subtract_forbidden(start_min, start_max, &forbidden);
+
+            if free.is_empty() {
+                continue;
+            }
+
+            let starts = Self::candidate_starts_from_free_intervals(&free, generated_step);
+            if starts.is_empty() {
+                continue;
+            }
+
+            resources_map.entry(ctx.resource.id()).or_insert_with(|| ctx.resource.clone());
+            all_candidates.extend(starts.into_iter().map(|s| TensorIdSliceIdx(ctx.resource.id(), s as u32)));
+        }
+
+        (all_candidates, resources_map)
+    }
+
+    fn shuffle_and_limit_candidates(all_candidates: &mut Vec<TensorIdSliceIdx>, desired_count: usize) {
+        let mut rng = rand::rng();
+        all_candidates.shuffle(&mut rng);
+
+        if all_candidates.len() > desired_count {
+            all_candidates.truncate(desired_count);
+        }
+    }
+
     fn map_tokio_rusqlite_err(
         ctx: &'static str,
         e: tokio_rusqlite::Error<ThoError>,
@@ -4221,6 +4352,55 @@ mod store_tests {
         for slice in random_slices {
             assert!(slice.1 > 0);
             assert!(slice.1 + WIDTH < adjusted_len);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_random_slices_falls_back_to_other_resources() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
+
+        create_resources(&store, &[("res_main", 220), ("res_other", 500)]).await?;
+
+        let run_id = store.save_run_config(None, &"find_motifs", "fallback negatives", "", HashMap::new()).await?;
+        let channel_id = 7i64;
+        let res_main = fetch_resource_id(&store, "res_main")?;
+        let res_other = fetch_resource_id(&store, "res_other")?;
+
+        let motif_id = insert_motif_with_slices(
+            &store,
+            run_id,
+            channel_id,
+            0,
+            &[(res_main, 40), (res_main, 100), (res_main, 160)],
+        )?;
+        insert_motif_with_slices(
+            &store,
+            run_id,
+            channel_id,
+            1,
+            &[(res_other, 60), (res_other, 260)],
+        )?;
+
+        const WIDTH: u32 = 50;
+        let (channel, returned_run_id, random_slices, resources_map) =
+            store.list_random_slices_out_of_motif(motif_id, WIDTH, None, Arc::new(|length: u32| length), None).await?;
+
+        assert_eq!(channel_id, channel);
+        assert_eq!(run_id, returned_run_id);
+        assert_eq!(random_slices.len(), 3);
+        assert!(random_slices.iter().all(|slice| slice.0 == res_other), "random_slices={random_slices:?}");
+        assert_eq!(resources_map.len(), 1);
+        assert!(!resources_map.contains_key(&res_main));
+
+        let resource = resources_map.get(&res_other).expect("resource missing");
+        let mut positions = random_slices.iter().map(|slice| slice.1).collect::<Vec<u32>>();
+        positions.sort_unstable();
+
+        for pos in positions {
+            assert!(pos > 0);
+            assert!(pos + WIDTH < resource.length());
         }
 
         Ok(())
