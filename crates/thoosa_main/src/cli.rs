@@ -1033,8 +1033,8 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        window: RangeOrValue::Range { range: Range { start: 100, end: 2001 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000), Some((200, 0))
-        // window: RangeOrValue::Value(200), //RangeOrValue::Value(1000),
+        // window: RangeOrValue::Range { range: Range { start: 100, end: 2001 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000), Some((200, 0))
+        window: RangeOrValue::Value(1900), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             // BandPassFilter(BandPassFilterParamsRangeOrValue {

@@ -97,7 +97,7 @@ pub fn cuda_mem() -> (usize, usize) {
 }
 
 ///for cases when only size and type is known
-pub fn tensor_mem_size(init_type: Kind, size: &[i64]) -> usize {//TODO rename to not confuse with one from thoosa_common::utils and move 
+pub fn tensor_mem_size(init_type: Kind, size: &[i64]) -> usize {//TODO rename to not confuse with one from thoosa_common::utils and move
     size.iter().fold(1, |a, v| a * (*v as usize)) * init_type.elt_size_in_bytes()
 }
 
@@ -926,6 +926,11 @@ mod tests {
         // assert!(mask.allclose(&unpack_bits_u8(&packed, None), 0.01, 0.01, false), "roundtrip mismatch");
 
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_cuda_stream(){
+
     }
 
 }

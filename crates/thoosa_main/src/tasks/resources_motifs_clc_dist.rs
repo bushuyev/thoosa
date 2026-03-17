@@ -153,10 +153,6 @@ where
         ];
 
         let channel_masks_dists_ids = {
-            if device_idx > 0 {
-                let motifs_stream = ThoCudaStream::new((device_idx - 1) as i32);
-                let _guard = ThoStreamGuard::set(&motifs_stream);
-            }
 
             let (mask_dists_result, motifs_stream) = with_cuda_stream(device_idx, || {
                 thoosa_motifs::distance::clc_dist_d2_and_mask(

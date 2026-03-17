@@ -1,4 +1,6 @@
 use tch::{Device, Kind, TchError, Tensor};
+use thoosa_shared::ThoError;
+
 //TODO this doesn't work - signal is not changed
 /// Rough heuristic:
 /// convert a desired "number of local extrema per window" into lambda
@@ -287,19 +289,78 @@ fn solve_symmetric_pentadiagonal(
     Ok(x)
 }
 
+/// Median filter for multichannel 1D data.
+///
+/// Input shape:
+/// - [C, Data]
+///
+/// Output shape:
+/// - [C, Data]
+///
+/// Applies the filter independently to each channel along dimension 1.
+///
+/// Border handling:
+/// - replicate padding
+///
+/// Requirements:
+/// - `window` must be odd and > 0
+pub fn median(x: &Tensor, window: u32) -> Result<Tensor, ThoError> {
+
+    let window = if window % 2 == 0 {
+        window+1
+    } else {
+        window
+    } as i64;
+
+    assert!(window >  3, "window ({window}) should be > 3");
+    let size = x.size();
+    assert_eq!(size.len(), 2, "median: expected input of shape [C, Data], got {size:?}");
+
+
+    let c = size[0];
+    let data_len = size[1];
+
+
+    if window == 1 || data_len == 1 {
+        return Ok(x.shallow_clone());
+    }
+
+    let radius = (window / 2) as i64;
+
+    // Replicate padding on the left and right along Data dimension.
+    let left = x.f_narrow(1, 0, 1)?.f_repeat([1i64, radius].as_slice())?;
+    let right = x
+        .f_narrow(1, data_len - 1, 1)?
+        .f_repeat([1, radius].as_slice())?;
+
+    // [C, Data + 2 * radius]
+    let padded = Tensor::f_cat(&[&left, x, &right], 1)?;
+
+    // Sliding windows: [C, Data, window]
+    let windows = padded.f_unfold(1, window, 1)?;
+
+    // Sort each window and take the middle value.
+    let (sorted, _idx) = windows.f_sort(-1, false)?;
+    let median = sorted.f_select(-1, radius)?;
+
+    debug_assert_eq!(median.size(), vec![c, data_len]);
+
+    Ok(median)
+}
 #[cfg(test)]
 mod tests {
     use thoosa_common::utils::make_periodic_signal;
     use thoosa_shared::ThoError;
-    use crate::tasks::transforms::smoothing::{smoothing_spline_1d_channels, spline_lambda_from_window_and_extrema};
+    use crate::tasks::transforms::smoothing::{median, smoothing_spline_1d_channels, spline_lambda_from_window_and_extrema};
 
     #[test]
     fn test_0() -> Result<(), ThoError> {
-        for periods in 0..2 {
+        for periods in 1..10 {
             let x = make_periodic_signal(1000, periods);
 
             let lambda = 0.5; //spline_lambda_from_window_and_extrema(x.size()[0], 1.0);
-            let smooth_x = smoothing_spline_1d_channels(&x, lambda)?;
+            // let smooth_x = smoothing_spline_1d_channels(&x, lambda)?;
+            let smooth_x = median(&x, 200)?;
 
 
             thoosa_common::utils::debug_plot_impl(&x, &format!("x_{periods}"), 0)?;
