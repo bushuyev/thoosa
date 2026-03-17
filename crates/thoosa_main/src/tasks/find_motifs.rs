@@ -231,7 +231,7 @@ where
                             }
                         }
                     };
-
+                    let radius = run_config.step() as u64 * 2;
 
                     let cross_unfold_clc: CrossUnfoldClc<
                         Box<dyn Fn(Tensor, Tensor, &CrossInput<Arc<Resource>>, &MasksCtx, &C) -> Result<DistsMask, ThoError> + Send + Sync>,
@@ -245,9 +245,10 @@ where
 
                             let mut mask_makers = match &masks_ctx {
                                 MasksCtx::AccumulatedMeanDist { k, ctx } => {
+
                                     vec![
-                                        LocalMin { dim: 1, radius: run_config.window as u64 / 2 },
-                                        LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
+                                        LocalMin { dim: 1, radius },
+                                        // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
                                         LeAccumulatedMean {
                                             k: *k,
                                             avg: &ctx.means_acc,
@@ -257,8 +258,8 @@ where
                                 }
                                 MasksCtx::AccumulatedQuantileDist { q, ctx } => {
                                     vec![
-                                        LocalMin { dim: 1, radius: run_config.window as u64 / 2 },
-                                        LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
+                                        LocalMin { dim: 1, radius },
+                                        // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
                                         LeAccumulatedQuantile {
                                             q: *q,
                                             quantiles: &ctx.quantiles_acc,
@@ -268,8 +269,8 @@ where
                                 }
                                 MasksCtx::PrecalculatedDist { dists } => {
                                     vec![
-                                        LocalMin { dim: 1, radius: run_config.window as u64 / 2 },
-                                        LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
+                                        LocalMin { dim: 1, radius },
+                                        // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
                                         Le {
                                             v: dists.t.shallow_clone(),
                                         }
