@@ -1023,8 +1023,8 @@ fn valid_time_mask(lengths: &[i64], batch: i64, max_l: i64, device: tch::Device)
 }
 
 fn self_attention_forward_t(
-    x: &Tensor,
-    key_valid: &Tensor,
+    x: Tensor,
+    key_valid: Tensor,
     w_q: &nn::Linear,
     w_k: &nn::Linear,
     w_v: &nn::Linear,
@@ -1041,58 +1041,99 @@ fn self_attention_forward_t(
 
     trace!("SelfAttention::tho_forward: key_valid=\n{key_valid}");
 
-    debug!("SelfAttention::tho_forward: \
-        x.size={:?}, \
-        key_valid.size={:?}, \
-        w_q.ws.size={:?}, w_q.bs.size={:?}, \
-        w_k.ws.size={:?}, w_k.bs.size={:?}, \
-        w_v.ws.size={:?}, w_v.bs.size={:?}, \
-        w_o.ws.size={:?}, w_o.bs.size={:?}, \
-        n_heads={:?}, \
-        head_dim={:?}, \
-        dropout={:?}
-     ",
+    debug!(
+        "SelfAttention::tho_forward: \
+         x.size={:?}, \
+         key_valid.size={:?}, \
+         w_q.ws.size={:?}, w_q.bs.size={:?}, \
+         w_k.ws.size={:?}, w_k.bs.size={:?}, \
+         w_v.ws.size={:?}, w_v.bs.size={:?}, \
+         w_o.ws.size={:?}, w_o.bs.size={:?}, \
+         n_heads={:?}, \
+         head_dim={:?}, \
+         dropout={:?}",
         x.size(),
         key_valid.size(),
-        w_q.ws.size(), w_q.bs.as_ref().map(|v|v.size()),
-        w_k.ws.size(), w_k.bs.as_ref().map(|v|v.size()),
-        w_v.ws.size(), w_v.bs.as_ref().map(|v|v.size()),
-        w_o.ws.size(), w_o.bs.as_ref().map(|v|v.size()),
+        w_q.ws.size(),
+        w_q.bs.as_ref().map(|v| v.size()),
+        w_k.ws.size(),
+        w_k.bs.as_ref().map(|v| v.size()),
+        w_v.ws.size(),
+        w_v.bs.as_ref().map(|v| v.size()),
+        w_o.ws.size(),
+        w_o.bs.as_ref().map(|v| v.size()),
         n_heads,
         head_dim,
         dropout
     );
 
+    let q = x
+        .f_linear(&w_q.ws, w_q.bs.as_ref())?
+        .f_view([b, l, n_heads, head_dim])?
+        .f_transpose(1, 2)?;
 
-    let q = x.f_linear(&w_q.ws, w_q.bs.as_ref())?;
-    let k = x.f_linear(&w_k.ws, w_k.bs.as_ref())?;
-    let v = x.f_linear(&w_v.ws, w_v.bs.as_ref())?;
+    let k = x
+        .f_linear(&w_k.ws, w_k.bs.as_ref())?
+        .f_view([b, l, n_heads, head_dim])?
+        .f_transpose(1, 2)?;
 
-    let q = q.f_view([b, l, n_heads, head_dim])?.f_transpose(1, 2)?;
-    let k = k.f_view([b, l, n_heads, head_dim])?.f_transpose(1, 2)?;
-    let v = v.f_view([b, l, n_heads, head_dim])?.f_transpose(1, 2)?;
+    let v = x
+        .f_linear(&w_v.ws, w_v.bs.as_ref())?
+        .f_view([b, l, n_heads, head_dim])?
+        .f_transpose(1, 2)?;
+
+    drop(x);
 
     let scale = (head_dim as f64).sqrt();
-    let mut scores = {
-        let tensor = q.f_matmul(&k.f_transpose(-2, -1)?)?;
-        panic_to_err!(tensor.f_div_scalar(scale))?
+
+    let attn = {
+        let scores = {
+            let raw_scores = panic_to_err!(q.f_matmul(&k.f_transpose(-2, -1)?)?.f_div_scalar(scale))?;
+
+            let masked_scores = {
+                let invalid_mask = key_valid
+                    .f_logical_not()?
+                    .f_unsqueeze(1)?
+                    .f_unsqueeze(2)?;
+
+                drop(key_valid);
+
+                raw_scores.f_masked_fill(&invalid_mask, -1e9)?
+            };
+
+            drop(raw_scores);
+            masked_scores
+        };
+
+        let attn = scores
+            .f_softmax(-1, scores.kind())?
+            .f_dropout(dropout, train)?;
+
+        drop(scores);
+        attn
     };
-    let key_mask_f = key_valid.f_unsqueeze(1)?.f_unsqueeze(2)?.f_to_kind(scores.kind())?;
 
-    let ones = Tensor::f_ones(key_mask_f.size(), (scores.kind(), scores.device()))?;
-    let inv = ones.f_sub(&key_mask_f)?;
-    scores = scores.f_add(&inv.f_mul_scalar(-1e9)?)?;
+    drop(q);
+    drop(k);
 
-    let attn = scores.f_softmax(-1, scores.kind())?.f_dropout(dropout, train)?;
-    let y = attn.f_matmul(&v)?;
-    let y = y.f_transpose(1, 2)?.f_contiguous()?.f_view([b, l, n_heads * head_dim])?;
+    let y = attn
+        .f_matmul(&v)?
+        .f_transpose(1, 2)?
+        .f_contiguous()?
+        .f_view([b, l, n_heads * head_dim])?;
 
-    y.f_linear(&w_o.ws, w_o.bs.as_ref())?.f_dropout(dropout, train).map_err(|e| e.into())
+    drop(attn);
+    drop(v);
+
+    let out = y.f_linear(&w_o.ws, w_o.bs.as_ref())?;
+    drop(y);
+
+    out.f_dropout(dropout, train).map_err(Into::into)
 }
 
 fn attn_block_forward_t(
     x: &Tensor,
-    key_valid: &Tensor,
+    key_valid: Tensor,
     ln1: &nn::LayerNorm,
     ln2: &nn::LayerNorm,
     w_q: &nn::Linear,
@@ -1113,22 +1154,24 @@ fn attn_block_forward_t(
         1e-5,
         true,
     )?;
-    let a = self_attention_forward_t(&h, key_valid, w_q, w_k, w_v, w_o, n_heads, head_dim, dropout, train)?;
-    let x = x.f_add(&a)?;
 
-    let h2 = x.f_layer_norm(
+    let x = x.f_add(
+        &self_attention_forward_t(h, key_valid, w_q, w_k, w_v, w_o, n_heads, head_dim, dropout, train)?
+    )?;
+
+
+    let f = x.f_layer_norm(
         ln2.normalized_shape.as_slice(),
         ln2.ws.as_ref(),
         ln2.bs.as_ref(),
         1e-5,
         true,
-    )?;
-    let f = h2
-        .f_linear(&ff1.ws, ff1.bs.as_ref())?
-        .f_gelu("none")?
-        .f_dropout(dropout, train)?
-        .f_linear(&ff2.ws, ff2.bs.as_ref())?
-        .f_dropout(dropout, train)?;
+    )?
+    .f_linear(&ff1.ws, ff1.bs.as_ref())?
+    .f_gelu("none")?
+    .f_dropout(dropout, train)?
+    .f_linear(&ff2.ws, ff2.bs.as_ref())?
+    .f_dropout(dropout, train)?;
 
     x.f_add(&f).map_err(|e| e.into())
 }
@@ -1234,7 +1277,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
         h = h.f_mul(&mask_f)?;
         h = attn_block_forward_t(
             &h,
-            &key_valid,
+            key_valid,
             &self.ln1,
             &self.ln2,
             &self.w_q,

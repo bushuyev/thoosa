@@ -1033,8 +1033,8 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        // window: RangeOrValue::Range { range: Range { start: 1000, end: 2001 }, step: Some((1000, 0)) }, //RangeOrValue::Value(1000), Some((200, 0))
-        window: RangeOrValue::Value(200), //RangeOrValue::Value(1000),
+        window: RangeOrValue::Range { range: Range { start: 100, end: 2001 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000), Some((200, 0))
+        // window: RangeOrValue::Value(200), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             // BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -1051,7 +1051,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             SavGolFilter(SavGolFilterParamsRangeOrValue {
                 // window_len: RangeOrValue::Value(2000),
                 window_len: RangeOrValue::Range { range: Range { start: 200, end: 500 }, step: None },//Some((200, 0))
-                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 3 }, step:None },//step: Some((3, 0))
+                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step:None },//step: Some((3, 0))
                 // poly_order: RangeOrValue::Value(1),
                 stride: RangeOrValue::Value(10),
                 padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
@@ -1059,7 +1059,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             SavGolFilter(SavGolFilterParamsRangeOrValue {
                 // window_len: RangeOrValue::Value(2000),
                 window_len: RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },//Some((200, 0))
-                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 3 }, step:None },//step: Some((3, 0))
+                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step:None },//step: Some((3, 0))
                 // poly_order: RangeOrValue::Value(1),
                 stride: RangeOrValue::Value(1),
                 padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
@@ -1145,7 +1145,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         max_slices: Some(RangeOrValue::Value(100)),
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
-    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(30, 10));
+    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(100, 10));
 
     /////////////////////train_motifs
     let common_training_args = CommonTrainingRunConfigRangeOrValue {
@@ -1206,9 +1206,9 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         // }),
         net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
             // d_model: RangeOrValue::Value(64),
-            head_size: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 4 }, step: None },
-            ff_mult: RangeOrValue::Range { range: Range { start: 4, end: 4 }, step: None },
+            head_size: RangeOrValue::Range { range: Range { start: 128, end: 256 }, step: None },
+            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
+            ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
             // ff_mult: RangeOrValue::Value(2),
             // dropout: RangeOrValue::Value(0.1),
             dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.1 }, step: None },
