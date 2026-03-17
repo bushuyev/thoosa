@@ -12,7 +12,7 @@ use tch::Kind::Bool;
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::{IndexOp, TchError, Tensor};
 use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm_2, z_norm_dims};
-use thoosa_shared::ThoError;
+use thoosa_shared::{panic_to_err, ThoError};
 use crate::pearson_corr::pearson_corr_distance_matrix_0_2;
 
 #[allow(dead_code)]
@@ -453,7 +453,7 @@ pub fn local_min_mask_suppressed_2d_pool(
     let idx_bhw = idx_hw.f_expand(&[b, h, w], true)?;
 
     let regional_not = regional.f_logical_not()?;
-    let idx_masked = idx_bhw.f_masked_fill(&regional_not, f64::INFINITY)?;
+    let idx_masked = panic_to_err!(idx_bhw.f_masked_fill(&regional_not, f64::INFINITY))?;
 
     let win_idx = window_min_2d_last_dims(&idx_masked, radius0, radius1)?;
     let is_first_regional = idx_bhw.f_eq_tensor(&win_idx)?;

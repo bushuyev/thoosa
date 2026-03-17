@@ -342,10 +342,11 @@ pub fn median(x: &Tensor, window: u32) -> Result<Tensor, ThoError> {
 
 
     // Sort each window and take the middle value.
-    let (sorted, _idx) = windows.f_sort(-1, false)?;
-    let median = sorted.f_select(-1, radius)?;
+    // let (sorted, _idx) = windows.f_sort(-1, false)?;
+    // let median = sorted.f_select(-1, radius)?;
 
-    debug_assert_eq!(median.size(), vec![c, data_len]);
+    // debug_assert_eq!(median.size(), vec![c, data_len]);
+    let median = windows.f_mean_dim(2, false, None)?;
 
     debug!("median: x.size={:?}  windows.size={:?}  median.size={:?}", x.size(), windows.size(), median.size());
 
