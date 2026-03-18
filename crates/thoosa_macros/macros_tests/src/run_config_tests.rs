@@ -58,6 +58,107 @@ impl TestRunConfig {
     }
 }
 
+
+#[test]
+fn test_grid_param() -> Result<(), ThoError> {
+    use thoosa_run_config_args::OptRunConfigSource;
+    use thoosa_shared::val::NamedVal;
+    use thoosa_shared::RangeOrValue;
+
+    let test_config = TestRunConfigRangeOrValue {
+        id: Some(1),
+        simple_field: RangeOrValue::Range { range: 0..10, step: Some((1,0)) },
+
+        cat_field: CatEnumRangeOrValue::Vec(vec![
+            CatEnumRangeOrValue::One(OneRangeOrValue {
+                inner_field_one: RangeOrValue::Dynamic(|named_val: &[NamedVal<TestRunConfigFields>]| {
+                    match named_val.iter().find(|f|f.path().eq(&TestRunConfigFields::SimpleField)){
+                        None => RangeOrValue::Value(0),
+                        Some(_v) => RangeOrValue::Range{ range: 0..3, step: None },
+                    }
+                })
+            })
+        ])
+    };
+
+    let opt_configs = test_config.opt_run_configs()?;
+    let grid_runs = opt_configs.grid_to_vals_and_opt_params();
+    assert_eq!(grid_runs.len(), 10);
+    assert!(grid_runs.iter().all(|(_, opt_params)| {
+        opt_params == &vec![Hyperparameter::UniformInt {
+            name: TestRunConfigFields::CatField(CatEnumFields::One(OneFields::InnerFieldOne)),
+            lower: 0,
+            upper: 3,
+        }]
+    }));
+
+    Ok(())
+}
+
+#[test]
+fn test_dynamic_grid_param() -> Result<(), ThoError> {
+    use thoosa_run_config_args::OptRunConfigSource;
+    use thoosa_shared::val::{NamedVal, Val};
+    use thoosa_shared::RangeOrValue;
+
+    let test_config = TestRunConfigRangeOrValue {
+        id: Some(1),
+        simple_field: RangeOrValue::Range { range: 0..3, step: Some((1,0)) },
+
+        cat_field: CatEnumRangeOrValue::Vec(vec![
+            CatEnumRangeOrValue::One(OneRangeOrValue {
+                inner_field_one: RangeOrValue::Dynamic(|named_vals: &[NamedVal<TestRunConfigFields>]| {
+                    let simple_field = named_vals
+                        .iter()
+                        .find(|field| field.path() == &TestRunConfigFields::SimpleField)
+                        .expect("simple_field should be available for dynamic grid resolution");
+
+                    match simple_field.val() {
+                        Val::UInt(1) => RangeOrValue::Range { range: 10..12, step: Some((1, 0)) },
+                        _ => RangeOrValue::Value(7),
+                    }
+                }),
+            })
+        ])
+    };
+
+    let opt_configs = test_config.opt_run_configs()?;
+    let grid_runs = opt_configs.grid_to_vals_and_opt_params();
+    assert_eq!(grid_runs.len(), 4);
+    assert!(grid_runs.iter().all(|(_, opt_params)| opt_params.is_empty()));
+
+    let actual = grid_runs
+        .into_iter()
+        .map(|(grid_vals, _)| {
+            let simple = grid_vals
+                .iter()
+                .find(|field| field.path() == &TestRunConfigFields::SimpleField)
+                .expect("simple_field should be in grid values")
+                .val()
+                .clone();
+            let inner = grid_vals
+                .iter()
+                .find(|field| field.path() == &TestRunConfigFields::CatField(CatEnumFields::One(OneFields::InnerFieldOne)))
+                .expect("inner_field_one should be in grid values")
+                .val()
+                .clone();
+            (simple, inner)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (Val::UInt(0), Val::UInt(7)),
+            (Val::UInt(1), Val::UInt(10)),
+            (Val::UInt(1), Val::UInt(11)),
+            (Val::UInt(2), Val::UInt(7)),
+        ]
+    );
+
+    Ok(())
+}
+
+
 #[test]
 fn test_cat_range() -> Result<(), ThoError>{
     use thoosa_properties_map_derive::ThoosaPropertiesMap;

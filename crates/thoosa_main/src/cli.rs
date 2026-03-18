@@ -87,7 +87,7 @@ use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::apply_motif_nets::apply_motif_net_forward;
-use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
+use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use crate::tasks::load_motif_net::MotifNetMeta;
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
@@ -766,8 +766,10 @@ async fn run_all(
         CacheArea::default()
     ));
 
-    let find_motifs_run_config_range_or_value_for_opt = all_config.find_motifs_run_config_range_or_value.clone();
-    let select_motifs_run_config_for_opt = all_config.select_motifs_run_config.clone();
+    let find_motifs_run_config_range_or_value_for_opt: FindMotifsRunConfigRangeOrValue<FindAndSelectMotifsRunConfigFields> =
+        serde_json::from_value(serde_json::to_value(&all_config.find_motifs_run_config_range_or_value)?)?;
+    let select_motifs_run_config_for_opt: SelectMotifsRunConfigRangeOrValue<FindAndSelectMotifsRunConfigFields> =
+        serde_json::from_value(serde_json::to_value(&all_config.select_motifs_run_config)?)?;
     let fixed_find_motifs_config_for_opt = all_config.fixed_find_motifs_config.clone();
 
     //gpt Pre-create context and shared handles for FindMotifs stage construction (kept outside the run_grid closure).
@@ -1065,7 +1067,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 poly_order: RangeOrValue::Range { range: Range { start: 1, end: 3 }, step:None },//step: Some((3, 0))
                 // poly_order: RangeOrValue::Value(1),
                 stride: RangeOrValue::Value(10),
-                padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
+                padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
             }),
             // NotchBandFilter(NotchBandFilterParamsRangeOrValue {
             //     low_hz: RangeOrValue::Value(59.0),
@@ -1151,7 +1153,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(100, 10));
 
     /////////////////////train_motifs
-    let common_training_args = CommonTrainingRunConfigRangeOrValue {
+    let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
         cycles: RangeOrValue::Value(100),
         batch_size: RangeOrValue::Value(10),
         // lr: RangeOrValue::Value(0.0001),
@@ -1159,10 +1161,24 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
     };
+    let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
+        cycles: RangeOrValue::Value(100),
+        batch_size: RangeOrValue::Value(10),
+        lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+        patience: RangeOrValue::Value(10),
+        min_delta: RangeOrValue::Value(1e-4_f32),
+    };
+    let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
+        cycles: RangeOrValue::Value(100),
+        batch_size: RangeOrValue::Value(10),
+        lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+        patience: RangeOrValue::Value(10),
+        min_delta: RangeOrValue::Value(1e-4_f32),
+    };
 
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
-        common_training_args: common_training_args.clone(),
+        common_training_args: common_training_args_for_motifs,
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
         //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
         //     step: RangeOrValue::Value(10),
@@ -1193,7 +1209,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     //////////////////////train labels
     let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
         id: None,
-        common_training_args: common_training_args.clone(),
+        common_training_args: common_training_args_for_labels,
 
         // net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
         //     num_conv_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
@@ -1221,7 +1237,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     //////////////////////train final
     let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
         id: None,
-        common_training_args,
+        common_training_args: common_training_args_for_final,
         net: FinalNetArgsRangeOrValue {
             num_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
         },
@@ -1244,7 +1260,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
             // band_hz:  RangeOrValue::Range { range: Range { start: 5., end: 20. }, step: Some((5., 1)) },
             kernel_size: RangeOrValue::Value(10),
             stride: RangeOrValue::Value(1),
-            padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
+            padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
         })]),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.025) }) }),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))} }) }),
@@ -1306,10 +1322,24 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
     };
     /////////////////////train_motifs
-    let common_training_args = CommonTrainingRunConfigRangeOrValue {
+    let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
         cycles: RangeOrValue::Value(150),
         batch_size: RangeOrValue::Value(10),
         // lr: RangeOrValue::Value(0.0001),
+        lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+        patience: RangeOrValue::Value(10),
+        min_delta: RangeOrValue::Value(1e-4_f32),
+    };
+    let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
+        cycles: RangeOrValue::Value(150),
+        batch_size: RangeOrValue::Value(10),
+        lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+        patience: RangeOrValue::Value(10),
+        min_delta: RangeOrValue::Value(1e-4_f32),
+    };
+    let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
+        cycles: RangeOrValue::Value(150),
+        batch_size: RangeOrValue::Value(10),
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
@@ -1319,7 +1349,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
 
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
-        common_training_args: common_training_args.clone(),
+        common_training_args: common_training_args_for_motifs,
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
         net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
             a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
@@ -1331,7 +1361,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
     //////////////////////train labels
     let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
         id: None,
-        common_training_args: common_training_args.clone(),
+        common_training_args: common_training_args_for_labels,
 
         // net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
         //     // num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
@@ -1355,7 +1385,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
     //////////////////////train final
     let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
         id: None,
-        common_training_args,
+        common_training_args: common_training_args_for_final,
         net: FinalNetArgsRangeOrValue {
             num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
         },
@@ -2180,7 +2210,8 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 fn check_opt_run_config<RCRV, RC>(find_and_select_run_config: &RCRV) -> Result<(), ThoError>
 where
     RCRV: OptRunConfigSource,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>> + ToHashmap
+    RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>> + ToHashmap,
+    <RCRV as OptRunConfigSource>::P: 'static,
 {
     let opt_run_config = find_and_select_run_config.opt_run_configs()?;
     let const_vals = opt_run_config.grid_run_config_source().const_params();
