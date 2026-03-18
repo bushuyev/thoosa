@@ -33,6 +33,9 @@ async engine is Tokio, rayon is used to parallel sync functions.
 Notes:
 - Requires nightly toolchain (`rust-toolchain.toml` is pinned). Install via `rustup toolchain install nightly`.
 - GPU/Torch runs may require `source ./env.sh` to set `LD_PRELOAD`.
+- The effective workspace root for cargo commands in this repo is `/home/bu/dvl/rust/thoosa/crates`.
+- For repeated CLI experiments, running the release binary directly is much faster than `cargo run`:
+  `LD_LIBRARY_PATH=/home/bu/dvl/rust/thoosa/crates/target/release /home/bu/dvl/rust/thoosa/crates/target/x86_64-unknown-linux-gnu/release/thoosa_hbac ...`
 
 ## Coding Style & Naming Conventions
 - Linting: keep `clippy` clean; deny warnings in CI/local before PRs.
@@ -48,3 +51,9 @@ Notes:
 
 ## Misc info
 masks for tensors of all sorts expected to contain false for padded (zeros)) values and true for actual values.
+
+## Motif Search Notes
+- For HBAC motif exploration, `plot-data --stdout` is the most useful inspection path because it emits machine-readable JSON. Redirect stderr separately because CUDA/libtorch setup can still print noise there even when stdout is clean JSON.
+- The SQLite schema stores motif membership in `slices`; `motifs` itself does not contain slice counts. For motif screening, join/query `slices` for `COUNT(*)` and `COUNT(DISTINCT resource_id)`, and `selected_motifs` for selection scores.
+- In March 2026 screening on `/home/bu/tmp/ws_test_hbac`, a `BandPassFilter(low_hz=4.0, band_hz=12.0, kernel_size=100, stride=10)` + notch family produced mostly oscillatory, low-correlation motifs, while `window=160`, `step=5`, `MedianFilter(window=100)`, `SavGolFilter(window_len=192, poly_order=1, stride=10)`, and `slices_filter=Accumulate(Quantile q≈0.0983)` produced more usable EEG motifs.
+- `InterestingTurningPointsRatio` was not discriminative in that screening pass; if future selection still over-favors edge-heavy motifs, consider adding an explicit consensus-edge/peak-position criterion instead of relying on that metric.
