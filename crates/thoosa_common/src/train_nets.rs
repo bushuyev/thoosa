@@ -1807,7 +1807,7 @@ pub async fn opt_train<P, R, F, N: Debug + Default>(
     descr: &str,
 ) -> Result<(VarStore, N, R, f32), ThoError>
 where
-    P: FieldName,
+    P: FieldName + 'static,
     R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone,
     F: for<'a, 'b> AsyncFnMut(
             Arc<Mutex<VarStore>>,

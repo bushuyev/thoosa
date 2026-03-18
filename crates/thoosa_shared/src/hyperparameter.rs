@@ -8,7 +8,7 @@ use log::trace;
 use once_cell::sync::Lazy;
 #[allow(unused_imports)]
 use rand::Rng;
-pub trait FieldName: Display + Debug + Clone {
+pub trait FieldName: Display + Debug + Clone + Send + Sync + 'static {
     //+ for<'a>  Add<&'a dyn AsRef<Self>>
 }
 
@@ -128,10 +128,10 @@ impl<T: FieldName> From<(T, &Range<bool>)> for Hyperparameter<T> {
     }
 }
 
-impl<T: FieldName> TryFrom<(T, &RangeOrValue<f64>)> for Hyperparameter<T> {
+impl<T: FieldName, P: FieldName> TryFrom<(T, &RangeOrValue<f64, P>)> for Hyperparameter<T> {
     type Error = ();
 
-    fn try_from((name, value): (T, &RangeOrValue<f64>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (T, &RangeOrValue<f64, P>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range { range, step } = value {
             if step.is_none() {
                 return Ok(Hyperparameter::UniformFloat {
@@ -145,10 +145,10 @@ impl<T: FieldName> TryFrom<(T, &RangeOrValue<f64>)> for Hyperparameter<T> {
     }
 }
 
-impl<T: FieldName> TryFrom<(T, &RangeOrValue<i32>)> for Hyperparameter<T> {
+impl<T: FieldName, P: FieldName> TryFrom<(T, &RangeOrValue<i32, P>)> for Hyperparameter<T> {
     type Error = ();
 
-    fn try_from((name, value): (T, &RangeOrValue<i32>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (T, &RangeOrValue<i32, P>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range { range, step } = value {
             if step.is_none() {
                 return Ok(Hyperparameter::UniformInt {
@@ -162,10 +162,10 @@ impl<T: FieldName> TryFrom<(T, &RangeOrValue<i32>)> for Hyperparameter<T> {
     }
 }
 
-impl<T: FieldName> TryFrom<(T, &RangeOrValue<u32>)> for Hyperparameter<T> {
+impl<T: FieldName, P: FieldName> TryFrom<(T, &RangeOrValue<u32, P>)> for Hyperparameter<T> {
     type Error = ();
 
-    fn try_from((name, value): (T, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (T, &RangeOrValue<u32, P>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range { range, step } = value {
             if step.is_none() {
                 return Ok(Hyperparameter::UniformInt {
