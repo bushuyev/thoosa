@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, TokenStream as TokenStream2};
+use proc_macro2::{Ident, TokenStream as TokenStream2, TokenTree};
 use quote::{ToTokens, format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{DeriveInput, parse_macro_input};
@@ -30,6 +30,14 @@ const RUN_CONFIG_DEFAULT_ATTR: &'static str = "run_config_default";
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     thoosa_args_derive_impl(ast).into()
+}
+
+fn token_stream_contains_ident(tokens: &TokenStream2, ident: &str) -> bool {
+    tokens.clone().into_iter().any(|token| match token {
+        TokenTree::Ident(found) => found == ident,
+        TokenTree::Group(group) => token_stream_contains_ident(&group.stream(), ident),
+        _ => false,
+    })
 }
 
 fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
@@ -106,7 +114,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                                     if is_primitive(&vec_inner_ty) {
                                         a.range_or_value_fields.push(quote! {
-                                            pub #field_ident: Option<Vec<thoosa_shared::RangeOrValue<#vec_inner_ty>>>,
+                                            pub #field_ident: Option<Vec<thoosa_shared::RangeOrValue<#vec_inner_ty, P>>>,
                                         });
 
                                         a.enum_fields.push(quote! {
@@ -117,7 +125,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         a.range_or_value_add_calls.push(quote! {
                                             if let Some(vs) = self.#field_ident.as_ref() {
                                                 for (i, v) in vs.iter().enumerate() {
-                                                    thoosa_shared::add_range_or_value::<#vec_inner_ty, T>(append(#fields_enum_ident::#camel_field_ident(i)), v, const_params, grid_params, opt_params);
+                                                    thoosa_shared::add_range_or_value::<#vec_inner_ty, P>(append(#fields_enum_ident::#camel_field_ident(i)), v, const_params, grid_params, opt_params);
                                                 }
                                             }
                                         });
@@ -154,7 +162,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         let field_type_builder = Ident::new(&format!("{}Builder", vec_inner_ty.to_token_stream().to_string()), camel_field_ident.span());
 
                                         a.range_or_value_fields.push(quote! {
-                                            pub #field_ident: Option<Vec<#field_type_range_or_value>>,
+                                            pub #field_ident: Option<Vec<#field_type_range_or_value<P>>>,
                                         });
 
                                         a.enum_fields.push(quote! {
@@ -198,7 +206,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     }
                                 } else if is_primitive(&inner_ty) {
                                     a.range_or_value_fields.push(quote! {
-                                        pub #field_ident: Option<thoosa_shared::RangeOrValue<#inner_ty>>,
+                                        pub #field_ident: Option<thoosa_shared::RangeOrValue<#inner_ty, P>>,
                                     });
 
                                     a.enum_fields.push(quote! {
@@ -209,7 +217,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                                     a.range_or_value_add_calls.push(quote! {
                                         if let Some(v) = self.#field_ident.as_ref(){
-                                            thoosa_shared::add_range_or_value::<#inner_ty, T>(append(#fields_enum_ident::#camel_field_ident), v, const_params, grid_params, opt_params);
+                                            thoosa_shared::add_range_or_value::<#inner_ty, P>(append(#fields_enum_ident::#camel_field_ident), v, const_params, grid_params, opt_params);
                                         }
                                     });
 
@@ -232,7 +240,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", inner_ty.to_token_stream().to_string()), camel_field_ident.span());
 
                                     a.range_or_value_fields.push(quote! {
-                                        pub #field_ident: Option<#field_type_range_or_value>,
+                                        pub #field_ident: Option<#field_type_range_or_value<P>>,
                                     });
 
                                     let field_type_fields = Ident::new(&format!("{}Fields", inner_ty.to_token_stream().to_string()), camel_field_ident.span());
@@ -278,7 +286,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                                     if is_primitive(&vec_inner_ty) {
                                         a.range_or_value_fields.push(quote! {
-                                            pub #field_ident: Vec<thoosa_shared::RangeOrValue<#vec_inner_ty>>,
+                                            pub #field_ident: Vec<thoosa_shared::RangeOrValue<#vec_inner_ty, P>>,
                                         });
                                         a.enum_fields.push(quote! {
                                             #camel_field_ident(#vec_index_ty_ident)
@@ -287,7 +295,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                                         a.range_or_value_add_calls.push(quote! {
                                             for (i, v) in self.#field_ident.iter().enumerate() {
-                                                thoosa_shared::add_range_or_value::<#vec_inner_ty, T>(append(#fields_enum_ident::#camel_field_ident(i)), v, const_params, grid_params, opt_params);
+                                                thoosa_shared::add_range_or_value::<#vec_inner_ty, P>(append(#fields_enum_ident::#camel_field_ident(i)), v, const_params, grid_params, opt_params);
                                             }
                                         });
 
@@ -321,7 +329,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         let field_type_builder = Ident::new(&format!("{}Builder", vec_inner_ty.to_token_stream().to_string()), camel_field_ident.span());
 
                                         a.range_or_value_fields.push(quote! {
-                                            pub #field_ident: Vec<#field_type_range_or_value>,
+                                            pub #field_ident: Vec<#field_type_range_or_value<P>>,
                                         });
 
                                         a.enum_fields.push(quote! {
@@ -361,7 +369,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     }
                                 } else if is_primitive(&field_type) {
                                     a.range_or_value_fields.push(quote! {
-                                        pub #field_ident: thoosa_shared::RangeOrValue<#field_type>,
+                                        pub #field_ident: thoosa_shared::RangeOrValue<#field_type, P>,
                                     });
                                     a.enum_fields.push(quote! {
                                         #camel_field_ident
@@ -369,7 +377,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     a.field_names.push(field_ident.to_string());
 
                                     a.range_or_value_add_calls.push(quote! {
-                                        thoosa_shared::add_range_or_value::<#field_type, T>(append(#fields_enum_ident::#camel_field_ident), &self.#field_ident, const_params, grid_params, opt_params);
+                                        thoosa_shared::add_range_or_value::<#field_type, P>(append(#fields_enum_ident::#camel_field_ident), &self.#field_ident, const_params, grid_params, opt_params);
                                     });
 
                                     a.builder_fields.push(quote! {
@@ -392,7 +400,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", field_type.to_token_stream().to_string()), camel_field_ident.span());
 
                                     a.range_or_value_fields.push(quote! {
-                                        pub #field_ident: #field_type_range_or_value,
+                                        pub #field_ident: #field_type_range_or_value<P>,
                                     });
 
                                     let field_type_fields = Ident::new(&format!("{}Fields", field_type.to_token_stream().to_string()), camel_field_ident.span());
@@ -604,7 +612,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                             Ident::new(&format!("{}RangeOrValue", ty_string), variant.ident.span());
 
                         token_streams.range_or_value_fields.push(quote! {
-                            #variant_ident(#field_type_range_or_value),
+                            #variant_ident(#field_type_range_or_value<P>),
 
                         });
 
@@ -688,7 +696,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
             }
 
             token_streams.range_or_value_fields.push(quote! {
-                Vec(Vec<#range_or_value_struct_ident>),
+                Vec(Vec<#range_or_value_struct_ident<P>>),
             });
             token_streams.range_or_value_add_calls.push(quote! {
                 #range_or_value_struct_ident::Vec(variants) => {
@@ -703,14 +711,16 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                             .map(|combo| {
                                 let mut vals = variant_const_params.clone();
                                 let mut opt_params = variant_opt_params.clone();
+                                let mut pending_fields = Vec::new();
 
                                 for value_set in combo {
-                                    let (value_set_values, value_set_opt_params) = value_set.into_parts();
+                                    let (value_set_values, value_set_opt_params, value_set_pending_fields) = value_set.into_parts_with_pending();
                                     vals.extend(value_set_values);
                                     opt_params.extend(value_set_opt_params);
+                                    pending_fields.extend(value_set_pending_fields);
                                 }
 
-                                thoosa_shared::val::GridValueSet::new(vals, opt_params)
+                                thoosa_shared::val::GridValueSet::with_pending_fields(vals, opt_params, pending_fields)
                             })
                             .collect::<Vec<_>>()
                     }).collect::<Vec<_>>();
@@ -811,7 +821,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
     let source_impl = if has_run_config_opt {
         quote! {
-            impl thoosa_run_config_args::OptRunConfigSource for #range_or_value_struct_ident {
+            impl thoosa_run_config_args::OptRunConfigSource for #range_or_value_struct_ident<#fields_enum_ident> {
                 type P =  #fields_enum_ident;
 
                 fn opt_run_configs(&self) -> Result<thoosa_shared::run_configs::OptRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>, Vec<thoosa_shared::hyperparameter::Hyperparameter<#fields_enum_ident>>, #fields_enum_ident>, thoosa_shared::ThoError> {
@@ -823,7 +833,10 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                     let has_grid_opt_params = grid_params
                         .iter()
                         .any(|grid_param| grid_param.grid_value_sets().into_iter().any(|value_set| !value_set.opt_params().is_empty()));
-                    if opt_params.is_empty() && !has_grid_opt_params {
+                    let has_pending_opt_params = grid_params
+                        .iter()
+                        .any(|grid_param| grid_param.grid_value_sets().into_iter().any(|value_set| !value_set.pending_fields().is_empty()));
+                    if opt_params.is_empty() && !has_grid_opt_params && !has_pending_opt_params {
                         return Err(thoosa_shared::ThoError::new("no opt params in run config"));
                     }
 
@@ -839,7 +852,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
         }
     } else if has_run_config_grid {
         quote! {
-            impl thoosa_run_config_args::GridRunConfigSource for #range_or_value_struct_ident {
+            impl thoosa_run_config_args::GridRunConfigSource for #range_or_value_struct_ident<#fields_enum_ident> {
                 type P =  #fields_enum_ident;
 
                 fn grid_run_configs(&self) -> Result<thoosa_shared::run_configs::GridRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>>, thoosa_shared::ThoError> {
@@ -907,16 +920,45 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
         quote! {}
     };
 
+    let needs_path_phantom = "struct" == &range_or_value_type.to_string() && !token_stream_contains_ident(&range_or_value_fields, "P");
+    let needs_zero_field_default = "struct" == &range_or_value_type.to_string() && range_or_value_fields.is_empty();
+    let range_or_value_derives = quote! { Debug, Clone, serde::Deserialize, serde::Serialize };
+    let range_or_value_path_phantom = if needs_path_phantom {
+        quote! {
+            #[serde(skip, default)]
+            pub _path_pd: std::marker::PhantomData<P>,
+        }
+    } else {
+        quote! {}
+    };
+    let range_or_value_default_impl = if needs_zero_field_default {
+        quote! {
+            impl<P: thoosa_shared::hyperparameter::FieldName + 'static> Default for #range_or_value_struct_ident<P> {
+                fn default() -> Self {
+                    Self {
+                        _path_pd: std::marker::PhantomData,
+                    }
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let token_stream = quote! {
 
-        #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-        pub #range_or_value_type #range_or_value_struct_ident {
+        #[derive(#range_or_value_derives)]
+        #[serde(bound(serialize = "", deserialize = ""))]
+        pub #range_or_value_type #range_or_value_struct_ident<P: thoosa_shared::hyperparameter::FieldName + 'static = #fields_enum_ident> {
             #range_or_value_fields
+            #range_or_value_path_phantom
         }
 
-        impl thoosa_run_config_args::RunConfigRangeOrValue for #range_or_value_struct_ident {
+        impl<P: thoosa_shared::hyperparameter::FieldName + 'static> thoosa_run_config_args::RunConfigRangeOrValue for #range_or_value_struct_ident<P> {
 
         }
+
+        #range_or_value_default_impl
 
         impl thoosa_shared::run_configs::RunConfig for #target_struct_ident {
 
@@ -947,13 +989,13 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
         impl thoosa_shared::hyperparameter::FieldName for #fields_enum_ident {}
 
-        impl #range_or_value_struct_ident {
-            fn fill_run_configs_dyn<T:thoosa_shared::hyperparameter::FieldName>(&self, append: &dyn Fn(#fields_enum_ident)->T, const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>) {
+        impl<P: thoosa_shared::hyperparameter::FieldName + 'static> #range_or_value_struct_ident<P> {
+            fn fill_run_configs_dyn(&self, append: &dyn Fn(#fields_enum_ident)->P, const_params: &mut Vec<thoosa_shared::val::NamedVal<P>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<P>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<P>>) {
                 #range_or_value_add_calls
             }
 
-            pub fn fill_run_configs<T:thoosa_shared::hyperparameter::FieldName, F>(&self, append: F, const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>)
-                where F:Fn(#fields_enum_ident)->T{
+            pub fn fill_run_configs<F>(&self, append: F, const_params: &mut Vec<thoosa_shared::val::NamedVal<P>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<P>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<P>>)
+                where F:Fn(#fields_enum_ident)->P{
 
                 self.fill_run_configs_dyn(&append, const_params, grid_params, opt_params);
             }
@@ -1024,6 +1066,6 @@ mod tests {
         let output = thoosa_args_derive_impl(ast).to_string();
         let normalized = output.split_whitespace().collect::<String>();
 
-        assert!(normalized.contains("Vec(Vec<ChoiceRangeOrValue>)"));
+        assert!(normalized.contains("Vec(Vec<ChoiceRangeOrValue<P>>)"), "{normalized}");
     }
 }
