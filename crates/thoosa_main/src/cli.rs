@@ -1032,9 +1032,9 @@ struct AllConfigs {
 fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(10), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        // window: RangeOrValue::Range { range: Range { start: 100, end: 2001 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000), Some((200, 0))
-        window: RangeOrValue::Value(200), //RangeOrValue::Value(1000),
+        step: RangeOrValue::Value(5), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 100, end: 1000 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000), Some((200, 0))
+        // window: RangeOrValue::Value(200), //RangeOrValue::Value(1000),
         // freq_filter: None,
         freq_filter: Some(vec![
             // BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -1078,8 +1078,8 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 3))
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }) }),//Some((0.05, 2))
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.02)  }) }),
-        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }) }),//Some((0.05, 2))
-        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.07) }) }),//Some((0.05, 2))
+        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }) }),//Some((0.05, 2))
+        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.07) }) }),//Some((0.05, 2))
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
     };
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
@@ -1104,7 +1104,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                     k: RangeOrValue::Value(0.0), //TODO not used RangeOrValue::Range{range: 1.0..10.0, step: None},
                     eps: RangeOrValue::Value(1e-8)
                 },
-                min: RangeOrValue::Value(0.70),
+                min: RangeOrValue::Value(0.75),
             }),
             inlier_ratioRunConfig:None,
             // inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {

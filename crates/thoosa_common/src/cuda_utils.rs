@@ -203,7 +203,7 @@ pub async fn copy_d2h_from_ptr(
 
                 let stream = buf_stream.1.clone();
                 // from cuda to pinned buffer
-                tokio::task::spawn_blocking(move || {
+                // tokio::task::spawn_blocking(move || {
                     let raw = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
                         buf_ptr as *mut c_void,
                         src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
@@ -217,14 +217,14 @@ pub async fn copy_d2h_from_ptr(
 
                     stream.synchronize();
 
-                    Ok(())
+                    // Ok(())
 
-                })
-                .await
-                .map_err(|e| Cause::External {
-                    type_name: std::any::type_name::<tokio::task::JoinError>(),
-                    source: Arc::new(e),
-                })??;
+                // })
+                // .await
+                // .map_err(|e| Cause::External {
+                //     type_name: std::any::type_name::<tokio::task::JoinError>(),
+                //     source: Arc::new(e),
+                // })??;
 
                 tokio::task::spawn_blocking(move || {
                     std::ptr::copy_nonoverlapping(
@@ -376,7 +376,7 @@ pub async fn copy_h2d_from_ptr(
                 //----------------------------------------------------------
                 // 2. copy   pinned host buffer  →  GPU tensor   (CUDA)
                 //----------------------------------------------------------
-                tokio::task::spawn_blocking(move || {
+                // tokio::task::spawn_blocking(move || {
                     let raw = thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
                         dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
                         buf_ptr as *const c_void,
@@ -390,7 +390,7 @@ pub async fn copy_h2d_from_ptr(
                     buf_stream.1.synchronize();
                     drop(buf_stream); // return buffer/stream to pool
 
-                }).await.unwrap();
+                // }).await.unwrap();
 
                 // wait for GPU work to finish before recycling buffer
 
