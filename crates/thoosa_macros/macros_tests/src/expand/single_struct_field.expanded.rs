@@ -4,11 +4,16 @@ pub struct SingleField {
     #[run_config]
     pub val: i32,
 }
-pub struct SingleFieldRangeOrValue {
-    pub val: thoosa_shared::RangeOrValue<i32>,
+#[serde(bound(serialize = "", deserialize = ""))]
+pub struct SingleFieldRangeOrValue<
+    P: thoosa_shared::hyperparameter::FieldName + 'static = SingleFieldFields,
+> {
+    pub val: thoosa_shared::RangeOrValue<i32, P>,
 }
 #[automatically_derived]
-impl ::core::fmt::Debug for SingleFieldRangeOrValue {
+impl<
+    P: ::core::fmt::Debug + thoosa_shared::hyperparameter::FieldName + 'static,
+> ::core::fmt::Debug for SingleFieldRangeOrValue<P> {
     #[inline]
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         ::core::fmt::Formatter::debug_struct_field1_finish(
@@ -20,9 +25,11 @@ impl ::core::fmt::Debug for SingleFieldRangeOrValue {
     }
 }
 #[automatically_derived]
-impl ::core::clone::Clone for SingleFieldRangeOrValue {
+impl<
+    P: ::core::clone::Clone + thoosa_shared::hyperparameter::FieldName + 'static,
+> ::core::clone::Clone for SingleFieldRangeOrValue<P> {
     #[inline]
-    fn clone(&self) -> SingleFieldRangeOrValue {
+    fn clone(&self) -> SingleFieldRangeOrValue<P> {
         SingleFieldRangeOrValue {
             val: ::core::clone::Clone::clone(&self.val),
         }
@@ -39,7 +46,10 @@ const _: () = {
     #[allow(unused_extern_crates, clippy::useless_attribute)]
     extern crate serde as _serde;
     #[automatically_derived]
-    impl<'de> _serde::Deserialize<'de> for SingleFieldRangeOrValue {
+    impl<
+        'de,
+        P: thoosa_shared::hyperparameter::FieldName + 'static,
+    > _serde::Deserialize<'de> for SingleFieldRangeOrValue<P> {
         fn deserialize<__D>(
             __deserializer: __D,
         ) -> _serde::__private228::Result<Self, __D::Error>
@@ -119,13 +129,19 @@ const _: () = {
                 }
             }
             #[doc(hidden)]
-            struct __Visitor<'de> {
-                marker: _serde::__private228::PhantomData<SingleFieldRangeOrValue>,
+            struct __Visitor<
+                'de,
+                P: thoosa_shared::hyperparameter::FieldName + 'static,
+            > {
+                marker: _serde::__private228::PhantomData<SingleFieldRangeOrValue<P>>,
                 lifetime: _serde::__private228::PhantomData<&'de ()>,
             }
             #[automatically_derived]
-            impl<'de> _serde::de::Visitor<'de> for __Visitor<'de> {
-                type Value = SingleFieldRangeOrValue;
+            impl<
+                'de,
+                P: thoosa_shared::hyperparameter::FieldName + 'static,
+            > _serde::de::Visitor<'de> for __Visitor<'de, P> {
+                type Value = SingleFieldRangeOrValue<P>;
                 fn expecting(
                     &self,
                     __formatter: &mut _serde::__private228::Formatter,
@@ -144,7 +160,7 @@ const _: () = {
                     __A: _serde::de::SeqAccess<'de>,
                 {
                     let __field0 = match _serde::de::SeqAccess::next_element::<
-                        thoosa_shared::RangeOrValue<i32>,
+                        thoosa_shared::RangeOrValue<i32, P>,
                     >(&mut __seq)? {
                         _serde::__private228::Some(__value) => __value,
                         _serde::__private228::None => {
@@ -169,7 +185,7 @@ const _: () = {
                     __A: _serde::de::MapAccess<'de>,
                 {
                     let mut __field0: _serde::__private228::Option<
-                        thoosa_shared::RangeOrValue<i32>,
+                        thoosa_shared::RangeOrValue<i32, P>,
                     > = _serde::__private228::None;
                     while let _serde::__private228::Some(__key) = _serde::de::MapAccess::next_key::<
                         __Field,
@@ -183,7 +199,7 @@ const _: () = {
                                 }
                                 __field0 = _serde::__private228::Some(
                                     _serde::de::MapAccess::next_value::<
-                                        thoosa_shared::RangeOrValue<i32>,
+                                        thoosa_shared::RangeOrValue<i32, P>,
                                     >(&mut __map)?,
                                 );
                             }
@@ -212,7 +228,9 @@ const _: () = {
                 "SingleFieldRangeOrValue",
                 FIELDS,
                 __Visitor {
-                    marker: _serde::__private228::PhantomData::<SingleFieldRangeOrValue>,
+                    marker: _serde::__private228::PhantomData::<
+                        SingleFieldRangeOrValue<P>,
+                    >,
                     lifetime: _serde::__private228::PhantomData,
                 },
             )
@@ -230,7 +248,8 @@ const _: () = {
     #[allow(unused_extern_crates, clippy::useless_attribute)]
     extern crate serde as _serde;
     #[automatically_derived]
-    impl _serde::Serialize for SingleFieldRangeOrValue {
+    impl<P: thoosa_shared::hyperparameter::FieldName + 'static> _serde::Serialize
+    for SingleFieldRangeOrValue<P> {
         fn serialize<__S>(
             &self,
             __serializer: __S,
@@ -252,7 +271,9 @@ const _: () = {
         }
     }
 };
-impl thoosa_run_config_args::RunConfigRangeOrValue for SingleFieldRangeOrValue {}
+impl<
+    P: thoosa_shared::hyperparameter::FieldName + 'static,
+> thoosa_run_config_args::RunConfigRangeOrValue for SingleFieldRangeOrValue<P> {}
 impl thoosa_shared::run_configs::RunConfig for SingleField {
     fn set_id(&mut self, id: thoosa_shared::run_configs::RunId) {
         self.id.replace(id);
@@ -295,17 +316,17 @@ impl std::fmt::Display for SingleFieldFields {
     }
 }
 impl thoosa_shared::hyperparameter::FieldName for SingleFieldFields {}
-impl SingleFieldRangeOrValue {
-    fn fill_run_configs_dyn<T: thoosa_shared::hyperparameter::FieldName>(
+impl<P: thoosa_shared::hyperparameter::FieldName + 'static> SingleFieldRangeOrValue<P> {
+    fn fill_run_configs_dyn(
         &self,
-        append: &dyn Fn(SingleFieldFields) -> T,
-        const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>,
-        grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>,
-        opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>,
+        append: &dyn Fn(SingleFieldFields) -> P,
+        const_params: &mut Vec<thoosa_shared::val::NamedVal<P>>,
+        grid_params: &mut Vec<thoosa_shared::val::NamedRange<P>>,
+        opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<P>>,
     ) {
         thoosa_shared::add_range_or_value::<
             i32,
-            T,
+            P,
         >(
             append(SingleFieldFields::Val),
             &self.val,
@@ -314,20 +335,21 @@ impl SingleFieldRangeOrValue {
             opt_params,
         );
     }
-    pub fn fill_run_configs<T: thoosa_shared::hyperparameter::FieldName, F>(
+    pub fn fill_run_configs<F>(
         &self,
         append: F,
-        const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>,
-        grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>,
-        opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>,
+        const_params: &mut Vec<thoosa_shared::val::NamedVal<P>>,
+        grid_params: &mut Vec<thoosa_shared::val::NamedRange<P>>,
+        opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<P>>,
     )
     where
-        F: Fn(SingleFieldFields) -> T,
+        F: Fn(SingleFieldFields) -> P,
     {
         self.fill_run_configs_dyn(&append, const_params, grid_params, opt_params);
     }
 }
-impl thoosa_run_config_args::OptRunConfigSource for SingleFieldRangeOrValue {
+impl thoosa_run_config_args::OptRunConfigSource
+for SingleFieldRangeOrValue<SingleFieldFields> {
     type P = SingleFieldFields;
     fn opt_run_configs(
         &self,
@@ -357,7 +379,15 @@ impl thoosa_run_config_args::OptRunConfigSource for SingleFieldRangeOrValue {
                     .into_iter()
                     .any(|value_set| !value_set.opt_params().is_empty())
             });
-        if opt_params.is_empty() && !has_grid_opt_params {
+        let has_pending_opt_params = grid_params
+            .iter()
+            .any(|grid_param| {
+                grid_param
+                    .grid_value_sets()
+                    .into_iter()
+                    .any(|value_set| !value_set.pending_fields().is_empty())
+            });
+        if opt_params.is_empty() && !has_grid_opt_params && !has_pending_opt_params {
             return Err(thoosa_shared::ThoError::new("no opt params in run config"));
         }
         Ok(
@@ -436,11 +466,16 @@ pub struct Outer {
     #[run_config]
     pub inner: SingleField,
 }
-pub struct OuterRangeOrValue {
-    pub inner: SingleFieldRangeOrValue,
+#[serde(bound(serialize = "", deserialize = ""))]
+pub struct OuterRangeOrValue<
+    P: thoosa_shared::hyperparameter::FieldName + 'static = OuterFields,
+> {
+    pub inner: SingleFieldRangeOrValue<P>,
 }
 #[automatically_derived]
-impl ::core::fmt::Debug for OuterRangeOrValue {
+impl<
+    P: ::core::fmt::Debug + thoosa_shared::hyperparameter::FieldName + 'static,
+> ::core::fmt::Debug for OuterRangeOrValue<P> {
     #[inline]
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         ::core::fmt::Formatter::debug_struct_field1_finish(
@@ -452,9 +487,11 @@ impl ::core::fmt::Debug for OuterRangeOrValue {
     }
 }
 #[automatically_derived]
-impl ::core::clone::Clone for OuterRangeOrValue {
+impl<
+    P: ::core::clone::Clone + thoosa_shared::hyperparameter::FieldName + 'static,
+> ::core::clone::Clone for OuterRangeOrValue<P> {
     #[inline]
-    fn clone(&self) -> OuterRangeOrValue {
+    fn clone(&self) -> OuterRangeOrValue<P> {
         OuterRangeOrValue {
             inner: ::core::clone::Clone::clone(&self.inner),
         }
@@ -471,7 +508,10 @@ const _: () = {
     #[allow(unused_extern_crates, clippy::useless_attribute)]
     extern crate serde as _serde;
     #[automatically_derived]
-    impl<'de> _serde::Deserialize<'de> for OuterRangeOrValue {
+    impl<
+        'de,
+        P: thoosa_shared::hyperparameter::FieldName + 'static,
+    > _serde::Deserialize<'de> for OuterRangeOrValue<P> {
         fn deserialize<__D>(
             __deserializer: __D,
         ) -> _serde::__private228::Result<Self, __D::Error>
@@ -551,13 +591,19 @@ const _: () = {
                 }
             }
             #[doc(hidden)]
-            struct __Visitor<'de> {
-                marker: _serde::__private228::PhantomData<OuterRangeOrValue>,
+            struct __Visitor<
+                'de,
+                P: thoosa_shared::hyperparameter::FieldName + 'static,
+            > {
+                marker: _serde::__private228::PhantomData<OuterRangeOrValue<P>>,
                 lifetime: _serde::__private228::PhantomData<&'de ()>,
             }
             #[automatically_derived]
-            impl<'de> _serde::de::Visitor<'de> for __Visitor<'de> {
-                type Value = OuterRangeOrValue;
+            impl<
+                'de,
+                P: thoosa_shared::hyperparameter::FieldName + 'static,
+            > _serde::de::Visitor<'de> for __Visitor<'de, P> {
+                type Value = OuterRangeOrValue<P>;
                 fn expecting(
                     &self,
                     __formatter: &mut _serde::__private228::Formatter,
@@ -576,7 +622,7 @@ const _: () = {
                     __A: _serde::de::SeqAccess<'de>,
                 {
                     let __field0 = match _serde::de::SeqAccess::next_element::<
-                        SingleFieldRangeOrValue,
+                        SingleFieldRangeOrValue<P>,
                     >(&mut __seq)? {
                         _serde::__private228::Some(__value) => __value,
                         _serde::__private228::None => {
@@ -601,7 +647,7 @@ const _: () = {
                     __A: _serde::de::MapAccess<'de>,
                 {
                     let mut __field0: _serde::__private228::Option<
-                        SingleFieldRangeOrValue,
+                        SingleFieldRangeOrValue<P>,
                     > = _serde::__private228::None;
                     while let _serde::__private228::Some(__key) = _serde::de::MapAccess::next_key::<
                         __Field,
@@ -615,7 +661,7 @@ const _: () = {
                                 }
                                 __field0 = _serde::__private228::Some(
                                     _serde::de::MapAccess::next_value::<
-                                        SingleFieldRangeOrValue,
+                                        SingleFieldRangeOrValue<P>,
                                     >(&mut __map)?,
                                 );
                             }
@@ -644,7 +690,7 @@ const _: () = {
                 "OuterRangeOrValue",
                 FIELDS,
                 __Visitor {
-                    marker: _serde::__private228::PhantomData::<OuterRangeOrValue>,
+                    marker: _serde::__private228::PhantomData::<OuterRangeOrValue<P>>,
                     lifetime: _serde::__private228::PhantomData,
                 },
             )
@@ -662,7 +708,8 @@ const _: () = {
     #[allow(unused_extern_crates, clippy::useless_attribute)]
     extern crate serde as _serde;
     #[automatically_derived]
-    impl _serde::Serialize for OuterRangeOrValue {
+    impl<P: thoosa_shared::hyperparameter::FieldName + 'static> _serde::Serialize
+    for OuterRangeOrValue<P> {
         fn serialize<__S>(
             &self,
             __serializer: __S,
@@ -684,7 +731,9 @@ const _: () = {
         }
     }
 };
-impl thoosa_run_config_args::RunConfigRangeOrValue for OuterRangeOrValue {}
+impl<
+    P: thoosa_shared::hyperparameter::FieldName + 'static,
+> thoosa_run_config_args::RunConfigRangeOrValue for OuterRangeOrValue<P> {}
 impl thoosa_shared::run_configs::RunConfig for Outer {
     fn set_id(&mut self, id: thoosa_shared::run_configs::RunId) {
         self.id.replace(id);
@@ -739,13 +788,13 @@ impl std::fmt::Display for OuterFields {
     }
 }
 impl thoosa_shared::hyperparameter::FieldName for OuterFields {}
-impl OuterRangeOrValue {
-    fn fill_run_configs_dyn<T: thoosa_shared::hyperparameter::FieldName>(
+impl<P: thoosa_shared::hyperparameter::FieldName + 'static> OuterRangeOrValue<P> {
+    fn fill_run_configs_dyn(
         &self,
-        append: &dyn Fn(OuterFields) -> T,
-        const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>,
-        grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>,
-        opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>,
+        append: &dyn Fn(OuterFields) -> P,
+        const_params: &mut Vec<thoosa_shared::val::NamedVal<P>>,
+        grid_params: &mut Vec<thoosa_shared::val::NamedRange<P>>,
+        opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<P>>,
     ) {
         self.inner
             .fill_run_configs(
@@ -755,20 +804,20 @@ impl OuterRangeOrValue {
                 opt_params,
             );
     }
-    pub fn fill_run_configs<T: thoosa_shared::hyperparameter::FieldName, F>(
+    pub fn fill_run_configs<F>(
         &self,
         append: F,
-        const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>,
-        grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>,
-        opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>,
+        const_params: &mut Vec<thoosa_shared::val::NamedVal<P>>,
+        grid_params: &mut Vec<thoosa_shared::val::NamedRange<P>>,
+        opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<P>>,
     )
     where
-        F: Fn(OuterFields) -> T,
+        F: Fn(OuterFields) -> P,
     {
         self.fill_run_configs_dyn(&append, const_params, grid_params, opt_params);
     }
 }
-impl thoosa_run_config_args::OptRunConfigSource for OuterRangeOrValue {
+impl thoosa_run_config_args::OptRunConfigSource for OuterRangeOrValue<OuterFields> {
     type P = OuterFields;
     fn opt_run_configs(
         &self,
@@ -798,7 +847,15 @@ impl thoosa_run_config_args::OptRunConfigSource for OuterRangeOrValue {
                     .into_iter()
                     .any(|value_set| !value_set.opt_params().is_empty())
             });
-        if opt_params.is_empty() && !has_grid_opt_params {
+        let has_pending_opt_params = grid_params
+            .iter()
+            .any(|grid_param| {
+                grid_param
+                    .grid_value_sets()
+                    .into_iter()
+                    .any(|value_set| !value_set.pending_fields().is_empty())
+            });
+        if opt_params.is_empty() && !has_grid_opt_params && !has_pending_opt_params {
             return Err(thoosa_shared::ThoError::new("no opt params in run config"));
         }
         Ok(
