@@ -3,6 +3,7 @@ use crate::{RangeOrValue, ThoError, round_to_digits};
 use num_traits::ToPrimitive;
 use std::fmt::Debug;
 use std::ops::Range;
+use std::sync::Arc;
 use log::warn;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -33,6 +34,26 @@ impl Val {
 
         }
     }
+
+    pub fn to_f64(&self) -> f64 {
+        match self {
+            Val::Real(v) => *v,
+            Val::Int(v) => *v as f64,
+            Val::UInt(v) => *v as f64,
+            Val::Str(v) => v
+                .parse()
+                .expect(format!("Could not parse {v} string").as_str()),
+            Val::Bool(v) => {
+                if *v {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+
+        }
+    }
+
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -58,15 +79,100 @@ impl<T: FieldName> NamedVal<T> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ResolvedOptField<T: FieldName> {
+    Const(NamedVal<T>),
+    Grid(NamedRange<T>),
+    Opt(Hyperparameter<T>),
+}
+
+impl<T: FieldName + 'static> ResolvedOptField<T> {
+    pub fn from_range_or_value<'a, V>(name: T, value: &'a RangeOrValue<V>) -> Self
+    where
+        Val: From<&'a V>,
+        Hyperparameter<T>: From<(T, &'a Range<V>)>,
+    {
+        match value {
+            RangeOrValue::Range { range, step } => match step {
+                None => Self::Opt((name, range).into()),
+                Some((step, mul)) => Self::Grid(NamedRange::new(
+                    name,
+                    (&range.start).into()..(&range.end).into(),
+                    (step.into(), *mul),
+                )),
+            },
+            RangeOrValue::Value(v) => Self::Const(NamedVal::from((name, v.into()))),
+            RangeOrValue::Dynamic(_) => panic!("dynamic RangeOrValue must resolve to a static value"),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum PendingOptField<T: FieldName> {
+    Dynamic(Arc<dyn Fn(&[NamedVal<T>]) -> ResolvedOptField<T> + Send + Sync>),
+}
+
+impl<T: FieldName + 'static> PendingOptField<T> {
+    pub fn from_range_or_value<V>(name: T, resolve: fn(&[NamedVal<T>]) -> RangeOrValue<V>) -> Self
+    where
+        for<'a> Val: From<&'a V>,
+        for<'a> Hyperparameter<T>: From<(T, &'a Range<V>)>,
+        V: 'static,
+    {
+        Self::Dynamic(Arc::new(move |named_vals| {
+            let resolved = resolve(named_vals);
+            ResolvedOptField::from_range_or_value(name.clone(), &resolved)
+        }))
+    }
+
+    pub fn resolve(&self, named_vals: &[NamedVal<T>]) -> ResolvedOptField<T> {
+        match self {
+            Self::Dynamic(resolve) => resolve(named_vals),
+        }
+    }
+}
+
+impl<T: FieldName> Debug for PendingOptField<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dynamic(_) => f.write_str("Dynamic"),
+        }
+    }
+}
+
+impl<T: FieldName> PartialEq for PendingOptField<T> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Dynamic(lhs), Self::Dynamic(rhs)) => Arc::ptr_eq(lhs, rhs),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
+// to run opt on search space from common hyperparams + specific to each grid values combo (filters with filter-specific params in find motifs)
+// gpt: Represents one concrete grid-search branch: a bundle of fixed values to apply
+// together plus opt hyperparameters that are only valid for that branch.
 pub struct GridValueSet<T: FieldName> {
     values: Vec<NamedVal<T>>,
     opt_params: Vec<Hyperparameter<T>>,
+    pending_fields: Vec<PendingOptField<T>>,
 }
 
-impl<T: FieldName> GridValueSet<T> {
+impl<T: FieldName + 'static> GridValueSet<T> {
     pub fn new(values: Vec<NamedVal<T>>, opt_params: Vec<Hyperparameter<T>>) -> Self {
-        Self { values, opt_params }
+        Self {
+            values,
+            opt_params,
+            pending_fields: vec![],
+        }
+    }
+
+    pub fn with_pending_fields(values: Vec<NamedVal<T>>, opt_params: Vec<Hyperparameter<T>>, pending_fields: Vec<PendingOptField<T>>) -> Self {
+        Self {
+            values,
+            opt_params,
+            pending_fields,
+        }
     }
 
     pub fn values(&self) -> &Vec<NamedVal<T>> {
@@ -77,8 +183,53 @@ impl<T: FieldName> GridValueSet<T> {
         &self.opt_params
     }
 
+    pub fn pending_fields(&self) -> &Vec<PendingOptField<T>> {
+        &self.pending_fields
+    }
+
     pub fn into_parts(self) -> (Vec<NamedVal<T>>, Vec<Hyperparameter<T>>) {
+        assert!(self.pending_fields.is_empty(), "GridValueSet::into_parts called with unresolved pending fields");
         (self.values, self.opt_params)
+    }
+
+    pub fn into_parts_with_pending(self) -> (Vec<NamedVal<T>>, Vec<Hyperparameter<T>>, Vec<PendingOptField<T>>) {
+        (self.values, self.opt_params, self.pending_fields)
+    }
+
+    pub fn resolve_pending_fields(self) -> Vec<Self> {
+        let mut pending = vec![self];
+        let mut resolved = Vec::new();
+
+        while let Some(mut value_set) = pending.pop() {
+            if value_set.pending_fields.is_empty() {
+                resolved.push(value_set);
+                continue;
+            }
+
+            let pending_field = value_set.pending_fields.remove(0);
+            match pending_field.resolve(value_set.values.as_slice()) {
+                ResolvedOptField::Const(value) => {
+                    value_set.values.push(value);
+                    pending.push(value_set);
+                }
+                ResolvedOptField::Opt(opt_param) => {
+                    value_set.opt_params.push(opt_param);
+                    pending.push(value_set);
+                }
+                ResolvedOptField::Grid(grid_range) => {
+                    for branch in grid_range.grid_value_sets().into_iter().rev() {
+                        let (branch_values, branch_opt_params, branch_pending_fields) = branch.into_parts_with_pending();
+                        let mut branched_value_set = value_set.clone();
+                        branched_value_set.values.extend(branch_values);
+                        branched_value_set.opt_params.extend(branch_opt_params);
+                        branched_value_set.pending_fields.extend(branch_pending_fields);
+                        pending.push(branched_value_set);
+                    }
+                }
+            }
+        }
+
+        resolved
     }
 }
 
@@ -89,10 +240,12 @@ pub enum NamedRange<T: FieldName> {
         range: Range<Val>,
         step: (Val, u32), //for NamedRangeIter step/digits -> round_to_digits(value: f64, digits: u32)
     },
+    // Stores pre-expanded grid branches when a single "range" choice needs to
+    // contribute multiple fixed values and/or branch-specific opt params.
     ValueSets(Vec<GridValueSet<T>>),
 }
 
-impl<T: FieldName> NamedRange<T> {
+impl<T: FieldName + 'static> NamedRange<T> {
     pub fn new(name: T, range: Range<Val>, step: (Val, u32)) -> Self {
         Self::Range { name, range, step }
     }
@@ -226,7 +379,7 @@ impl<T: FieldName> Iterator for NamedRangeIter<T> {
     }
 }
 
-impl<T: FieldName> IntoIterator for NamedRange<T> {
+impl<T: FieldName + 'static> IntoIterator for NamedRange<T> {
     type Item = NamedVal<T>;
     type IntoIter = std::vec::IntoIter<NamedVal<T>>;
 
@@ -296,10 +449,10 @@ impl<T: FieldName> From<(T, Val)> for NamedVal<T> {
     }
 }
 
-impl<T: FieldName> TryFrom<(T, &RangeOrValue<f64>)> for NamedRange<T> {
+impl<T: FieldName + 'static, P: FieldName> TryFrom<(T, &RangeOrValue<f64, P>)> for NamedRange<T> {
     type Error = ();
 
-    fn try_from((name, value): (T, &RangeOrValue<f64>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (T, &RangeOrValue<f64, P>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range { range, step } = value {
             if let Some(step) = step {
                 return Ok(NamedRange::new(name, Val::Real(range.start)..Val::Real(range.end), (Val::Real(step.0), step.1)));
@@ -327,10 +480,10 @@ impl From<&NamedRange<String>> for Vec<NamedVal<String>> {
     }
 }
 
-impl<T: FieldName> TryFrom<(T, &RangeOrValue<u32>)> for NamedRange<T> {
+impl<T: FieldName + 'static, P: FieldName> TryFrom<(T, &RangeOrValue<u32, P>)> for NamedRange<T> {
     type Error = ();
 
-    fn try_from((name, value): (T, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (T, &RangeOrValue<u32, P>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range { range, step } = value {
             if let Some(step) = step {
                 return Ok(NamedRange::new(name, Val::UInt(range.start)..Val::UInt(range.end), (Val::UInt(step.0), step.1)));
@@ -340,10 +493,10 @@ impl<T: FieldName> TryFrom<(T, &RangeOrValue<u32>)> for NamedRange<T> {
     }
 }
 
-impl<T: FieldName> TryFrom<(T, &RangeOrValue<u32>)> for NamedVal<T> {
+impl<T: FieldName, P: FieldName> TryFrom<(T, &RangeOrValue<u32, P>)> for NamedVal<T> {
     type Error = ();
 
-    fn try_from((name, value): (T, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (T, &RangeOrValue<u32, P>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Value(v) = value {
             return Ok(NamedVal {
                 path: name,

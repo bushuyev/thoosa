@@ -10,7 +10,7 @@ extern crate self as thoosa_shared;
 use crate::hyperparameter::{FieldName, Hyperparameter};
 use crate::collect_futures_eta::{collect_eta_maybe_log, collect_eta_record_completion, CollectEtaInvocationGuard, COLLECT_ETA_LOG_INTERVAL};
 use crate::resource::ResourceId;
-use crate::val::{NamedRange, NamedVal, Val};
+use crate::val::{GridValueSet, NamedRange, NamedVal, PendingOptField, Val};
 use bytemuck::{Pod, Zeroable};
 use chrono::SecondsFormat;
 use lazy_static::lazy_static;
@@ -833,16 +833,31 @@ where
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum RangeOrValue<V> {
+#[derive(Debug, Clone)]
+pub enum RangeOrValue<V, T: FieldName = String> {
     Range {
         range: Range<V>,
         step: Option<(V, u32)>,//(value, number of digits to round to)
     }, //TODO replace step in params with number of steps? how choose number of decimals in step=to-from/steps?
     Value(V),
+    Dynamic(fn(&[NamedVal<T>]) -> RangeOrValue<V>),
 }
 
-impl<V: Display + Serialize> Serialize for RangeOrValue<V> {
+impl<V: PartialEq, T: FieldName> PartialEq for RangeOrValue<V, T> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Range { range: lhs_range, step: lhs_step },
+                Self::Range { range: rhs_range, step: rhs_step },
+            ) => lhs_range == rhs_range && lhs_step == rhs_step,
+            (Self::Value(lhs), Self::Value(rhs)) => lhs == rhs,
+            (Self::Dynamic(lhs), Self::Dynamic(rhs)) => std::ptr::fn_addr_eq(*lhs, *rhs),
+            _ => false,
+        }
+    }
+}
+
+impl<V: Display + Serialize, T: FieldName> Serialize for RangeOrValue<V, T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -856,11 +871,12 @@ impl<V: Display + Serialize> Serialize for RangeOrValue<V> {
                 }
                 serializer.serialize_str(&s)
             }
+            RangeOrValue::Dynamic(_) => Err(serde::ser::Error::custom("dynamic RangeOrValue values cannot be serialized")),
         }
     }
 }
 
-impl<'de, V: FromStr + Deserialize<'de>> Deserialize<'de> for RangeOrValue<V>
+impl<'de, V: FromStr + Deserialize<'de>, T: FieldName> Deserialize<'de> for RangeOrValue<V, T>
 where
     <V as FromStr>::Err: Display,
 {
@@ -905,15 +921,15 @@ where
     }
 }
 
-pub fn add_range_or_value<'a, V: 'a, T: FieldName>(
+pub fn add_range_or_value<'a, V: 'a + 'static, T: FieldName + 'static>(
     name: T,
-    v: &'a RangeOrValue<V>,
+    v: &'a RangeOrValue<V, T>,
     const_params: &mut Vec<NamedVal<T>>,
     grid_params: &mut Vec<NamedRange<T>>,
     opt_params: &mut Vec<Hyperparameter<T>>,
 ) where
-    Val: From<&'a V>,
-    Hyperparameter<T>: From<(T, &'a Range<V>)>,
+    for<'b> Val: From<&'b V>,
+    for<'b> Hyperparameter<T>: From<(T, &'b Range<V>)>,
 {
     match v {
         RangeOrValue::Range {
@@ -934,6 +950,13 @@ pub fn add_range_or_value<'a, V: 'a, T: FieldName>(
         RangeOrValue::Value(v) => {
             const_params.push(NamedVal::from((name, v.into())));
         }
+        RangeOrValue::Dynamic(resolve) => {
+            grid_params.push(NamedRange::from_grid_value_sets(vec![GridValueSet::with_pending_fields(
+                vec![],
+                vec![],
+                vec![PendingOptField::from_range_or_value(name, *resolve)],
+            )]));
+        }
     }
 }
 
@@ -949,7 +972,7 @@ pub fn add_prefix<T: FieldName>(prefix: Option<&T>, field: T) -> T {
     }
 }
 
-impl IntoIterator for RangeOrValue<u32> {
+impl<T: FieldName> IntoIterator for RangeOrValue<u32, T> {
     type Item = u32;
     type IntoIter = Box<dyn Iterator<Item = u32>>;
 
@@ -963,11 +986,12 @@ impl IntoIterator for RangeOrValue<u32> {
                 }
             }
             RangeOrValue::Value(v) => Box::new(std::iter::once(v)),
+            RangeOrValue::Dynamic(_) => panic!("can't iterate unresolved dynamic RangeOrValue"),
         }
     }
 }
 
-impl IntoIterator for RangeOrValue<i32> {
+impl<T: FieldName> IntoIterator for RangeOrValue<i32, T> {
     type Item = i32;
     type IntoIter = Box<dyn Iterator<Item = i32>>;
 
@@ -981,11 +1005,12 @@ impl IntoIterator for RangeOrValue<i32> {
                 }
             }
             RangeOrValue::Value(v) => Box::new(std::iter::once(v)),
+            RangeOrValue::Dynamic(_) => panic!("can't iterate unresolved dynamic RangeOrValue"),
         }
     }
 }
 
-impl IntoIterator for RangeOrValue<f64> {
+impl<T: FieldName> IntoIterator for RangeOrValue<f64, T> {
     type Item = f64;
     type IntoIter = Box<dyn Iterator<Item = f64>>;
 
@@ -1006,11 +1031,12 @@ impl IntoIterator for RangeOrValue<f64> {
                 }
             }
             RangeOrValue::Value(v) => Box::new(std::iter::once(v)),
+            RangeOrValue::Dynamic(_) => panic!("can't iterate unresolved dynamic RangeOrValue"),
         }
     }
 }
 
-impl<V: Display + PrimInt> Display for RangeOrValue<V> {
+impl<V: Display + PrimInt, T: FieldName> Display for RangeOrValue<V, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             RangeOrValue::Range { range, step: _ } => {
@@ -1019,11 +1045,14 @@ impl<V: Display + PrimInt> Display for RangeOrValue<V> {
             RangeOrValue::Value(v) => {
                 write!(f, "{}", v)
             }
+            RangeOrValue::Dynamic(_) => {
+                write!(f, "<dynamic>")
+            }
         }
     }
 }
 
-impl<V> RangeOrValue<V>
+impl<V, T: FieldName> RangeOrValue<V, T>
 where
     V: Clone + 'static,
 {
@@ -1034,6 +1063,10 @@ where
                 Cause::ExpectedValue,
             )),
             RangeOrValue::Value(v) => Ok(v),
+            RangeOrValue::Dynamic(_resolve) => Err(ThoError::new_with_error(
+                "expected RangeOrValue::Value, got Dynamic",
+                Cause::ExpectedValue,
+            )),
         }
     }
 
@@ -1044,43 +1077,47 @@ where
                 "expected RangeOrValue::Range, got Value",
                 Cause::ExpectedRange,
             )),
+            RangeOrValue::Dynamic(_resolve) => Err(ThoError::new_with_error(
+                "expected RangeOrValue::Range, got Dynamic",
+                Cause::ExpectedRange,
+            )),
         }
     }
 }
 
-impl From<f64> for RangeOrValue<f64> {
+impl<T: FieldName> From<f64> for RangeOrValue<f64, T> {
     fn from(value: f64) -> Self {
         RangeOrValue::Value(value)
     }
 }
 
-impl From<f32> for RangeOrValue<f32> {
+impl<T: FieldName> From<f32> for RangeOrValue<f32, T> {
     fn from(value: f32) -> Self {
         RangeOrValue::Value(value)
     }
 }
 
-impl From<u32> for RangeOrValue<u32> {
+impl<T: FieldName> From<u32> for RangeOrValue<u32, T> {
     fn from(value: u32) -> Self {
         RangeOrValue::Value(value)
     }
 }
 
-impl From<i32> for RangeOrValue<i32> {
+impl<T: FieldName> From<i32> for RangeOrValue<i32, T> {
     fn from(value: i32) -> Self {
         RangeOrValue::Value(value)
     }
 }
 
-impl From<i64> for RangeOrValue<i64> {
+impl<T: FieldName> From<i64> for RangeOrValue<i64, T> {
     fn from(value: i64) -> Self {
         RangeOrValue::Value(value)
     }
 }
 
-impl<V> From<Range<V>> for RangeOrValue<V>
+impl<V, T: FieldName> From<Range<V>> for RangeOrValue<V, T>
 where
-    V: PartialEq + Into<RangeOrValue<V>>,
+    V: PartialEq + Into<RangeOrValue<V, T>>,
 {
     fn from(r: Range<V>) -> Self {
         if r.start == r.end {
