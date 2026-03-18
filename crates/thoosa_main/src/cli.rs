@@ -32,6 +32,8 @@ use std::{fs, process};
 use std::marker::PhantomData;
 use std::time::Instant;
 use plotters::prelude::BLACK;
+use plotters::style::ShapeStyle;
+use serde::Serialize;
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::nn::VarStore;
@@ -708,7 +710,7 @@ where
             // }
             //
             // info!("tensors: {} max={:?} avg={}",lengths.len(),lengths.iter().max(),lengths.iter().sum::<i64>() / lengths.len() as i64);
-            // perf_unfold_concat_cuda_vs_cpu().await?;
+            perf_unfold_concat_cuda_vs_cpu().await?;
 
             info!("Hello");
         }
@@ -1501,6 +1503,7 @@ pub async fn run_plot<C>(
 where
     C:RunCtx + Adjustable{
 
+    let print_to_stdout = plot_params.print_to_stdout();
 
     let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<C>, C>::new(
         Arc::clone(store),
@@ -1517,17 +1520,17 @@ where
     match plot_params.motifs_by() {
         DataBy::Resource { resource_id, channels, freq_filters } => {
             debug!("run_plot: MotifsBy::Resource resource_id={resource_id} channels={channels:?} freq_filters={freq_filters:?}");
-            plot_resource(ws, store, loader, resource_id, channels, freq_filters, resolution, ctx).await?;
+            plot_resource(ws, store, loader, resource_id, channels, freq_filters, resolution, print_to_stdout, ctx).await?;
             return Ok(());
         }
         DataBy::MotifNetApplied { resource_id, net_path } => {
             debug!("run_plot: MotifsBy::MotifNetApplied resource_id={resource_id} net_path={net_path:?}");
-            plot_motif_net_applied(ws, store, loader, resource_id, net_path, resolution, ctx).await?;
+            plot_motif_net_applied(ws, store, loader, resource_id, net_path, resolution, print_to_stdout, ctx).await?;
             return Ok(());
         }
         DataBy::MotifId(motif_id) => {
             debug!("run_plot: MotifsBy::MotifId run_id={motif_id}");
-            plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None, resolution).await?;
+            plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None, resolution, print_to_stdout).await?;
         }
         DataBy::RunId {
             find_motifs_run_ids,
@@ -1544,6 +1547,7 @@ where
                     &clc_dist,
                     select_motifs_run_ids.clone(),
                     resolution,
+                    print_to_stdout,
                     ctx.branch(Some(&format!("find_motifs_run_{find_motifs_run_id}")), true, false),
                 )
                 .await?;
@@ -1559,6 +1563,7 @@ where
                     &motif_loader_impl,
                     &clc_dist,
                     resolution,
+                    print_to_stdout,
                     ctx.branch(Some(&format!("selected_motifs_run_{select_motifs_run_id}")), true, false),
                 )
                 .await?;
@@ -1570,6 +1575,134 @@ where
     Ok(())
 }
 
+#[derive(Serialize)]
+#[serde(untagged)]
+enum StdoutPlotNumber {
+    Finite(f32),
+    Special(String),
+}
+
+impl From<f32> for StdoutPlotNumber {
+    fn from(value: f32) -> Self {
+        if value.is_finite() {
+            Self::Finite(value)
+        } else {
+            Self::Special(value.to_string())
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct StdoutPlotPoint {
+    x: StdoutPlotNumber,
+    y: StdoutPlotNumber,
+}
+
+#[derive(Serialize)]
+struct StdoutPlotSeries {
+    name: String,
+    points: Vec<StdoutPlotPoint>,
+}
+
+#[derive(Serialize)]
+struct StdoutPlotSidebarRow {
+    name: String,
+    value: StdoutPlotNumber,
+}
+
+#[derive(Serialize)]
+struct StdoutPlotSidebar {
+    title: String,
+    rows: Vec<StdoutPlotSidebarRow>,
+}
+
+#[derive(Serialize)]
+struct StdoutPlotDump {
+    format: &'static str,
+    caption: String,
+    target_path: String,
+    size: (u32, u32),
+    series: Vec<StdoutPlotSeries>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sidebar: Option<StdoutPlotSidebar>,
+}
+
+fn print_plot_data_to_stdout<S>(
+    plot_data: Vec<(String, S, Vec<(f32, f32)>)>,
+    caption: &str,
+    size: (u32, u32),
+    path: &impl AsRef<Path>,
+    sidebar: Option<(&str, &[(String, f32)])>,
+) -> Result<(), ThoError> {
+    let dump = StdoutPlotDump {
+        format: "thoosa_plot_data_v1",
+        caption: caption.to_string(),
+        target_path: path.as_ref().display().to_string(),
+        size,
+        series: plot_data
+            .into_iter()
+            .map(|(name, _, points)| StdoutPlotSeries {
+                name,
+                points: points
+                    .into_iter()
+                    .map(|(x, y)| StdoutPlotPoint { x: x.into(), y: y.into() })
+                    .collect(),
+            })
+            .collect(),
+        sidebar: sidebar.map(|(title, rows)| StdoutPlotSidebar {
+            title: title.to_string(),
+            rows: rows
+                .iter()
+                .map(|(name, value)| StdoutPlotSidebarRow {
+                    name: name.clone(),
+                    value: (*value).into(),
+                })
+                .collect(),
+        }),
+    };
+
+    let mut stdout = std::io::stdout().lock();
+    serde_json::to_writer(&mut stdout, &dump).map_err(|e| ThoError::from_error("print plot data to stdout", e))?;
+    writeln!(&mut stdout).map_err(|e| ThoError::from_error("finish plot data stdout line", e))?;
+    Ok(())
+}
+
+fn emit_or_plot_series<S>(
+    print_to_stdout: bool,
+    plot_data: Vec<(String, S, Vec<(f32, f32)>)>,
+    caption: &str,
+    size: (u32, u32),
+    path: &impl AsRef<Path>,
+) -> Result<(), ThoError>
+where
+    S: Into<ShapeStyle> + Clone,
+{
+    if print_to_stdout {
+        print_plot_data_to_stdout(plot_data, caption, size, path, None)
+    } else {
+        plot_series(plot_data, caption, size, path)
+    }
+}
+
+fn emit_or_plot_series_with_sidebar_values<S>(
+    print_to_stdout: bool,
+    plot_data: Vec<(String, S, Vec<(f32, f32)>)>,
+    caption: &str,
+    size: (u32, u32),
+    path: &impl AsRef<Path>,
+    sidebar_title: &str,
+    sidebar_rows: &[(String, f32)],
+) -> Result<(), ThoError>
+where
+    S: Into<ShapeStyle> + Clone,
+{
+    if print_to_stdout {
+        print_plot_data_to_stdout(plot_data, caption, size, path, Some((sidebar_title, sidebar_rows)))
+    } else {
+        plot_series_with_sidebar_values(plot_data, caption, size, path, sidebar_title, sidebar_rows)
+    }
+}
+
 async fn plot_found_motifs<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
@@ -1578,6 +1711,7 @@ async fn plot_found_motifs<C>(
     clc_dist: &Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
     select_motifs_run_ids: Option<Vec<RunId>>,
     resolution: Resolution,
+    print_to_stdout: bool,
     mut ctx: C,
 ) -> Result<(), ThoError>
 where
@@ -1598,7 +1732,7 @@ where
             async move {
                 debug!("run_plot: motif_id={motif_id}");
 
-                if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_ids, resolution).await {
+                if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_ids, resolution, print_to_stdout).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
                 MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();
@@ -1631,6 +1765,7 @@ async fn plot_selected_motifs<C>(
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
     clc_dist: &Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
     resolution: Resolution,
+    print_to_stdout: bool,
     mut ctx: C,
 ) -> Result<(), ThoError>
 where
@@ -1667,7 +1802,7 @@ where
             let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true, false);
             async move {
                 debug!("run_plot: motif_id={motif_id}");
-                if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution).await {
+                if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution, print_to_stdout).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
                 MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();
@@ -1736,6 +1871,7 @@ fn plot_resource_channels<C>(
     tensor: &ThoTensor<ChannelsData2, SynKey>,
     channels: Option<&Vec<u32>>,
     resolution: Resolution,
+    print_to_stdout: bool,
 ) -> Result<(), ThoError>
 where
     C: RunCtx + Adjustable,
@@ -1764,7 +1900,8 @@ where
         })
         .collect::<Result<Vec<_>, ThoError>>()?;
 
-    plot_series(
+    emit_or_plot_series(
+        print_to_stdout,
         plot_data,
         caption,
         resolution.plot_size((2000, 1000)),
@@ -1780,6 +1917,7 @@ fn plot_single_line_tensor(
     caption: &str,
     line_t: &Tensor,
     resolution: Resolution,
+    print_to_stdout: bool,
 ) -> Result<(), ThoError> {
     let line_t = line_t.f_view([-1])?;
     let points = line_t
@@ -1788,7 +1926,8 @@ fn plot_single_line_tensor(
         .map(|(i, v)| (i as f32, v as f32))
         .collect::<Vec<_>>();
 
-    plot_series(
+    emit_or_plot_series(
+        print_to_stdout,
         vec![("0".to_string(), BLACK, points)],
         caption,
         resolution.plot_size((2000, 1000)),
@@ -1806,6 +1945,7 @@ async fn plot_resource<C>(
     channels: Option<Vec<u32>>,
     freq_filters: Option<Vec<thoosa_common::find_motifs_run_config::InputFilter>>,
     resolution: Resolution,
+    print_to_stdout: bool,
     mut ctx: C,
 ) -> Result<(), ThoError>
 where
@@ -1817,7 +1957,7 @@ where
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
     raw.with_data_ref(0, ctx.branch(Some("plot_resource_raw"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-        plot_resource_channels::<C>(ws, resource_id, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution)
+        plot_resource_channels::<C>(ws, resource_id, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution, print_to_stdout)
     }).await?;
 
     if let Some(freq_filters) = freq_filters {
@@ -1831,7 +1971,7 @@ where
 
         let filtered_channels = channels.clone();
         filtered.with_data_ref(0, ctx.branch(Some("plot_resource_freq_filter_plot"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-            plot_resource_channels::<C>(ws, resource_id, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution)
+            plot_resource_channels::<C>(ws, resource_id, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution, print_to_stdout)
         }).await?;
     }
 
@@ -1845,6 +1985,7 @@ async fn plot_motif_net_applied<C>(
     resource_id: ResourceId,
     net_path: PathBuf,
     resolution: Resolution,
+    print_to_stdout: bool,
     mut ctx: C,
 ) -> Result<(), ThoError>
 where
@@ -1866,7 +2007,7 @@ where
     let net_path_sfx = sanitize_plot_path_segment(&net_path.to_string_lossy());
 
     raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_raw_channel"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-        plot_resource_channels::<C>(ws, resource_id, &format!("motif_net_input_raw_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net input raw channel={channel} net={net_path:?}"), tensor, Some(&channel_only), resolution)
+        plot_resource_channels::<C>(ws, resource_id, &format!("motif_net_input_raw_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net input raw channel={channel} net={net_path:?}"), tensor, Some(&channel_only), resolution, print_to_stdout)
     }).await?;
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
@@ -1884,7 +2025,7 @@ where
 
         let channel_only_filtered = vec![channel];
         filtered.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_prefilter_channel"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-            plot_resource_channels::<C>(ws, resource_id, &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_id={find_motifs_run_id}"), tensor, Some(&channel_only_filtered), resolution)
+            plot_resource_channels::<C>(ws, resource_id, &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_id={find_motifs_run_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout)
         }).await?;
 
         filtered
@@ -1916,6 +2057,7 @@ where
                 &format!("Resource {resource_id} motif-net output motif_id={motif_id} channel={channel} find_run_id={find_motifs_run_id} net={net_path:?}"),
                 out.t_ref(),
                 resolution,
+                print_to_stdout,
             )?;
 
             Ok(())
@@ -1933,6 +2075,7 @@ async fn plot_motif<C>(
     motif_stats: Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
     select_motif_run_ids: Option<Vec<RunId>>,
     resolution: Resolution,
+    print_to_stdout: bool,
 ) -> Result<(), ThoError>
 where
     C:RunCtx + Adjustable{
@@ -1990,7 +2133,8 @@ where
                 })
                 .collect::<Result<Vec<_>, ThoError>>()?;
 
-            plot_series_with_sidebar_values(
+            emit_or_plot_series_with_sidebar_values(
+                print_to_stdout,
                 plot_data,
                 format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len}").as_str(),
                 resolution.plot_size((2600, 1200)),
@@ -2148,7 +2292,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
     // log::set_max_level(Info);
     // GlobalCtx::init_devices(2);
 
-    let num_tensors = 1000;
+    let num_tensors = 3;
 
     let mut cuda_first_time = 0;
     let mut cpu_first_time = 0;
@@ -2299,6 +2443,16 @@ mod cli_tests {
 
         match cli.command {
             Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.resolution(), Resolution::High),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_plot_data_stdout_flag_parses_true() {
+        let cli = Cli::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:7", "--stdout"]);
+
+        match cli.command {
+            Some(crate::cli::Commands::PlotData(args)) => assert!(args.print_to_stdout()),
             other => panic!("unexpected command: {other:?}"),
         }
     }
