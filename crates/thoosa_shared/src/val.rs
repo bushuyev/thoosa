@@ -59,6 +59,9 @@ impl<T: FieldName> NamedVal<T> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+// to run opt on search space from common hyperparams + specific to each grid values combo (filters with filter-specific params in find motifs)
+// gpt: Represents one concrete grid-search branch: a bundle of fixed values to apply
+// together plus opt hyperparameters that are only valid for that branch.
 pub struct GridValueSet<T: FieldName> {
     values: Vec<NamedVal<T>>,
     opt_params: Vec<Hyperparameter<T>>,
@@ -89,6 +92,8 @@ pub enum NamedRange<T: FieldName> {
         range: Range<Val>,
         step: (Val, u32), //for NamedRangeIter step/digits -> round_to_digits(value: f64, digits: u32)
     },
+    // Stores pre-expanded grid branches when a single "range" choice needs to
+    // contribute multiple fixed values and/or branch-specific opt params.
     ValueSets(Vec<GridValueSet<T>>),
 }
 
