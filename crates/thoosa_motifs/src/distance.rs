@@ -395,6 +395,48 @@ fn window_min_2d_last_dims(x_bhw: &Tensor, radius0: i64, radius1: i64) -> Result
     Ok(win_min4.f_squeeze_dim(1)?)
 }
 
+
+#[inline]
+fn kind_size_bytes(kind: Kind) -> usize {
+    match kind {
+        Kind::Uint8 | Kind::Int8 | Kind::Bool => 1,
+        Kind::Int16 | Kind::Half | Kind::BFloat16 => 2,
+        Kind::Int | Kind::Float => 4,
+        Kind::Int64 | Kind::Double => 8,
+        _ => 4, // conservative default
+    }
+}
+
+#[inline]
+fn choose_b_chunk(
+    b: i64,
+    h: i64,
+    w: i64,
+    distances_kind: Kind,
+    idx_kind: Kind,
+) -> i64 {
+    // Rough per-element live memory inside one chunk:
+    //   win_min      : distances dtype
+    //   regional     : bool
+    //   regional_not : bool
+    //   idx_masked   : idx dtype
+    //   win_idx      : idx dtype
+    //   is_first     : bool
+    //   keep_chunk   : bool
+    //
+    // x_chunk and idx_expand are views, output is allocated once outside the loop.
+    let per_elem = kind_size_bytes(distances_kind)
+        + kind_size_bytes(idx_kind) * 2
+        + 4; // ~4 bool/intermediate bytes
+
+    // Aim to keep chunk intermediates around ~128 MiB.
+    let target_bytes: usize = 128 * 1024 * 1024;
+    let elems_per_b = (h as usize).saturating_mul(w as usize).max(1);
+    let b_chunk = (target_bytes / per_elem / elems_per_b).max(1);
+
+    (b_chunk as i64).min(b).max(1)
+}
+
 /// Exact 2D local-min suppression using pooled minima + pooled tie-break.
 /// Keeps at most one minimum inside every rectangle
 ///   [y-radius0 .. y+radius0] x [x-radius1 .. x+radius1]
@@ -441,24 +483,60 @@ pub fn local_min_mask_suppressed_2d_pool(
     let b: i64 = perm_sizes[..perm_sizes.len() - 2].iter().product();
 
     // Flatten leading dims: [*, H, W] -> [B, H, W]
-    let x_bhw = x_perm.f_reshape(&[b, h, w])?;
+    let x_bhw = x_perm.f_reshape([b, h, w])?;
 
-    // 1) regional minima over a 2D window
-    let win_min = window_min_2d_last_dims(&x_bhw, radius0, radius1)?;
-    let regional = x_bhw.f_eq_tensor(&win_min)?; // [B, H, W]
+    // Use Float for lexicographic indices when exactly representable, otherwise Double.
+    let hw = h
+        .checked_mul(w)
+        .ok_or_else(|| ThoError::new("local_min_mask_suppressed_2d_pool: h*w overflow"))?;
+    let idx_kind = if hw <= 16_777_216 {
+        Kind::Float
+    } else {
+        Kind::Double
+    };
 
-    // 2) deterministic tie-break via lexicographic index y*W + x
-    // Use Float64 so +inf is available and index equality is exact enough here.
-    let idx_hw = Tensor::arange(h * w, (Kind::Double, x_bhw.device())).f_reshape(&[1, h, w])?;
-    let idx_bhw = idx_hw.f_expand(&[b, h, w], true)?;
+    // Base lexicographic index [1, H, W]; expand per chunk as a view.
+    let idx_hw = Tensor::arange(hw, (idx_kind, x_bhw.device())).f_reshape([1, h, w])?;
 
-    let regional_not = regional.f_logical_not()?;
-    let idx_masked = panic_to_err!(idx_bhw.f_masked_fill(&regional_not, f64::INFINITY))?;
+    // Process B in chunks to reduce peak memory.
+    let b_chunk = choose_b_chunk(b, h, w, x_bhw.kind(), idx_kind);
 
-    let win_idx = window_min_2d_last_dims(&idx_masked, radius0, radius1)?;
-    let is_first_regional = idx_bhw.f_eq_tensor(&win_idx)?;
+    // Allocate output once and fill chunk-by-chunk.
+    let keep_bhw = Tensor::zeros([b, h, w], (Kind::Bool, x_bhw.device()));
 
-    let keep_bhw = regional.f_logical_and(&is_first_regional)?; // [B, H, W]
+    let mut start = 0i64;
+    while start < b {
+        let len = (b - start).min(b_chunk);
+
+        let x_chunk = x_bhw.f_narrow(0, start, len)?;
+
+        let keep_chunk = {
+            // 1) regional minima over a 2D window
+            let win_min = window_min_2d_last_dims(&x_chunk, radius0, radius1)?;
+            let regional = x_chunk.f_eq_tensor(&win_min)?; // [len, H, W]
+
+            // 2) deterministic tie-break via lexicographic index y*W + x
+            let idx_chunk = idx_hw.f_expand([len, h, w], true)?; // view
+            let regional_not = regional.f_logical_not()?;
+            let inf = match idx_kind {
+                Kind::Float => f32::INFINITY as f64,
+                Kind::Double => f64::INFINITY,
+                _ => unreachable!(),
+            };
+
+            let idx_masked = panic_to_err!(idx_chunk.f_masked_fill(&regional_not, inf))?;
+            let win_idx = window_min_2d_last_dims(&idx_masked, radius0, radius1)?;
+            let is_first_regional = idx_chunk.f_eq_tensor(&win_idx)?;
+
+            regional.f_logical_and(&is_first_regional)?
+        };
+
+        keep_bhw
+            .f_narrow(0, start, len)?
+            .f_copy_(&keep_chunk)?;
+
+        start += len;
+    }
 
     // Back to original layout
     let keep_perm = keep_bhw.f_reshape(&perm_sizes)?;
