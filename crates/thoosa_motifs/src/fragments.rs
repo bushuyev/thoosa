@@ -328,6 +328,9 @@ pub struct PlotDataArgs {
 
     #[arg(long, value_enum, default_value_t = Resolution::Normal)]
     pub resolution: Resolution,
+
+    #[arg(long, default_value_t = false)]
+    pub stdout: bool,
 }
 
 impl PlotDataArgs {
@@ -339,11 +342,16 @@ impl PlotDataArgs {
         self.resolution
     }
 
+    pub fn print_to_stdout(&self) -> bool {
+        self.stdout
+    }
+
     pub fn new(motifs_by: DataBy) -> Self {
         Self {
             data_by: motifs_by,
             limit: None,
             resolution: Resolution::Normal,
+            stdout: false,
         }
     }
 }
@@ -457,6 +465,7 @@ mod motifs_tests {
         assert_eq!(args.motifs_by(), DataBy::MotifId(17));
         assert_eq!(args.resolution(), Resolution::Normal);
         assert_eq!(args.limit, None);
+        assert!(!args.print_to_stdout());
     }
 
     #[test]
