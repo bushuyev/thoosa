@@ -23,7 +23,7 @@ pub struct GridRunConfigs<CP, GP> {
     grid_params: GP,
 }
 
-impl<T: FieldName> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
+impl<T: FieldName + 'static> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
     pub fn new(
         const_config_source: ConstConfigs<Vec<NamedVal<T>>>,
         grid_params: Vec<NamedRange<T>>,
@@ -41,17 +41,19 @@ impl<T: FieldName> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
     pub fn grid_value_sets(&self) -> Vec<GridValueSet<T>> {
         make_combos(self.grid_params.iter().map(|gp| gp.grid_value_sets().into_iter()))
             .into_iter()
-            .map(|combo| {
+            .flat_map(|combo| {
                 let mut values = Vec::new();
                 let mut opt_params = Vec::new();
+                let mut pending_fields = Vec::new();
 
                 for value_set in combo {
-                    let (value_set_values, value_set_opt_params) = value_set.into_parts();
+                    let (value_set_values, value_set_opt_params, value_set_pending_fields) = value_set.into_parts_with_pending();
                     values.extend(value_set_values);
                     opt_params.extend(value_set_opt_params);
+                    pending_fields.extend(value_set_pending_fields);
                 }
 
-                GridValueSet::new(values, opt_params)
+                GridValueSet::with_pending_fields(values, opt_params, pending_fields).resolve_pending_fields()
             })
             .collect()
     }
@@ -59,7 +61,11 @@ impl<T: FieldName> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
     pub fn grid_to_vals(&self) -> Vec<Vec<NamedVal<T>>> {
         self.grid_value_sets()
             .into_iter()
-            .map(|value_set| value_set.into_parts().0)
+            .map(|value_set| {
+                let (values, opt_params) = value_set.into_parts();
+                assert!(opt_params.is_empty(), "grid_to_vals encountered opt params after resolving grid values: {opt_params:?}");
+                values
+            })
             .collect()
     }
 
@@ -89,7 +95,7 @@ pub struct OptRunConfigs<CP, GP, OP, T> {
     _pd: PhantomData<T>,
 }
 
-impl<T: FieldName> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyperparameter<T>>, T> {
+impl<T: FieldName + 'static> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyperparameter<T>>, T> {
     pub fn new(
         grid_run_config_source: GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>>,
         opt_params: Vec<Hyperparameter<T>>,

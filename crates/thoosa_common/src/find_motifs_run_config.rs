@@ -388,7 +388,7 @@ mod tests {
                     band_hz: 300f64.into(),
                     kernel_size: 12000u32.into(),
                     stride: 1u32.into(),
-                    padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
+                    padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
                 },
             ), InputFilterRangeOrValue::MedianFilter(MedianFilterParamsRangeOrValue { window: 11u32.into() })]),
             slices_filter: SlicesFilterRangeOrValue::Accumulate(
@@ -473,7 +473,7 @@ mod tests {
         let rc = SelectMotifsRunConfigRangeOrValue {
             id: Some(7),
             extend_config: Some(ExtendMotifsConfigRangeOrValue {
-                slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue {}),
+                slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue::default()),
                 slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
             }),
             motif_criteria: MotifCriteriaRangeOrValue {
