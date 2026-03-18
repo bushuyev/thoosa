@@ -71,10 +71,13 @@ fn test_grid_param() -> Result<(), ThoError> {
 
         cat_field: CatEnumRangeOrValue::Vec(vec![
             CatEnumRangeOrValue::One(OneRangeOrValue {
-                inner_field_one: RangeOrValue::Dynamic(|named_val: &[NamedVal<TestRunConfigFields>]| {
-                    match named_val.iter().find(|f|f.path().eq(&TestRunConfigFields::SimpleField)){
+                inner_field_one: RangeOrValue::Dynamic(|named_vals: &[NamedVal<TestRunConfigFields>]| {
+                    match named_vals.iter().find(|f|f.path().eq(&TestRunConfigFields::SimpleField)){
                         None => RangeOrValue::Value(0),
-                        Some(_v) => RangeOrValue::Range{ range: 0..3, step: None },
+                        Some(_v) => {
+                            debug!("val={:?}", _v.val().to_f64());
+                            RangeOrValue::Range{ range: 0 .._v.val().to_i64(1) as u32, step: None }
+                        },
                     }
                 })
             })
@@ -84,11 +87,11 @@ fn test_grid_param() -> Result<(), ThoError> {
     let opt_configs = test_config.opt_run_configs()?;
     let grid_runs = opt_configs.grid_to_vals_and_opt_params();
     assert_eq!(grid_runs.len(), 10);
-    assert!(grid_runs.iter().all(|(_, opt_params)| {
+    assert!(grid_runs.iter().enumerate().all(|(i, (_, opt_params))| {
         opt_params == &vec![Hyperparameter::UniformInt {
             name: TestRunConfigFields::CatField(CatEnumFields::One(OneFields::InnerFieldOne)),
             lower: 0,
-            upper: 3,
+            upper: i as i64,
         }]
     }));
 

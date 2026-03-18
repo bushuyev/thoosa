@@ -39,7 +39,7 @@ use tch::{Device, IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MinAggrRangeOrValue, MotifCriteriaRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfConstraintRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MinAggrRangeOrValue, MotifCriteriaRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfConstraintRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -55,7 +55,7 @@ use thoosa_motifs::fragments::{
 use thoosa_properties_map::ToHashmap;
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 use thoosa_shared::applicables_runner::Input;
-use thoosa_shared::hyperparameter::Hyperparameter;
+use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Adjustable, Data, DataId, SimpleId, WithId};
@@ -766,10 +766,6 @@ async fn run_all(
         CacheArea::default()
     ));
 
-    let find_motifs_run_config_range_or_value_for_opt: FindMotifsRunConfigRangeOrValue<FindAndSelectMotifsRunConfigFields> =
-        serde_json::from_value(serde_json::to_value(&all_config.find_motifs_run_config_range_or_value)?)?;
-    let select_motifs_run_config_for_opt: SelectMotifsRunConfigRangeOrValue<FindAndSelectMotifsRunConfigFields> =
-        serde_json::from_value(serde_json::to_value(&all_config.select_motifs_run_config)?)?;
     let fixed_find_motifs_config_for_opt = all_config.fixed_find_motifs_config.clone();
 
     //gpt Pre-create context and shared handles for FindMotifs stage construction (kept outside the run_grid closure).
@@ -786,11 +782,7 @@ async fn run_all(
         CacheArea::default(),
     ));
 
-    let find_and_select_run_config = FindAndSelectMotifsRunConfigRangeOrValue {
-        id: None,
-        find_motifs_run_config: find_motifs_run_config_range_or_value_for_opt,
-        select_motifs_run_config: select_motifs_run_config_for_opt,
-    };
+    let find_and_select_run_config = all_config.find_and_select_run_config_range_or_value.clone();
 
     //TODO check if it's opt or grid and then check
     // check_opt_run_config::<_, FindAndSelectMotifsRunConfig>(&find_and_select_run_config)?;
@@ -1024,6 +1016,7 @@ struct AllConfigs {
     find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue,
     fixed_find_motifs_config:FixedFindMotifsConfig,
     select_motifs_run_config:SelectMotifsRunConfigRangeOrValue,
+    find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue,
     find_and_select_motifs_opt_config:Arc<OptConfig>,
     train_motif_nets_run_config_range_or_value:TrainMotifsNetsRunConfigRangeOrValue,
     train_label_nets_run_config_range_or_value:TrainLabelNetsRunConfigRangeOrValue,
@@ -1031,111 +1024,78 @@ struct AllConfigs {
     train_opt_config:Arc<OptConfig>,
 }
 
-fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
-    let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
+fn resolve_median_window<P: FieldName + PartialEq>(named_vals: &[NamedVal<P>], window_path: &P) -> RangeOrValue<u32> {
+    match named_vals.iter().find(|field| field.path() == window_path) {
+        None => RangeOrValue::Value(100),
+        Some(value) => {
+            let window = value.val().to_i64(0) as u32;
+            info!("Window: window={window}");
+            RangeOrValue::Value(window)
+        }
+    }
+}
+
+fn median_window_from_find_motifs(named_vals: &[NamedVal<FindMotifsRunConfigFields>]) -> RangeOrValue<u32> {
+    resolve_median_window(named_vals, &FindMotifsRunConfigFields::Window)
+}
+
+fn median_window_from_find_and_select(named_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>]) -> RangeOrValue<u32> {
+    resolve_median_window(
+        named_vals,
+        &FindAndSelectMotifsRunConfigFields::FindMotifsRunConfig(FindMotifsRunConfigFields::Window),
+    )
+}
+
+fn run_all_find_motifs_config_0<P: FieldName + 'static>(median_window: fn(&[NamedVal<P>]) -> RangeOrValue<u32>) -> FindMotifsRunConfigRangeOrValue<P> {
+    FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(5), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        window: RangeOrValue::Range { range: Range { start: 100, end: 1000 }, step: Some((200, 0)) }, //RangeOrValue::Value(1000), Some((200, 0))
-        // window: RangeOrValue::Value(200), //RangeOrValue::Value(1000),
-        // freq_filter: None,
+        step: RangeOrValue::Value(5),
+        window: RangeOrValue::Range { range: Range { start: 100, end: 301 }, step: Some((200, 0)) },
         freq_filter: Some(vec![
-            // BandPassFilter(BandPassFilterParamsRangeOrValue {
-            //     // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-            //     low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 200. }, step: None },//Some((10., 1))
-            //     // band_hz: RangeOrValue::Value(10.),
-            //     band_hz:  RangeOrValue::Value(1.0),
-            //     // kernel_size: RangeOrValue::Value(100),
-            //     kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 1000 }, step: None },
-            //     stride: RangeOrValue::Value(10),
-            //     // stride: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
-            //     padding: SgPaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
-            // }),
-            // SavGolFilter(SavGolFilterParamsRangeOrValue {
-            //     // window_len: RangeOrValue::Value(2000),
-            //     window_len: RangeOrValue::Range { range: Range { start: 200, end: 500 }, step: None },//Some((200, 0))
-            //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step:None },//step: Some((3, 0))
-            //     // poly_order: RangeOrValue::Value(1),
-            //     stride: RangeOrValue::Value(10),
-            //     padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue {}),
-            // }),
             MedianFilter(MedianFilterParamsRangeOrValue {
-                window: RangeOrValue::Range { range: Range { start: 500, end: 2000 }, step: None },
+                window: RangeOrValue::Dynamic(median_window),
             }),
             SavGolFilter(SavGolFilterParamsRangeOrValue {
-                // window_len: RangeOrValue::Value(2000),
-                window_len: RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },//Some((200, 0))
-                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 3 }, step:None },//step: Some((3, 0))
-                // poly_order: RangeOrValue::Value(1),
+                window_len: RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
+                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 3 }, step: None },
                 stride: RangeOrValue::Value(10),
                 padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
             }),
-            // NotchBandFilter(NotchBandFilterParamsRangeOrValue {
-            //     low_hz: RangeOrValue::Value(59.0),
-            //     high_hz: RangeOrValue::Value(62.0),
-            // })
         ]),
-        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.0005) }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
-        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
-        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 2))
-        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }), slices: RangeOrValue::Value(1000) }),//Some((0.05, 3))
-        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.01..0.3, step: None}  }) }),//Some((0.05, 2))
-        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.02)  }) }),
-        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.0..0.1, step: None} }) }),//Some((0.05, 2))
-        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.07) }) }),//Some((0.05, 2))
-        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
-    };
-    let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
-    //////////////////////select
-    let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
+        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+            aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                q: RangeOrValue::Range { range: 0.0..0.1, step: None },
+            }),
+        }),
+        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+    }
+}
+
+fn run_all_select_motifs_config_0<P: FieldName + 'static>() -> SelectMotifsRunConfigRangeOrValue<P> {
+    SelectMotifsRunConfigRangeOrValue {
         id: None,
-        // extend_config: Some(ExtendMotifsConfigRangeOrValue {
-        //     slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue {  }),
-        //     slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
-        // }),
-        // extend_config: Some(ExtendMotifsConfigRangeOrValue {
-        //     slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue {  }),
-        //     // slices_selector_metric: ComparisonMethodRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue {  }),
-        //     // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.5) }),
-        //     slices_selector_aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.01) }),
-        //     // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.8..1.2, step: Some((0.1, 1))} }),
-        // }),
         extend_config: None,
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
                 criterion: NormThicknessRunConfigRangeOrValue {
-                    k: RangeOrValue::Value(0.0), //TODO not used RangeOrValue::Range{range: 1.0..10.0, step: None},
-                    eps: RangeOrValue::Value(1e-8)
+                    k: RangeOrValue::Value(0.0),
+                    eps: RangeOrValue::Value(1e-8),
                 },
                 min: RangeOrValue::Value(0.75),
             }),
-            inlier_ratioRunConfig:None,
-            // inlier_ratioRunConfig: Some(InlierRatioRunConfigRangeOrValue {
-            //     k: RangeOrValue::Value(3.0),
-            //     eps: RangeOrValue::Value(1e-8),
-            // }),
-            coherenceRunConfig:None,
-            // coherenceRunConfig: Some(CoherenceRunConfigRangeOrValue {
-            //     k: RangeOrValue::Value(10.0),
-            //     eps: RangeOrValue::Value(1e-8),
-            // }),
+            inlier_ratioRunConfig: None,
+            coherenceRunConfig: None,
             interesting_amp_01: None,
-            // interesting_amp_01: Some(InterestingAmp01RunConfigRangeOrValue {
-            //     q_lo: RangeOrValue::Value(0.05),
-            //     q_hi: RangeOrValue::Value(0.95),
-            //     a0: RangeOrValue::Value(0.5),
-            //     eps: RangeOrValue::Value(1e-8),
-            // }),
             interesting_tv_norm_01: None,
             interesting_curvature_norm_01: None,
             interesting_turning_points_ratio: None,
-            // interesting_turning_points_ratio: Some(InterestingTurningPointsRatioRunConfigRangeOrValue{ peak: RangeOrValue::Value(4), }),
             interesting_band_energy_ratio_01: None,
             interesting_entropy_gauss_01: None,
             interesting_entropy_band_01: None,
             periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
                 criterion: PeriodicityAcfRunConfigRangeOrValue {
-                    struct_lag_max: RangeOrValue::Value(1./64.),
-                    lag_min: RangeOrValue::Value(1./32.),
+                    struct_lag_max: RangeOrValue::Value(1. / 64.),
+                    lag_min: RangeOrValue::Value(1. / 32.),
                     lag_max: RangeOrValue::Value(0.5),
                     struct0: RangeOrValue::Value(0.2),
                     peak_good: RangeOrValue::Value(0.25),
@@ -1145,10 +1105,80 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 min: RangeOrValue::Value(0.80),
             }),
         },
-        threshold: RangeOrValue::Value(0.73), //RangeOrValue::Range{range: 0.8..0.95, step: None}, //RangeOrValue::Value(0.8),
+        threshold: RangeOrValue::Value(0.73),
         min_slices: Some(RangeOrValue::Value(5)),
         max_slices: Some(RangeOrValue::Value(100)),
-        extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(1000)})),
+        extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+    }
+}
+
+fn run_all_find_motifs_config_test_1<P: FieldName + 'static>() -> FindMotifsRunConfigRangeOrValue<P> {
+    FindMotifsRunConfigRangeOrValue {
+        id: None,
+        step: RangeOrValue::Value(1),
+        window: RangeOrValue::Value(100),
+        freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
+            low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
+            band_hz: RangeOrValue::Value(2.),
+            kernel_size: RangeOrValue::Value(10),
+            stride: RangeOrValue::Value(1),
+            padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
+        })]),
+        slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
+            aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.05) }),
+            slices: RangeOrValue::Value(100),
+        }),
+        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
+    }
+}
+
+fn run_all_select_motifs_config_test_1<P: FieldName + 'static>() -> SelectMotifsRunConfigRangeOrValue<P> {
+    SelectMotifsRunConfigRangeOrValue {
+        id: None,
+        extend_config: None,
+        motif_criteria: MotifCriteriaRangeOrValue {
+            norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
+                criterion: NormThicknessRunConfigRangeOrValue { k: RangeOrValue::Value(5.0), eps: RangeOrValue::Value(1e-8) },
+                min: RangeOrValue::Value(0.5),
+            }),
+            inlier_ratioRunConfig: Some(thoosa_common::find_motifs_run_config::InlierRatioConstraintRangeOrValue {
+                criterion: InlierRatioRunConfigRangeOrValue {
+                    k: RangeOrValue::Value(3.0),
+                    eps: RangeOrValue::Value(1e-8),
+                },
+                min: RangeOrValue::Value(0.5),
+            }),
+            coherenceRunConfig: Some(thoosa_common::find_motifs_run_config::CoherenceConstraintRangeOrValue {
+                criterion: CoherenceRunConfigRangeOrValue {
+                    k: RangeOrValue::Value(10.0),
+                    eps: RangeOrValue::Value(1e-8),
+                },
+                min: RangeOrValue::Value(0.5),
+            }),
+            interesting_amp_01: None,
+            interesting_tv_norm_01: None,
+            interesting_curvature_norm_01: None,
+            interesting_turning_points_ratio: None,
+            interesting_band_energy_ratio_01: None,
+            interesting_entropy_gauss_01: None,
+            interesting_entropy_band_01: None,
+            periodicity_acf_01: None,
+        },
+        threshold: RangeOrValue::Value(0.8),
+        min_slices: None,
+        max_slices: None,
+        extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
+    }
+}
+
+fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
+    let find_motifs_run_config_range_or_value = run_all_find_motifs_config_0::<FindMotifsRunConfigFields>(median_window_from_find_motifs);
+    let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
+    let select_motifs_run_config = run_all_select_motifs_config_0::<SelectMotifsRunConfigFields>();
+    let find_and_select_run_config_range_or_value = FindAndSelectMotifsRunConfigRangeOrValue {
+        id: None,
+        find_motifs_run_config: run_all_find_motifs_config_0::<FindAndSelectMotifsRunConfigFields>(median_window_from_find_and_select),
+        select_motifs_run_config: run_all_select_motifs_config_0::<FindAndSelectMotifsRunConfigFields>(),
     };
     let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(100, 10));
 
@@ -1243,83 +1273,17 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         },
     };
     let train_opt_config = Arc::new(OptConfig::new(100, 10));
-    AllConfigs{find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, find_and_select_motifs_opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value, train_opt_config}
+    AllConfigs{find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, find_and_select_run_config_range_or_value, find_and_select_motifs_opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value, train_opt_config}
 }
 
 fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
-    let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = FindMotifsRunConfigRangeOrValue {
-        id: None,
-        step: RangeOrValue::Value(1), //RangeOrValue::Range { range: Range { start: 50, end: 100 }, step: Some((100, 0)) },
-        window: RangeOrValue::Value(100),
-        // freq_filter: None,
-        freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
-            // low_hz: RangeOrValue::Range { range: Range { start: 0., end: 201. }, step: Some((50., 1)) },
-            low_hz:  RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },//
-            // low_hz:  RangeOrValue::Value(0.0),//
-            band_hz: RangeOrValue::Value(2.),
-            // band_hz:  RangeOrValue::Range { range: Range { start: 5., end: 20. }, step: Some((5., 1)) },
-            kernel_size: RangeOrValue::Value(10),
-            stride: RangeOrValue::Value(1),
-            padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
-        })]),
-        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.025) }) }),
-        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))} }) }),
-        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.01) })}),
-        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.005..0.1, step: Some((0.005, 3))}})}),
-        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Range{range: 0.05..1.0, step: Some((0.05, 2))} }), slices: RangeOrValue::Value(100) }),
-        slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue { aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue{ q: RangeOrValue::Value(0.05) }), slices: RangeOrValue::Value(100) }),
-        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.005..0.05, step: Some((0.005, 4))} }), slices: RangeOrValue::Value(100)}),
-        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k:  RangeOrValue::Value(0.025) }), slices: RangeOrValue::Value(1000)}),
-        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue{aggr: AggrRangeOrValue::Min(MinAggrRangeOrValue { k:  RangeOrValue::Range{range: 0.095..1.2, step: Some((0.005, 3))} }), slices: RangeOrValue::Value(1000)}),
-        // slices_filter: SlicesFilterRangeOrValue::Exact(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.1, step: Some((0.001, 3))}  }),//Some((0.01, 2))
-        // slices_filter: SlicesFilterRangeOrValue::Exact(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Range{range: 0.001..0.2, step: None}  }),//Some((0.01, 2))
-        // slices_filter: SlicesFilterRangeOrValue::Exact(ExactStatsRangeOrValue{ euc_dist:  RangeOrValue::Value(0.01)  }),
-        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
-    };
+    let find_motifs_run_config_range_or_value = run_all_find_motifs_config_test_1::<FindMotifsRunConfigFields>();
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
-    //////////////////////select
-    let select_motifs_run_config = SelectMotifsRunConfigRangeOrValue {
+    let select_motifs_run_config = run_all_select_motifs_config_test_1::<SelectMotifsRunConfigFields>();
+    let find_and_select_run_config_range_or_value = FindAndSelectMotifsRunConfigRangeOrValue {
         id: None,
-        // extend_config: Some(ExtendMotifsConfigRangeOrValue {
-        //     slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue {  }),
-        //     // slices_selector_metric: ComparisonMethodRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue {  }),
-        //     slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(0.5) }),
-        //     // slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Range{range: 0.8..1.2, step: Some((0.1, 1))} }),
-        // }),
-        extend_config:None,
-        motif_criteria: MotifCriteriaRangeOrValue {
-            norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
-                criterion: NormThicknessRunConfigRangeOrValue { k: RangeOrValue::Value(5.0), eps: RangeOrValue::Value(1e-8) },
-                min: RangeOrValue::Value(0.5),
-            }),
-            inlier_ratioRunConfig: Some(thoosa_common::find_motifs_run_config::InlierRatioConstraintRangeOrValue {
-                criterion: InlierRatioRunConfigRangeOrValue {
-                    k: RangeOrValue::Value(3.0),
-                    eps: RangeOrValue::Value(1e-8),
-                },
-                min: RangeOrValue::Value(0.5),
-            }),
-            coherenceRunConfig: Some(thoosa_common::find_motifs_run_config::CoherenceConstraintRangeOrValue {
-                criterion: CoherenceRunConfigRangeOrValue {
-                    k: RangeOrValue::Value(10.0),
-                    eps: RangeOrValue::Value(1e-8),
-                },
-                min: RangeOrValue::Value(0.5),
-            }),
-            interesting_amp_01: None,
-            interesting_tv_norm_01: None,
-            interesting_curvature_norm_01: None,
-            interesting_turning_points_ratio: None,
-            interesting_band_energy_ratio_01: None,
-            interesting_entropy_gauss_01: None,
-            interesting_entropy_band_01: None,
-            periodicity_acf_01: None,
-        },
-        threshold: RangeOrValue::Value(0.8),
-        // threshold: RangeOrValue::Range{range: 0.4..1.1, step: Some((0.1, 1))},
-        min_slices: None,
-        max_slices: None,
-        extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue{count: RangeOrValue::Value(100)})),
+        find_motifs_run_config: run_all_find_motifs_config_test_1::<FindAndSelectMotifsRunConfigFields>(),
+        select_motifs_run_config: run_all_select_motifs_config_test_1::<FindAndSelectMotifsRunConfigFields>(),
     };
     /////////////////////train_motifs
     let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
@@ -1392,7 +1356,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
     };
     let train_opt_config = Arc::new(OptConfig::new(60, 10));
 
-    AllConfigs{find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, find_and_select_motifs_opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value, train_opt_config}
+    AllConfigs{find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, find_and_select_run_config_range_or_value, find_and_select_motifs_opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value, train_opt_config}
 }
 
 async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
@@ -2258,7 +2222,7 @@ mod cli_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Kind::Float;
-    use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilter, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+    use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilter, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
     use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, NotchBandFilter};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -2299,13 +2263,13 @@ mod cli_tests {
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::traits::{Data, DataId};
-    use thoosa_shared::val::NamedVal;
+    use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
     use thoosa_with_data::with_data;
     use crate::tasks::slices_stats::{Aggr, Metrics};
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
-    use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue};
+    use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
     use crate::tasks::find_motifs::FindMotifsStage;
     use crate::tasks::motif_stats::MotifStats;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
@@ -2354,6 +2318,48 @@ mod cli_tests {
             Some(crate::cli::Commands::RunAll(args)) => assert_eq!(args.resolution, Resolution::High),
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_run_all_config_0_preserves_dynamic_find_and_select_fields() {
+        let all_configs = run_all_config_0(&RunAllArgs {
+            find_resources: "group:find".to_string(),
+            select_resources: "group:select".to_string(),
+            max_chunk_size: 20_000,
+            train_resource_group: "train".to_string(),
+            valid_resource_group: "valid".to_string(),
+            run_config_cnt: "1".to_string(),
+            max_motif_net_loss: 0.3,
+            selected_motif_nets_limit: None,
+            motif_slices_step: 100,
+            with_plots: false,
+            resolution: Resolution::Normal,
+            labels: None,
+        });
+
+        let freq_filter = all_configs
+            .find_and_select_run_config_range_or_value
+            .find_motifs_run_config
+            .freq_filter
+            .as_ref()
+            .expect("find-and-select sample config should include freq_filter");
+
+        let median_window = match &freq_filter[0] {
+            thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::MedianFilter(params) => &params.window,
+            other => panic!("expected median filter in find-and-select sample config, got {other:?}"),
+        };
+
+        let resolve = match median_window {
+            RangeOrValue::Dynamic(resolve) => resolve,
+            other => panic!("expected dynamic median window in find-and-select sample config, got {other:?}"),
+        };
+
+        let resolved = resolve(&[NamedVal::new(
+            FindAndSelectMotifsRunConfigFields::FindMotifsRunConfig(FindMotifsRunConfigFields::Window),
+            Val::UInt(123),
+        )]);
+
+        assert_eq!(resolved, RangeOrValue::Value(123));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

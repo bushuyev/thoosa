@@ -34,6 +34,26 @@ impl Val {
 
         }
     }
+
+    pub fn to_f64(&self) -> f64 {
+        match self {
+            Val::Real(v) => *v,
+            Val::Int(v) => *v as f64,
+            Val::UInt(v) => *v as f64,
+            Val::Str(v) => v
+                .parse()
+                .expect(format!("Could not parse {v} string").as_str()),
+            Val::Bool(v) => {
+                if *v {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+
+        }
+    }
+
 }
 
 #[derive(Debug, PartialEq, Clone)]
