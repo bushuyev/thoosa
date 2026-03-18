@@ -517,13 +517,11 @@ impl ResourceStore for SqlStore {
     ) -> Result<Vec<Resource>, ThoError> {
         let descr = descr.to_string();
         self.with_reader_conn("list_resource_set_resources_by_descr", move |conn| {
-            let t = conn.transaction()?;
             let r = Self::list_resource_set_resources(
-                t.query_row("SELECT id FROM resource_set WHERE descr=?", [descr.as_str()], |row| row.get(0))?,
-                &t,
+                conn.query_row("SELECT id FROM resource_set WHERE descr=?", [descr.as_str()], |row| row.get(0))?,
+                conn,
             )?;
             debug!("list_resource_set_resources_by_descr: descr={descr} r={r:?}");
-            t.commit()?;
             Ok(r)
         })
         .await
@@ -534,7 +532,6 @@ impl ResourceStore for SqlStore {
     ) -> Result<Vec<Resource>, ThoError> {
         let file_stems = file_stems.iter().map(|v| (*v).to_string()).collect::<Vec<String>>();
         self.with_reader_conn("list_resources_by_file_stems", move |conn| {
-            let t = conn.transaction()?;
             let (mut q, params) = file_stems.into_iter().fold(
                 (vec!["SELECT id, import_id, key, length FROM resources WHERE "], vec![]),
                 |mut a, v| {
@@ -549,7 +546,7 @@ impl ResourceStore for SqlStore {
             q.push(" ORDER BY key");
 
             let resources = {
-                let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
+                let mut stmt = conn.prepare(q.into_iter().collect::<String>().as_str())?;
                 debug!("list_resources_by_file_stems: stmt={stmt:?}");
                 stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
                     Ok(Resource::new(
@@ -563,7 +560,6 @@ impl ResourceStore for SqlStore {
                 .collect()
             };
 
-            t.commit()?;
             Ok(resources)
         })
         .await
@@ -575,9 +571,8 @@ impl ResourceStore for SqlStore {
     ) -> Result<Vec<(usize, String)>, ThoError> {
         let group_descr = group_descr.to_string();
         self.with_reader_conn("list_resource_set_group_sets", move |conn| {
-            let t = conn.transaction()?;
             let group_sets = {
-                let mut stmt = t.prepare("SELECT rs.id, rs.descr FROM resource_set rs LEFT JOIN resource_set_group rsg ON rsg.id=rs.group_id WHERE rsg.descr=?")?;
+                let mut stmt = conn.prepare("SELECT rs.id, rs.descr FROM resource_set rs LEFT JOIN resource_set_group rsg ON rsg.id=rs.group_id WHERE rsg.descr=?")?;
 
                 stmt.query_map([group_descr.as_str()], |row| {
                     Ok((
@@ -589,7 +584,6 @@ impl ResourceStore for SqlStore {
                 .collect()
             };
 
-            t.commit()?;
             Ok(group_sets)
         })
         .await
@@ -603,9 +597,8 @@ impl ResourceStore for SqlStore {
         let group_descr = group_descr.to_string();
         debug!("list_group_labeled_resources_sets: group_descr={group_descr}");
         self.with_reader_conn("list_group_labeled_resources_sets", move |conn| {
-            let t = conn.transaction()?;
             let labeled_resources_sets = {
-                let mut stmt = t.prepare("SELECT l.label, rs.descr FROM resource_set_group rsg JOIN resource_set rs ON rs.group_id=rsg.id JOIN labels l ON l.id=rs.label_id WHERE rsg.descr=? ORDER BY label")?;
+                let mut stmt = conn.prepare("SELECT l.label, rs.descr FROM resource_set_group rsg JOIN resource_set rs ON rs.group_id=rsg.id JOIN labels l ON l.id=rs.label_id WHERE rsg.descr=? ORDER BY label")?;
 
                 stmt.query_map([group_descr.as_str()], |row| {
                     Ok((
@@ -617,7 +610,6 @@ impl ResourceStore for SqlStore {
                 .collect()
             };
 
-            t.commit()?;
             debug!("list_group_labeled_resources_sets: labeled_resources_sets={labeled_resources_sets:?}");
             Ok(labeled_resources_sets)
         })
@@ -626,9 +618,7 @@ impl ResourceStore for SqlStore {
 
     async fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoError> {
         self.with_reader_conn("list_resource_set_resources", move |conn| {
-            let t = conn.transaction()?;
-            let set_resources = Self::list_resource_set_resources(set_id, &t)?;
-            t.commit()?;
+            let set_resources = Self::list_resource_set_resources(set_id, conn)?;
             Ok(set_resources)
         })
         .await
@@ -640,11 +630,10 @@ impl ResourceStore for SqlStore {
     ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError> {
         let group_descr = group_descr.to_string();
         self.with_reader_conn("list_resource_random_in_group", move |conn| {
-            let t = conn.transaction()?;
-            let labels = Self::list_labels(&t)?;
+            let labels = Self::list_labels(conn)?;
             debug!("list_resource_random_in_group: group_descr={:?} labels={:?}", group_descr, labels);
 
-            let r: Vec<(Resource, Vec<f32>)> = t.prepare(
+            let r: Vec<(Resource, Vec<f32>)> = conn.prepare(
                 "SELECT r.id, r.import_id, r.key, GROUP_CONCAT(l.label || '/' || lr.p, ','), r.length FROM resource_set_group rsg \
                 JOIN resource_set rs ON rs.group_id=rsg.id \
                 JOIN resource_resources_set rrs ON rrs.set_id=rs.id \
@@ -679,7 +668,6 @@ impl ResourceStore for SqlStore {
                 ))
             })?.map(|v| v.unwrap()).collect();
 
-            t.commit()?;
             debug!("list_resource_random_in_group: r.len={:?}", r.len());
             Ok(r)
         })
@@ -693,9 +681,8 @@ impl ResourceStore for SqlStore {
     ) -> Result<Vec<Resource>, ThoError> {
         let group_descr = group_descr.to_string();
         self.with_reader_conn("list_resources_not_in_group", move |conn| {
-            let t = conn.transaction()?;
             let group_sets = {
-                let mut stmt = t.prepare(
+                let mut stmt = conn.prepare(
                     "SELECT r.id, r.import_id, r.key, r.length FROM resources AS r WHERE NOT EXISTS \
                     (SELECT 1 FROM resource_resources_set AS rrs JOIN resource_set AS rs  ON rs.id = rrs.set_id JOIN resource_set_group  AS g   ON g.id = rs.group_id WHERE rrs.resource_id = r.id AND g.descr = ? )\
                      ORDER BY RANDOM()  limit ?"
@@ -713,7 +700,6 @@ impl ResourceStore for SqlStore {
                 .collect()
             };
 
-            t.commit()?;
             Ok(group_sets)
         })
         .await
@@ -724,9 +710,8 @@ impl ResourceStore for SqlStore {
         limit: Option<u32>
     ) -> Result<Vec<Resource>, ThoError> {
         self.with_reader_conn("list_random_resources", move |conn| {
-            let t = conn.transaction()?;
             let resources = if let Some(limit) = limit {
-                let mut stmt = t.prepare("SELECT r.id, r.import_id, r.key, r.length FROM resources AS r ORDER BY RANDOM() LIMIT ?")?;
+                let mut stmt = conn.prepare("SELECT r.id, r.import_id, r.key, r.length FROM resources AS r ORDER BY RANDOM() LIMIT ?")?;
                 stmt.query_map([Value::Integer(limit as i64)], |row| {
                     Ok(Resource::new(
                         row.get::<usize, u32>(0)?,
@@ -738,7 +723,7 @@ impl ResourceStore for SqlStore {
                 .map(|v| v.unwrap())
                 .collect()
             } else {
-                let mut stmt = t.prepare("SELECT r.id, r.import_id, r.key, r.length FROM resources AS r ORDER BY RANDOM();")?;
+                let mut stmt = conn.prepare("SELECT r.id, r.import_id, r.key, r.length FROM resources AS r ORDER BY RANDOM();")?;
                 stmt.query_map([], |row| {
                     Ok(Resource::new(
                         row.get::<usize, u32>(0)?,
@@ -751,7 +736,6 @@ impl ResourceStore for SqlStore {
                 .collect()
             };
 
-            t.commit()?;
             Ok(resources)
         })
         .await
@@ -2891,13 +2875,10 @@ impl SqlStore {
         }))
     }
 
-    fn list_resource_set_resources(
-        set_id: usize,
-        t: &Transaction,
-    ) -> Result<Vec<Resource>, ThoError> {
+    fn list_resource_set_resources(set_id: usize, conn: &Connection) -> Result<Vec<Resource>, ThoError> {
         let set_resources = {
             // because the running-mean mask (LeRunningMean) is order-sensitive, any non-deterministic resource ordering (or random selection) changes which pairs pass the mask, ORDER BY id is to fix it.
-            let mut stmt = t.prepare("SELECT rs.id as id, rs.import_id, rs.key, rs.length FROM resource_resources_set rrs LEFT JOIN resources rs ON rs.id=rrs.resource_id WHERE rrs.set_id=? ORDER BY id")?;
+            let mut stmt = conn.prepare("SELECT rs.id as id, rs.import_id, rs.key, rs.length FROM resource_resources_set rrs LEFT JOIN resources rs ON rs.id=rrs.resource_id WHERE rrs.set_id=? ORDER BY id")?;
 
             let vec = stmt
                 .query_map([set_id], |row| {
@@ -2920,9 +2901,9 @@ impl SqlStore {
     /**
     defines global label order
     */
-    fn list_labels(t: &Transaction) -> Result<Vec<(usize, String)>, ThoError> {
+    fn list_labels(conn: &Connection) -> Result<Vec<(usize, String)>, ThoError> {
         let set_resources = {
-            let mut stmt = t.prepare("SELECT id, label FROM labels ORDER BY id")?;
+            let mut stmt = conn.prepare("SELECT id, label FROM labels ORDER BY id")?;
 
             let vec = stmt
                 .query_map([], |row| {
