@@ -121,6 +121,8 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoError>; //corr_run_id, run_id, label
 
+    async fn list_run_ids_with_outputs(&self, input_run_ids: &[RunId]) -> Result<Vec<RunId>, ThoError>;
+
     async fn list_output_run_ids(&self, input_run_id: RunId) -> Result<Vec<RunId>, ThoError>; //corr_run_id, run_id, label
 
     async fn save_resources_set(
@@ -279,6 +281,7 @@ mock! {
         ) -> Result<RunId, ThoError>;
         async fn get_input_run_ids<'a>(&self,run_id: RunId,input_type: Option<&'a str>,) -> Result<Vec<RunId>, ThoError>;
         async fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoError>;
+        async fn list_run_ids_with_outputs(&self, input_run_ids: &[RunId]) -> Result<Vec<RunId>, ThoError>;
         async fn list_output_run_ids(&self, input_run_id: RunId) -> Result<Vec<RunId>, ThoError>;
 
         async fn save_resources_set(
@@ -903,6 +906,46 @@ impl Store for SqlStore {
             }
             t.commit()?;
             Ok(id_input_id)
+        })
+        .await
+    }
+
+    async fn list_run_ids_with_outputs(&self, input_run_ids: &[RunId]) -> Result<Vec<RunId>, ThoError> {
+        if input_run_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let input_run_ids = input_run_ids.to_vec();
+        self.with_reader_conn("list_run_ids_with_outputs", move |conn| {
+            let t = conn.transaction()?;
+            let mut run_ids_with_outputs = vec![];
+
+            for ids_chunk in input_run_ids.chunks(500) {
+                let (mut q, params) = ids_chunk.iter().fold(
+                    (
+                        vec!["SELECT DISTINCT input_run_id FROM run_configs_input WHERE input_run_id IN ("],
+                        vec![],
+                    ),
+                    |mut a, v| {
+                        a.0.push("?");
+                        a.0.push(",");
+                        a.1.push(*v);
+                        a
+                    },
+                );
+
+                q.pop();
+                q.push(")");
+
+                let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
+                let chunk_rows = stmt
+                    .query_map(rusqlite::params_from_iter(params.into_iter()), |row| row.get::<usize, RunId>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                run_ids_with_outputs.extend(chunk_rows);
+            }
+
+            t.commit()?;
+            Ok(run_ids_with_outputs)
         })
         .await
     }
@@ -4379,6 +4422,34 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_run_ids_with_outputs_reads_large_sets_in_chunks() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
+
+        let mut parent_run_ids = Vec::with_capacity(1001);
+        for idx in 0..1001 {
+            let parent_run_id = store.save_run_config(None, &format!("parent-{idx}"), "parent", "", HashMap::new()).await?;
+            if idx % 2 == 0 {
+                store.save_run_config(Some(&[parent_run_id]), &format!("child-{idx}"), "child", "", HashMap::new()).await?;
+            }
+            parent_run_ids.push(parent_run_id);
+        }
+
+        let mut run_ids_with_outputs = store.list_run_ids_with_outputs(&parent_run_ids).await?;
+        run_ids_with_outputs.sort();
+
+        let mut expected_run_ids = parent_run_ids
+            .into_iter()
+            .enumerate()
+            .filter_map(|(idx, run_id)| if idx % 2 == 0 { Some(run_id) } else { None })
+            .collect::<Vec<_>>();
+        expected_run_ids.sort();
+
+        assert_eq!(expected_run_ids, run_ids_with_outputs);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_resources_by_file_stem() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
         {
@@ -4865,6 +4936,21 @@ impl MockStoreBuilder {
                 map.get(&input_run_id)
                     .cloned()
                     .expect(&format!("mock is not configured to return output run ids for run id {input_run_id}"))
+            },
+        );
+        self
+    }
+
+    pub fn with_list_run_ids_with_outputs<R: Into<HashMap<Vec<RunId>, Result<Vec<RunId>, ThoError>>>>(
+        mut self,
+        results: R,
+    ) -> Self {
+        let map = results.into();
+        self.store.expect_list_run_ids_with_outputs().returning(
+            move |input_run_ids| {
+                map.get(&input_run_ids.to_vec())
+                    .cloned()
+                    .expect(&format!("mock is not configured to return run ids with outputs for input ids {input_run_ids:?}"))
             },
         );
         self
