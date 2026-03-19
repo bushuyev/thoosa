@@ -3,10 +3,11 @@ use interprocess::local_socket::{
     GenericFilePath, GenericNamespaced, Name, ToFsName, ToNsName,
 };
 use chrono::{NaiveDate, NaiveDateTime};
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::io::IsTerminal;
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
@@ -21,14 +22,33 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use thoosa_shared::collect_futures_eta::{CollectEtaProgressInvocation, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
 use thoosa_shared::val::Val;
 use thoosa_shared::ThoError;
-use thoosa_store::{RunConfigEntry, SqlStore, Store};
+use thoosa_store::{RunConfigEntry, RunMotifEntry, SqlStore, Store};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 const SEARCH_TYPE_NONE_LABEL: &str = "no value";
 const RUN_ON_DATE_FORMAT: &str = "%Y-%m-%d";
 const RUN_ON_DATETIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+const DEFAULT_PLOT_PROJECT: &str = "thoosa_hbac";
+
+#[derive(Clone, Debug)]
+struct RunTreeNode {
+    entry: RunConfigEntry,
+    input_run_ids: Vec<u32>,
+    output_run_ids: Vec<u32>,
+    children_loaded: bool,
+    expanded: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VisibleRunConfigRow {
+    run_id: u32,
+    depth: usize,
+    has_children: bool,
+    expanded: bool,
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "thoosa_tui")]
@@ -163,12 +183,22 @@ impl NormalizedRunConfigSearch {
 
 struct App {
     store: Box<dyn Store>,
+    ws_path: PathBuf,
     db_path: PathBuf,
     all_run_configs: Vec<RunConfigEntry>,
-    run_configs: Vec<RunConfigEntry>,
+    loaded_input_pairs: Vec<(u32, u32)>,
+    known_output_run_ids: HashMap<u32, Vec<u32>>,
+    paged_run_config_offset: usize,
+    has_more_paged_run_configs: bool,
+    run_config_tree: HashMap<u32, RunTreeNode>,
+    run_configs: Vec<VisibleRunConfigRow>,
     main_list_offset: usize,
     selected_idx: usize,
     selected_values: Vec<(String, String)>,
+    selected_run_motifs: Vec<RunMotifEntry>,
+    selected_motif_idx: usize,
+    motif_list_offset: usize,
+    prefer_right_motifs: bool,
     status: Option<String>,
     selected_area: SelectedArea,
     run_on_sort_order: SortOrder,
@@ -187,6 +217,7 @@ struct App {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectedArea {
     LeftRunConfigs,
+    RightMotifs,
     ProgressView,
     TypeFilterPopup,
     SearchPopup,
@@ -241,15 +272,25 @@ impl SearchField {
 }
 
 impl App {
-    fn new(store: Box<dyn Store>, db_path: PathBuf) -> Self {
+    fn new(store: Box<dyn Store>, ws_path: PathBuf, db_path: PathBuf) -> Self {
         Self {
             store,
+            ws_path,
             db_path,
             all_run_configs: vec![],
+            loaded_input_pairs: vec![],
+            known_output_run_ids: HashMap::new(),
+            paged_run_config_offset: 0,
+            has_more_paged_run_configs: true,
+            run_config_tree: HashMap::new(),
             run_configs: vec![],
             main_list_offset: 0,
             selected_idx: 0,
             selected_values: vec![],
+            selected_run_motifs: vec![],
+            selected_motif_idx: 0,
+            motif_list_offset: 0,
+            prefer_right_motifs: false,
             status: None,
             selected_area: SelectedArea::LeftRunConfigs,
             run_on_sort_order: SortOrder::Desc,
@@ -267,7 +308,20 @@ impl App {
     }
 
     fn selected_run_id(&self) -> Option<u32> {
-        self.run_configs.get(self.selected_idx).map(|entry| entry.id)
+        self.run_configs.get(self.selected_idx).map(|entry| entry.run_id)
+    }
+
+    fn selected_run_entry(&self) -> Option<&RunConfigEntry> {
+        self.selected_run_id()
+            .and_then(|run_id| self.run_config_tree.get(&run_id).map(|node| &node.entry))
+    }
+
+    fn selected_motif(&self) -> Option<&RunMotifEntry> {
+        self.selected_run_motifs.get(self.selected_motif_idx)
+    }
+
+    fn has_selected_run_motifs(&self) -> bool {
+        !self.selected_run_motifs.is_empty()
     }
 
     fn selected_popup_type(&self) -> Option<String> {
@@ -303,9 +357,119 @@ impl App {
         }
     }
 
+    fn default_run_configs_area(&self) -> SelectedArea {
+        if self.prefer_right_motifs && self.has_selected_run_motifs() {
+            SelectedArea::RightMotifs
+        } else {
+            SelectedArea::LeftRunConfigs
+        }
+    }
+
     fn main_page_size(&self) -> usize {
         let rows = terminal::size().map(|(_, r)| r).unwrap_or(24);
         rows.saturating_sub(3).max(1) as usize
+    }
+
+    fn run_config_batch_size(&self) -> usize {
+        (self.main_page_size().max(25) * 4).clamp(100, 500)
+    }
+
+    fn merge_run_configs(&mut self, entries: Vec<RunConfigEntry>) {
+        let mut existing_ids = self.all_run_configs.iter().map(|entry| entry.id).collect::<HashSet<u32>>();
+        for entry in entries {
+            if existing_ids.insert(entry.id) {
+                self.all_run_configs.push(entry);
+            }
+        }
+    }
+
+    async fn load_next_run_config_page(&mut self, keep_run_id: Option<u32>) -> Result<bool, ThoError> {
+        if !self.has_more_paged_run_configs {
+            return Ok(false);
+        }
+
+        let limit = self.run_config_batch_size();
+        let page = self.store.list_run_configs_page(limit, self.paged_run_config_offset).await?;
+        if page.is_empty() {
+            self.has_more_paged_run_configs = false;
+            let loaded_input_pairs = self.loaded_input_pairs.clone();
+            let known_output_run_ids = self.known_output_run_ids.clone();
+            self.rebuild_run_config_tree(&loaded_input_pairs, &known_output_run_ids);
+            self.rebuild_visible_run_configs(keep_run_id);
+            return Ok(false);
+        }
+
+        let page_ids = page.iter().map(|entry| entry.id).collect::<Vec<u32>>();
+        let input_pairs = if page_ids.is_empty() {
+            vec![]
+        } else {
+            self.store.list_input_run_ids(&page_ids).await?
+        };
+
+        self.paged_run_config_offset += page.len();
+        self.has_more_paged_run_configs = page.len() == limit;
+        self.merge_run_configs(page);
+        self.loaded_input_pairs.extend(input_pairs);
+        let loaded_input_pairs = self.loaded_input_pairs.clone();
+        let known_output_run_ids = self.known_output_run_ids.clone();
+        self.rebuild_run_config_tree(&loaded_input_pairs, &known_output_run_ids);
+        self.rebuild_visible_run_configs(keep_run_id);
+        Ok(true)
+    }
+
+    async fn ensure_all_run_configs_loaded(&mut self, keep_run_id: Option<u32>) -> Result<(), ThoError> {
+        while self.has_more_paged_run_configs {
+            if !self.load_next_run_config_page(keep_run_id).await? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    async fn ensure_run_ids_loaded(&mut self, run_ids: &[u32], keep_run_id: Option<u32>) -> Result<bool, ThoError> {
+        let existing_ids = self.all_run_configs.iter().map(|entry| entry.id).collect::<HashSet<u32>>();
+        let missing_ids = run_ids
+            .iter()
+            .copied()
+            .filter(|run_id| !existing_ids.contains(run_id))
+            .collect::<Vec<u32>>();
+        if missing_ids.is_empty() {
+            return Ok(false);
+        }
+
+        let run_configs = self.store.list_run_configs_by_ids(&missing_ids).await?;
+        let input_pairs = self.store.list_input_run_ids(&missing_ids).await?;
+        self.merge_run_configs(run_configs);
+        self.loaded_input_pairs.extend(input_pairs);
+        let loaded_input_pairs = self.loaded_input_pairs.clone();
+        let known_output_run_ids = self.known_output_run_ids.clone();
+        self.rebuild_run_config_tree(&loaded_input_pairs, &known_output_run_ids);
+        self.rebuild_visible_run_configs(keep_run_id);
+        Ok(true)
+    }
+
+    async fn ensure_run_children_loaded(&mut self, run_id: u32, keep_run_id: Option<u32>) -> Result<bool, ThoError> {
+        let output_run_ids = self.store.list_output_run_ids(run_id).await?;
+        self.known_output_run_ids.insert(run_id, output_run_ids.clone());
+        let loaded_any = self.ensure_run_ids_loaded(&output_run_ids, keep_run_id).await?;
+        if !loaded_any {
+            let loaded_input_pairs = self.loaded_input_pairs.clone();
+            let known_output_run_ids = self.known_output_run_ids.clone();
+            self.rebuild_run_config_tree(&loaded_input_pairs, &known_output_run_ids);
+            self.rebuild_visible_run_configs(keep_run_id);
+        }
+        Ok(!output_run_ids.is_empty())
+    }
+
+    async fn maybe_load_more_run_configs(&mut self) -> Result<bool, ThoError> {
+        if self.search_filters.is_empty()
+            && self.has_more_paged_run_configs
+            && self.selected_idx + self.main_page_size() >= self.run_configs.len()
+        {
+            return self.load_next_run_config_page(self.selected_run_id()).await;
+        }
+
+        Ok(false)
     }
 
     fn max_main_list_offset(&self) -> usize {
@@ -340,6 +504,45 @@ impl App {
         }
 
         self.main_list_offset = self.main_list_offset.min(self.max_main_list_offset());
+    }
+
+    fn motif_page_size(&self) -> usize {
+        let rows = terminal::size().map(|(_, r)| r).unwrap_or(24) as usize;
+        rows.saturating_sub(10).max(4) / 2
+    }
+
+    fn max_motif_list_offset(&self) -> usize {
+        self.selected_run_motifs.len().saturating_sub(self.motif_page_size())
+    }
+
+    fn ensure_motif_selection_visible(&mut self) {
+        let page_size = self.motif_page_size();
+        if self.selected_run_motifs.is_empty() || page_size == 0 {
+            self.motif_list_offset = 0;
+            return;
+        }
+
+        if self.selected_motif_idx < self.motif_list_offset {
+            self.motif_list_offset = self.selected_motif_idx;
+        } else if self.selected_motif_idx >= self.motif_list_offset + page_size {
+            self.motif_list_offset = self.selected_motif_idx + 1 - page_size;
+        }
+
+        self.motif_list_offset = self.motif_list_offset.min(self.max_motif_list_offset());
+    }
+
+    fn ensure_motif_selection_visible_after_down(&mut self) {
+        let page_size = self.motif_page_size();
+        if self.selected_run_motifs.is_empty() || page_size == 0 {
+            self.motif_list_offset = 0;
+            return;
+        }
+
+        if self.selected_motif_idx >= self.motif_list_offset + page_size {
+            self.motif_list_offset = self.selected_motif_idx + 1 - page_size;
+        }
+
+        self.motif_list_offset = self.motif_list_offset.min(self.max_motif_list_offset());
     }
 
     fn popup_page_size(&self) -> usize {
@@ -400,6 +603,85 @@ impl App {
         let moved = move_to_bottom(&mut self.selected_idx, self.run_configs.len());
         if moved {
             self.main_list_offset = self.max_main_list_offset();
+        }
+        moved
+    }
+
+    async fn move_main_down_lazy(&mut self, step: usize) -> bool {
+        if self.move_main_down(step) {
+            if let Err(err) = self.maybe_load_more_run_configs().await {
+                warn!("move_main_down_lazy failed to load more run configs: {err:?}");
+                self.status = Some(format!("Failed to load more run_configs: {err:?}"));
+            }
+            return true;
+        }
+
+        match self.maybe_load_more_run_configs().await {
+            Ok(true) => self.move_main_down(step),
+            Ok(false) => false,
+            Err(err) => {
+                warn!("move_main_down_lazy failed to load more run configs: {err:?}");
+                self.status = Some(format!("Failed to load more run_configs: {err:?}"));
+                false
+            }
+        }
+    }
+
+    async fn move_main_to_bottom_lazy(&mut self) -> bool {
+        if self.search_filters.is_empty() && self.has_more_paged_run_configs {
+            if let Err(err) = self.ensure_all_run_configs_loaded(self.selected_run_id()).await {
+                warn!("move_main_to_bottom_lazy failed to load all run configs: {err:?}");
+                self.status = Some(format!("Failed to load all run_configs: {err:?}"));
+                return false;
+            }
+        }
+
+        self.move_main_to_bottom()
+    }
+
+    fn move_motif_down(&mut self, step: usize) -> bool {
+        let moved = move_down(&mut self.selected_motif_idx, self.selected_run_motifs.len(), step);
+        if moved {
+            self.ensure_motif_selection_visible_after_down();
+        }
+        moved
+    }
+
+    fn move_motif_up(&mut self, step: usize) -> bool {
+        if self.selected_run_motifs.is_empty() {
+            return false;
+        }
+
+        let old_selected = self.selected_motif_idx;
+        let old_offset = self.motif_list_offset;
+        let moved = move_up(&mut self.selected_motif_idx, self.selected_run_motifs.len(), step);
+        if !moved {
+            return false;
+        }
+
+        if step == 1 {
+            if old_selected == old_offset {
+                self.motif_list_offset = self.motif_list_offset.saturating_sub(1);
+            }
+        } else {
+            self.ensure_motif_selection_visible();
+        }
+
+        true
+    }
+
+    fn move_motif_to_top(&mut self) -> bool {
+        let moved = move_to_top(&mut self.selected_motif_idx, self.selected_run_motifs.len());
+        if moved {
+            self.motif_list_offset = 0;
+        }
+        moved
+    }
+
+    fn move_motif_to_bottom(&mut self) -> bool {
+        let moved = move_to_bottom(&mut self.selected_motif_idx, self.selected_run_motifs.len());
+        if moved {
+            self.motif_list_offset = self.max_motif_list_offset();
         }
         moved
     }
@@ -538,13 +820,21 @@ impl App {
         self.status = Some("Search draft reset.".to_string());
     }
 
-    fn apply_search_from_popup(&mut self) -> bool {
+    async fn apply_search_from_popup(&mut self) -> bool {
         match self.search_popup.draft.normalized() {
             Ok(_) => {
                 let keep_run_id = self.selected_run_id();
                 self.search_filters = self.search_popup.draft.clone();
+                if !self.search_filters.is_empty() {
+                    if let Err(err) = self.ensure_all_run_configs_loaded(keep_run_id).await {
+                        warn!("apply_search_from_popup failed to load all run configs: {err:?}");
+                        self.status = Some(format!("Failed to list run_configs for search: {err:?}"));
+                        return false;
+                    }
+                }
                 self.rebuild_visible_run_configs(keep_run_id);
                 self.selected_area = SelectedArea::LeftRunConfigs;
+                self.prefer_right_motifs = false;
                 self.status = Some(format!("Run config filters: {}", self.search_filters.summary()));
                 true
             }
@@ -601,7 +891,7 @@ impl App {
     fn apply_view_mode_from_popup(&mut self) {
         self.view_mode = self.selected_view_mode();
         self.selected_area = match self.view_mode {
-            ViewMode::RunConfigs => SelectedArea::LeftRunConfigs,
+            ViewMode::RunConfigs => self.default_run_configs_area(),
             ViewMode::Progress => SelectedArea::ProgressView,
         };
         debug!("apply_view_mode_from_popup: mode={}", self.view_mode.label());
@@ -622,6 +912,8 @@ impl App {
 
     fn progress_lines(&self) -> Vec<String> {
         let mut lines = vec![format!("socket: {}", self.progress_status)];
+        lines.push(format!("uptime: {}", format_progress_uptime(self.progress_state.started_at_unix_ms)));
+        lines.push(format!("failed OOM runs: {}", self.progress_state.oom_all_failed));
         match self.progress_last_update {
             Some(last_update) => {
                 lines.push(format!("last update: {}ms ago", last_update.elapsed().as_millis()));
@@ -643,21 +935,198 @@ impl App {
         lines
     }
 
-    fn rebuild_visible_run_configs(&mut self, keep_run_id: Option<u32>) {
-        let mut rows = self.all_run_configs.clone();
-        if let Ok(active_search) = self.search_filters.normalized() {
-            rows.retain(|entry| active_search.matches(entry));
+    fn rebuild_run_config_tree(&mut self, input_pairs: &[(u32, u32)], outputs_by_run_id: &HashMap<u32, Vec<u32>>) {
+        let old_expanded = self
+            .run_config_tree
+            .iter()
+            .map(|(run_id, node)| (*run_id, node.expanded))
+            .collect::<HashMap<u32, bool>>();
+        let entries_by_id = self
+            .all_run_configs
+            .iter()
+            .cloned()
+            .map(|entry| (entry.id, entry))
+            .collect::<HashMap<u32, RunConfigEntry>>();
+        let mut input_map = HashMap::<u32, HashSet<u32>>::new();
+        let mut output_map = HashMap::<u32, HashSet<u32>>::new();
+
+        for (run_id, input_run_id) in input_pairs {
+            if entries_by_id.contains_key(run_id) && entries_by_id.contains_key(input_run_id) {
+                input_map.entry(*run_id).or_default().insert(*input_run_id);
+                output_map.entry(*input_run_id).or_default().insert(*run_id);
+            }
         }
 
-        match self.run_on_sort_order {
-            SortOrder::Asc => rows.sort_by(|a, b| a.run_on.cmp(&b.run_on)),
-            SortOrder::Desc => rows.sort_by(|a, b| b.run_on.cmp(&a.run_on)),
+        for (run_id, output_run_ids) in outputs_by_run_id {
+            if !entries_by_id.contains_key(run_id) {
+                continue;
+            }
+
+            let outputs = output_map.entry(*run_id).or_default();
+            for output_run_id in output_run_ids {
+                if entries_by_id.contains_key(output_run_id) {
+                    outputs.insert(*output_run_id);
+                }
+            }
+        }
+
+        self.run_config_tree = entries_by_id
+            .into_iter()
+            .map(|(run_id, entry)| {
+                let mut input_run_ids = input_map.remove(&run_id).unwrap_or_default().into_iter().collect::<Vec<u32>>();
+                let mut output_run_ids = output_map.remove(&run_id).unwrap_or_default().into_iter().collect::<Vec<u32>>();
+                let children_loaded = outputs_by_run_id.contains_key(&run_id) || !self.has_more_paged_run_configs;
+                let default_expanded = !output_run_ids.is_empty();
+                sort_run_ids(&mut input_run_ids, &self.all_run_configs, self.run_on_sort_order);
+                sort_run_ids(&mut output_run_ids, &self.all_run_configs, self.run_on_sort_order);
+                (
+                    run_id,
+                    RunTreeNode {
+                        entry,
+                        input_run_ids,
+                        output_run_ids,
+                        children_loaded,
+                        expanded: old_expanded.get(&run_id).copied().unwrap_or(default_expanded),
+                    },
+                )
+            })
+            .collect();
+    }
+
+    fn run_visible_with_descendants(
+        &self,
+        run_id: u32,
+        filter_active: bool,
+        matching_run_ids: &HashSet<u32>,
+        memo: &mut HashMap<u32, bool>,
+        path: &mut HashSet<u32>,
+    ) -> bool {
+        if let Some(visible) = memo.get(&run_id) {
+            return *visible;
+        }
+
+        if !path.insert(run_id) {
+            return false;
+        }
+
+        let visible = !filter_active
+            || matching_run_ids.contains(&run_id)
+            || self
+                .run_config_tree
+                .get(&run_id)
+                .map(|node| {
+                    node.output_run_ids.iter().any(|child_run_id| {
+                        self.run_visible_with_descendants(*child_run_id, filter_active, matching_run_ids, memo, path)
+                    })
+                })
+                .unwrap_or(false);
+        path.remove(&run_id);
+        memo.insert(run_id, visible);
+        visible
+    }
+
+    fn append_visible_run_rows(
+        &self,
+        run_id: u32,
+        depth: usize,
+        filter_active: bool,
+        matching_run_ids: &HashSet<u32>,
+        memo: &mut HashMap<u32, bool>,
+        path: &mut HashSet<u32>,
+        rows: &mut Vec<VisibleRunConfigRow>,
+    ) {
+        if !path.insert(run_id) {
+            return;
+        }
+
+        let Some(node) = self.run_config_tree.get(&run_id) else {
+            path.remove(&run_id);
+            return;
+        };
+        let visible_children = node
+            .output_run_ids
+            .iter()
+            .filter(|child_run_id| self.run_visible_with_descendants(**child_run_id, filter_active, matching_run_ids, memo, path))
+            .copied()
+            .collect::<Vec<u32>>();
+
+        rows.push(VisibleRunConfigRow {
+            run_id,
+            depth,
+            has_children: !visible_children.is_empty() || !node.children_loaded,
+            expanded: node.expanded,
+        });
+
+        if node.expanded {
+            for child_run_id in visible_children {
+                self.append_visible_run_rows(child_run_id, depth + 1, filter_active, matching_run_ids, memo, path, rows);
+            }
+        }
+
+        path.remove(&run_id);
+    }
+
+    fn rebuild_visible_run_configs(&mut self, keep_run_id: Option<u32>) {
+        let filter_active = !self.search_filters.is_empty();
+        let matching_run_ids = if filter_active {
+            self.search_filters
+                .normalized()
+                .ok()
+                .map(|active_search| {
+                    self.run_config_tree
+                        .values()
+                        .filter(|node| active_search.matches(&node.entry))
+                        .map(|node| node.entry.id)
+                        .collect::<HashSet<u32>>()
+                })
+                .unwrap_or_default()
+        } else {
+            HashSet::new()
+        };
+
+        let mut root_run_ids = self
+            .run_config_tree
+            .iter()
+            .filter_map(|(run_id, node)| {
+                if node
+                    .input_run_ids
+                    .iter()
+                    .all(|input_run_id| !self.run_config_tree.contains_key(input_run_id))
+                {
+                    Some(*run_id)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<u32>>();
+        sort_run_ids(&mut root_run_ids, &self.all_run_configs, self.run_on_sort_order);
+
+        let mut memo = HashMap::new();
+        let mut rows = vec![];
+        for run_id in root_run_ids {
+            if self.run_visible_with_descendants(run_id, filter_active, &matching_run_ids, &mut memo, &mut HashSet::new()) {
+                self.append_visible_run_rows(run_id, 0, filter_active, &matching_run_ids, &mut memo, &mut HashSet::new(), &mut rows);
+            }
+        }
+
+        let appended_run_ids = rows.iter().map(|row| row.run_id).collect::<HashSet<u32>>();
+        let mut remaining_run_ids = self
+            .run_config_tree
+            .keys()
+            .filter(|run_id| !appended_run_ids.contains(run_id))
+            .copied()
+            .collect::<Vec<u32>>();
+        sort_run_ids(&mut remaining_run_ids, &self.all_run_configs, self.run_on_sort_order);
+        for run_id in remaining_run_ids {
+            if self.run_visible_with_descendants(run_id, filter_active, &matching_run_ids, &mut memo, &mut HashSet::new()) {
+                self.append_visible_run_rows(run_id, 0, filter_active, &matching_run_ids, &mut memo, &mut HashSet::new(), &mut rows);
+            }
         }
 
         self.run_configs = rows;
 
         if let Some(run_id) = keep_run_id {
-            if let Some(idx) = self.run_configs.iter().position(|entry| entry.id == run_id) {
+            if let Some(idx) = self.run_configs.iter().position(|entry| entry.run_id == run_id) {
                 self.selected_idx = idx;
                 self.ensure_main_selection_visible();
                 return;
@@ -672,6 +1141,85 @@ impl App {
         }
 
         self.ensure_main_selection_visible();
+    }
+
+    async fn toggle_selected_run_expanded(&mut self) -> bool {
+        let Some(run_id) = self.selected_run_id() else {
+            return false;
+        };
+        let needs_children_load = self
+            .run_config_tree
+            .get(&run_id)
+            .map(|node| !node.children_loaded)
+            .unwrap_or(false);
+        if needs_children_load {
+            match self.ensure_run_children_loaded(run_id, Some(run_id)).await {
+                Ok(false) => return false,
+                Ok(true) => {}
+                Err(e) => {
+                    warn!("toggle_selected_run_expanded failed to lazy-load children: run_id={run_id} err={e:?}");
+                    self.status = Some(format!("Failed to list child runs for run_id={run_id}: {e:?}"));
+                    return false;
+                }
+            }
+        }
+
+        let Some(node) = self.run_config_tree.get_mut(&run_id) else {
+            return false;
+        };
+        if node.output_run_ids.is_empty() {
+            return false;
+        }
+        node.expanded = !node.expanded;
+        self.rebuild_visible_run_configs(Some(run_id));
+        true
+    }
+
+    async fn expand_selected_run(&mut self) -> bool {
+        let Some(run_id) = self.selected_run_id() else {
+            return false;
+        };
+        let needs_children_load = self
+            .run_config_tree
+            .get(&run_id)
+            .map(|node| !node.children_loaded)
+            .unwrap_or(false);
+        if needs_children_load {
+            match self.ensure_run_children_loaded(run_id, Some(run_id)).await {
+                Ok(false) => return false,
+                Ok(true) => {}
+                Err(e) => {
+                    warn!("expand_selected_run failed to lazy-load children: run_id={run_id} err={e:?}");
+                    self.status = Some(format!("Failed to list child runs for run_id={run_id}: {e:?}"));
+                    return false;
+                }
+            }
+        }
+
+        let Some(node) = self.run_config_tree.get_mut(&run_id) else {
+            return false;
+        };
+        if node.output_run_ids.is_empty() || node.expanded {
+            return false;
+        }
+        node.expanded = true;
+        self.rebuild_visible_run_configs(Some(run_id));
+        true
+    }
+
+    fn collapse_selected_run(&mut self) -> bool {
+        let Some(run_id) = self.selected_run_id() else {
+            return false;
+        };
+        let Some(node) = self.run_config_tree.get_mut(&run_id) else {
+            return false;
+        };
+        if node.output_run_ids.is_empty() || !node.expanded {
+            return false;
+        }
+        node.expanded = false;
+        self.rebuild_visible_run_configs(Some(run_id));
+        true
     }
 
     fn toggle_run_on_sort_order(&mut self) {
@@ -696,10 +1244,15 @@ impl App {
         }
     }
 
-    fn apply_type_filter_from_popup(&mut self) {
+    async fn apply_type_filter_from_popup(&mut self) {
         if let Some(selected_type) = self.selected_popup_type() {
             let keep_run_id = self.selected_run_id();
             self.search_filters.run_config_type = Some(selected_type.clone());
+            if let Err(err) = self.ensure_all_run_configs_loaded(keep_run_id).await {
+                warn!("apply_type_filter_from_popup failed to load all run configs: {err:?}");
+                self.status = Some(format!("Failed to list run_configs for type filter: {err:?}"));
+                return;
+            }
             self.rebuild_visible_run_configs(keep_run_id);
             self.status = Some(format!("Type filter applied: {selected_type}"));
             debug!("apply_type_filter_from_popup: type={selected_type}");
@@ -734,33 +1287,59 @@ impl App {
 
     async fn refresh_run_configs(&mut self) {
         let keep_run_id = self.selected_run_id();
-        match self.store.list_run_configs().await {
-            Ok(run_configs) => {
-                self.all_run_configs = run_configs;
-                self.rebuild_visible_run_configs(keep_run_id);
+        self.all_run_configs.clear();
+        self.loaded_input_pairs.clear();
+        self.known_output_run_ids.clear();
+        self.paged_run_config_offset = 0;
+        self.has_more_paged_run_configs = true;
+        self.run_config_tree.clear();
+        self.run_configs.clear();
+
+        let load_result = if self.search_filters.is_empty() {
+            self.load_next_run_config_page(keep_run_id).await.map(|_| ())
+        } else {
+            self.ensure_all_run_configs_loaded(keep_run_id).await
+        };
+
+        match load_result {
+            Ok(()) => {
                 self.status = None;
                 debug!(
-                    "refresh_run_configs: loaded total={} visible={} filters={}",
+                    "refresh_run_configs: loaded total={} visible={} paged_offset={} more_pages={} filters={}",
                     self.all_run_configs.len(),
                     self.run_configs.len(),
+                    self.paged_run_config_offset,
+                    self.has_more_paged_run_configs,
                     self.search_filters.summary()
                 );
             }
             Err(e) => {
                 warn!("refresh_run_configs failed: {e:?}");
                 self.all_run_configs.clear();
+                self.loaded_input_pairs.clear();
+                self.known_output_run_ids.clear();
+                self.paged_run_config_offset = 0;
+                self.has_more_paged_run_configs = false;
+                self.run_config_tree.clear();
                 self.run_configs.clear();
                 self.selected_idx = 0;
                 self.selected_values.clear();
+                self.selected_run_motifs.clear();
                 self.status = Some(format!("Failed to list run_configs: {e:?}"));
             }
         }
     }
 
-    async fn refresh_selected_values(&mut self) {
+    async fn refresh_selected_details(&mut self) {
+        let keep_motif_id = self.selected_motif().map(|motif| motif.motif_id);
         self.selected_values.clear();
+        self.selected_run_motifs.clear();
 
         let Some(run_id) = self.selected_run_id() else {
+            if self.selected_area == SelectedArea::RightMotifs {
+                self.selected_area = SelectedArea::LeftRunConfigs;
+                self.prefer_right_motifs = false;
+            }
             if self.status.is_none() {
                 self.status = Some("No run_configs found.".to_string());
             }
@@ -776,14 +1355,66 @@ impl App {
                     .collect::<Vec<(String, String)>>();
                 rows.sort_by(|a, b| a.0.cmp(&b.0));
                 debug!("refresh_selected_values: run_id={} rows={}", run_id, rows.len());
-                if rows.is_empty() {
-                    self.status = Some(format!("No run_config_values for run_id={run_id}."));
-                }
                 self.selected_values = rows;
             }
             Err(e) => {
-                warn!("refresh_selected_values failed: run_id={} err={e:?}", run_id);
+                warn!("refresh_selected_details failed to list values: run_id={} err={e:?}", run_id);
                 self.status = Some(format!("Failed to list run_config_values for run_id={run_id}: {e:?}"));
+            }
+        }
+
+        match self.store.list_run_motifs(run_id).await {
+            Ok(motifs) => {
+                self.selected_run_motifs = motifs;
+                if self.selected_run_motifs.is_empty() {
+                    self.selected_motif_idx = 0;
+                    self.motif_list_offset = 0;
+                    if self.selected_area == SelectedArea::RightMotifs {
+                        self.selected_area = SelectedArea::LeftRunConfigs;
+                        self.prefer_right_motifs = false;
+                    }
+                } else {
+                    self.selected_motif_idx = keep_motif_id
+                        .and_then(|motif_id| self.selected_run_motifs.iter().position(|motif| motif.motif_id == motif_id))
+                        .unwrap_or(0);
+                    self.ensure_motif_selection_visible();
+                }
+            }
+            Err(e) => {
+                warn!("refresh_selected_details failed to list motifs: run_id={} err={e:?}", run_id);
+                self.status = Some(format!("Failed to list motifs for run_id={run_id}: {e:?}"));
+            }
+        }
+    }
+
+    async fn open_selected_motif_plot(&mut self) {
+        let Some(selected_motif) = self.selected_motif().cloned() else {
+            self.status = Some("No motif selected.".to_string());
+            return;
+        };
+
+        match resolve_motif_plot_target(&self.ws_path, selected_motif.motif_id).await {
+            Ok(target_path) => {
+                let target_path = if target_path.is_absolute() { target_path } else { self.ws_path.join(target_path) };
+                if !target_path.exists() {
+                    self.status = Some(format!("Generating plot for motif_id={}...", selected_motif.motif_id));
+                    if let Err(err) = generate_motif_plot(&self.ws_path, selected_motif.motif_id).await {
+                        self.status = Some(format!("Failed to generate plot for motif_id={}: {err}", selected_motif.motif_id));
+                        return;
+                    }
+                }
+
+                match open_path_in_system_viewer(&target_path) {
+                    Ok(()) => {
+                        self.status = Some(format!("Opened plot: {}", target_path.display()));
+                    }
+                    Err(err) => {
+                        self.status = Some(format!("Failed to open plot {}: {err}", target_path.display()));
+                    }
+                }
+            }
+            Err(err) => {
+                self.status = Some(format!("Failed to resolve plot for motif_id={}: {err}", selected_motif.motif_id));
             }
         }
     }
@@ -820,9 +1451,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("starting thoosa_tui: ws_path={} db_path={}", args.ws_path.display(), db_path.display());
     let store = SqlStore::from_path(&db_path).await.map_err(|e| io::Error::other(format!("{e:?}")))?;
 
-    let mut app = App::new(store, db_path);
+    let mut app = App::new(store, args.ws_path.clone(), db_path);
     app.refresh_run_configs().await;
-    app.refresh_selected_values().await;
+    app.refresh_selected_details().await;
 
     if !io::stdout().is_terminal() || !io::stdin().is_terminal() {
         warn!("no TTY detected, switching to non-interactive mode");
@@ -858,7 +1489,7 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
 
-                if key.code == KeyCode::Char(' ') && key.modifiers.is_empty() && matches!(app.selected_area, SelectedArea::LeftRunConfigs | SelectedArea::ProgressView) {
+                if key.code == KeyCode::Char(' ') && key.modifiers.is_empty() && matches!(app.selected_area, SelectedArea::LeftRunConfigs | SelectedArea::RightMotifs | SelectedArea::ProgressView) {
                     app.open_view_popup();
                     continue;
                 }
@@ -875,33 +1506,48 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                         match key.code {
                             KeyCode::Char('r') if key.modifiers.is_empty() => {
                                 app.refresh_run_configs().await;
-                                app.refresh_selected_values().await;
+                                app.refresh_selected_details().await;
                             }
                             KeyCode::Char('s') if key.modifiers.is_empty() => {
                                 app.toggle_run_on_sort_order();
-                                app.refresh_selected_values().await;
+                                app.refresh_selected_details().await;
                             }
                             KeyCode::Char('t') if key.modifiers.is_empty() => {
                                 app.open_type_filter_popup().await;
                             }
                             KeyCode::Char('T') if is_unmodified_or_shift(&key) => {
                                 app.reset_search_filters();
-                                app.refresh_selected_values().await;
+                                app.refresh_selected_details().await;
+                            }
+                            KeyCode::Tab if key.modifiers.is_empty() => {
+                                if app.has_selected_run_motifs() {
+                                    app.selected_area = SelectedArea::RightMotifs;
+                                    app.prefer_right_motifs = true;
+                                }
+                            }
+                            KeyCode::Enter if key.modifiers.is_empty() => {
+                                app.toggle_selected_run_expanded().await;
+                            }
+                            KeyCode::Right if key.modifiers.is_empty() => {
+                                app.expand_selected_run().await;
+                            }
+                            KeyCode::Left if key.modifiers.is_empty() => {
+                                app.collapse_selected_run();
                             }
                             KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                                selection_changed = app.move_main_down(1);
+                                selection_changed = app.move_main_down_lazy(1).await;
                             }
                             KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
                                 selection_changed = app.move_main_up(1);
                             }
                             KeyCode::Char('d') if is_ctrl_char(&key, 'd') => {
-                                selection_changed = app.move_main_down(app.main_page_size());
+                                selection_changed = app.move_main_down_lazy(app.main_page_size()).await;
                             }
                             KeyCode::Char('u') if is_ctrl_char(&key, 'u') => {
                                 selection_changed = app.move_main_up(app.main_page_size());
                             }
                             KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
-                                selection_changed = app.move_main_to_bottom();
+                                selection_changed = app.move_main_to_bottom_lazy().await;
                             }
                             KeyCode::Char('g') if key.modifiers.is_empty() => {
                                 if app.handle_g_press(SelectedArea::LeftRunConfigs) {
@@ -912,24 +1558,56 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         if selection_changed {
-                            app.refresh_selected_values().await;
+                            app.refresh_selected_details().await;
+                        }
+                    }
+                    SelectedArea::RightMotifs => {
+                        match key.code {
+                            KeyCode::Tab | KeyCode::Left if key.modifiers.is_empty() => {
+                                app.selected_area = SelectedArea::LeftRunConfigs;
+                                app.prefer_right_motifs = false;
+                            }
+                            KeyCode::Enter | KeyCode::Char('p') if key.modifiers.is_empty() => {
+                                app.open_selected_motif_plot().await;
+                            }
+                            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                                app.move_motif_down(1);
+                            }
+                            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                                app.move_motif_up(1);
+                            }
+                            KeyCode::Char('d') if is_ctrl_char(&key, 'd') => {
+                                app.move_motif_down(app.motif_page_size());
+                            }
+                            KeyCode::Char('u') if is_ctrl_char(&key, 'u') => {
+                                app.move_motif_up(app.motif_page_size());
+                            }
+                            KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
+                                app.move_motif_to_bottom();
+                            }
+                            KeyCode::Char('g') if key.modifiers.is_empty() => {
+                                if app.handle_g_press(SelectedArea::RightMotifs) {
+                                    app.move_motif_to_top();
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     SelectedArea::ProgressView => {}
                     SelectedArea::TypeFilterPopup => {
                         match key.code {
                             KeyCode::Esc => {
-                                app.selected_area = SelectedArea::LeftRunConfigs;
+                                app.selected_area = app.default_run_configs_area();
                             }
                             KeyCode::Enter => {
-                                app.apply_type_filter_from_popup();
-                                app.selected_area = SelectedArea::LeftRunConfigs;
-                                app.refresh_selected_values().await;
+                                app.apply_type_filter_from_popup().await;
+                                app.selected_area = app.default_run_configs_area();
+                                app.refresh_selected_details().await;
                             }
                             KeyCode::Char('T') if is_unmodified_or_shift(&key) => {
                                 app.reset_search_filters();
-                                app.selected_area = SelectedArea::LeftRunConfigs;
-                                app.refresh_selected_values().await;
+                                app.selected_area = app.default_run_configs_area();
+                                app.refresh_selected_details().await;
                             }
                             KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
                                 app.move_popup_down(1);
@@ -957,13 +1635,13 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                     SelectedArea::SearchPopup => {
                         match key.code {
                             KeyCode::Esc => {
-                                app.selected_area = SelectedArea::LeftRunConfigs;
+                                app.selected_area = app.default_run_configs_area();
                             }
                             KeyCode::Enter => {
                                 if app.selected_search_field() == SearchField::Type {
                                     app.open_search_type_popup();
-                                } else if app.apply_search_from_popup() {
-                                    app.refresh_selected_values().await;
+                                } else if app.apply_search_from_popup().await {
+                                    app.refresh_selected_details().await;
                                 }
                             }
                             KeyCode::Right | KeyCode::Left if app.selected_search_field() == SearchField::Type => {
@@ -1030,7 +1708,7 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                         match key.code {
                             KeyCode::Esc => {
                                 app.selected_area = match app.view_mode {
-                                    ViewMode::RunConfigs => SelectedArea::LeftRunConfigs,
+                                    ViewMode::RunConfigs => app.default_run_configs_area(),
                                     ViewMode::Progress => SelectedArea::ProgressView,
                                 };
                             }
@@ -1095,9 +1773,10 @@ fn render(frame: &mut Frame<'_>, app: &App) {
 
     let status_line = match app.selected_area {
         SelectedArea::LeftRunConfigs => format!(
-            "area: run_configs | sort(run_on): {} (s toggle) | j/k, Up/Down | Ctrl-d/u page | gg top | G bottom | / search | t type | T reset filters | r reload | Space panels | q quit",
+            "area: run tree | sort(run_on): {} (s toggle) | j/k, Up/Down lazy-load | Ctrl-d/u page | gg top | G bottom | Enter toggle/load | Left/Right collapse/expand/load | Tab motifs | / search | t type | T reset filters | r reload | Space panels | q quit",
             app.sort_order_label()
         ),
+        SelectedArea::RightMotifs => "area: motifs | j/k, Up/Down | Ctrl-d/u page | gg top | G bottom | Enter/p open plot | Tab/Left back | Space panels | q quit".to_string(),
         SelectedArea::ProgressView => "area: progress | Space panels | q quit".to_string(),
         SelectedArea::TypeFilterPopup => {
             "area: type-filter | j/k, Up/Down | Ctrl-d/u page | gg top | G bottom | Enter apply type | Esc close | T reset filters".to_string()
@@ -1120,12 +1799,7 @@ fn render_run_configs_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         app.run_configs
             .iter()
-            .map(|entry| {
-                ListItem::new(format!(
-                    "{:>6}  {:<19}  {:<24}  {}",
-                    entry.id, entry.run_on, entry.run_config_type, entry.descr
-                ))
-            })
+            .map(|entry| ListItem::new(format_run_tree_row(app, entry)))
             .collect::<Vec<ListItem>>()
     };
 
@@ -1147,13 +1821,74 @@ fn render_run_configs_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
     }
     frame.render_stateful_widget(left_list, layout[0], &mut left_state);
 
+    if app.selected_run_motifs.is_empty() {
+        let right = Paragraph::new(render_run_value_lines(app).join("\n"))
+            .block(Block::default().title("run_config_values").borders(Borders::ALL))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(right, layout[1]);
+        return;
+    }
+
+    let right_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .split(layout[1]);
+    let motif_items = app
+        .selected_run_motifs
+        .iter()
+        .map(|motif| ListItem::new(format_run_motif_row(motif)))
+        .collect::<Vec<ListItem>>();
+    let motif_list = List::new(motif_items)
+        .block(Block::default().title(format!("motifs [{}]", app.selected_run_motifs.len())).borders(Borders::ALL))
+        .highlight_style(if app.selected_area == SelectedArea::RightMotifs {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().add_modifier(Modifier::BOLD)
+        })
+        .highlight_symbol(">> ");
+    let mut motif_state = ListState::default().with_offset(app.motif_list_offset);
+    motif_state.select(Some(app.selected_motif_idx.min(app.selected_run_motifs.len().saturating_sub(1))));
+    frame.render_stateful_widget(motif_list, right_layout[0], &mut motif_state);
+
+    let motif_details = Paragraph::new(render_motif_detail_lines(app).join("\n"))
+        .block(Block::default().title("motif details").borders(Borders::ALL))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(motif_details, right_layout[1]);
+}
+
+fn format_run_tree_row(app: &App, row: &VisibleRunConfigRow) -> String {
+    let Some(node) = app.run_config_tree.get(&row.run_id) else {
+        return format!("<missing run {}>", row.run_id);
+    };
+    let indent = "  ".repeat(row.depth);
+    let tree_marker = if row.has_children {
+        if row.expanded {
+            "▼"
+        } else if node.children_loaded || !node.output_run_ids.is_empty() {
+            "▶"
+        } else {
+            "▷"
+        }
+    } else {
+        "•"
+    };
+    format!(
+        "{}{} {:>6}  {:<19}  {:<24}  {}",
+        indent, tree_marker, node.entry.id, node.entry.run_on, node.entry.run_config_type, node.entry.descr
+    )
+}
+
+fn render_run_value_lines(app: &App) -> Vec<String> {
     let mut right_lines = vec![
         format!("db: {}", app.db_path.display()),
         String::new(),
     ];
 
-    if let Some(run_id) = app.selected_run_id() {
-        right_lines.push(format!("run_id: {run_id}"));
+    if let Some(run_entry) = app.selected_run_entry() {
+        right_lines.push(format!("run_id: {}", run_entry.id));
+        right_lines.push(format!("type: {}", run_entry.run_config_type));
+        right_lines.push(format!("run_on: {}", run_entry.run_on));
+        right_lines.push(format!("descr: {}", run_entry.descr));
     } else {
         right_lines.push("run_id: <none>".to_string());
     }
@@ -1164,7 +1899,6 @@ fn render_run_configs_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
     right_lines.push(format!("descr filter: {}", display_search_text(&app.search_filters.descr, "<none>")));
     right_lines.push(format!("run_on from: {}", display_search_text(&app.search_filters.run_on_from, "<none>")));
     right_lines.push(format!("run_on to: {}", display_search_text(&app.search_filters.run_on_to, "<none>")));
-
     right_lines.push(String::new());
 
     for (name, value) in &app.selected_values {
@@ -1176,10 +1910,64 @@ fn render_run_configs_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
         right_lines.push(format!("status: {status}"));
     }
 
-    let right = Paragraph::new(right_lines.join("\n"))
-        .block(Block::default().title("run_config_values").borders(Borders::ALL))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(right, layout[1]);
+    right_lines
+}
+
+fn format_run_motif_row(motif: &RunMotifEntry) -> String {
+    match motif.score {
+        Some(score) => format!(
+            "{:>8}  ch {:<2}  score {:>8.5}  slices {:>5}  resources {:>4}",
+            motif.motif_id, motif.channel_id, score, motif.slices_cnt, motif.resources_cnt
+        ),
+        None => format!(
+            "{:>8}  ch {:<2}  slices {:>5}  resources {:>4}",
+            motif.motif_id, motif.channel_id, motif.slices_cnt, motif.resources_cnt
+        ),
+    }
+}
+
+fn render_motif_detail_lines(app: &App) -> Vec<String> {
+    let mut lines = vec![
+        format!("db: {}", app.db_path.display()),
+        String::new(),
+    ];
+
+    if let Some(run_entry) = app.selected_run_entry() {
+        lines.push(format!("run_id: {}", run_entry.id));
+        lines.push(format!("type: {}", run_entry.run_config_type));
+        lines.push(format!("descr: {}", run_entry.descr));
+    }
+
+    lines.push(String::new());
+
+    if let Some(motif) = app.selected_motif() {
+        lines.push(format!("motif_id: {}", motif.motif_id));
+        lines.push(format!("channel: {}", motif.channel_id));
+        lines.push(format!("source find_motifs run_id: {}", motif.source_run_id));
+        lines.push(format!("score: {}", motif.score.map(|value| format!("{value:.6}")).unwrap_or_else(|| "<n/a>".to_string())));
+        lines.push(format!("slices: {}", motif.slices_cnt));
+        lines.push(format!("resources: {}", motif.resources_cnt));
+        lines.push(String::new());
+        lines.push("[Enter] or [p] open plot".to_string());
+        lines.push("The plot is generated on demand if it does not exist yet.".to_string());
+    } else {
+        lines.push("No motif selected.".to_string());
+    }
+
+    if !app.selected_values.is_empty() {
+        lines.push(String::new());
+        lines.push("run_config_values:".to_string());
+        for (name, value) in &app.selected_values {
+            lines.push(format!("{name} = {value}"));
+        }
+    }
+
+    if let Some(status) = &app.status {
+        lines.push(String::new());
+        lines.push(format!("status: {status}"));
+    }
+
+    lines
 }
 
 fn render_progress_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -1311,6 +2099,58 @@ fn popup_height(term_rows: u16, items_count: usize) -> u16 {
     let max_h = term_rows.saturating_sub(4).max(3);
     let desired = items_count.saturating_add(2) as u16;
     desired.clamp(3, max_h)
+}
+
+fn sort_run_ids(run_ids: &mut Vec<u32>, all_run_configs: &[RunConfigEntry], sort_order: SortOrder) {
+    let run_on_by_id = all_run_configs
+        .iter()
+        .map(|entry| (entry.id, entry.run_on.as_str()))
+        .collect::<HashMap<u32, &str>>();
+    match sort_order {
+        SortOrder::Asc => run_ids.sort_by(|a, b| {
+            run_on_by_id
+                .get(a)
+                .cmp(&run_on_by_id.get(b))
+                .then_with(|| a.cmp(b))
+        }),
+        SortOrder::Desc => run_ids.sort_by(|a, b| {
+            run_on_by_id
+                .get(b)
+                .cmp(&run_on_by_id.get(a))
+                .then_with(|| a.cmp(b))
+        }),
+    }
+}
+
+fn format_progress_uptime(started_at_unix_ms: u64) -> String {
+    if started_at_unix_ms == 0 {
+        return "<unknown>".to_string();
+    }
+
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let elapsed = now_ms.saturating_sub(started_at_unix_ms);
+    format_duration_short(Duration::from_millis(elapsed))
+}
+
+fn format_duration_short(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    let days = secs / 86_400;
+    let hours = (secs % 86_400) / 3_600;
+    let mins = (secs % 3_600) / 60;
+    let rem_secs = secs % 60;
+
+    if days > 0 {
+        format!("{days}d {hours:02}h {mins:02}m")
+    } else if hours > 0 {
+        format!("{hours}h {mins:02}m {rem_secs:02}s")
+    } else if mins > 0 {
+        format!("{mins}m {rem_secs:02}s")
+    } else {
+        format!("{rem_secs}s")
+    }
 }
 
 fn format_search_field_row(field: SearchField, popup: &SearchPopupState) -> String {
@@ -1548,6 +2388,123 @@ fn progress_socket_names(socket_id: &str) -> io::Result<Vec<Name<'static>>> {
     Ok(names)
 }
 
+fn cargo_workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
+        .to_path_buf()
+}
+
+fn release_plot_binary_candidates() -> Vec<PathBuf> {
+    let workspace_root = cargo_workspace_root();
+    vec![
+        workspace_root.join(format!("target/x86_64-unknown-linux-gnu/release/{DEFAULT_PLOT_PROJECT}")),
+        workspace_root.join(format!("target/release/{DEFAULT_PLOT_PROJECT}")),
+    ]
+}
+
+fn plot_command(ws_path: &Path, motif_id: u32, print_to_stdout: bool) -> Command {
+    let mut command = release_plot_binary_candidates()
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .map(|candidate| Command::new(candidate))
+        .unwrap_or_else(|| {
+            let mut cargo_command = Command::new("cargo");
+            cargo_command.current_dir(cargo_workspace_root());
+            cargo_command.args(["run", "--release", "-p", DEFAULT_PLOT_PROJECT, "--"]);
+            cargo_command
+        });
+
+    command.args([
+        "--term-logger-level",
+        "ERROR",
+        "--write-logger-level",
+        "ERROR",
+        "--ws-path",
+    ]);
+    command.arg(ws_path);
+    command.args(["plot-data", "--data-by"]);
+    command.arg(format!("motif_id:{motif_id}"));
+    if print_to_stdout {
+        command.arg("--stdout");
+    }
+    command
+}
+
+async fn resolve_motif_plot_target(ws_path: &Path, motif_id: u32) -> Result<PathBuf, String> {
+    let output = plot_command(ws_path, motif_id, true)
+        .output()
+        .await
+        .map_err(|err| format!("spawn failed: {err}"))?;
+    if !output.status.success() {
+        return Err(command_output_error(&output.stdout, &output.stderr));
+    }
+    parse_plot_target_path(&output.stdout)
+}
+
+async fn generate_motif_plot(ws_path: &Path, motif_id: u32) -> Result<(), String> {
+    let output = plot_command(ws_path, motif_id, false)
+        .output()
+        .await
+        .map_err(|err| format!("spawn failed: {err}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(command_output_error(&output.stdout, &output.stderr))
+    }
+}
+
+fn parse_plot_target_path(stdout: &[u8]) -> Result<PathBuf, String> {
+    let stdout = String::from_utf8_lossy(stdout);
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Some(target_path) = parsed.get("target_path").and_then(|value| value.as_str()) {
+                return Ok(PathBuf::from(target_path));
+            }
+        }
+    }
+
+    Err("plot command did not emit a target_path".to_string())
+}
+
+fn command_output_error(stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    if !stderr.trim().is_empty() {
+        return stderr.trim().to_string();
+    }
+
+    let stdout = String::from_utf8_lossy(stdout);
+    if !stdout.trim().is_empty() {
+        return stdout.trim().to_string();
+    }
+
+    "command failed without output".to_string()
+}
+
+fn open_path_in_system_viewer(path: &Path) -> Result<(), String> {
+    let mut command = if cfg!(target_os = "macos") {
+        let mut command = std::process::Command::new("open");
+        command.arg(path);
+        command
+    } else if cfg!(target_os = "windows") {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", ""]);
+        command.arg(path);
+        command
+    } else {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(path);
+        command
+    };
+
+    command.spawn().map(|_| ()).map_err(|err| err.to_string())
+}
+
 fn value_to_string(value: &Val) -> String {
     match value {
         Val::Real(v) => v.to_string(),
@@ -1568,8 +2525,8 @@ fn run_non_interactive(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     println!("run_configs: {}", app.run_configs.len());
     println!();
 
-    for entry in app.run_configs.iter().take(20) {
-        println!("[{}] {} | {} | {}", entry.id, entry.run_config_type, entry.run_on, entry.descr);
+    for row in app.run_configs.iter().take(20) {
+        println!("{}", format_run_tree_row(app, row));
     }
 
     if app.run_configs.len() > 20 {
@@ -1615,7 +2572,7 @@ mod tests {
     #[test]
     fn test_apply_view_mode_from_popup_switches_focus() {
         let store = Box::new(MockStore::new()) as Box<dyn Store>;
-        let mut app = App::new(store, PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
 
         app.open_view_popup();
         app.view_popup_selected_idx = 1;
@@ -1675,11 +2632,12 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn test_apply_search_from_popup_filters_visible_rows() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_apply_search_from_popup_filters_visible_rows() {
         let store = Box::new(MockStore::new()) as Box<dyn Store>;
-        let mut app = App::new(store, PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.selected_area = SelectedArea::SearchPopup;
+        app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![
             RunConfigEntry {
                 id: 7,
@@ -1694,6 +2652,7 @@ mod tests {
                 run_on: "2026-03-14 09:00:00".to_string(),
             },
         ];
+        app.rebuild_run_config_tree(&[], &HashMap::new());
         app.search_popup.draft = RunConfigSearch {
             id: "7".to_string(),
             run_config_type: Some("select_motifs".to_string()),
@@ -1702,23 +2661,97 @@ mod tests {
             run_on_to: "2026-03-13".to_string(),
         };
 
-        assert!(app.apply_search_from_popup());
+        assert!(app.apply_search_from_popup().await);
         assert_eq!(app.selected_area, SelectedArea::LeftRunConfigs);
         assert_eq!(app.search_filters.id, "7");
         assert_eq!(app.run_configs.len(), 1);
-        assert_eq!(app.run_configs[0].id, 7);
+        assert_eq!(app.run_configs[0].run_id, 7);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_refresh_run_configs_uses_paged_startup_loading() {
+        let mut store = MockStore::new();
+        store.expect_list_run_configs_page().times(1).returning(|limit, offset| {
+            assert!(limit >= 1);
+            assert_eq!(0, offset);
+            Ok(vec![
+                RunConfigEntry {
+                    id: 2,
+                    run_config_type: "child".to_string(),
+                    descr: "child run".to_string(),
+                    run_on: "2026-03-14 09:00:00".to_string(),
+                },
+                RunConfigEntry {
+                    id: 1,
+                    run_config_type: "root".to_string(),
+                    descr: "root run".to_string(),
+                    run_on: "2026-03-14 08:00:00".to_string(),
+                },
+            ])
+        });
+        store.expect_list_input_run_ids().times(1).returning(|ids| {
+            assert_eq!(vec![2, 1], ids.to_vec());
+            Ok(vec![(2, 1)])
+        });
+        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+
+        app.refresh_run_configs().await;
+
+        assert_eq!(2, app.all_run_configs.len());
+        assert_eq!(2, app.run_configs.len());
+        assert!(!app.has_more_paged_run_configs);
+        assert_eq!(Some(1), app.run_configs.first().map(|row| row.run_id));
+        assert_eq!(Some(2), app.run_configs.get(1).map(|row| row.run_id));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_expand_selected_run_lazy_loads_children() {
+        let mut store = MockStore::new();
+        store.expect_list_output_run_ids().times(1).returning(|run_id| {
+            assert_eq!(1, run_id);
+            Ok(vec![2])
+        });
+        store.expect_list_run_configs_by_ids().times(1).returning(|ids| {
+            assert_eq!(vec![2], ids.to_vec());
+            Ok(vec![RunConfigEntry {
+                id: 2,
+                run_config_type: "child".to_string(),
+                descr: "child run".to_string(),
+                run_on: "2026-03-14 09:00:00".to_string(),
+            }])
+        });
+        store.expect_list_input_run_ids().times(1).returning(|ids| {
+            assert_eq!(vec![2], ids.to_vec());
+            Ok(vec![(2, 1)])
+        });
+        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        app.has_more_paged_run_configs = true;
+        app.all_run_configs = vec![RunConfigEntry {
+            id: 1,
+            run_config_type: "root".to_string(),
+            descr: "root run".to_string(),
+            run_on: "2026-03-14 08:00:00".to_string(),
+        }];
+        app.rebuild_run_config_tree(&[], &HashMap::new());
+        app.rebuild_visible_run_configs(Some(1));
+
+        assert!(app.expand_selected_run().await);
+        assert_eq!(2, app.run_configs.len());
+        assert_eq!(Some(2), app.run_configs.get(1).map(|row| row.run_id));
+        assert!(app.run_config_tree.get(&1).map(|node| node.children_loaded).unwrap_or(false));
+        assert!(app.run_config_tree.get(&1).map(|node| node.expanded).unwrap_or(false));
     }
 
     #[test]
     fn test_move_main_to_bottom_updates_offset() {
         let store = Box::new(MockStore::new()) as Box<dyn Store>;
-        let mut app = App::new(store, PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.run_configs = (0..30)
-            .map(|idx| RunConfigEntry {
-                id: idx as u32,
-                run_config_type: "select_motifs".to_string(),
-                descr: format!("descr-{idx}"),
-                run_on: format!("2026-03-13 00:00:{idx:02}"),
+            .map(|idx| VisibleRunConfigRow {
+                run_id: idx as u32,
+                depth: 0,
+                has_children: false,
+                expanded: true,
             })
             .collect();
 
@@ -1730,13 +2763,13 @@ mod tests {
     #[test]
     fn test_move_main_up_keeps_offset_until_top_visible_row() {
         let store = Box::new(MockStore::new()) as Box<dyn Store>;
-        let mut app = App::new(store, PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.run_configs = (0..30)
-            .map(|idx| RunConfigEntry {
-                id: idx as u32,
-                run_config_type: "select_motifs".to_string(),
-                descr: format!("descr-{idx}"),
-                run_on: format!("2026-03-13 00:00:{idx:02}"),
+            .map(|idx| VisibleRunConfigRow {
+                run_id: idx as u32,
+                depth: 0,
+                has_children: false,
+                expanded: true,
             })
             .collect();
         app.selected_idx = 15;
@@ -1770,6 +2803,8 @@ mod tests {
                     total: 9,
                     completed: 4,
                 }],
+                started_at_unix_ms: 123,
+                oom_all_failed: 2,
             };
             let mut writer = &stream;
             let mut bytes = serde_json::to_vec(&snapshot)?;
@@ -1802,6 +2837,8 @@ mod tests {
                     total: 9,
                     completed: 4,
                 }],
+                started_at_unix_ms: 123,
+                oom_all_failed: 2,
             })
         );
 

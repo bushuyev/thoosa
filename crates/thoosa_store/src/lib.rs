@@ -95,6 +95,16 @@ pub struct RunConfigEntry {
     pub run_on: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunMotifEntry {
+    pub motif_id: u32,
+    pub channel_id: usize,
+    pub score: Option<f64>,
+    pub source_run_id: RunId,
+    pub slices_cnt: usize,
+    pub resources_cnt: usize,
+}
+
 #[async_trait]
 pub trait Store: ResourceStore + Debug + Sync + Send {
     async fn save_import(&self, descr: String) -> Result<u32, ThoError>;
@@ -231,10 +241,14 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
 
     async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
+    async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError>;
+    async fn list_run_configs_by_ids(&self, ids: &[RunId]) -> Result<Vec<RunConfigEntry>, ThoError>;
 
     async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError>;
 
     async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
+
+    async fn list_run_motifs(&self, run_id: RunId) -> Result<Vec<RunMotifEntry>, ThoError>;
 
     async fn save_selected_motifs(&self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoError>;
 
@@ -405,8 +419,11 @@ mock! {
         >;
         async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
         async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
+        async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError>;
+        async fn list_run_configs_by_ids(&self, ids: &[RunId]) -> Result<Vec<RunConfigEntry>, ThoError>;
         async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError>;
         async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
+        async fn list_run_motifs(&self, run_id: RunId) -> Result<Vec<RunMotifEntry>, ThoError>;
         async fn save_selected_motifs(
             &self,
             run_id: RunId,
@@ -858,30 +875,32 @@ impl Store for SqlStore {
         let ids = ids.to_vec();
         self.with_reader_conn("list_input_run_ids", move |conn| {
             let t = conn.transaction()?;
-            let (mut q, params) = ids.into_iter().fold(
-                (
-                    vec!["SELECT run_id, input_run_id FROM run_configs_input WHERE run_id IN ("],
-                    vec![],
-                ),
-                |mut a, v| {
-                    a.0.push("?");
-                    a.0.push(",");
-                    a.1.push(v);
-                    a
-                },
-            );
+            let mut id_input_id = vec![];
+            for ids_chunk in ids.chunks(500) {
+                let (mut q, params) = ids_chunk.iter().fold(
+                    (
+                        vec!["SELECT run_id, input_run_id FROM run_configs_input WHERE run_id IN ("],
+                        vec![],
+                    ),
+                    |mut a, v| {
+                        a.0.push("?");
+                        a.0.push(",");
+                        a.1.push(*v);
+                        a
+                    },
+                );
 
-            q.pop();
-            q.push(")");
+                q.pop();
+                q.push(")");
 
-            let id_input_id = {
                 let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
-                stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
-                    Ok((row.get::<usize, RunId>(0)?, row.get::<usize, RunId>(1)?))
-                })?
-                .map(|v| v.unwrap())
-                .collect()
-            };
+                let chunk_rows = stmt
+                    .query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
+                        Ok((row.get::<usize, RunId>(0)?, row.get::<usize, RunId>(1)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                id_input_id.extend(chunk_rows);
+            }
             t.commit()?;
             Ok(id_input_id)
         })
@@ -2028,6 +2047,75 @@ impl Store for SqlStore {
         .await
     }
 
+    async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError> {
+        self.with_reader_conn("list_run_configs_page", move |conn| {
+            let t = conn.transaction()?;
+
+            let run_configs = {
+                let mut stmt = t.prepare("SELECT id, type, descr, run_on FROM run_configs ORDER BY id DESC LIMIT ? OFFSET ?")?;
+                stmt.query_map([limit as i64, offset as i64], |row| {
+                    Ok(RunConfigEntry {
+                        id: row.get::<usize, RunId>(0)?,
+                        run_config_type: row.get::<usize, String>(1)?,
+                        descr: row.get::<usize, String>(2)?,
+                        run_on: row.get::<usize, String>(3)?,
+                    })
+                })?
+                .map(|v| v.map_err(ThoError::from))
+                .collect::<Result<Vec<RunConfigEntry>, ThoError>>()?
+            };
+
+            t.commit()?;
+            Ok(run_configs)
+        })
+        .await
+    }
+
+    async fn list_run_configs_by_ids(&self, ids: &[RunId]) -> Result<Vec<RunConfigEntry>, ThoError> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let ids = ids.to_vec();
+        self.with_reader_conn("list_run_configs_by_ids", move |conn| {
+            let t = conn.transaction()?;
+            let mut run_configs = vec![];
+
+            for ids_chunk in ids.chunks(500) {
+                let (mut q, params) = ids_chunk.iter().fold(
+                    (vec!["SELECT id, type, descr, run_on FROM run_configs WHERE id IN ("], vec![]),
+                    |mut a, v| {
+                        a.0.push("?");
+                        a.0.push(",");
+                        a.1.push(*v);
+                        a
+                    },
+                );
+                q.pop();
+                q.push(")");
+
+                let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
+                let chunk_rows = stmt
+                    .query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
+                        Ok(RunConfigEntry {
+                            id: row.get::<usize, RunId>(0)?,
+                            run_config_type: row.get::<usize, String>(1)?,
+                            descr: row.get::<usize, String>(2)?,
+                            run_on: row.get::<usize, String>(3)?,
+                        })
+                    })?
+                    .map(|v| v.map_err(ThoError::from))
+                    .collect::<Result<Vec<RunConfigEntry>, ThoError>>()?;
+                run_configs.extend(chunk_rows);
+            }
+
+            run_configs.sort_by(|a, b| b.id.cmp(&a.id));
+            t.commit()?;
+            Ok(run_configs)
+        })
+        .await
+    }
+
     async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError> {
         self.with_reader_conn("list_run_config_types", move |conn| {
             let t = conn.transaction()?;
@@ -2080,6 +2168,70 @@ impl Store for SqlStore {
             t.commit()?;
             debug!("list_run_config_values: run_id={run_id} result={result:?}");
             Ok(result)
+        })
+        .await
+    }
+
+    async fn list_run_motifs(&self, run_id: RunId) -> Result<Vec<RunMotifEntry>, ThoError> {
+        self.with_reader_conn("list_run_motifs", move |conn| {
+            let t = conn.transaction()?;
+
+            let selected_motifs = {
+                let mut stmt = t.prepare(
+                    "SELECT sm.motif_id, m.channel_id, sm.rate, m.run_id, COUNT(s.motif_id), COUNT(DISTINCT s.resource_id) \
+                     FROM selected_motifs sm \
+                     JOIN motifs m ON m.id=sm.motif_id \
+                     LEFT JOIN slices s ON s.motif_id=sm.motif_id \
+                     WHERE sm.run_id=? \
+                     GROUP BY sm.motif_id, m.channel_id, sm.rate, m.run_id \
+                     ORDER BY m.channel_id ASC, sm.rate DESC, sm.motif_id ASC",
+                )?;
+
+                stmt.query_map([run_id], |row| {
+                    Ok(RunMotifEntry {
+                        motif_id: row.get::<usize, u32>(0)?,
+                        channel_id: row.get::<usize, usize>(1)?,
+                        score: row.get::<usize, f64>(2).ok(),
+                        source_run_id: row.get::<usize, RunId>(3)?,
+                        slices_cnt: row.get::<usize, usize>(4)?,
+                        resources_cnt: row.get::<usize, usize>(5)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, Error>>()?
+            };
+
+            if !selected_motifs.is_empty() {
+                t.commit()?;
+                debug!("list_run_motifs: run_id={run_id} selected_motifs={selected_motifs:?}");
+                return Ok(selected_motifs);
+            }
+
+            let motifs = {
+                let mut stmt = t.prepare(
+                    "SELECT m.id, m.channel_id, m.run_id, COUNT(s.motif_id), COUNT(DISTINCT s.resource_id) \
+                     FROM motifs m \
+                     LEFT JOIN slices s ON s.motif_id=m.id \
+                     WHERE m.run_id=? \
+                     GROUP BY m.id, m.channel_id, m.run_id \
+                     ORDER BY m.channel_id ASC, m.id ASC",
+                )?;
+
+                stmt.query_map([run_id], |row| {
+                    Ok(RunMotifEntry {
+                        motif_id: row.get::<usize, u32>(0)?,
+                        channel_id: row.get::<usize, usize>(1)?,
+                        score: None,
+                        source_run_id: row.get::<usize, RunId>(2)?,
+                        slices_cnt: row.get::<usize, usize>(3)?,
+                        resources_cnt: row.get::<usize, usize>(4)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, Error>>()?
+            };
+
+            t.commit()?;
+            debug!("list_run_motifs: run_id={run_id} motifs={motifs:?}");
+            Ok(motifs)
         })
         .await
     }
@@ -3750,6 +3902,35 @@ mod store_tests {
         let mut expected_ids = vec![motif_slices_444[0].motif_id, motif_slices_1111[0].motif_id];
         expected_ids.sort();
         assert_eq!(expected_ids, motif_ids);
+
+        let selected_run_motifs = store.list_run_motifs(select_motifs_run_id).await?;
+        assert_eq!(2, selected_run_motifs.len());
+        assert!(selected_run_motifs.iter().all(|entry| entry.channel_id == 7));
+        let selected_run_motifs_by_id =
+            selected_run_motifs.iter().map(|entry| (entry.motif_id, entry)).collect::<HashMap<_, _>>();
+        let motif_1111_entry = selected_run_motifs_by_id.get(&motif_slices_1111[0].motif_id).unwrap();
+        let motif_444_entry = selected_run_motifs_by_id.get(&motif_slices_444[0].motif_id).unwrap();
+        assert_eq!(Some(0.2), motif_1111_entry.score);
+        assert_eq!(Some(0.1), motif_444_entry.score);
+        assert_eq!(find_motifs_run_id, motif_1111_entry.source_run_id);
+        assert_eq!(find_motifs_run_id, motif_444_entry.source_run_id);
+
+        let (_channel, _run_id, motif_1111_slices_all, motif_1111_resources_map) =
+            store.list_motif_slices(motif_slices_1111[0].motif_id, None, None, None).await?;
+        let (_channel, _run_id, motif_444_slices_all, motif_444_resources_map) =
+            store.list_motif_slices(motif_slices_444[0].motif_id, None, None, None).await?;
+        assert_eq!(motif_1111_slices_all.len(), motif_1111_entry.slices_cnt);
+        assert_eq!(motif_1111_resources_map.len(), motif_1111_entry.resources_cnt);
+        assert_eq!(motif_444_slices_all.len(), motif_444_entry.slices_cnt);
+        assert_eq!(motif_444_resources_map.len(), motif_444_entry.resources_cnt);
+
+        let find_run_motifs = store.list_run_motifs(find_motifs_run_id).await?;
+        assert_eq!(2, find_run_motifs.len());
+        assert!(find_run_motifs.iter().all(|entry| entry.score.is_none()));
+        assert!(find_run_motifs.iter().all(|entry| entry.source_run_id == find_motifs_run_id));
+        let mut find_run_motif_ids = find_run_motifs.iter().map(|entry| entry.motif_id).collect::<Vec<_>>();
+        find_run_motif_ids.sort();
+        assert_eq!(expected_ids, find_run_motif_ids);
         //
         // //TODO
         let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, None, None).await?;
@@ -4099,6 +4280,26 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_run_configs_page_and_by_ids() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
+
+        let run_id_1 = store.save_run_config(None, &"first", "test", "", HashMap::new()).await?;
+        let run_id_2 = store.save_run_config(None, &"second", "test", "", HashMap::new()).await?;
+        let run_id_3 = store.save_run_config(None, &"third", "test", "", HashMap::new()).await?;
+
+        let first_page = store.list_run_configs_page(2, 0).await?;
+        assert_eq!(vec![run_id_3, run_id_2], first_page.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
+
+        let second_page = store.list_run_configs_page(2, 2).await?;
+        assert_eq!(vec![run_id_1], second_page.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
+
+        let loaded_by_ids = store.list_run_configs_by_ids(&[run_id_1, run_id_3]).await?;
+        assert_eq!(vec![run_id_3, run_id_1], loaded_by_ids.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_conv_cond() {
         let input = vec![
             ("aaa".into(), SetCond::Lt(0.4)),
@@ -4139,6 +4340,40 @@ mod store_tests {
             store.get_input_run_ids(run_id, Some(&"aaa")).await?[0],
             input_run_id_0
         );
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_input_run_ids_reads_large_sets_in_chunks() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
+
+        let input_run_id = store.save_run_config(None, &"root", "root", "", HashMap::new()).await?;
+        let mut run_ids = Vec::with_capacity(1001);
+        for idx in 0..1001 {
+            run_ids.push(
+                store
+                    .save_run_config(
+                        Some(&[input_run_id]),
+                        &format!("task-{idx}"),
+                        "chunked",
+                        "",
+                        HashMap::new(),
+                    )
+                    .await?,
+            );
+        }
+
+        let mut input_pairs = store.list_input_run_ids(&run_ids).await?;
+        input_pairs.sort();
+
+        let mut expected_pairs = run_ids
+            .into_iter()
+            .map(|run_id| (run_id, input_run_id))
+            .collect::<Vec<_>>();
+        expected_pairs.sort();
+
+        assert_eq!(expected_pairs, input_pairs);
 
         Ok(())
     }

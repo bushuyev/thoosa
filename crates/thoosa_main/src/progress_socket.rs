@@ -193,6 +193,8 @@ mod tests {
                 total: 10,
                 completed: 3,
             }],
+            started_at_unix_ms: 111,
+            oom_all_failed: 1,
         })?;
 
         let second = timeout(Duration::from_secs(2), lines.next_line()).await??.expect("second line");
@@ -205,6 +207,8 @@ mod tests {
                 completed: 3,
             }]
         );
+        assert_eq!(second.started_at_unix_ms, 111);
+        assert_eq!(second.oom_all_failed, 1);
 
         snapshot_tx.send(CollectEtaProgressState {
             invocations: vec![
@@ -219,6 +223,8 @@ mod tests {
                     completed: 1,
                 },
             ],
+            started_at_unix_ms: 222,
+            oom_all_failed: 2,
         })?;
 
         let third = timeout(Duration::from_secs(2), lines.next_line()).await??.expect("third line");
@@ -238,6 +244,8 @@ mod tests {
                 },
             ]
         );
+        assert_eq!(third.started_at_unix_ms, 222);
+        assert_eq!(third.oom_all_failed, 2);
 
         server.shutdown().await;
         Ok(())
