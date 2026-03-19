@@ -61,7 +61,7 @@ pub enum StatsKey {
         kernel_size: u32,
     },
     SavGolFilter {
-        window_len: i64,
+        window_len: u32,
         poly_order: i64,
         stride: u32,
         padding: Padding,

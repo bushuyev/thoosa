@@ -257,7 +257,6 @@ mod tests {
     use std::collections::HashSet;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
-    use tracing::debug;
     use super::{build_resource_maps_with_rng, Resource};
 
     fn resource(id: u32, file_stem: &str) -> Resource {

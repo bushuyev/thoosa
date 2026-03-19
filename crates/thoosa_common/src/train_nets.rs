@@ -36,7 +36,7 @@ use std::sync::Arc;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
 
-use crate::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Slice, ThoBatch};
+use crate::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Slice};
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use thoosa_properties_map::ToHashmap;
@@ -1903,45 +1903,6 @@ pub fn slices_in_all_resources<ResourceId>(slices: Vec<(ResourceId, Vec<Tensor>)
         .flat_map(|(_resource_key, slices)| slices.into_iter())
         .collect::<Vec<Tensor>>()
 }
-
-fn split_train_val<T>(
-    classes_tensors: Vec<Vec<T>>,
-    train_valid_split: f32,
-) -> (Vec<Vec<T>>, Vec<Vec<T>>) {
-    let classes_len = classes_tensors.len();
-    let (train, val): (Vec<Vec<T>>, Vec<Vec<T>>) = classes_tensors.into_iter().fold(
-        (
-            Vec::with_capacity(classes_len),
-            Vec::with_capacity(classes_len),
-        ),
-        |mut class_train_val, tensors| {
-            let tensors_len = tensors.len();
-            let split_i = (tensors_len as f32 * train_valid_split) as usize;
-
-            let train_val = tensors.into_iter().enumerate().fold(
-                (
-                    Vec::with_capacity(split_i),
-                    Vec::with_capacity(tensors_len - split_i),
-                ),
-                |mut train_val, (i, t)| {
-                    if i < split_i {
-                        train_val.0.push(t);
-                    } else {
-                        train_val.1.push(t);
-                    }
-                    train_val
-                },
-            );
-
-            class_train_val.0.push(train_val.0); //train
-            class_train_val.1.push(train_val.1); //validation
-            class_train_val
-        },
-    );
-    (train, val)
-}
-
-
 
 
 #[derive(Debug)]
