@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use crate::{with_perf_log, LOCK_TIMEOUT};
 
@@ -108,11 +108,14 @@ struct CollectEtaState {
     last_log_at: Option<Instant>,
     historical_interval_s: Option<f64>,
     historical_completed: u64,
+    oom_all_failed: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CollectEtaProgressState {
     pub invocations: Vec<CollectEtaProgressInvocation>,
+    pub started_at_unix_ms: u64,
+    pub oom_all_failed: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -138,15 +141,25 @@ struct CollectEtaSnapshot {
 struct CollectEtaTracker {
     next_id: AtomicU64,
     state: Mutex<CollectEtaState>,
+    started_at_unix_ms: u64,
     progress_tx: watch::Sender<CollectEtaProgressState>,
 }
 
 impl CollectEtaTracker {
     fn new() -> Self {
-        let (progress_tx, _progress_rx) = watch::channel(CollectEtaProgressState::default());
+        let started_at_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let (progress_tx, _progress_rx) = watch::channel(CollectEtaProgressState {
+            invocations: vec![],
+            started_at_unix_ms,
+            oom_all_failed: 0,
+        });
         Self {
             next_id: AtomicU64::new(1),
             state: Mutex::new(CollectEtaState::default()),
+            started_at_unix_ms,
             progress_tx,
         }
     }
@@ -163,7 +176,7 @@ impl CollectEtaTracker {
         let progress_state = {
             let mut state = self.state_guard();
             state.invocations.insert(id, CollectEtaInvocation::new(descr, total, concurrency));
-            Self::build_snapshot(&state, Instant::now()).progress_state
+            self.build_snapshot(&state, Instant::now()).progress_state
         };
         let _ = self.progress_tx.send_replace(progress_state);
         id
@@ -182,7 +195,7 @@ impl CollectEtaTracker {
             let mut state = self.state_guard();
             if let Some(invocation) = state.invocations.get_mut(&id) {
                 invocation.record_completion(now);
-                Some(Self::build_snapshot(&state, now).progress_state)
+                Some(self.build_snapshot(&state, now).progress_state)
             } else {
                 None
             }
@@ -203,7 +216,7 @@ impl CollectEtaTracker {
                         Self::update_historical_interval(&mut state, interval_s, invocation.completed as u64);
                     }
                 }
-                Some(Self::build_snapshot(&state, now).progress_state)
+                Some(self.build_snapshot(&state, now).progress_state)
             } else {
                 None
             }
@@ -227,9 +240,23 @@ impl CollectEtaTracker {
         state.historical_completed = next_completed;
     }
 
-    fn build_snapshot(state: &CollectEtaState, now: Instant) -> CollectEtaSnapshot {
+    fn record_oom_all_failed(&self) {
+        let progress_state = {
+            let mut state = self.state_guard();
+            state.oom_all_failed = state.oom_all_failed.saturating_add(1);
+            self.build_snapshot(&state, Instant::now()).progress_state
+        };
+        let _ = self.progress_tx.send_replace(progress_state);
+    }
+
+    fn build_snapshot(&self, state: &CollectEtaState, now: Instant) -> CollectEtaSnapshot {
         let mut snapshot = CollectEtaSnapshot {
             active_collectors: state.invocations.len(),
+            progress_state: CollectEtaProgressState {
+                invocations: vec![],
+                started_at_unix_ms: self.started_at_unix_ms,
+                oom_all_failed: state.oom_all_failed,
+            },
             ..Default::default()
         };
         let mut fallback_interval_s = state.historical_interval_s;
@@ -290,7 +317,7 @@ impl CollectEtaTracker {
                 }
             }
             state.last_log_at = Some(now);
-            Self::build_snapshot(&state, now)
+            self.build_snapshot(&state, now)
         };
         let _ = self.progress_tx.send_replace(snapshot.progress_state.clone());
 
@@ -339,6 +366,10 @@ pub fn collect_eta_record_completion(id: u64) {
 
 pub fn collect_eta_subscribe_progress() -> watch::Receiver<CollectEtaProgressState> {
     COLLECT_ETA_TRACKER.subscribe_progress()
+}
+
+pub fn collect_eta_record_oom_all_failed() {
+    COLLECT_ETA_TRACKER.record_oom_all_failed();
 }
 
 pub(crate) fn collect_eta_maybe_log(force: bool) {
@@ -402,13 +433,13 @@ mod tests {
         tracker.record_completion_at(id, now + Duration::from_secs(1));
         tracker.record_completion_at(id, now + Duration::from_secs(2));
         let state = tracker.state_guard();
-        let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(2));
+        let snapshot = tracker.build_snapshot(&state, now + Duration::from_secs(2));
         assert_eq!(snapshot.max_eta, None);
         drop(state);
 
         tracker.record_completion_at(id, now + Duration::from_secs(3));
         let state = tracker.state_guard();
-        let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(3));
+        let snapshot = tracker.build_snapshot(&state, now + Duration::from_secs(3));
         assert_eq!(snapshot.total_completed, 3);
         assert_eq!(snapshot.total_remaining, 3);
         let eta = snapshot.max_eta.expect("eta should be present after warmup");
@@ -426,7 +457,7 @@ mod tests {
         tracker.record_completion_at(slow, now + Duration::from_secs(1));
         tracker.record_completion_at(slow, now + Duration::from_secs(5));
         let state = tracker.state_guard();
-        let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(5));
+        let snapshot = tracker.build_snapshot(&state, now + Duration::from_secs(5));
         assert_eq!(snapshot.total_completed, 4);
         assert_eq!(snapshot.total_remaining, 6);
         let max_eta = snapshot.max_eta.expect("max eta should be present");
@@ -457,7 +488,7 @@ mod tests {
         tracker.record_completion_at(id, now + Duration::from_millis(1600));
         tracker.record_completion_at(id, now + Duration::from_millis(1800));
         let state = tracker.state_guard();
-        let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_millis(1800));
+        let snapshot = tracker.build_snapshot(&state, now + Duration::from_millis(1800));
         assert_eq!(snapshot.total_completed, 5);
         assert_eq!(snapshot.total_remaining, 15);
         let eta = snapshot.max_eta.expect("eta should be present");
@@ -476,7 +507,7 @@ mod tests {
 
         let _pending = tracker.register("pending", 3, 3);
         let state = tracker.state_guard();
-        let snapshot = CollectEtaTracker::build_snapshot(&state, now + Duration::from_secs(2));
+        let snapshot = tracker.build_snapshot(&state, now + Duration::from_secs(2));
         assert_eq!(snapshot.total_completed, 0);
         assert_eq!(snapshot.total_remaining, 3);
         let max_eta = snapshot.max_eta.expect("historical fallback eta should be present");
@@ -521,5 +552,21 @@ mod tests {
                 completed: 2,
             }]
         );
+    }
+
+    #[test]
+    fn test_progress_state_tracks_oom_all_failed_count() {
+        let tracker = CollectEtaTracker::new();
+        let rx = tracker.subscribe_progress();
+
+        assert_eq!(rx.borrow().oom_all_failed, 0);
+        assert!(rx.borrow().started_at_unix_ms > 0);
+
+        tracker.record_oom_all_failed();
+        tracker.record_oom_all_failed();
+
+        let snapshot = rx.borrow().clone();
+        assert_eq!(snapshot.oom_all_failed, 2);
+        assert!(snapshot.started_at_unix_ms > 0);
     }
 }
