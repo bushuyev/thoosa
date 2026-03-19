@@ -1,4 +1,5 @@
 use std::borrow::Borrow;
+use crate::collect_futures_eta::collect_eta_record_oom_all_failed;
 use crate::runner::common::{PermitsCtx, RunCtx};
 use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -688,6 +689,7 @@ where
                     }
                 }
 
+                collect_eta_record_oom_all_failed();
                 warn!("OOMHandler::run, error: ctx_id={ctx_id:?} out_key={out_key:?} os_thread_id={} all failed: input.mem_size={:?} semaphore={:?}", os_thread_id(), input.mem_size(), GlobalCtx::global().debug_semaphore(device_idx));
                 #[cfg(tho_debug)]
                 GlobalCtx::global().debug_caches(device_idx).await;
