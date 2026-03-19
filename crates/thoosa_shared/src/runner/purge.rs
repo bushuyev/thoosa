@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use futures_util::StreamExt;
 use futures_util::future::{BoxFuture, Shared};
 use futures_util::stream;
-use log::{debug, trace, warn};
+use log::{debug, trace};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;

@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
-use tch::{nn, no_grad, Kind, TchError, Tensor};
+use tch::{nn, Kind, TchError, Tensor};
 
 use tch::nn::{ConvConfig, Module};
 use tch::nn::{
@@ -502,7 +502,6 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
         }
 
         let x = Self::ensure_3d(x_in.as_ref());
-        let size = x.size();
         // Normalize kernel each forward so it stays unit-ish during training
         let k_sq = self.kernel.f_mul(&self.kernel)?;
         let k_norm = k_sq
