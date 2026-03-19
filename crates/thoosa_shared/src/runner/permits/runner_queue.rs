@@ -556,8 +556,6 @@ mod tests {
 
     use log::debug;
     use std::sync::Arc;
-    use tokio::try_join;
-    use tracing::field::debug;
     use crate::mono_key;
     use crate::simple_id;
     use crate::runner::permits::MAX_PERMITS;
@@ -727,7 +725,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_task_keeps_permits() -> Result<(), ThoError>{
-        let mut arb = Arbiter::new(MAX_PERMITS, 0);
+        let arb = Arbiter::new(MAX_PERMITS, 0);
 
         let root_key:SynKey = mono_key!(0, "root").into();
 

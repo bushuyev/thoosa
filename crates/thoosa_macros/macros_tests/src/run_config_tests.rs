@@ -52,13 +52,6 @@ pub(crate)  struct TestRunConfig {
 
 }
 
-impl TestRunConfig {
-    pub fn new(id: Option<u32>, num_layers: u32) -> Self {
-        Self { id, simple_field: num_layers, cat_field: CatEnum::One(One{ inner_field_one: 3 }) }
-    }
-}
-
-
 #[test]
 fn test_grid_param() -> Result<(), ThoError> {
     use thoosa_run_config_args::OptRunConfigSource;
@@ -164,8 +157,6 @@ fn test_dynamic_grid_param() -> Result<(), ThoError> {
 
 #[test]
 fn test_cat_range() -> Result<(), ThoError>{
-    use thoosa_properties_map_derive::ThoosaPropertiesMap;
-    use thoosa_run_config_args_derive::ThoosaRunConfig;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_shared::RangeOrValue;

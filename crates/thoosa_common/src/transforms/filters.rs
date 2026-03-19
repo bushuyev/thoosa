@@ -79,7 +79,7 @@ impl InputFilterLengthAdjuster for NotchBandFilterParams {
 pub struct SavGolFilterParams {
     #[in_map]
     #[run_config]
-    pub window_len: i64,
+    pub window_len: u32,
 
     #[in_map]
     #[run_config]
@@ -100,8 +100,8 @@ impl InputFilterLengthAdjuster for SavGolFilterParams {
         let stride = self.stride;
         let padding = self.padding;
         Box::new(move |l: u32| {
-            assert!(window_len > 0 && window_len <= u32::MAX as i64, "window_len({window_len}) must be in 1..={}", u32::MAX);
-            let kernel_size = window_len as u32;
+            assert!(window_len > 0 && window_len <= u32::MAX , "window_len({window_len}) must be in 1..={}", u32::MAX);
+            let kernel_size = window_len;
             assert!(stride > 0, "stride({stride}) must be > 0");
             assert!(l > 0, "l({l}) must be > 0");
             let pad = kernel_size / 2;

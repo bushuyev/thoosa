@@ -618,10 +618,6 @@ where
             },
         );
 
-    let scale_x = w_h.0 as f32 / (max_x - min_x);
-
-    // debug!("scale_x={scale_x:?} w_h={w_h:?} max_x={max_x} min_x={min_x}");
-
     let root = BitMapBackend::new(&path, w_h).into_drawing_area();
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
@@ -1190,7 +1186,7 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
     (0..n).map(|x| x as f32)
 }
 
-use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
+use crate::train_nets::ThoModuleWithStore;
 
 
 pub trait TrainListener: Send + Sync {
@@ -1500,6 +1496,7 @@ pub fn assert_close<A:Into<f64> + Display, B:Into<f64> + Display>(val_a: A, val_
     );
 }
 
+#[cfg(test)]
 fn assert_tensor_eq(a: &Tensor, b: &Tensor) {
     assert_eq!(a.size(), b.size(), "size mismatch");
     assert_eq!(a.kind(), b.kind(), "dtype mismatch");
@@ -1700,7 +1697,7 @@ pub mod tests {
     use crate::batches::BatchLengths;
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to, pad_to_2, stretch, to_vec_f32, to_vec_i64, TrainListener};
+    use crate::utils::{assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, stretch, to_vec_f32, to_vec_i64, TrainListener};
     use clap::{Args, Parser, Subcommand};
 
     use log::{debug, set_max_level};
@@ -1714,7 +1711,7 @@ pub mod tests {
     use tch::nn::VarStore;
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::{Device, IndexOp, Kind, Tensor};
+    use tch::{Device, Kind, Tensor};
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
@@ -1726,10 +1723,8 @@ pub mod tests {
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ThoError};
     use thoosa_shared::run_configs::RunId;
-    use thoosa_shared::traits::SimpleId;
     use crate::dims::AnyDims;
     use crate::my_tch::ThoModule;
-    use crate::tho_tensor::ThoTensor;
     use crate::train_nets::{self_attention_label_node, LabelNetParams, LabelNetTypeParams, SelfAttentionNetParams};
 
     #[ctor::ctor]
