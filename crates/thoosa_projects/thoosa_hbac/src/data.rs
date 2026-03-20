@@ -437,8 +437,8 @@ impl EEG {
 #[derive(Debug)]
 pub struct EEGs {
     train_set: Vec<EEG>,
-    valid_set: Vec<EEG>,
-    batch_size: usize,
+    _valid_set: Vec<EEG>,
+    _batch_size: usize,
 }
 
 #[allow(dead_code)]
@@ -694,8 +694,8 @@ impl EEGs {
 
         Ok(Box::new(EEGs {
             train_set: train_eegs,
-            valid_set: valid_eegs,
-            batch_size: 10, //TODO param
+            _valid_set: valid_eegs,
+            _batch_size: 10, //TODO param
         }))
     }
 
@@ -946,7 +946,7 @@ mod tests {
 
         // assert_eq!(eegs.len(), 1);
         debug!("train eegs={:?}", eegs.train_set.len());
-        debug!("test eegs={:?}", eegs.valid_set.len());
+        debug!("test eegs={:?}", eegs._valid_set.len());
 
         // debug!("batch_x={:?}", eegs.TRAIN[0].egg_map[0].len());
 

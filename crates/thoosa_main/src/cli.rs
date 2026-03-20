@@ -1032,7 +1032,8 @@ fn resolve_median_window<P: FieldName + PartialEq>(named_vals: &[NamedVal<P>], w
         Some(value) => {
             let window = value.val().to_i64(0) as u32;
             info!("Window: window={window}");
-            RangeOrValue::Value(window)
+            // RangeOrValue::Value(window)
+            RangeOrValue::Range{ range: Range { start: window/2, end: window * 2 }, step: None }
         }
     }
 }
@@ -1051,15 +1052,15 @@ fn median_window_from_find_and_select(named_vals: &[NamedVal<FindAndSelectMotifs
 fn run_all_find_motifs_config_0<P: FieldName + 'static>(median_window: fn(&[NamedVal<P>]) -> RangeOrValue<u32>) -> FindMotifsRunConfigRangeOrValue<P> {
     FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(5),
-        window: RangeOrValue::Range { range: Range { start: 100, end: 301 }, step: Some((200, 0)) },
+        step: RangeOrValue::Value(10),
+        window: RangeOrValue::Range { range: Range { start: 100, end: 1001 }, step: Some((100, 0)) },
         freq_filter: Some(vec![
             MedianFilter(MedianFilterParamsRangeOrValue {
                 window: RangeOrValue::Dynamic(median_window),
             }),
             SavGolFilter(SavGolFilterParamsRangeOrValue {
-                window_len: RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
-                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 3 }, step: None },
+                window_len: RangeOrValue::Dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
+                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: None },
                 stride: RangeOrValue::Value(10),
                 padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
             }),
@@ -1107,7 +1108,7 @@ fn run_all_select_motifs_config_0<P: FieldName + 'static>() -> SelectMotifsRunCo
                 min: RangeOrValue::Value(0.80),
             }),
         },
-        threshold: RangeOrValue::Value(0.73),
+        threshold: RangeOrValue::Value(0.8),
         min_slices: Some(RangeOrValue::Value(5)),
         max_slices: Some(RangeOrValue::Value(100)),
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
@@ -1194,7 +1195,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         min_delta: RangeOrValue::Value(1e-4_f32),
     };
     let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(100),
+        cycles: RangeOrValue::Value(300),
         batch_size: RangeOrValue::Value(10),
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
         patience: RangeOrValue::Value(10),

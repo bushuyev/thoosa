@@ -189,7 +189,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use log::debug;
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
 
