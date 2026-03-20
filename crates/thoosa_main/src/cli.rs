@@ -370,6 +370,9 @@ where
                         metrics.blocking_queue_depth(),
                     );
 
+                    info!("semaphore_0={:?}", GlobalCtx::global().debug_semaphore(0));
+                    info!("semaphore_1={:?}", GlobalCtx::global().debug_semaphore(1));
+
                     for w in 0..workers {
                            let poll = metrics.worker_poll_count(w);
                             let park = metrics.worker_park_count(w);
@@ -768,7 +771,7 @@ async fn run_all(
         CacheArea::default()
     ));
 
-    let fixed_find_motifs_config_for_opt = all_config.fixed_find_motifs_config.clone();
+    // let fixed_find_motifs_config_for_opt = all_config.fixed_find_motifs_config.clone();
 
     //gpt Pre-create context and shared handles for FindMotifs stage construction (kept outside the run_grid closure).
     let init_ctx_find_motifs = root_ctx.branch(Some("init find motifs"), true, false);
@@ -784,53 +787,16 @@ async fn run_all(
         CacheArea::default(),
     ));
 
-    let find_and_select_run_config = all_config.find_and_select_run_config_range_or_value.clone();
+    // let find_and_select_run_config = all_config.find_and_select_run_config_range_or_value.clone();
 
-    //TODO check if it's opt or grid and then check
-    // check_opt_run_config::<_, FindAndSelectMotifsRunConfig>(&find_and_select_run_config)?;
-
-    let select_motifs_run_ids = match run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
-        None,
-        find_and_select_run_config,
-        find_and_select_input,
-        &ws,
-        &store,
-        async |run_configs| {
-            Ok(Arc::new(FindAndSelectMotifsStage::new(
-                Arc::clone(&loader),
-                &ws,
-                &store,
-                run_configs,
-                fixed_find_motifs_config_for_opt,
-                Arc::clone(&all_config.find_and_select_motifs_opt_config),
-                run_all_args.max_chunk_size as i64,
-            )))
-        },
-        || root_ctx.branch(Some("opt find and select motifs"), true, false),
-    ).await {
-        Ok(best_find_and_select_result_ids) => {
-            info!("opt FindAndSelectMotifsRunConfig done: find_and_select_run_ids={best_find_and_select_result_ids:?}");
-            assert_eq!(best_find_and_select_result_ids.len(), 1); //should be one from run_opt
-
-            let read_guard = store;
-            let select_motifs_run_ids = read_guard
-                .list_input_run_ids(&best_find_and_select_result_ids)
-                .await?
-                .into_iter().map(
-                    |opt_select_result_ids| opt_select_result_ids.1
-                ).collect::<Vec<_>>();
-
-            info!("opt FindAndSelectMotifsRunConfig done: select_motifs_run_ids={select_motifs_run_ids:?}");
-
-            select_motifs_run_ids
-        }
-        Err(e) if matches!(e.what(), thoosa_shared::Cause::SomethingElse(msg) if msg == "no opt params in run config") => {
+    let select_motifs_run_ids = match all_config.find_and_select {
+        FindAndSelect::GridOnly { find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config } => {
             info!("find and select motifs opt skipped: no opt params in run config, falling back to grid search");
 
             //gpt Run a grid over FindMotifs configs, constructing a stage per grid point and executing it.
             let find_motifs_run_ids = run_grid::</*Simple,*/ _, _, _, _, _>(
                 None,
-                all_config.find_motifs_run_config_range_or_value,
+                find_motifs_run_config_range_or_value,
                 find_motifs_input,
                 &ws,
                 &store,
@@ -842,7 +808,7 @@ async fn run_all(
                             &store_in_find_motifs,
                             loader_in_find_motifs,
                             run_configs,
-                            all_config.fixed_find_motifs_config,
+                            fixed_find_motifs_config,
                             ThoDevice::from(1),
                             //gpt TODO!! hard-coded device index assumes GPU 1 exists; consider selecting from args or ctx.
                             init_ctx_find_motifs
@@ -869,7 +835,7 @@ async fn run_all(
             for find_motifs_run_id in &find_motifs_run_ids {
                 select_motifs_run_ids.extend( run_grid::</*Labeled,*/ _, _, _, _, _>(
                     Some(vec![*find_motifs_run_id]),
-                    all_config.select_motifs_run_config.clone(),
+                    select_motifs_run_config.clone(),
                     select_motifs_input.clone(),
                     &ws,
                     &store,
@@ -900,8 +866,45 @@ async fn run_all(
 
             select_motifs_run_ids
         }
-        Err(e) => return Err(e),
+        FindAndSelect::WithOpt { find_and_select_run_config_range_or_value, fixed_find_motifs_config, find_and_select_motifs_opt_config } => {
+            let best_find_and_select_result_ids:Vec<RunId>= run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
+                None,
+                find_and_select_run_config_range_or_value,
+                find_and_select_input,
+                &ws,
+                &store,
+                async |run_configs| {
+                    Ok(Arc::new(FindAndSelectMotifsStage::new(
+                        Arc::clone(&loader),
+                        &ws,
+                        &store,
+                        run_configs,
+                        fixed_find_motifs_config,
+                        Arc::new(find_and_select_motifs_opt_config),
+                        run_all_args.max_chunk_size as i64,
+                    )))
+                },
+                || root_ctx.branch(Some("opt find and select motifs"), true, false),
+            ).await?;
+
+            info!("opt FindAndSelectMotifsRunConfig done: find_and_select_run_ids={best_find_and_select_result_ids:?}");
+            assert_eq!(best_find_and_select_result_ids.len(), 1); //should be one from run_opt
+
+            let read_guard = store;
+            let select_motifs_run_ids = read_guard
+                .list_input_run_ids(&best_find_and_select_result_ids)
+                .await?
+                .into_iter().map(
+                |opt_select_result_ids| opt_select_result_ids.1
+            ).collect::<Vec<_>>();
+
+            info!("opt FindAndSelectMotifsRunConfig done: select_motifs_run_ids={select_motifs_run_ids:?}");
+
+            select_motifs_run_ids
+        }
     };
+
+
 
     // #[cfg(tho_debug_plots)]
     if run_all_args.with_plots {
@@ -1012,12 +1015,23 @@ async fn run_all(
     Ok(())
 }
 
+enum FindAndSelect {
+    GridOnly{
+        find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue,
+        fixed_find_motifs_config:FixedFindMotifsConfig,
+        select_motifs_run_config:SelectMotifsRunConfigRangeOrValue,
+    },
+    WithOpt{
+        find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue,
+        fixed_find_motifs_config:FixedFindMotifsConfig,
+        find_and_select_motifs_opt_config:OptConfig,
+    }
+}
+
 struct AllConfigs {
-    find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue,
-    fixed_find_motifs_config:FixedFindMotifsConfig,
-    select_motifs_run_config:SelectMotifsRunConfigRangeOrValue,
-    find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue,
-    find_and_select_motifs_opt_config:Arc<OptConfig>,
+    find_and_select: FindAndSelect,
+
+
     train_motif_nets_run_config_range_or_value:TrainMotifsNetsRunConfigRangeOrValue,
     train_label_nets_run_config_range_or_value:TrainLabelNetsRunConfigRangeOrValue,
     train_final_net_run_config_range_or_value:TrainFinalNetRunConfigRangeOrValue,
@@ -1049,6 +1063,33 @@ fn median_window_from_find_and_select(named_vals: &[NamedVal<FindAndSelectMotifs
     )
 }
 
+fn run_all_find_motifs_config_grid_0<P: FieldName + 'static>(median_window: fn(&[NamedVal<P>]) -> RangeOrValue<u32>) -> FindMotifsRunConfigRangeOrValue<P> {
+    FindMotifsRunConfigRangeOrValue {
+        id: None,
+        step: RangeOrValue::Value(10),
+        // window: RangeOrValue::Value(200),
+        window: RangeOrValue::Range { range: Range { start: 100, end: 1001 }, step: Some((200, 0)) },
+        freq_filter: Some(vec![
+            MedianFilter(MedianFilterParamsRangeOrValue {
+                window: RangeOrValue::Dynamic(median_window),
+            }),
+            SavGolFilter(SavGolFilterParamsRangeOrValue {
+                window_len: RangeOrValue::Dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
+                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: Some((1, 0)) },
+                stride: RangeOrValue::Value(10),
+                padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
+            }),
+        ]),
+        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+            aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
+            }),
+        }),
+        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+    }
+}
+
+
 fn run_all_find_motifs_config_0<P: FieldName + 'static>(median_window: fn(&[NamedVal<P>]) -> RangeOrValue<u32>) -> FindMotifsRunConfigRangeOrValue<P> {
     FindMotifsRunConfigRangeOrValue {
         id: None,
@@ -1074,6 +1115,48 @@ fn run_all_find_motifs_config_0<P: FieldName + 'static>(median_window: fn(&[Name
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
     }
 }
+fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifsRunConfigRangeOrValue<P> {
+    SelectMotifsRunConfigRangeOrValue {
+        id: None,
+        extend_config: None,
+        motif_criteria: MotifCriteriaRangeOrValue {
+            norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
+                criterion: NormThicknessRunConfigRangeOrValue {
+                    k: RangeOrValue::Value(0.0),
+                    eps: RangeOrValue::Value(1e-8),
+                },
+                min: RangeOrValue::Value(0.75),
+            }),
+            inlier_ratioRunConfig: None,
+            coherenceRunConfig: None,
+            interesting_amp_01: None,
+            interesting_tv_norm_01: None,
+            interesting_curvature_norm_01: None,
+            interesting_turning_points_ratio: None,
+            interesting_band_energy_ratio_01: None,
+            interesting_entropy_gauss_01: None,
+            interesting_entropy_band_01: None,
+            periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
+                criterion: PeriodicityAcfRunConfigRangeOrValue {
+                    struct_lag_max: RangeOrValue::Value(1. / 64.),
+                    lag_min: RangeOrValue::Value(1. / 32.),
+                    lag_max: RangeOrValue::Value(0.5),
+                    struct0: RangeOrValue::Value(0.2),
+                    peak_good: RangeOrValue::Value(0.25),
+                    peak_bad: RangeOrValue::Value(0.65),
+                    eps: RangeOrValue::Value(1e-8),
+                },
+                min: RangeOrValue::Value(0.80),
+            }),
+        },
+        threshold: RangeOrValue::Value(0.8),
+        min_slices: Some(RangeOrValue::Value(5)),
+        max_slices: Some(RangeOrValue::Value(100)),
+        extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+    }
+}
+
+
 
 fn run_all_select_motifs_config_0<P: FieldName + 'static>() -> SelectMotifsRunConfigRangeOrValue<P> {
     SelectMotifsRunConfigRangeOrValue {
@@ -1176,15 +1259,22 @@ fn run_all_select_motifs_config_test_1<P: FieldName + 'static>() -> SelectMotifs
 }
 
 fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
-    let find_motifs_run_config_range_or_value = run_all_find_motifs_config_0::<FindMotifsRunConfigFields>(median_window_from_find_motifs);
-    let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false);
-    let select_motifs_run_config = run_all_select_motifs_config_0::<SelectMotifsRunConfigFields>();
-    let find_and_select_run_config_range_or_value = FindAndSelectMotifsRunConfigRangeOrValue {
-        id: None,
-        find_motifs_run_config: run_all_find_motifs_config_0::<FindAndSelectMotifsRunConfigFields>(median_window_from_find_and_select),
-        select_motifs_run_config: run_all_select_motifs_config_0::<FindAndSelectMotifsRunConfigFields>(),
+
+    let find_and_select =  FindAndSelect::GridOnly {
+        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0::<FindMotifsRunConfigFields>(median_window_from_find_motifs),
+        fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
+        select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
     };
-    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(50, 10));
+
+    // let find_and_select =  FindAndSelect::WithOpt {
+    //     find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
+    //         id: None,
+    //         find_motifs_run_config: run_all_find_motifs_config_0::<FindAndSelectMotifsRunConfigFields>(median_window_from_find_and_select),
+    //         select_motifs_run_config: run_all_select_motifs_config_0::<FindAndSelectMotifsRunConfigFields>(),
+    //     },
+    //     fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
+    //     find_and_select_motifs_opt_config: OptConfig::new(50, 10),
+    // };
 
     /////////////////////train_motifs
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
@@ -1274,11 +1364,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     };
     let train_opt_config = Arc::new(OptConfig::new(100, 10));
     AllConfigs{
-        find_motifs_run_config_range_or_value,
-        fixed_find_motifs_config,
-        select_motifs_run_config,
-        find_and_select_run_config_range_or_value,
-        find_and_select_motifs_opt_config,
+        find_and_select,
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
         train_final_net_run_config_range_or_value,
@@ -1297,6 +1383,18 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config: run_all_find_motifs_config_test_1::<FindAndSelectMotifsRunConfigFields>(),
         select_motifs_run_config: run_all_select_motifs_config_test_1::<FindAndSelectMotifsRunConfigFields>(),
     };
+
+    let find_and_select_grid =  FindAndSelect::GridOnly {
+        find_motifs_run_config_range_or_value,
+        fixed_find_motifs_config:fixed_find_motifs_config.clone(),
+        select_motifs_run_config,
+    };
+    let find_and_select_opt =  FindAndSelect::WithOpt {
+        find_and_select_run_config_range_or_value,
+        fixed_find_motifs_config,
+        find_and_select_motifs_opt_config: OptConfig::new(100, 10),
+    };
+
     /////////////////////train_motifs
     let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
         cycles: RangeOrValue::Value(150),
@@ -1320,7 +1418,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
     };
-    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(100, 10));
+
 
 
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
@@ -1368,11 +1466,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
     };
 
     AllConfigs{
-        find_motifs_run_config_range_or_value,
-        fixed_find_motifs_config,
-        select_motifs_run_config,
-        find_and_select_run_config_range_or_value,
-        find_and_select_motifs_opt_config,
+        find_and_select: find_and_select_grid,
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
         train_final_net_run_config_range_or_value,
@@ -2028,7 +2122,7 @@ where
     let net_path_sfx = sanitize_plot_path_segment(&net_path.to_string_lossy());
 
     raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_raw_channel"), false, false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-        plot_resource_channels::<C>(ws, resource_id, &format!("motif_net_input_raw_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net input raw channel={channel} net={net_path:?}"), tensor, Some(&channel_only), resolution, print_to_stdout)
+        plot_resource_channels::<C>(ws, resource_id, &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor, Some(&channel_only), resolution, print_to_stdout)
     }).await?;
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
@@ -2362,7 +2456,7 @@ where
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, import_resources_with_pure_sets, run_all, run_all_config_0, run_all_config_test_1, run_grid, run_plot, Cli, RunAllArgs};
+    use crate::cli::{import_resources, import_resources_with_pure_sets, run_all, run_all_config_0, run_all_config_test_1, run_grid, run_plot, Cli, FindAndSelect, RunAllArgs};
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Info, Trace, Warn};
@@ -2512,8 +2606,11 @@ mod cli_tests {
             labels: None,
         });
 
-        let freq_filter = all_configs
-            .find_and_select_run_config_range_or_value
+        let FindAndSelect::WithOpt {find_and_select_run_config_range_or_value, .. } = all_configs.find_and_select else {
+            panic!("no find_and_select_run_config_range_or_value")
+        };
+
+        let freq_filter = find_and_select_run_config_range_or_value
             .find_motifs_run_config
             .freq_filter
             .as_ref()
