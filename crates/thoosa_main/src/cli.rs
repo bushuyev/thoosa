@@ -93,7 +93,7 @@ use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSele
 use crate::tasks::load_motif_net::MotifNetMeta;
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-use crate::tasks::select_motifs::SelectMotifsStage;
+use crate::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use crate::tasks::train_final_net::new_train_final_net;
 use crate::tasks::train_label_nets::{new_train_label_nets, TrainLabelNets, TrainLabelNetsInput};
 use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
@@ -139,7 +139,7 @@ pub struct RunAllArgs {
     select_resources: String,
 
     #[arg(long, default_value_t = 20_000)]
-    pub max_chunk_size: u32, //FixedFindMotifsConfig::max_chunk_size
+    pub max_chunk_size: u32,
 
     #[arg(long, default_value = "XXX")]
     train_resource_group: String,
@@ -147,14 +147,14 @@ pub struct RunAllArgs {
     #[arg(long, default_value = "XXX")]
     valid_resource_group: String,
 
-    #[arg(long)]
-    pub run_config_cnt: String, //TrainLabelNetsRunConfig
+    #[arg(long, default_value_t = 10)]
+    pub train_motifs_epoch_size: u32,
 
     #[arg(long, default_value = "0.3")]
-    pub max_motif_net_loss: f32, //FixedFindMotifsConfig::max_chunk_size
+    pub max_motif_net_loss: f32, //filters motif nets for label training
 
     #[arg(long)]
-    pub selected_motif_nets_limit: Option<usize>,
+    pub selected_motif_nets_limit: Option<usize>,//filters motif nets for label training
 
     #[arg(long, default_value = "100")]
     pub motif_slices_step: u32,
@@ -489,7 +489,7 @@ where
             let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue = serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
-                ResourcesConfigInput::new(select_motifs_args.resource_config()),
+                SelectMotifsInput::standalone(ResourcesConfigInput::new(select_motifs_args.resource_config())),
                 CacheArea::default()
             ));
             //TODO move it into SelectMotifsStage
@@ -533,7 +533,7 @@ where
             let motifs_by = train_motif_nets_args.motifs_by()?;
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(
-                TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.fixed_config.clone())),
+                TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.opt_config.clone())),
                 CacheArea::default()
             ));
 
@@ -570,7 +570,7 @@ where
                 CacheArea::default()
             ));
 
-            let opt_config = Arc::new(train_label_nets_args.fixed_config.clone());
+            let opt_config = Arc::new(train_label_nets_args.opt_config.clone());
             let init_ctx = root_ctx.branch(Some("init label nets"), true, false);
             let labels_filter = train_label_nets_args.labels_filter();
 
@@ -614,7 +614,7 @@ where
                 CacheArea::default()
             ));
 
-            let opt_config = Arc::new(train_final_net_args.fixed_config.clone());
+            let opt_config = Arc::new(train_final_net_args.opt_config.clone());
             let init_ctx = root_ctx.branch(Some("init final nets"), true, false);
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
                 None,
@@ -749,7 +749,7 @@ async fn run_all(
 
     //gpt Build the input for SelectMotifs: separate resource config so selection can use its own dataset.
     let select_motifs_input = Arc::new(DevicesWrap::wrap(
-        ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).await?,
+        SelectMotifsInput::standalone(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).await?),
         CacheArea::default()
     ));
 
@@ -916,7 +916,7 @@ async fn run_all(
     // return Ok(());
     //gpt Train motif nets needs a custom input wrapper (motif ids + opt config) rather than a resource config.
     let input_wrapper = Arc::new(DevicesWrap::wrap(
-        TrainMotifNetInput::new(TrainMotifsBy::SelectMotifsRunIds { select_motifs_run_ids: select_motifs_run_ids.clone() }, Arc::clone(&all_config.train_opt_config)),
+        TrainMotifNetInput::new(TrainMotifsBy::SelectMotifsRunIds { select_motifs_run_ids: select_motifs_run_ids.clone() }, Arc::clone(&all_config.train_motifs_opt_config)),
         CacheArea::default()
     ));
 
@@ -933,7 +933,7 @@ async fn run_all(
                 &ws,
                 &store,
                 run_configs,
-                10,
+                run_all_args.train_motifs_epoch_size,
             )))
         },
         || root_ctx.branch(Some("train motif nets"), true, false),
@@ -948,8 +948,6 @@ async fn run_all(
     let init_ctx_train_labels = root_ctx.branch(Some("init label nets"), true, false);
     let store_in_train_labels = Arc::clone(&store);
     let ws_in_train_labels = Arc::clone(&ws);
-    let loader_in_train_labels = Arc::clone(&loader);
-    let opt_config_in_train_labels = Arc::clone(&all_config.train_opt_config);
     let labels_filter = run_all_args.labels_filter();
 
     //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
@@ -962,12 +960,12 @@ async fn run_all(
         async move |run_configs| {
             new_train_label_nets(
                 train_motif_nets_run_ids,
-                loader_in_train_labels,
+                Arc::clone(&loader),
                 run_configs,
                 &ws_in_train_labels,
                 &store_in_train_labels,
                 init_ctx_train_labels,
-                opt_config_in_train_labels,
+                Arc::clone(&all_config.train_labels_opt_config),
                 labels_filter.clone(),
                 Some(run_all_args.max_motif_net_loss), //to RunAll args,
                 run_all_args.selected_motif_nets_limit,
@@ -1004,7 +1002,7 @@ async fn run_all(
                 &ws_in_train_final,
                 &store_in_train_final,
                 init_ctx_in_train_final,
-                Arc::clone(&all_config.train_opt_config),
+                Arc::clone(&all_config.train_final_opt_config),
                 10, //TODO
                 run_all_args.selected_motif_nets_limit,
             ).await.map(|v| Arc::new(v))
@@ -1023,7 +1021,9 @@ struct AllConfigs {
     train_motif_nets_run_config_range_or_value:TrainMotifsNetsRunConfigRangeOrValue,
     train_label_nets_run_config_range_or_value:TrainLabelNetsRunConfigRangeOrValue,
     train_final_net_run_config_range_or_value:TrainFinalNetRunConfigRangeOrValue,
-    train_opt_config:Arc<OptConfig>,
+    train_motifs_opt_config:Arc<OptConfig>,
+    train_labels_opt_config:Arc<OptConfig>,
+    train_final_opt_config:Arc<OptConfig>,
 }
 
 fn resolve_median_window<P: FieldName + PartialEq>(named_vals: &[NamedVal<P>], window_path: &P) -> RangeOrValue<u32> {
@@ -1053,7 +1053,8 @@ fn run_all_find_motifs_config_0<P: FieldName + 'static>(median_window: fn(&[Name
     FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10),
-        window: RangeOrValue::Range { range: Range { start: 100, end: 1001 }, step: Some((100, 0)) },
+        // window: RangeOrValue::Value(200),
+        window: RangeOrValue::Range { range: Range { start: 100, end: 1001 }, step: Some((200, 0)) },
         freq_filter: Some(vec![
             MedianFilter(MedianFilterParamsRangeOrValue {
                 window: RangeOrValue::Dynamic(median_window),
@@ -1183,35 +1184,19 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config: run_all_find_motifs_config_0::<FindAndSelectMotifsRunConfigFields>(median_window_from_find_and_select),
         select_motifs_run_config: run_all_select_motifs_config_0::<FindAndSelectMotifsRunConfigFields>(),
     };
-    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(100, 10));
+    let find_and_select_motifs_opt_config = Arc::new(OptConfig::new(50, 10));
 
     /////////////////////train_motifs
-    let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(100),
-        batch_size: RangeOrValue::Value(10),
-        // lr: RangeOrValue::Value(0.0001),
-        lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
-        patience: RangeOrValue::Value(10),
-        min_delta: RangeOrValue::Value(1e-4_f32),
-    };
-    let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(300),
-        batch_size: RangeOrValue::Value(10),
-        lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
-        patience: RangeOrValue::Value(10),
-        min_delta: RangeOrValue::Value(1e-4_f32),
-    };
-    let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(100),
-        batch_size: RangeOrValue::Value(10),
-        lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
-        patience: RangeOrValue::Value(10),
-        min_delta: RangeOrValue::Value(1e-4_f32),
-    };
-
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
-        common_training_args: common_training_args_for_motifs,
+        common_training_args: CommonTrainingRunConfigRangeOrValue {
+            cycles: RangeOrValue::Value(100),
+            batch_size: RangeOrValue::Value(10),
+            // lr: RangeOrValue::Value(0.0001),
+            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+            patience: RangeOrValue::Value(10),
+            min_delta: RangeOrValue::Value(1e-4_f32),
+        },
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
         //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
         //     step: RangeOrValue::Value(10),
@@ -1242,7 +1227,13 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     //////////////////////train labels
     let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
         id: None,
-        common_training_args: common_training_args_for_labels,
+        common_training_args: CommonTrainingRunConfigRangeOrValue {
+            cycles: RangeOrValue::Value(300),
+            batch_size: RangeOrValue::Value(10),
+            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+            patience: RangeOrValue::Value(10),
+            min_delta: RangeOrValue::Value(1e-4_f32),
+        },
 
         // net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
         //     num_conv_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
@@ -1270,13 +1261,31 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     //////////////////////train final
     let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
         id: None,
-        common_training_args: common_training_args_for_final,
+        common_training_args: CommonTrainingRunConfigRangeOrValue {
+            cycles: RangeOrValue::Value(100),
+            batch_size: RangeOrValue::Value(10),
+            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+            patience: RangeOrValue::Value(10),
+            min_delta: RangeOrValue::Value(1e-4_f32),
+        },
         net: FinalNetArgsRangeOrValue {
             num_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
         },
     };
     let train_opt_config = Arc::new(OptConfig::new(100, 10));
-    AllConfigs{find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, find_and_select_run_config_range_or_value, find_and_select_motifs_opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value, train_opt_config}
+    AllConfigs{
+        find_motifs_run_config_range_or_value,
+        fixed_find_motifs_config,
+        select_motifs_run_config,
+        find_and_select_run_config_range_or_value,
+        find_and_select_motifs_opt_config,
+        train_motif_nets_run_config_range_or_value,
+        train_label_nets_run_config_range_or_value,
+        train_final_net_run_config_range_or_value,
+        train_motifs_opt_config: Arc::new(OptConfig::new(10, 3)),
+        train_labels_opt_config: Arc::new(OptConfig::new(100, 10)),
+        train_final_opt_config: Arc::new(OptConfig::new(100, 10))
+    }
 }
 
 fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
@@ -1357,9 +1366,20 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
             num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
         },
     };
-    let train_opt_config = Arc::new(OptConfig::new(60, 10));
 
-    AllConfigs{find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, find_and_select_run_config_range_or_value, find_and_select_motifs_opt_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_final_net_run_config_range_or_value, train_opt_config}
+    AllConfigs{
+        find_motifs_run_config_range_or_value,
+        fixed_find_motifs_config,
+        select_motifs_run_config,
+        find_and_select_run_config_range_or_value,
+        find_and_select_motifs_opt_config,
+        train_motif_nets_run_config_range_or_value,
+        train_label_nets_run_config_range_or_value,
+        train_final_net_run_config_range_or_value,
+        train_motifs_opt_config:Arc::new(OptConfig::new(60, 10)),
+        train_labels_opt_config: Arc::new(OptConfig::new(60, 10)),
+        train_final_opt_config: Arc::new(OptConfig::new(60, 10)),
+    }
 }
 
 async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
@@ -2483,7 +2503,7 @@ mod cli_tests {
             max_chunk_size: 20_000,
             train_resource_group: "train".to_string(),
             valid_resource_group: "valid".to_string(),
-            run_config_cnt: "1".to_string(),
+            train_motifs_epoch_size: 10,
             max_motif_net_loss: 0.3,
             selected_motif_nets_limit: None,
             motif_slices_step: 100,
@@ -2809,7 +2829,7 @@ mod cli_tests {
             max_chunk_size: 100000,
             train_resource_group: "pure group 20".to_string(),
             valid_resource_group: "pure group 10".to_string(),
-            run_config_cnt: "".to_string(),
+            train_motifs_epoch_size: 10,
             max_motif_net_loss: 0.4,
             selected_motif_nets_limit: None,
             motif_slices_step: 10,

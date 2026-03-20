@@ -108,22 +108,22 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
     } else {
         quote! { (#closure)(__with_data_ctx #(, #arg_refs)*) }
     };
-    //
-    // let permits = if await_closure {
-    //     quote! {
+
+    let permits = if await_closure {
+        quote! {
     //         if __with_data_ctx.acquired_permits() == 0 {
-    //             let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone())).await?;
+                let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone())).await?;
     //             __with_data_ctx.add_permit(permit);
     //         }
-    //     }
-    // } else {
-    //     quote! {
+        }
+    } else {
+        quote! {
     //         if __with_data_ctx.acquired_permits() == 0 {
-    //             let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone())).await?;
+                let permit = thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone())).await?;
     //             __with_data_ctx.add_permit(permit);
     //         }
-    //     }
-    // };
+        }
+    };
     quote! {
         {
             use thoosa_shared::traits::WithId;
@@ -133,7 +133,7 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
             let __device_idx = __with_data_ctx.device_idx();
             let r = async {
                 #(#prelude)*
-                // #permits
+                #permits
                 #(#load_steps)*
 
                 #invoke_closure
