@@ -296,7 +296,6 @@ mod tests {
     use argmin::core::*;
     use argmin::solver::linesearch::MoreThuenteLineSearch;
     use argmin::solver::quasinewton::LBFGS;
-    use argmin_math::ArgminMul;
     use log::debug;
     use tch::Device::Cpu;
     use tch::Tensor;

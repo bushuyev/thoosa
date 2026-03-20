@@ -2,7 +2,6 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use log::{debug, error, trace, warn};
 use tokio::sync::{mpsc, RwLock};
-use tokio::sync::mpsc::error::SendError;
 use tokio::task::JoinHandle;
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use crate::{panic_to_err, panic_to_err_async, ThoError};
@@ -18,15 +17,15 @@ pub enum PurgeCmd {
 pub struct Purger {
     tx: mpsc::UnboundedSender<PurgeCmd>,
     //TODO Arc<RwLock seems to prevent self.tx.send failing "channel closed"
-    rx_arc: Arc<RwLock<mpsc::UnboundedReceiver<PurgeCmd>>>,
-    worker: JoinHandle<()>,
+    _rx_arc: Arc<RwLock<mpsc::UnboundedReceiver<PurgeCmd>>>,
+    _worker: JoinHandle<()>,
 }
 
 impl Purger {
     pub fn new() -> Self {
         debug!("Purger::new");
 
-        let (tx, mut rx) = mpsc::unbounded_channel::<PurgeCmd>();
+        let (tx, rx) = mpsc::unbounded_channel::<PurgeCmd>();
         let rx_arc = Arc::new(RwLock::new(rx));
         let rx_arc_self = Arc::clone(&rx_arc);
         let worker = tokio::spawn(async move {
@@ -80,7 +79,11 @@ impl Purger {
             warn!("Purger::new: loop exited");
         });
 
-        Self { tx, rx_arc:rx_arc_self, worker,  }
+        Self {
+            tx,
+            _rx_arc: rx_arc_self,
+            _worker: worker,
+        }
     }
 
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>, cache_area: u64) -> Result<(), ThoError>{
