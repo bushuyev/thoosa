@@ -374,7 +374,7 @@ pub struct ExactStats {
 mod tests {
     use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioConstraintRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, MotifCriteria, MotifCriteriaRangeOrValue, NormThicknessConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
     use crate::find_motifs_run_config::InputFilter::{BandPassFilter, MedianFilter, AverageFilter, NotchBandFilter, SavGolFilter};
-    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, MedianFilterParams, MedianFilterParamsRangeOrValue, AverageFilterParams, MovingAverageFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, Padding, PaddingRangeOrValue, SgZeroPaddingRangeOrValue};
+    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, MedianFilterParams, MedianFilterParamsRangeOrValue, AverageFilterParams, AverageFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, Padding, PaddingRangeOrValue, SgZeroPaddingRangeOrValue};
     use log::debug;
     use tch::Tensor;
     use thoosa_properties_map::ToHashmap;
