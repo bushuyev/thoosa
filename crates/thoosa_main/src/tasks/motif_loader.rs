@@ -697,7 +697,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn test_load_random_slices() -> Result<(), ThoError> {
         set_max_level(Trace);
         GlobalCtx::init_devices(2);

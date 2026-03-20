@@ -269,10 +269,31 @@ impl SelectMotifsArgs {
 
 #[derive(Debug, Clone, DummyData)]
 #[dummy_data(clone)]
+pub struct SelectMotifsRunResult {
+    pub run_config: SelectMotifsRunConfig,
+    pub selected_motif_ids_scores: Vec<(u32, f64)>,
+    pub constraint_metrics: Option<HashMap<String, f32>>,
+}
+
+impl SelectMotifsRunResult {
+    pub fn new(
+        run_config: SelectMotifsRunConfig,
+        selected_motif_ids_scores: Vec<(u32, f64)>,
+        constraint_metrics: Option<HashMap<String, f32>>,
+    ) -> Self {
+        Self {
+            run_config,
+            selected_motif_ids_scores,
+            constraint_metrics,
+        }
+    }
+}
+
+#[derive(Debug, Clone, DummyData)]
+#[dummy_data(clone)]
 pub struct SelectMotifsSavableResult {
     dummy_id:RunId,
-    run_config: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)>,
-    // good_motif_ids_rates: Vec<(u32, f64)>,
+    run_results: Vec<SelectMotifsRunResult>,
 }
 
 impl Output for SelectMotifsSavableResult {}
@@ -286,24 +307,29 @@ impl WithId for SelectMotifsSavableResult {
 
 impl SelectMotifsSavableResult {
     pub fn new(
-        run_config_good_motif_ids: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)>,
+        run_results: Vec<SelectMotifsRunResult>,
     ) -> Self {
         Self {
             dummy_id: 0,
-            run_config: run_config_good_motif_ids,
+            run_results,
         }
     }
 
     //to be used from opt FindAndSelectMotifsStage
     pub fn score_sum(&self) -> f64 {
         //always one - from run_find_and_select
-        assert_eq!(self.run_config.len(), 1, "expected one run config");
-        self.run_config[0].1.iter().map(|v|v.1).sum::<f64>()
+        assert_eq!(self.run_results.len(), 1, "expected one run config");
+        self.run_results[0].selected_motif_ids_scores.iter().map(|v| v.1).sum::<f64>()
     }
 
     pub fn selected_motif_ids_scores(&self) -> &[(u32, f64)] {
-        assert_eq!(self.run_config.len(), 1, "expected one run config");
-        self.run_config[0].1.as_slice()
+        assert_eq!(self.run_results.len(), 1, "expected one run config");
+        self.run_results[0].selected_motif_ids_scores.as_slice()
+    }
+
+    pub fn constraint_metrics(&self) -> Option<&HashMap<String, f32>> {
+        assert_eq!(self.run_results.len(), 1, "expected one run config");
+        self.run_results[0].constraint_metrics.as_ref()
     }
 }
 
@@ -318,8 +344,8 @@ impl SavableResult for SelectMotifsSavableResult {
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
-        for (run_config, good_motif_ids_rates) in &self.run_config {
-            store.save_selected_motifs(run_config.id.expect("should be pre set in run_grid"), good_motif_ids_rates.clone()).await?; //TODO mem::replace?
+        for run_result in &self.run_results {
+            store.save_selected_motifs(run_result.run_config.id.expect("should be pre set in run_grid"), run_result.selected_motif_ids_scores.clone()).await?; //TODO mem::replace?
 
         }
         //gpt TODO!! save returns a dummy run_id; run_grid currently ignores it and uses presaved ids.
