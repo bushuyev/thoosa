@@ -863,9 +863,7 @@ impl Store for SqlStore {
         let input_type = input_type.map(|v| v.to_string());
         debug!("SqlStore::get_input_run_ids: run_id={run_id} input_type={input_type:?}");
         self.with_reader_conn("get_input_run_ids", move |conn| {
-            let t = conn.transaction()?;
-            let input_run_ids = Self::get_input_run_ids_(&t, run_id, input_type.as_deref())?;
-            t.commit()?;
+            let input_run_ids = Self::get_input_run_ids_(conn, run_id, input_type.as_deref())?;
             debug!("get_input_run_ids: input_run_ids={input_run_ids:?}");
             Ok(input_run_ids)
         })
@@ -877,7 +875,6 @@ impl Store for SqlStore {
         assert!(!ids.is_empty());
         let ids = ids.to_vec();
         self.with_reader_conn("list_input_run_ids", move |conn| {
-            let t = conn.transaction()?;
             let mut id_input_id = vec![];
             for ids_chunk in ids.chunks(500) {
                 let (mut q, params) = ids_chunk.iter().fold(
@@ -896,7 +893,7 @@ impl Store for SqlStore {
                 q.pop();
                 q.push(")");
 
-                let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
+                let mut stmt = conn.prepare(q.into_iter().collect::<String>().as_str())?;
                 let chunk_rows = stmt
                     .query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
                         Ok((row.get::<usize, RunId>(0)?, row.get::<usize, RunId>(1)?))
@@ -904,7 +901,6 @@ impl Store for SqlStore {
                     .collect::<Result<Vec<_>, _>>()?;
                 id_input_id.extend(chunk_rows);
             }
-            t.commit()?;
             Ok(id_input_id)
         })
         .await
@@ -917,7 +913,6 @@ impl Store for SqlStore {
 
         let input_run_ids = input_run_ids.to_vec();
         self.with_reader_conn("list_run_ids_with_outputs", move |conn| {
-            let t = conn.transaction()?;
             let mut run_ids_with_outputs = vec![];
 
             for ids_chunk in input_run_ids.chunks(500) {
@@ -937,14 +932,13 @@ impl Store for SqlStore {
                 q.pop();
                 q.push(")");
 
-                let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
+                let mut stmt = conn.prepare(q.into_iter().collect::<String>().as_str())?;
                 let chunk_rows = stmt
                     .query_map(rusqlite::params_from_iter(params.into_iter()), |row| row.get::<usize, RunId>(0))?
                     .collect::<Result<Vec<_>, _>>()?;
                 run_ids_with_outputs.extend(chunk_rows);
             }
 
-            t.commit()?;
             Ok(run_ids_with_outputs)
         })
         .await
@@ -987,9 +981,7 @@ impl Store for SqlStore {
 
     async fn list_labels(&self) -> Result<Vec<String>, ThoError> {
         self.with_reader_conn("list_labels", move |conn| {
-            let t = conn.transaction()?;
-            let labels = Self::list_labels(&t).map(|v| v.into_iter().map(|id_label| id_label.1).collect())?;
-            t.commit()?;
+            let labels = Self::list_labels(conn).map(|v| v.into_iter().map(|id_label| id_label.1).collect())?;
             Ok(labels)
         })
         .await
@@ -1396,9 +1388,7 @@ impl Store for SqlStore {
     ) -> Result<Vec<Resource>, ThoError> {
         let label = label.to_string();
         self.with_reader_conn("list_resource_random_not_labeled", move |conn| {
-            let t = conn.transaction()?;
-
-            let r = t.prepare(
+            let r = conn.prepare(
                 "SELECT r.id, r.import_id, r.key, r.length FROM resources AS r WHERE NOT EXISTS ( SELECT 1 FROM labeled_resources AS lr JOIN labels AS l ON l.id = lr.label_id WHERE lr.resource_id = r.id AND l.label = ? ) ORDER BY RANDOM() limit ?;"
             )?.query_map([Value::Text(label), Value::Integer(limit as i64)], |row| {
                 Ok(Resource::new(
@@ -1408,8 +1398,6 @@ impl Store for SqlStore {
                     row.get::<usize, u32>(3)?,
                 ))
             })?.map(|v| v.unwrap()).collect();
-
-            t.commit()?;
 
             Ok(r)
         })
@@ -1423,8 +1411,6 @@ impl Store for SqlStore {
         assert!(!resource_ids.is_empty(), "resource_ids are empty");
         let resource_ids = resource_ids.clone();
         self.with_reader_conn("list_resources_by_ids", move |conn| {
-            let t = conn.transaction()?;
-
             let (mut q, params) = resource_ids.into_iter().fold(
                 (
                     vec!["SELECT id, import_id, key, length FROM resources WHERE id IN ("],
@@ -1442,7 +1428,7 @@ impl Store for SqlStore {
             q.push(")");
 
             let resources = {
-                let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
+                let mut stmt = conn.prepare(q.into_iter().collect::<String>().as_str())?;
 
                 stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
                     Ok(Resource::new(
@@ -1456,7 +1442,6 @@ impl Store for SqlStore {
                 .collect()
             };
 
-            t.commit()?;
             Ok(resources)
         })
         .await
@@ -1699,9 +1684,7 @@ impl Store for SqlStore {
 
     async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError> {
         self.with_reader_conn("get_motif_meta", move |conn| {
-                let t = conn.transaction()?;
-                let (channel, run_id) = Self::_motif_meta(motif_id, &t)?;
-                t.commit()?;
+                let (channel, run_id) = Self::_motif_meta(motif_id, conn)?;
                 debug!("get_motif_meta: motif_id={motif_id} channel={channel} run_id={run_id}");
                 Ok::<_, ThoError>((channel as usize, run_id))
             })
@@ -1710,13 +1693,11 @@ impl Store for SqlStore {
 
     async fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError> {
         self.with_reader_conn("list_motifs", move |conn| {
-            let t = conn.transaction()?;
             let motif_ids = {
-                let mut stmt = t.prepare("SELECT id FROM motifs WHERE run_id=?")?;
+                let mut stmt = conn.prepare("SELECT id FROM motifs WHERE run_id=?")?;
                 stmt.query_map([run_id], |row| Ok(row.get::<usize, u32>(0)?))?
                     .collect::<Result<Vec<_>, Error>>()?
             };
-            t.commit()?;
             Ok(motif_ids)
         })
         .await
@@ -1731,8 +1712,6 @@ impl Store for SqlStore {
         select_motifs_run_id: Option<Vec<RunId>>,
     ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError> {
         self.with_reader_conn("list_motifs_slices", move |conn| {
-            let t = conn.transaction()?;
-
             let slice_run_ids = select_motifs_run_id.map(|mut ids| {
                 ids.push(run_id);
                 ids.sort();
@@ -1746,7 +1725,7 @@ impl Store for SqlStore {
                 .unwrap_or_default();
 
             let resources_motifs = {
-                let mut stmt = t.prepare(
+                let mut stmt = conn.prepare(
                     &format!(
                         "SELECT m.id, m.channel_id, r.id, r.import_id, r.key, s.slice_idx, r.length \
                          FROM motifs m \
@@ -1794,7 +1773,6 @@ impl Store for SqlStore {
                     })
                     .0
             };
-            t.commit()?;
 
             Ok(resources_motifs)
         })
@@ -1821,8 +1799,6 @@ impl Store for SqlStore {
     > {
         debug!("list_motif_slices: motif_id={motif_id} select_motifs_run_id={select_motifs_run_ids:?} limit={limit:?} all_but_in_run_id={all_but_in_run_id:?}");
         self.with_reader_conn("list_motif_slices", move |conn| {
-            let t = conn.transaction()?;
-
             let (slice_filter_clause, slice_filter_params) = if all_but_in_run_id.is_none() {
                 match select_motifs_run_ids.as_ref() {
                     None => (String::new(), Vec::new()),
@@ -1868,7 +1844,7 @@ impl Store for SqlStore {
                     query.push_str(&format!(" LIMIT {}", limit));
                 }
 
-                let mut stmt = t.prepare(&query)?;
+                let mut stmt = conn.prepare(&query)?;
                 debug!("list_motif_slices: params={params:?}");
 
                 let (slices, channel_set, run_id, resources_map) = stmt
@@ -1913,7 +1889,6 @@ impl Store for SqlStore {
                 }
             };
 
-            t.commit()?;
             Ok(channel_slices)
         })
         .await
@@ -1943,24 +1918,21 @@ impl Store for SqlStore {
         assert!(motif_width > 0, "motif_width must be greater than zero");
         let input_len_adjuster_in_motif = Arc::clone(&input_len_adjuster);
         let (channel, run_id, mut all_candidates, mut resources_map, desired_count) = self.with_reader_conn("list_random_motif_slices", move |conn| {
-            let t = conn.transaction()?;
-            let (channel, run_id) = Self::_motif_meta(motif_id, &t)?;
-            let (target_positions_by_res, num_motif_slices) = Self::load_motif_target_positions(motif_id, &t)?;
+            let (channel, run_id) = Self::_motif_meta(motif_id, conn)?;
+            let (target_positions_by_res, num_motif_slices) = Self::load_motif_target_positions(motif_id, conn)?;
             let desired_count = desired_count.unwrap_or(num_motif_slices);
             if desired_count == 0 {
-                t.commit()?;
                 return Ok((channel, run_id, vec![], HashMap::new(), desired_count));
             }
 
             let contexts =
-                Self::load_motif_resource_contexts(motif_id, input_len_adjuster_in_motif.as_ref(), &t, target_positions_by_res)?;
+                Self::load_motif_resource_contexts(motif_id, input_len_adjuster_in_motif.as_ref(), conn, target_positions_by_res)?;
 
             if contexts.is_empty() {
                 return Err(ThoError::new(format!("no resources found for channel {channel}, run_id={run_id}")));
             }
 
             let (all_candidates, resources_map) = Self::build_random_slice_candidates(&contexts, motif_width, min_distance);
-            t.commit()?;
             Ok((channel, run_id, all_candidates, resources_map, desired_count))
         }).await?;
 
@@ -2012,39 +1984,33 @@ impl Store for SqlStore {
         assert!(motif_width > 0, "motif_width must be greater than zero");
 
         self.with_reader_conn("list_random_slices_out_of_resources", move |conn| {
-            let t = conn.transaction()?;
-            let (channel, run_id) = Self::_motif_meta(motif_id, &t)?;
+            let (channel, run_id) = Self::_motif_meta(motif_id, conn)?;
             let desired_count = match desired_count {
                 Some(desired_count) => desired_count,
-                None => Self::count_motif_slices(motif_id, &t)?,
+                None => Self::count_motif_slices(motif_id, conn)?,
             };
 
             if desired_count == 0 {
-                t.commit()?;
                 return Ok((channel, run_id, vec![], HashMap::new()));
             }
 
-            let contexts = Self::load_non_motif_resource_contexts(motif_id, run_id, channel, input_len_adjuster.as_ref(), &t)?;
+            let contexts = Self::load_non_motif_resource_contexts(motif_id, run_id, channel, input_len_adjuster.as_ref(), conn)?;
             if contexts.is_empty() {
-                t.commit()?;
                 return Ok((channel, run_id, vec![], HashMap::new()));
             }
 
             let (mut all_candidates, resources_map) = Self::build_random_slice_candidates(&contexts, motif_width, min_distance);
             Self::shuffle_and_limit_candidates(&mut all_candidates, desired_count);
 
-            t.commit()?;
             Ok((channel, run_id, all_candidates, resources_map))
         }).await
     }
     async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError> {
         self.with_reader_conn("list_run_resources", move |conn| {
-            let t = conn.transaction()?;
-
             let result = {
-                let count: i64 = t.query_row("SELECT count(*) FROM run_resources WHERE run_id=?", [run_id], |row| row.get(0))?;
+                let count: i64 = conn.query_row("SELECT count(*) FROM run_resources WHERE run_id=?", [run_id], |row| row.get(0))?;
                 debug!("list_run_resources: count={}", count);
-                let mut stmt = t.prepare("SELECT ord_id, key FROM run_resources WHERE run_id=? ORDER BY ord_id")?;
+                let mut stmt = conn.prepare("SELECT ord_id, key FROM run_resources WHERE run_id=? ORDER BY ord_id")?;
 
                 stmt.query_map([run_id], |row| Ok((row.get::<usize, i64>(0)?, row.get::<usize, String>(1)?)))?
                     .enumerate()
@@ -2059,7 +2025,6 @@ impl Store for SqlStore {
                     .collect::<Result<Vec<String>, ThoError>>()
             };
 
-            t.commit()?;
             debug!("list_run_resources: result.is_ok={}", result.is_ok());
             result
         })
@@ -2068,10 +2033,8 @@ impl Store for SqlStore {
 
     async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError> {
         self.with_reader_conn("list_run_configs", move |conn| {
-            let t = conn.transaction()?;
-
             let run_configs = {
-                let mut stmt = t.prepare("SELECT id, type, descr, run_on FROM run_configs ORDER BY id DESC")?;
+                let mut stmt = conn.prepare("SELECT id, type, descr, run_on FROM run_configs ORDER BY id DESC")?;
                 stmt.query_map([], |row| {
                     Ok(RunConfigEntry {
                         id: row.get::<usize, RunId>(0)?,
@@ -2084,7 +2047,6 @@ impl Store for SqlStore {
                 .collect::<Result<Vec<RunConfigEntry>, ThoError>>()?
             };
 
-            t.commit()?;
             Ok(run_configs)
         })
         .await
@@ -2092,10 +2054,8 @@ impl Store for SqlStore {
 
     async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError> {
         self.with_reader_conn("list_run_configs_page", move |conn| {
-            let t = conn.transaction()?;
-
             let run_configs = {
-                let mut stmt = t.prepare("SELECT id, type, descr, run_on FROM run_configs ORDER BY id DESC LIMIT ? OFFSET ?")?;
+                let mut stmt = conn.prepare("SELECT id, type, descr, run_on FROM run_configs ORDER BY id DESC LIMIT ? OFFSET ?")?;
                 stmt.query_map([limit as i64, offset as i64], |row| {
                     Ok(RunConfigEntry {
                         id: row.get::<usize, RunId>(0)?,
@@ -2108,7 +2068,6 @@ impl Store for SqlStore {
                 .collect::<Result<Vec<RunConfigEntry>, ThoError>>()?
             };
 
-            t.commit()?;
             Ok(run_configs)
         })
         .await
@@ -2121,7 +2080,6 @@ impl Store for SqlStore {
 
         let ids = ids.to_vec();
         self.with_reader_conn("list_run_configs_by_ids", move |conn| {
-            let t = conn.transaction()?;
             let mut run_configs = vec![];
 
             for ids_chunk in ids.chunks(500) {
@@ -2137,7 +2095,7 @@ impl Store for SqlStore {
                 q.pop();
                 q.push(")");
 
-                let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
+                let mut stmt = conn.prepare(q.into_iter().collect::<String>().as_str())?;
                 let chunk_rows = stmt
                     .query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
                         Ok(RunConfigEntry {
@@ -2153,7 +2111,6 @@ impl Store for SqlStore {
             }
 
             run_configs.sort_by(|a, b| b.id.cmp(&a.id));
-            t.commit()?;
             Ok(run_configs)
         })
         .await
@@ -2161,16 +2118,13 @@ impl Store for SqlStore {
 
     async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError> {
         self.with_reader_conn("list_run_config_types", move |conn| {
-            let t = conn.transaction()?;
-
             let run_config_types = {
-                let mut stmt = t.prepare("SELECT DISTINCT type FROM run_configs ORDER BY type ASC")?;
+                let mut stmt = conn.prepare("SELECT DISTINCT type FROM run_configs ORDER BY type ASC")?;
                 stmt.query_map([], |row| row.get::<usize, String>(0))?
                     .map(|v| v.map_err(ThoError::from))
                     .collect::<Result<Vec<String>, ThoError>>()?
             };
 
-            t.commit()?;
             Ok(run_config_types)
         })
         .await
@@ -2178,10 +2132,8 @@ impl Store for SqlStore {
 
     async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError> {
         self.with_reader_conn("list_run_config_values", move |conn| {
-            let t = conn.transaction()?;
-
             let result = {
-                let mut stmt = t.prepare("SELECT name, real_value, int_value, str_value, bool_value, unsigned FROM run_config_values WHERE run_id=?")?;
+                let mut stmt = conn.prepare("SELECT name, real_value, int_value, str_value, bool_value, unsigned FROM run_config_values WHERE run_id=?")?;
 
                 stmt.query_map([run_id], |row| {
                     Ok((
@@ -2208,7 +2160,6 @@ impl Store for SqlStore {
                 })
             };
 
-            t.commit()?;
             debug!("list_run_config_values: run_id={run_id} result={result:?}");
             Ok(result)
         })
@@ -2217,10 +2168,8 @@ impl Store for SqlStore {
 
     async fn list_run_motifs(&self, run_id: RunId) -> Result<Vec<RunMotifEntry>, ThoError> {
         self.with_reader_conn("list_run_motifs", move |conn| {
-            let t = conn.transaction()?;
-
             let selected_motifs = {
-                let mut stmt = t.prepare(
+                let mut stmt = conn.prepare(
                     "SELECT sm.motif_id, m.channel_id, sm.rate, m.run_id, COUNT(s.motif_id), COUNT(DISTINCT s.resource_id) \
                      FROM selected_motifs sm \
                      JOIN motifs m ON m.id=sm.motif_id \
@@ -2244,13 +2193,12 @@ impl Store for SqlStore {
             };
 
             if !selected_motifs.is_empty() {
-                t.commit()?;
                 debug!("list_run_motifs: run_id={run_id} selected_motifs={selected_motifs:?}");
                 return Ok(selected_motifs);
             }
 
             let motifs = {
-                let mut stmt = t.prepare(
+                let mut stmt = conn.prepare(
                     "SELECT m.id, m.channel_id, m.run_id, COUNT(s.motif_id), COUNT(DISTINCT s.resource_id) \
                      FROM motifs m \
                      LEFT JOIN slices s ON s.motif_id=m.id \
@@ -2272,7 +2220,6 @@ impl Store for SqlStore {
                 .collect::<Result<Vec<_>, Error>>()?
             };
 
-            t.commit()?;
             debug!("list_run_motifs: run_id={run_id} motifs={motifs:?}");
             Ok(motifs)
         })
@@ -2315,17 +2262,14 @@ impl Store for SqlStore {
 
     async fn list_output_run_ids(&self, input_run_id: RunId) -> Result<Vec<RunId>, ThoError> {
         self.with_reader_conn("list_output_run_ids", move |conn| {
-            let t = conn.transaction()?;
-
             let q = "SELECT run_id FROM run_configs_input WHERE input_run_id=?";
 
             let id_input_id = {
-                let mut stmt = t.prepare(q)?;
+                let mut stmt = conn.prepare(q)?;
                 stmt.query_map([input_run_id], |row| row.get::<usize, usize>(0))?
                     .map(|v| v.map(|v| v as RunId).map_err(|e| e.into()))
                     .collect::<Result<Vec<_>, ThoError>>()
             };
-            t.commit()?;
             id_input_id
         })
         .await
@@ -2341,10 +2285,8 @@ impl Store for SqlStore {
     ) -> Result<Vec<Vec<(u32, f64)>>, ThoError> {
         self.with_reader_conn("list_selected_motifs", move |conn| {
             let mut channels_motifs = (0..channels).into_iter().map(|_| Vec::with_capacity(10)).collect::<Vec<Vec<(u32, f64)>>>();
-            let t = conn.transaction()?;
-
             {
-                let mut stmt = t.prepare(
+                let mut stmt = conn.prepare(
                     "SELECT DISTINCT sm.motif_id, sm.rate, m.channel_id \
                     FROM selected_motifs sm LEFT JOIN motifs AS m ON m.id=sm.motif_id \
                     WHERE sm.run_id=? ORDER BY motif_id"
@@ -2358,7 +2300,6 @@ impl Store for SqlStore {
                     channels_motifs[channel_id].push((motif_id, corr as f64))
                 });
             }
-            t.commit()?;
 
             debug!("list_selected_motifs: channels_motifs={channels_motifs:?}");
             Ok(channels_motifs)
@@ -2387,7 +2328,6 @@ impl Store for SqlStore {
 
     async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(PathBuf, f32)>, ThoError> {
         self.with_reader_conn("list_selected_nets", move |conn| {
-            let t = conn.transaction()?;
             let selected_nets = {
                 //TODO compose
                 let (query, params): (&str, Vec<rusqlite::types::Value>) = match (loss, limit) {
@@ -2415,15 +2355,13 @@ impl Store for SqlStore {
                         vec![rusqlite::types::Value::Integer(run_id as i64)],
                     ),
                 };
-                let mut stmt = t.prepare(query)?;
+                let mut stmt = conn.prepare(query)?;
                 stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
                     Ok((PathBuf::from(row.get::<usize, String>(0)?), row.get::<usize, f32>(1)?))
                 })?
                 .map(|v| v.unwrap())
                 .collect::<Vec<_>>()
             };
-
-            t.commit()?;
 
             Ok(selected_nets)
         })
@@ -2432,11 +2370,8 @@ impl Store for SqlStore {
 
     async fn run_config_descr(&self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError> {
         self.with_reader_conn("run_config_descr", move |conn| {
-            let t = conn.transaction()?;
-
-            let descr: String = t.query_row("SELECT descr FROM run_configs WHERE id=?", [corr_run_id], |row| row.get(0))?;
+            let descr: String = conn.query_row("SELECT descr FROM run_configs WHERE id=?", [corr_run_id], |row| row.get(0))?;
             debug!("descr={:?}", descr);
-            t.commit()?;
 
             parse_corr_labels(descr.as_str())
         })
@@ -2459,8 +2394,8 @@ fn init_sqlite(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
 
 //TODO move all prepare to init
 impl SqlStore {
-    fn count_motif_slices(motif_id: u32, t: &Transaction) -> Result<usize, ThoError> {
-        let count = t.query_row("SELECT count(*) FROM slices WHERE motif_id = ?", [motif_id], |row| {
+    fn count_motif_slices(motif_id: u32, conn: &Connection) -> Result<usize, ThoError> {
+        let count = conn.query_row("SELECT count(*) FROM slices WHERE motif_id = ?", [motif_id], |row| {
             row.get::<usize, i64>(0)
         })?;
 
@@ -2469,11 +2404,11 @@ impl SqlStore {
 
     fn load_motif_target_positions(
         motif_id: u32,
-        t: &Transaction,
+        conn: &Connection,
     ) -> Result<(HashMap<ResourceId, Vec<i64>>, usize), ThoError> {
         let mut target_positions_by_res: HashMap<ResourceId, Vec<i64>> = HashMap::new();
         let mut num_motif_slices = 0usize;
-        let mut stmt = t.prepare(
+        let mut stmt = conn.prepare(
             "SELECT s.resource_id, s.slice_idx
              FROM slices s
              WHERE s.motif_id = ?
@@ -2503,10 +2438,10 @@ impl SqlStore {
     fn load_motif_resource_contexts(
         motif_id: u32,
         input_len_adjuster: &(dyn Fn(u32) -> u32 + Send + Sync),
-        t: &Transaction,
+        conn: &Connection,
         mut target_positions_by_res: HashMap<ResourceId, Vec<i64>>,
     ) -> Result<Vec<RandomSliceResourceCtx>, ThoError> {
-        let mut stmt = t.prepare(
+        let mut stmt = conn.prepare(
             "SELECT DISTINCT r.id, r.import_id, r.key, r.length
              FROM slices s
              JOIN resources r ON r.id = s.resource_id
@@ -2539,9 +2474,9 @@ impl SqlStore {
         run_id: RunId,
         channel: i64,
         input_len_adjuster: &(dyn Fn(u32) -> u32 + Send + Sync),
-        t: &Transaction,
+        conn: &Connection,
     ) -> Result<Vec<RandomSliceResourceCtx>, ThoError> {
-        let mut stmt = t.prepare(
+        let mut stmt = conn.prepare(
             "SELECT DISTINCT r.id, r.import_id, r.key, r.length
              FROM slices s
              JOIN resources r ON r.id = s.resource_id
@@ -3278,11 +3213,11 @@ impl SqlStore {
     }
 
     fn get_input_run_ids_(
-        t: &Transaction,
+        conn: &Connection,
         run_id: RunId,
         input_type: Option<&str>,
     ) -> Result<Vec<RunId>, ThoError> {
-        let mut stmt = t.prepare("SELECT rci.input_run_id, rc.type FROM run_configs_input rci JOIN run_configs rc ON rc.id=rci.input_run_id WHERE run_id=?")?;
+        let mut stmt = conn.prepare("SELECT rci.input_run_id, rc.type FROM run_configs_input rci JOIN run_configs rc ON rc.id=rci.input_run_id WHERE run_id=?")?;
 
         let vec = stmt
             .query_map([run_id], |row| {
@@ -3296,7 +3231,7 @@ impl SqlStore {
                     .unwrap_or(false)
                 {
                     Box::new(
-                        Self::get_input_run_ids_(t, run_id, input_type)
+                        Self::get_input_run_ids_(conn, run_id, input_type)
                             .unwrap()
                             .into_iter(),
                     ) as Box<dyn Iterator<Item = RunId>>
@@ -3344,9 +3279,9 @@ impl SqlStore {
         e
     }
 
-    fn _motif_meta(motif_id: u32, t: &Transaction) -> Result<(i64, RunId), ThoError> {
+    fn _motif_meta(motif_id: u32, conn: &Connection) -> Result<(i64, RunId), ThoError> {
         // Pre-load the motif metadata to identify its channel and run.
-        let (channel, run_id): (i64, RunId) = t.query_row(
+        let (channel, run_id): (i64, RunId) = conn.query_row(
             "SELECT channel_id, run_id FROM motifs WHERE id=?",
             [motif_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -3478,14 +3413,12 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
     ) -> Result<usize, ThoError> {
         let groups = {
             let mut guard = self.conn.lock();
-            let t = guard.transaction()?;
-
             debug!(
                 "set_motifs: run_id={:?}, channel={:?}",
                 self.run_id, self.channel
             );
 
-            let mut stmt = t.prepare(
+            let mut stmt = guard.prepare(
                 "SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches",
             )?;
 
@@ -3503,7 +3436,6 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
             );
 
             drop(stmt);
-            t.commit()?;
             groups
         };
 
@@ -3849,8 +3781,7 @@ mod store_tests {
         {
             let store_guard = Arc::clone(&store);
             let mut guard = store_guard.conn().lock();
-            let t2 = guard.transaction()?;
-            let mut stmt = t2.prepare("SELECT sm.motif_id, s_0.resource_id, s_0.slice_idx, s_1.resource_id, s_1.slice_idx FROM slice_matches sm \
+            let mut stmt = guard.prepare("SELECT sm.motif_id, s_0.resource_id, s_0.slice_idx, s_1.resource_id, s_1.slice_idx FROM slice_matches sm \
              JOIN slices s_0 ON s_0.id=sm.slice_id_0 \
              JOIN slices s_1 ON s_1.id=sm.slice_id_1 \
               ORDER BY s_0.resource_id, s_0.slice_idx, s_1.resource_id, s_1.slice_idx")?;
