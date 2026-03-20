@@ -37,7 +37,7 @@ use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::criteria::{coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01, interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio, interesting_turning_points_ratio_peaked_01, interesting_turning_points_ratio_trapezoid_01, interesting_tv_norm_01, norm_thickness, periodicity_acf_01, periodicity_acf_01_frac};
-use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsSavableResult};
+use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
@@ -48,7 +48,8 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_shared::applicables_runner::Output;
+use thoosa_dummy_data_derive::DummyData;
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 use crate::cli::Commands::SelectMotifs;
 use crate::tasks::slices_stats::{Aggr, Metrics};
@@ -84,6 +85,69 @@ use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 //   optionally add slices to motifs which is less than threshold distance.
 //
 //   distance statistic so far is only Euclidean distance
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectMotifsOutputMode {
+    Standalone,
+    WithConstraintMetrics,
+}
+
+#[derive(Debug, DummyData)]
+#[dummy_data(no_clone)]
+pub struct SelectMotifsInput {
+    id: SynKey,
+    resources_input: ResourcesConfigInput<Simple>,
+    output_mode: SelectMotifsOutputMode,
+}
+
+impl SelectMotifsInput {
+    pub fn standalone(resources_input: ResourcesConfigInput<Simple>) -> Self {
+        Self::new(resources_input, SelectMotifsOutputMode::Standalone)
+    }
+
+    pub fn with_constraint_metrics(resources_input: ResourcesConfigInput<Simple>) -> Self {
+        Self::new(resources_input, SelectMotifsOutputMode::WithConstraintMetrics)
+    }
+
+    fn new(resources_input: ResourcesConfigInput<Simple>, output_mode: SelectMotifsOutputMode) -> Self {
+        Self {
+            id: SynKey::new([mono_key!("SelectMotifsInput", "stage")]),
+            resources_input,
+            output_mode,
+        }
+    }
+
+    fn resources_input(&self) -> &ResourcesConfigInput<Simple> {
+        &self.resources_input
+    }
+
+    fn output_mode(&self) -> SelectMotifsOutputMode {
+        self.output_mode
+    }
+}
+
+impl Input for SelectMotifsInput {}
+
+impl WithId for SelectMotifsInput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SelectedMotifEvaluation {
+    motif_id: u32,
+    avg_score: f64,
+    criterion_scores: Vec<(&'static str, f64)>,
+}
+
+impl SelectedMotifEvaluation {
+    fn to_savable_score(&self) -> (u32, f64) {
+        (self.motif_id, self.avg_score)
+    }
+}
 
 // Searches for matches between motifs from previous FindMotifsStage runs in the input resources,
 // then selects motifs by motif-quality criteria.
@@ -803,11 +867,11 @@ where
         Ok(run_configs__stacked_motifs)
     }
 
-    async fn load_resources_for_selection(&self, input: &Arc<DevicesWrap<ResourcesConfigInput<Simple>>>, mut ctx: C) -> Result<Arc<Vec<Resource>>, ThoError> {
-        let resources_config = with_data!(ctx, input; |_ctx, input: &ResourcesConfigInput<Simple>| {
-            Ok::<Simple, ThoError>(input.resources_config().clone())
+    async fn load_resources_for_selection(&self, input: &Arc<DevicesWrap<SelectMotifsInput>>, mut ctx: C) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
+        let (resources_config, output_mode) = with_data!(ctx, input; |_ctx, input: &SelectMotifsInput| {
+            Ok::<_, ThoError>((input.resources_input().resources_config().clone(), input.output_mode()))
         })?;
-        Ok(Arc::new(resources_config.to_resources(&self.store).await?.into_iter().collect::<Vec<_>>()))
+        Ok((Arc::new(resources_config.to_resources(&self.store).await?.into_iter().collect::<Vec<_>>()), output_mode))
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::extend_motifs_for_run_config"))]
@@ -1034,7 +1098,7 @@ where
         motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>,
         resources: Arc<Vec<Resource>>,
         channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<DataId, HashSet<IdSlice>>>>>,
-        max_batch: i64,
+        max_batch: i64,//TODO rename max chunk size
         total_size: usize,
         mut ctx: C,
     ) -> Result<(), ThoError> {
@@ -1261,78 +1325,58 @@ where
         }
     }
 
-    pub(crate) async fn clc_constraint_metrics(
-        &self,
-        select_motifs_run_config: &SelectMotifsRunConfig,
-        motif_ids_scores: &[(u32, f64)],
-        mut ctx: C,
-    ) -> Result<HashMap<String, f32>, ThoError> {
+    fn clc_constraint_metrics(select_motifs_run_config: &SelectMotifsRunConfig, selected_motifs: &[SelectedMotifEvaluation]) -> HashMap<String, f32> {
         let constraints = select_motifs_run_config.motif_criteria.constraints();
         let mut metrics = MotifCriteria::optimizer_constraints();
 
         if constraints.is_empty() {
-            return Ok(metrics);
+            return metrics;
         }
 
-        if motif_ids_scores.is_empty() {
+        if selected_motifs.is_empty() {
             for constraint in constraints {
                 metrics.insert(constraint.key.to_string(), constraint.min);
             }
-            return Ok(metrics);
+            return metrics;
         }
 
-        let select_run_config_id = select_motifs_run_config.id.expect("no select_motifs_run_config");
         let mut score_sums = constraints
             .iter()
             .map(|constraint| (constraint.key, 0.0f64))
             .collect::<HashMap<_, _>>();
 
-        for (motif_id, _) in motif_ids_scores {
-            let motif_data = Arc::clone(&self.clc_dist.motif_loader)
-                .run_cached(
-                    Arc::new(DevicesWrap::wrap(
-                        MotifLoaderInput::new(DataId(*motif_id), Some(vec![select_run_config_id])),
-                        CacheArea::default(),
-                    )),
-                    ctx.branch(Some("select_motifs_clc_constraint_metrics_loader"), false, false),
-                )
-                .await?;
-
-            let motif_scores = with_data!(ctx.branch(Some("select_motifs_clc_constraint_metrics"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
-                let motif_slices = motif_data.data().t_ref();
-                constraints
-                    .iter()
-                    .map(|constraint| Ok::<_, ThoError>((constraint.key, Self::clc_criterion_score(motif_slices, &constraint.criterion)?)))
-                    .collect::<Result<Vec<_>, ThoError>>()
-            })?;
-
-            for (constraint_key, score) in motif_scores {
+        for selected_motif in selected_motifs {
+            for (constraint_key, score) in &selected_motif.criterion_scores {
                 *score_sums.get_mut(constraint_key).expect("missing criterion score accumulator") += score;
             }
         }
 
-        let selected_count = motif_ids_scores.len() as f64;
+        let selected_count = selected_motifs.len() as f64;
         for constraint in constraints {
             let avg_score = score_sums[constraint.key] / selected_count;
             metrics.insert(constraint.key.to_string(), (constraint.min as f64 - avg_score) as f32);
         }
 
-        Ok(metrics)
+        debug!("SelectMotifsStage::clc_constraint_metrics: metrics={metrics:?}");
+        metrics
     }
 
     async fn filter_motifs_by_criteria(
         &self,
         select_motifs_run_config: &SelectMotifsRunConfig,
-        // motif_ids: Vec<(u32, f64)>,
         mut ctx: C,
-    ) -> Result<Vec<(u32, f64)>, ThoError> {
+    ) -> Result<Vec<SelectedMotifEvaluation>, ThoError> {
         assert!((0.0..=1.0).contains(&select_motifs_run_config.threshold), "SelectMotifsRunConfig::threshold must be within 0..1, got {}", select_motifs_run_config.threshold);
         debug!("SelectMotifsStage::run: 0. self.find_motif_run_ids_motif_ids={:?}", self.find_motif_run_ids_motif_ids);
 
         let criteria_constraints = select_motifs_run_config.motif_criteria.constraints();
         if criteria_constraints.is_empty() {
             debug!("SelectMotifsStage::run: no motif criteria configured");
-            return Ok(self.find_motif_run_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).map(|v| (*v, 1.0)).collect::<Vec<_>>());
+            return Ok(self.find_motif_run_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).map(|v| SelectedMotifEvaluation {
+                motif_id: *v,
+                avg_score: 1.0,
+                criterion_scores: vec![],
+            }).collect::<Vec<_>>());
         }
 
         let motif_ids = self.find_motif_run_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).collect::<Vec<_>>();
@@ -1353,32 +1397,38 @@ where
                     ctx.branch(Some("select_motifs_filter_motif_loader"), false, false),
                 ).await?;
 
-            let keep_score = with_data!(ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
+            let selected_motif = with_data!(ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
                 let motif_slices = motif_data.data().t_ref();
                 debug!("SelectMotifsStage::run: motif_id={motif_id} criteria_constraints={criteria_constraints:?} threshold={threshold:.6} motif_slices={motif_slices:?}");
 
                 if motif_slices.size()[0] < min_slices || motif_slices.size()[0] > max_slices {
-                    return Ok::<(bool, f64), ThoError>((false, 0.0));
+                    return Ok::<Option<SelectedMotifEvaluation>, ThoError>(None);
                 }
                 let mut score_sum = 0.0f64;
                 let mut avg_score = 1.0;
+                let mut criterion_scores = Vec::with_capacity(criteria_constraints.len());
 
 
                 for (idx, criterion_constraint) in criteria_constraints.iter().enumerate() {
                     let criterion_score = Self::clc_criterion_score(motif_slices, &criterion_constraint.criterion)?;
                     if criterion_score < criterion_constraint.min as f64 {
-                        return Ok::<(bool, f64), ThoError>((false, 0.0));
+                        return Ok::<Option<SelectedMotifEvaluation>, ThoError>(None);
                     }
                     score_sum += criterion_score;
                     avg_score = score_sum / (idx + 1) as f64;
+                    criterion_scores.push((criterion_constraint.key, criterion_score));
                     debug!("SelectMotifsStage::run: motif_id={motif_id} criterion_constraint={criterion_constraint:?} criterion_score={criterion_score:.6} avg_score={avg_score:.6}");
                 }
 
-                Ok::<(bool, f64), ThoError>((avg_score >= threshold, avg_score))
+                Ok::<Option<SelectedMotifEvaluation>, ThoError>((avg_score >= threshold).then_some(SelectedMotifEvaluation {
+                    motif_id: *motif_id,
+                    avg_score,
+                    criterion_scores,
+                }))
             })?;
 
-            if keep_score.0 {
-                motif_ids_filtered.push((*motif_id, keep_score.1));
+            if let Some(selected_motif) = selected_motif {
+                motif_ids_filtered.push(selected_motif);
             }
         }
 
@@ -1397,7 +1447,7 @@ where
 
 {
     type Ctx = C;
-    type In<'a> = ResourcesConfigInput<Simple>;
+    type In<'a> = SelectMotifsInput;
     type Out = SelectMotifsSavableResult;
 }
 
@@ -1410,7 +1460,7 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let resources = self.load_resources_for_selection(&input, ctx.branch("load_resources_for_selection".into(), false, false)).await?;
+        let (resources, output_mode) = self.load_resources_for_selection(&input, ctx.branch("load_resources_for_selection".into(), false, false)).await?;
 
         debug!("SelectMotifsStage::run: resources={resources:?}");
         if resources.is_empty() {
@@ -1427,7 +1477,7 @@ where
         .channels() as usize;
         let total_size = resources.iter().map(|resource| resource.length() as usize).sum::<usize>();
 
-        let mut run_config_extended_motif_ids: Vec<(SelectMotifsRunConfig, Vec<(u32, f64)>)> = vec![];
+        let mut run_results = Vec::with_capacity(self.run_configs.len());
         debug!("SelectMotifsStage::run: self.run_configs.len={}", self.run_configs.len());
         for select_motifs_run_config in self.run_configs.iter() {
 
@@ -1453,18 +1503,23 @@ where
                 }
             }
 
-            let extended_motif_ids_scores_filtered = self
+            let selected_motifs = self
                 .filter_motifs_by_criteria(select_motifs_run_config, ctx.branch("filter_motifs_by_criteria".into(), false, false))
                 .await?;
 
-            run_config_extended_motif_ids.push((select_motifs_run_config.clone(), extended_motif_ids_scores_filtered));
+            let constraint_metrics = match output_mode {
+                SelectMotifsOutputMode::Standalone => None,
+                SelectMotifsOutputMode::WithConstraintMetrics => Some(Self::clc_constraint_metrics(select_motifs_run_config, selected_motifs.as_slice())),
+            };
+            let selected_motif_ids_scores = selected_motifs.iter().map(SelectedMotifEvaluation::to_savable_score).collect::<Vec<_>>();
+            run_results.push(SelectMotifsRunResult::new(select_motifs_run_config.clone(), selected_motif_ids_scores, constraint_metrics));
 
         }
 
 
-        debug!("SelectMotifsStage::run: extended_motif_ids={run_config_extended_motif_ids:?}");
+        debug!("SelectMotifsStage::run: run_results={run_results:?}");
 
-        Ok(Arc::new(DevicesWrap::wrap(SelectMotifsSavableResult::new(run_config_extended_motif_ids), CacheArea::default())))
+        Ok(Arc::new(DevicesWrap::wrap(SelectMotifsSavableResult::new(run_results), CacheArea::default())))
     }
 }
 
@@ -1474,6 +1529,7 @@ pub mod tests {
     use std::collections::{HashMap, HashSet};
     use std::path::Path;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use dashmap::DashMap;
     use log::{debug, LevelFilter};
     use log::Level::Debug;
@@ -1524,7 +1580,7 @@ pub mod tests {
     use crate::tasks::slices_stats::{Aggr, Metrics};
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
-    use crate::tasks::select_motifs::{fold_dists, fold_mask, SelectMotifsSavableResultBuilder, SelectMotifsStage};
+    use crate::tasks::select_motifs::{fold_dists, fold_mask, SelectMotifsInput, SelectMotifsSavableResultBuilder, SelectMotifsStage};
     use crate::tasks::slices_iter::SlicesIter;
     use crate::tasks::stacked_moitfs_loader::{StackedMotifsOutput, StackedMotifsOutputId};
     use crate::tasks::tensor_loader::mock_tensor_loader;
@@ -1533,6 +1589,20 @@ pub mod tests {
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
+    }
+
+    fn standalone_select_input(resources_group: &str) -> Arc<DevicesWrap<SelectMotifsInput>> {
+        Arc::new(DevicesWrap::wrap(
+            SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))),
+            CacheArea::default(),
+        ))
+    }
+
+    fn select_input_with_constraint_metrics(resources_group: &str) -> Arc<DevicesWrap<SelectMotifsInput>> {
+        Arc::new(DevicesWrap::wrap(
+            SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))),
+            CacheArea::default(),
+        ))
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1610,9 +1680,7 @@ pub mod tests {
             None,
         ).await?);
 
-        let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))), CacheArea::default())), mock_run_ctx::default(1),
-        ).await?;
+        let result = select_motifs_stage.run(standalone_select_input(resources_group), mock_run_ctx::default(1)).await?;
 
         Ok(())
     }
@@ -1688,9 +1756,7 @@ pub mod tests {
             None
         ).await?);
 
-        let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))), CacheArea::default())), mock_run_ctx::default(0),
-        ).await?;
+        let result = select_motifs_stage.run(standalone_select_input(resources_group), mock_run_ctx::default(0)).await?;
 
         Ok(())
     }
@@ -1773,9 +1839,7 @@ pub mod tests {
         ).await?);
 
 
-        let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))), CacheArea::default())), mock_run_ctx::default(0),
-        ).await?;
+        let result = select_motifs_stage.run(standalone_select_input(resources_group), mock_run_ctx::default(0)).await?;
 
         Ok(())
     }
@@ -1916,9 +1980,7 @@ pub mod tests {
         ).await?);
 
 
-        let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))), CacheArea::default())), mock_run_ctx::default(1),
-        ).await?;
+        let result = select_motifs_stage.run(standalone_select_input(resources_group), mock_run_ctx::default(1)).await?;
 
         Ok(())
     }
@@ -2003,8 +2065,111 @@ pub mod tests {
         let filtered = stage.filter_motifs_by_criteria(&select_motifs_run_config, mock_run_ctx::default(0)).await?;
 
         assert_eq!(filtered.len(), 1, "filtered={filtered:?}");
-        assert_eq!(filtered[0].0, 4, "filtered={filtered:?}");
-        assert!((filtered[0].1 - 0.8).abs() < 1e-6, "filtered={filtered:?}");
+        assert_eq!(filtered[0].motif_id, 4, "filtered={filtered:?}");
+        assert!((filtered[0].avg_score - 0.8).abs() < 1e-6, "filtered={filtered:?}");
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_select_motifs_run_reuses_criterion_scores_for_constraint_metrics() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(1);
+        let find_motifs_run_id: RunId = 31;
+        let select_motifs_run_id: RunId = 32;
+        let resources_group = "constraint_metrics_group";
+        let norm_thickness_calls = Arc::new(AtomicUsize::new(0));
+        let inlier_ratio_calls = Arc::new(AtomicUsize::new(0));
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let store = Arc::new(
+            MockStoreBuilder::new()
+                .with_list_motifs([(find_motifs_run_id, Ok(vec![101, 102]))])
+                .with_list_resources_not_in_group([
+                    (resources_group, Ok(vec![Resource::new(1, 1, "resource_a", 1000)])),
+                ])
+                .build(),
+        );
+        let loader = Arc::new(mock_tensor_loader::build().finish());
+        let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
+            (
+                MotifLoaderInput::new(DataId(101), Some(vec![select_motifs_run_id])),
+                (
+                    MotifMeta { channel: 0, find_motifs_run_id, window: 4 },
+                    Tensor::zeros([2, 4], FLOAT_CPU),
+                ),
+            ),
+            (
+                MotifLoaderInput::new(DataId(102), Some(vec![select_motifs_run_id])),
+                (
+                    MotifMeta { channel: 0, find_motifs_run_id, window: 4 },
+                    Tensor::zeros([4, 4], FLOAT_CPU),
+                ),
+            ),
+        ]).finish());
+
+        let norm_thickness_calls_clone = Arc::clone(&norm_thickness_calls);
+        let inlier_ratio_calls_clone = Arc::clone(&inlier_ratio_calls);
+        let _criteria_mocks = mock_criteria::build()
+            .with_norm_thickness(move |x, _k, _eps| {
+                norm_thickness_calls_clone.fetch_add(1, Ordering::SeqCst);
+                let score = if x.size()[0] == 2 { 0.8 } else { 0.9 };
+                Ok(Tensor::from(score).to_kind(x.kind()).to_device(x.device()))
+            })
+            .with_inlier_ratio(move |x, _k, _eps| {
+                inlier_ratio_calls_clone.fetch_add(1, Ordering::SeqCst);
+                let score = if x.size()[0] == 2 { 0.7 } else { 0.8 };
+                Ok(Tensor::from(score).to_kind(x.kind()).to_device(x.device()))
+            })
+            .install();
+
+        let mut select_motifs_run_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
+        select_motifs_run_config.extend_config = None;
+        select_motifs_run_config.motif_criteria = MotifCriteria {
+            norm_thickness: Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { k: 5.0, eps: 1e-8 }, min: 0.7 }),
+            inlier_ratioRunConfig: Some(InlierRatioConstraint { criterion: InlierRatioRunConfig { k: 3.0, eps: 1e-8 }, min: 0.65 }),
+            coherenceRunConfig: None,
+            interesting_amp_01: None,
+            interesting_tv_norm_01: None,
+            interesting_curvature_norm_01: None,
+            interesting_turning_points_ratio: None,
+            interesting_band_energy_ratio_01: None,
+            interesting_entropy_gauss_01: None,
+            interesting_entropy_band_01: None,
+            periodicity_acf_01: None,
+        };
+        select_motifs_run_config.threshold = 0.5;
+        select_motifs_run_config.min_slices = Some(1);
+        select_motifs_run_config.max_slices = Some(10);
+
+        let stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
+            &ws,
+            &store,
+            loader,
+            motif_loader,
+            vec![select_motifs_run_config],
+            vec![find_motifs_run_id],
+            1024,
+            None,
+        ).await?);
+
+        let result: Arc<DevicesWrap<SelectMotifsSavableResult>> = stage
+            .run(select_input_with_constraint_metrics(resources_group), mock_run_ctx::default(0))
+            .await?;
+        let savable: SelectMotifsSavableResult = Arc::into_inner(result)
+            .expect("test_select_motifs_run_reuses_criterion_scores_for_constraint_metrics: output still shared")
+            .take_data(0)
+            .await?;
+        let metrics = savable
+            .constraint_metrics()
+            .cloned()
+            .expect("missing constraint metrics");
+
+        assert_eq!(metrics.len(), MotifCriteria::CONSTRAINT_KEYS.len());
+        assert!((metrics[MotifCriteria::NORM_THICKNESS_MIN_KEY] + 0.15).abs() < 1e-6, "metrics={metrics:?}");
+        assert!((metrics[MotifCriteria::INLIER_RATIO_MIN_KEY] + 0.10).abs() < 1e-6, "metrics={metrics:?}");
+        assert_eq!(metrics[MotifCriteria::COHERENCE_MIN_KEY], 0.0, "metrics={metrics:?}");
+        assert_eq!(norm_thickness_calls.load(Ordering::SeqCst), 2, "metrics={metrics:?}");
+        assert_eq!(inlier_ratio_calls.load(Ordering::SeqCst), 2, "metrics={metrics:?}");
 
         Ok(())
     }
@@ -2189,10 +2354,7 @@ pub mod tests {
 
         let result:Arc<DevicesWrap<SelectMotifsSavableResult>> = select_motifs_stage
             .run(
-                Arc::new(DevicesWrap::wrap(
-                    ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))),
-                    CacheArea::default(),
-                )),
+                standalone_select_input(resources_group),
                 mock_run_ctx::default(0),
             )
             .await?;
@@ -2285,10 +2447,7 @@ pub mod tests {
 
         let result:Arc<DevicesWrap<SelectMotifsSavableResult>> = select_motifs_stage
             .run(
-                Arc::new(DevicesWrap::wrap(
-                    ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))),
-                    CacheArea::default(),
-                )),
+                standalone_select_input(resources_group),
                 mock_run_ctx::default(0),
             )
             .await?;
@@ -2573,9 +2732,7 @@ pub mod tests {
 
         let ctx =  mock_run_ctx::default(1);
 
-        let result = select_motifs_stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))), CacheArea::default())), ctx,
-        ).await?;
+        let result = select_motifs_stage.run(standalone_select_input(resources_group), ctx).await?;
 
         Ok(())
     }

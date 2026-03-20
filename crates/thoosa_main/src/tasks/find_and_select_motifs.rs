@@ -33,7 +33,7 @@ use thoosa_store::Store;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::find_motifs::FindMotifsStage;
 use crate::tasks::motif_loader::MotifLoader;
-use crate::tasks::select_motifs::SelectMotifsStage;
+use crate::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use crate::tasks::tensor_loader::RawTensorLoader;
 use thoosa_shared::comp_id::SynKey;
 use crate::cli::run_plot;
@@ -238,7 +238,7 @@ impl FindAndSelectMotifsStage {
         ));
 
         let select_input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store).await?,
+            SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store).await?),
             CacheArea::default(),
         ));
 
@@ -302,13 +302,10 @@ impl FindAndSelectMotifsStage {
             .expect("FindAndSelectMotifsStage::run_find_and_select: select output still shared")
             .take_data(device_idx)
             .await?;
-        let constraint_metrics = select_stage
-            .clc_constraint_metrics(
-                &run_config.select_motifs_run_config,
-                select_savable.selected_motif_ids_scores(),
-                ctx.branch(Some("select_stage_constraint_metrics"), false, false),
-            )
-            .await?;
+        let constraint_metrics = select_savable
+            .constraint_metrics()
+            .cloned()
+            .ok_or_else(|| ThoError::new("FindAndSelectMotifsStage::run_find_and_select: missing constraint metrics in SelectMotifs output".to_string()))?;
         let score_sum = select_savable.score_sum();
         select_savable.save(store, ws).await?;
 

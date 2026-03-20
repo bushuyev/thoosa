@@ -1920,6 +1920,7 @@ impl Store for SqlStore {
     }
 
     ///gpt generated, returns slices from same resources and same channel as target motif but not belonging to the motif
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SqlStore::list_random_slices_out_of_motif"))]
     async fn list_random_slices_out_of_motif(
         &self,
         motif_id: u32,
@@ -1936,9 +1937,7 @@ impl Store for SqlStore {
         ),
         ThoError,
     > {
-        debug!(
-        "list_random_slices_out_of_motif: motif_id={motif_id} motif_width={motif_width} min_distance={min_distance:?}"
-    );
+        debug!("list_random_slices_out_of_motif: motif_id={motif_id} motif_width={motif_width} min_distance={min_distance:?}");
 
         assert!(motif_width > 0, "motif_width must be greater than zero");
         let input_len_adjuster_in_motif = Arc::clone(&input_len_adjuster);
@@ -1989,6 +1988,7 @@ impl Store for SqlStore {
         Ok((channel, run_id, all_candidates, resources_map))
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SqlStore::list_random_slices_out_of_resources"))]
     async fn list_random_slices_out_of_resources(
         &self,
         motif_id: u32,
@@ -2005,9 +2005,7 @@ impl Store for SqlStore {
         ),
         ThoError,
     > {
-        debug!(
-        "list_random_slices_out_of_resources: motif_id={motif_id} motif_width={motif_width} min_distance={min_distance:?}"
-    );
+        debug!("list_random_slices_out_of_resources: motif_id={motif_id} motif_width={motif_width} min_distance={min_distance:?}");
 
         assert!(motif_width > 0, "motif_width must be greater than zero");
 
@@ -2037,6 +2035,7 @@ impl Store for SqlStore {
             Ok((channel, run_id, all_candidates, resources_map))
         }).await
     }
+
     async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError> {
         self.with_reader_conn("list_run_resources", move |conn| {
             let t = conn.transaction()?;
@@ -2542,19 +2541,10 @@ impl SqlStore {
         t: &Transaction,
     ) -> Result<Vec<RandomSliceResourceCtx>, ThoError> {
         let mut stmt = t.prepare(
-            "SELECT DISTINCT r.id, r.import_id, r.key, r.length
-             FROM slices s
-             JOIN resources r ON r.id = s.resource_id
-             WHERE s.run_id = ? AND s.channel_id = ?
-             AND NOT EXISTS (
-                 SELECT 1
-                 FROM slices motif_s
-                 WHERE motif_s.motif_id = ? AND motif_s.resource_id = s.resource_id
-             )
-             ORDER BY r.id",
+            "SELECT r.id, r.import_id, r.key, r.length FROM main.resources r WHERE r.id NOT IN (SELECT resource_id FROM slices s WHERE s.motif_id=?)",
         )?;
 
-        stmt.query_map(params![run_id as i64, channel, motif_id as i64], |row| {
+        stmt.query_map(params![motif_id as i64], |row| {
             Ok(RandomSliceResourceCtx {
                 resource: Resource::new(
                     row.get::<usize, ResourceId>(0)?,
@@ -2852,20 +2842,18 @@ impl SqlStore {
     pub async fn in_mem() -> Result<Box<dyn Store>, ThoError> {
         let db_idx = IN_MEM_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let uri = format!("file:thoosa_store_{db_idx}?mode=memory&cache=shared");
-        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI;
 
-        let writer = tokio_rusqlite::Connection::open_with_flags(&uri, flags).await?;
+        let writer = tokio_rusqlite::Connection::open_with_flags(&uri, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI).await?;
         writer.call(init_sqlite).await?;
 
         let mut readers = Vec::with_capacity(SQL_STORE_READERS_CNT.max(1));
         for _ in 0..SQL_STORE_READERS_CNT.max(1) {
-            let reader = tokio_rusqlite::Connection::open_with_flags(&uri, flags).await?;
+            let reader = tokio_rusqlite::Connection::open_with_flags(&uri, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI).await?;
             reader.call(init_sqlite).await?;
             readers.push(reader);
         }
 
-        let conn = Connection::open_with_flags(&uri, flags)?;
-        Self::create_tables(conn, writer, readers)
+        Self::create_tables(Connection::open_with_flags(&uri, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI)?, writer, readers)
     }
 
     //TODO rename channel_id to channel - not a pk
@@ -4640,6 +4628,39 @@ mod store_tests {
             assert!(slice.1 > 0);
             assert!(slice.1 + WIDTH < adjusted_len);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
+    async fn heavy_list_random_slices() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
+
+        create_resources(&store, (0..100).map(|i| (&*format!("res_{i}").leak(), 2000u32)).collect::<Vec<_>>().as_slice()).await?;
+
+        let run_id = store.save_run_config(None, &"find_motifs", "length adjust", "", HashMap::new()).await?;
+        let channel_id = 6i64;
+        let res_0 = fetch_resource_id(&store, "res_0")?;
+        let res_10 = fetch_resource_id(&store, "res_1")?;
+
+        let motif_id = insert_motif_with_slices(
+            &store,
+            run_id,
+            channel_id,
+            0,
+            &[
+                    (res_0, 100), (res_0, 500), (res_0, 1000),
+                    (res_10, 100), (res_10, 500), (res_10, 1000),
+            ],
+        )?;
+
+        const WIDTH: u32 = 200;
+        let input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync> = Arc::new(|length: u32| length);
+        let n = Instant::now();
+        let (channel, _, random_slices, resources_map) = store.list_random_slices_out_of_motif(motif_id, WIDTH, None, Arc::clone(&input_len_adjuster), Some(100)).await?;
+
+        debug!("random_slices.size={} elapsed={}", random_slices.len(), n.elapsed().as_millis());
+        assert_eq!(100, random_slices.len());
 
         Ok(())
     }

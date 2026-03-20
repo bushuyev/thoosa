@@ -63,7 +63,7 @@ pub struct TrainLabelNetsArgs {
     valid_resource_group: String,
 
     #[command(flatten)]
-    pub fixed_config: OptConfig,
+    pub opt_config: OptConfig,
 
     #[arg(long)]
     pub run_config_cnt: String, //TrainLabelNetsRunConfig
@@ -481,7 +481,7 @@ pub struct TrainMotifsNetsArgs {
     pub motif_id: Option<u32>,
 
     #[command(flatten)]
-    pub fixed_config: OptConfig,
+    pub opt_config: OptConfig,
 
     #[arg(long)]
     pub run_config_cnt: String, //TrainMotifsNetsRunConfig
@@ -519,7 +519,7 @@ mod train_motifs_nets_args_tests {
         let args = TrainMotifsNetsArgs {
             select_motifs_run_ids: Some(vec![1, 2]),
             motif_id: None,
-            fixed_config: OptConfig::new(10, 1),
+            opt_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
             epoch_size: 10,
         };
@@ -537,7 +537,7 @@ mod train_motifs_nets_args_tests {
         let args = TrainMotifsNetsArgs {
             select_motifs_run_ids: Some(vec![10, 11]),
             motif_id: Some(7),
-            fixed_config: OptConfig::new(10, 1),
+            opt_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
             epoch_size: 10,
         };
@@ -556,7 +556,7 @@ mod train_motifs_nets_args_tests {
         let args = TrainMotifsNetsArgs {
             select_motifs_run_ids: None,
             motif_id: None,
-            fixed_config: OptConfig::new(10, 1),
+            opt_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
             epoch_size: 10,
         };
@@ -1946,7 +1946,7 @@ pub struct TrainFinalNetArgs {
     valid_resource_group: String,
 
     #[command(flatten)]
-    pub fixed_config: OptConfig,
+    pub opt_config: OptConfig,
 
     #[arg(long)]
     pub run_config_cnt: String, //TrainLabelNetsRunConfig
