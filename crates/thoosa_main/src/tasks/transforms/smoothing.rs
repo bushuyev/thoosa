@@ -290,6 +290,35 @@ fn solve_symmetric_pentadiagonal(
     Ok(x)
 }
 
+fn odd_window(window: u32, filter_name: &str) -> Result<i64, ThoError> {
+    let normalized = if window % 2 == 0 { window + 1 } else { window };
+    if normalized <= 3 {
+        return Err(ThoError::new(format!("{filter_name} window must be > 3 after odd normalization, got {window}")));
+    }
+
+    Ok(normalized as i64)
+}
+
+fn windows_with_replicate_padding(x: &Tensor, window: i64, filter_name: &str) -> Result<Tensor, ThoError> {
+    let size = x.size();
+    if size.len() != 2 {
+        return Err(ThoError::new(format!("{filter_name}: expected input of shape [C, Data], got {size:?}")));
+    }
+
+    let data_len = size[1];
+    if data_len < 1 {
+        return Err(ThoError::new(format!("{filter_name}: expected Data dimension > 0, got {size:?}")));
+    }
+
+    let radius = window / 2;
+
+    let left = x.f_narrow(1, 0, 1)?.f_repeat([1i64, radius].as_slice())?;
+    let right = x.f_narrow(1, data_len - 1, 1)?.f_repeat([1, radius].as_slice())?;
+    let padded = Tensor::f_cat(&[&left, x, &right], 1)?;
+
+    Ok(padded.f_unfold(1, window, 1)?)
+}
+
 /// Median filter for multichannel 1D data.
 ///
 /// Input shape:
@@ -304,59 +333,51 @@ fn solve_symmetric_pentadiagonal(
 /// - replicate padding
 ///
 /// Requirements:
-/// - `window` must be odd and > 0
+/// - `window` must be > 3 after odd normalization
 pub fn median(x: &Tensor, window: u32) -> Result<Tensor, ThoError> {
-
-    let window = if window % 2 == 0 {
-        window+1
-    } else {
-        window
-    } as i64;
-
-    assert!(window >  3, "window ({window}) should be > 3");
-    let size = x.size();
-    assert_eq!(size.len(), 2, "median: expected input of shape [C, Data], got {size:?}");
-
-
-    let c = size[0];
-    let data_len = size[1];
-
-
-    if window == 1 || data_len == 1 {
-        return Ok(x.shallow_clone());
-    }
-
-    let radius = (window / 2) as i64;
-
-    // Replicate padding on the left and right along Data dimension.
-    let left = x.f_narrow(1, 0, 1)?.f_repeat([1i64, radius].as_slice())?;
-    let right = x
-        .f_narrow(1, data_len - 1, 1)?
-        .f_repeat([1, radius].as_slice())?;
-
-    // [C, Data + 2 * radius]
-    let padded = Tensor::f_cat(&[&left, x, &right], 1)?;
-
-    // Sliding windows: [C, Data, window]
-    let windows = padded.f_unfold(1, window, 1)?;
-
+    let window = odd_window(window, "median")?;
+    let windows = windows_with_replicate_padding(x, window, "median")?;
+    let radius = window / 2;
 
     // Sort each window and take the middle value.
-    // let (sorted, _idx) = windows.f_sort(-1, false)?;
-    // let median = sorted.f_select(-1, radius)?;
-
-    // debug_assert_eq!(median.size(), vec![c, data_len]);
-    let median = windows.f_mean_dim(2, false, None)?;
+    let (sorted, _idx) = windows.f_sort(-1, false)?;
+    let median = sorted.f_select(-1, radius)?;
 
     debug!("median: x.size={:?}  windows.size={:?}  median.size={:?}", x.size(), windows.size(), median.size());
 
     Ok(median)
 }
+
+/// Moving-average filter for multichannel 1D data.
+///
+/// Input shape:
+/// - [C, Data]
+///
+/// Output shape:
+/// - [C, Data]
+///
+/// Applies the filter independently to each channel along dimension 1.
+///
+/// Border handling:
+/// - replicate padding
+///
+/// Requirements:
+/// - `window` must be > 3 after odd normalization
+pub fn moving_average(x: &Tensor, window: u32) -> Result<Tensor, ThoError> {
+    let window = odd_window(window, "moving average")?;
+    let windows = windows_with_replicate_padding(x, window, "moving_average")?;
+    let moving_average = windows.f_mean_dim(2, false, None)?;
+
+    debug!("moving_average: x.size={:?} windows.size={:?} moving_average.size={:?}", x.size(), windows.size(), moving_average.size());
+
+    Ok(moving_average)
+}
 #[cfg(test)]
 mod tests {
     use thoosa_common::utils::make_periodic_signal;
     use thoosa_shared::ThoError;
-    use crate::tasks::transforms::smoothing::{median, smoothing_spline_1d_channels, spline_lambda_from_window_and_extrema};
+    use tch::Tensor;
+    use crate::tasks::transforms::smoothing::{median, moving_average, smoothing_spline_1d_channels, spline_lambda_from_window_and_extrema};
 
     #[test]
     fn test_0() -> Result<(), ThoError> {
@@ -371,6 +392,17 @@ mod tests {
             thoosa_common::utils::debug_plot_impl(&x, &format!("x_{periods}"), 0)?;
             thoosa_common::utils::debug_plot_impl(&smooth_x, &format!("smooth_x{periods}"), 0)?;
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_moving_average_replicates_edges() -> Result<(), ThoError> {
+        let input = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
+        let output = moving_average(&input, 4)?;
+        let expected = Tensor::from_slice(&[1.6f32, 2.2, 3.0, 3.8, 4.4, 4.4, 3.8, 3.0, 2.2, 1.6]).f_view([2, 5])?;
+
+        assert!(output.allclose(&expected, 1e-5, 1e-5, false));
 
         Ok(())
     }
