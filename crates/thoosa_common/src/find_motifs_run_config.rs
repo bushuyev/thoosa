@@ -69,6 +69,9 @@ pub enum StatsKey {
     MedianFilter {
         window: u32,
     },
+    MovingAverageFilter {
+        window: u32,
+    },
 }
 
 impl Named for StatsKeys {//for  CachableIdTr
@@ -112,6 +115,14 @@ impl From<&MedianFilterParams> for StatsKey {
     }
 }
 
+impl From<&AverageFilterParams> for StatsKey {
+    fn from(value: &AverageFilterParams) -> Self {
+        StatsKey::MovingAverageFilter {
+            window: value.window,
+        }
+    }
+}
+
 impl From<&InputFilter> for StatsKey {
     fn from(value: &InputFilter) -> Self {
         match value {
@@ -119,6 +130,7 @@ impl From<&InputFilter> for StatsKey {
             InputFilter::BandPassFilter(filter) => filter.into(),
             InputFilter::SavGolFilter(filter) => filter.into(),
             InputFilter::MedianFilter(filter) => filter.into(),
+            InputFilter::AverageFilter(filter) => filter.into(),
         }
     }
 }
@@ -225,6 +237,7 @@ pub enum InputFilter {
     BandPassFilter(BandPassFilterParams),
     SavGolFilter(SavGolFilterParams),
     MedianFilter(MedianFilterParams),
+    AverageFilter(AverageFilterParams),
 }
 
 impl InputFilterLengthAdjuster for InputFilter {
@@ -234,6 +247,7 @@ impl InputFilterLengthAdjuster for InputFilter {
             InputFilter::BandPassFilter(filter) => filter.adjust_length(),
             InputFilter::SavGolFilter(filter) => filter.adjust_length(),
             InputFilter::MedianFilter(filter) => filter.adjust_length(),
+            InputFilter::AverageFilter(filter) => filter.adjust_length(),
         }
     }
 }
@@ -359,8 +373,8 @@ pub struct ExactStats {
 #[allow(unused_imports)]
 mod tests {
     use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioConstraintRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, MotifCriteria, MotifCriteriaRangeOrValue, NormThicknessConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
-    use crate::find_motifs_run_config::InputFilter::{BandPassFilter, MedianFilter, NotchBandFilter, SavGolFilter};
-    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, MedianFilterParams, MedianFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, Padding, PaddingRangeOrValue, SgZeroPaddingRangeOrValue};
+    use crate::find_motifs_run_config::InputFilter::{BandPassFilter, MedianFilter, AverageFilter, NotchBandFilter, SavGolFilter};
+    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, MedianFilterParams, MedianFilterParamsRangeOrValue, AverageFilterParams, MovingAverageFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, Padding, PaddingRangeOrValue, SgZeroPaddingRangeOrValue};
     use log::debug;
     use tch::Tensor;
     use thoosa_properties_map::ToHashmap;
@@ -462,6 +476,19 @@ mod tests {
             100,
             100,
             Some(vec![MedianFilter(MedianFilterParams { window: 11 })]),
+            None,
+        );
+        let adjust = config.input_len_adjuster();
+        assert_eq!(1000, adjust(1000));
+    }
+
+    #[test]
+    fn test_input_len_adjuster_moving_average_is_identity() {
+        let config = FindMotifsRunConfig::new_with_running_mean(
+            None,
+            100,
+            100,
+            Some(vec![AverageFilter(AverageFilterParams { window: 11 })]),
             None,
         );
         let adjust = config.input_len_adjuster();
@@ -572,6 +599,30 @@ mod tests {
                 keys: vec![
                     StatsKey::Window(1000),
                     StatsKey::MedianFilter { window: 11 },
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_to_stats_keys_with_moving_average() {
+        let run_config = FindMotifsRunConfig {
+            id: Some(246),
+            step: 100,
+            window: 1000,
+            freq_filter: Some(vec![AverageFilter(AverageFilterParams { window: 11 })]),
+            slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
+            max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
+        };
+
+        let keys = run_config.to_stats_keys();
+
+        assert_eq!(
+            keys,
+            StatsKeys {
+                keys: vec![
+                    StatsKey::Window(1000),
+                    StatsKey::MovingAverageFilter { window: 11 },
                 ]
             }
         );
