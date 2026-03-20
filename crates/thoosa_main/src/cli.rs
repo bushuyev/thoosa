@@ -1063,7 +1063,18 @@ fn median_window_from_find_and_select(named_vals: &[NamedVal<FindAndSelectMotifs
     )
 }
 
-fn run_all_find_motifs_config_grid_0<P: FieldName + 'static>(median_window: fn(&[NamedVal<P>]) -> RangeOrValue<u32>) -> FindMotifsRunConfigRangeOrValue<P> {
+fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, step:u32) -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
+    let median_window = |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| {
+        match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
+            None => RangeOrValue::Value(100),
+            Some(value) => {
+                let window = value.val().to_i64(0) as u32;
+                info!("Window: window={window}");
+                // RangeOrValue::Value(window)
+                RangeOrValue::Range{ range: Range { start: window/2/*min_k*/, end: window * 2/*max_k*/ }, step: Some((10/*step*/,0)) }
+            }
+        }
+    };
     FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10),
@@ -1261,7 +1272,7 @@ fn run_all_select_motifs_config_test_1<P: FieldName + 'static>() -> SelectMotifs
 fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
     let find_and_select =  FindAndSelect::GridOnly {
-        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0::<FindMotifsRunConfigFields>(median_window_from_find_motifs),
+        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 10),
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
         select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
     };
