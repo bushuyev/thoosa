@@ -24,7 +24,7 @@ use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::transforms::smoothing::median;
+use crate::tasks::transforms::smoothing::{median, moving_average};
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 
 #[derive(Debug, Clone)]
@@ -49,6 +49,9 @@ enum PreparedFilter {
         padding: Padding,
     },
     Median {
+        window: u32,
+    },
+    MovingAverage {
         window: u32,
     },
 }
@@ -161,6 +164,19 @@ where
                         window: median_config.window,
                     });
                 }
+                InputFilter::AverageFilter(moving_average_config) => {
+                    let effective_window = if moving_average_config.window % 2 == 0 {
+                        moving_average_config.window + 1
+                    } else {
+                        moving_average_config.window
+                    };
+                    if effective_window <= 3 {
+                        return Err(ThoError::new(format!("moving average window must be > 3 after odd normalization, got {}", moving_average_config.window)));
+                    }
+                    filters.push(PreparedFilter::MovingAverage {
+                        window: moving_average_config.window,
+                    });
+                }
             }
         }
 
@@ -213,6 +229,11 @@ where
                 PreparedFilter::Median { window } => {
                     let filtered_t_out = median(&filtered_t, *window)?;
                     debug!("FreqFilter::apply_tho_tensor, Median: id={} window={} filtered_t.size={:?} filtered_t_out.size={:?}", input_tensor.id(), window, filtered_t.size(), filtered_t_out.size());
+                    filtered_t = filtered_t_out;
+                }
+                PreparedFilter::MovingAverage { window } => {
+                    let filtered_t_out = moving_average(&filtered_t, *window)?;
+                    debug!("FreqFilter::apply_tho_tensor, MovingAverage: id={} window={} filtered_t.size={:?} filtered_t_out.size={:?}", input_tensor.id(), window, filtered_t.size(), filtered_t_out.size());
                     filtered_t = filtered_t_out;
                 }
             }
@@ -317,7 +338,7 @@ mod tests {
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
-    use thoosa_common::transforms::filters::{BandPassFilterParams, MedianFilterParams, Padding, SavGolFilterParams};
+    use thoosa_common::transforms::filters::{BandPassFilterParams, MedianFilterParams, AverageFilterParams, Padding, SavGolFilterParams};
     use thoosa_shared::ThoError;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::from;
@@ -325,7 +346,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
-    use crate::tasks::transforms::smoothing::median;
+    use crate::tasks::transforms::smoothing::{median, moving_average};
     use crate::tasks::transforms::freq_filter::FreqFilter;
     use thoosa_shared::runner::common::RunCtx;
     use thoosa_with_data::with_data;
@@ -386,6 +407,21 @@ mod tests {
         let expected_flat = expected.f_view([-1])?;
 
         assert_eq!(from::<Vec<f32>>(&output_flat), from::<Vec<f32>>(&expected_flat));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_tho_tensor_with_moving_average_filter() -> Result<(), ThoError> {
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let freq_filter = FreqFilter::<RunCtxWithPermits>::new(&[InputFilter::AverageFilter(AverageFilterParams { window: 4 })], &ws, 0)?;
+        let input_t = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
+        let input = ThoTensor::new(SynKey::new([mono_key!("moving_average", "moving_average")]), input_t)?;
+
+        let output = freq_filter.apply_tho_tensor(&input)?;
+        let expected = moving_average(input.as_ref(), 4)?;
+
+        assert!(output.as_ref().allclose(&expected, 1e-5, 1e-5, false));
 
         Ok(())
     }

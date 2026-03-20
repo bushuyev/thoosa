@@ -130,6 +130,19 @@ impl InputFilterLengthAdjuster for MedianFilterParams {
     }
 }
 
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+pub struct AverageFilterParams {
+    #[in_map]
+    #[run_config]
+    pub window: u32,
+}
+
+impl InputFilterLengthAdjuster for AverageFilterParams {
+    fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
+        Box::new(|l: u32| l)
+    }
+}
+
 
 /// Create a sinc-based band-pass filter
 pub fn band_pass_filter(
