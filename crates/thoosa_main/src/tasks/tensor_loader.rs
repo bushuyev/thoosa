@@ -20,6 +20,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use thoosa_with_data::with_data;
+use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
 // use crate::tasks::stages_seq::StagesSeq;
 
 type LoadFn =
@@ -88,7 +89,7 @@ where
     C: RunCtx + 'static,
 {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        SynKey::new([mono_key!(input_id.id(), format!("loaded_{}", input_id.id()))])
+        &self.id + mono_key!(input_id.id(), format!("loaded_{}", input_id.id()))
     }
 }
 
@@ -104,7 +105,7 @@ where
             + 'static,
     {
         Self {
-            id: (0, "TensorLoader").into(),
+            id: (RAW_TENSOR_LOADER, "RawTensorLoader").into(),
             device,
             loader_fn: Box::new(loader_fn),
             _ctx: PhantomData,

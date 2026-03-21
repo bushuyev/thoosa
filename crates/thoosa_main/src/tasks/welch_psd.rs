@@ -30,6 +30,7 @@ use thoosa_with_data::with_data;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::random_slices_stats::RANDOM_STATS_GROUP;
+use crate::tasks::stage_ids::{WELCH_PSD, WELCH_PSD_PER_RESOURCE};
 
 #[derive(Clone, Debug)]
 pub struct WelchInputChannels;
@@ -157,7 +158,7 @@ where
 {
     fn new(sample_rate: f64, nperseg: i64, noverlap: i64) -> Self {
         Self {
-            id: SynKey::new([mono_key!("WelchPsdPerResource", "stage")]),
+            id: (WELCH_PSD_PER_RESOURCE, "WelchPsdPerResource").into(),
             sample_rate,
             nperseg,
             noverlap,
@@ -173,7 +174,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        mono_key!("welch_psd", "welch_psd") + input_id
+        &self.id + input_id
     }
 }
 
@@ -224,6 +225,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
+    id: SynKey,
     store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
@@ -238,6 +240,7 @@ where
 {
     pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
         Self {
+            id: (WELCH_PSD, "WelchPSD").into(),
             store,
             loader,
             ws: Arc::clone(ws),
@@ -266,7 +269,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        mono_key!("welch_psd", "welch_psd") + input_id
+        &self.id + input_id
     }
 }
 
