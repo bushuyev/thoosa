@@ -600,7 +600,7 @@ where
         let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
         let stats = OOMHandler::new(
             vec![
-                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
+                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
                 Adjusters::RunContext(Box::new(DumpToCpu::new())),
             ],
             None,

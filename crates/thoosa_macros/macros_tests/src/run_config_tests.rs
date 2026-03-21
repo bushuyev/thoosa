@@ -64,7 +64,7 @@ fn test_grid_param() -> Result<(), ThoError> {
 
         cat_field: CatEnumRangeOrValue::Vec(vec![
             CatEnumRangeOrValue::One(OneRangeOrValue {
-                inner_field_one: RangeOrValue::Dynamic(|named_vals: &[NamedVal<TestRunConfigFields>]| {
+                inner_field_one: RangeOrValue::dynamic(|named_vals: &[NamedVal<TestRunConfigFields>]| {
                     match named_vals.iter().find(|f|f.path().eq(&TestRunConfigFields::SimpleField)){
                         None => RangeOrValue::Value(0),
                         Some(_v) => {
@@ -103,7 +103,7 @@ fn test_dynamic_grid_param() -> Result<(), ThoError> {
 
         cat_field: CatEnumRangeOrValue::Vec(vec![
             CatEnumRangeOrValue::One(OneRangeOrValue {
-                inner_field_one: RangeOrValue::Dynamic(|named_vals: &[NamedVal<TestRunConfigFields>]| {
+                inner_field_one: RangeOrValue::dynamic(|named_vals: &[NamedVal<TestRunConfigFields>]| {
                     let simple_field = named_vals
                         .iter()
                         .find(|field| field.path() == &TestRunConfigFields::SimpleField)

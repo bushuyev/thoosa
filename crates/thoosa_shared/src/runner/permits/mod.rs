@@ -24,7 +24,7 @@ impl Deref for PermitStep {
         match self {
             PermitStep::TEN => &10,
             PermitStep::TWENTY => &20,
-            PermitStep::FIFTY => &50,
+            PermitStep::FIFTY => &51,
         }
     }
 }

@@ -18,8 +18,7 @@ use tokio::sync::RwLock as AsyncRwLock;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
 use crate::{with_async_perf_log, with_perf_log, LOCK_TIMEOUT};
-
-
+use crate::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 
 #[derive(Debug)]
 pub struct GlobalCtx {
@@ -249,12 +248,14 @@ impl GlobalCtx {
             maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
         };
 
+        let dump_eta_guard = CollectEtaInvocationGuard::new(&"dump_all_to_cpu", maps.len(), 1);
         for (type_name, map) in maps {
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
 
             map.purge_gpu(required_ids.get(type_name).map(|v| *v), device_idx).await?;
 
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} done");
+            collect_eta_record_completion(dump_eta_guard.id());
         }
 
         self.is_all_on_cpu[device_idx].store(true, Relaxed);

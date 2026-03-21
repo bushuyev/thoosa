@@ -496,13 +496,13 @@ pub fn local_min_mask_suppressed_2d_pool(
     };
 
     // Base lexicographic index [1, H, W]; expand per chunk as a view.
-    let idx_hw = Tensor::arange(hw, (idx_kind, x_bhw.device())).f_reshape([1, h, w])?;
+    let idx_hw = panic_to_err!(Tensor::f_arange(hw, (idx_kind, x_bhw.device()))?.f_reshape([1, h, w]))?;
 
     // Process B in chunks to reduce peak memory.
     let b_chunk = choose_b_chunk(b, h, w, x_bhw.kind(), idx_kind);
 
     // Allocate output once and fill chunk-by-chunk.
-    let keep_bhw = Tensor::zeros([b, h, w], (Kind::Bool, x_bhw.device()));
+    let keep_bhw = Tensor::f_zeros([b, h, w], (Kind::Bool, x_bhw.device()))?;
 
     let mut start = 0i64;
     while start < b {

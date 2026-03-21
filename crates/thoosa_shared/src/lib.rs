@@ -833,14 +833,24 @@ where
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum RangeOrValue<V, T: FieldName = String> {
     Range {
         range: Range<V>,
         step: Option<(V, u32)>,//(value, number of digits to round to)
     }, //TODO replace step in params with number of steps? how choose number of decimals in step=to-from/steps?
     Value(V),
-    Dynamic(fn(&[NamedVal<T>]) -> RangeOrValue<V>),
+    Dynamic(Arc<dyn Fn(&[NamedVal<T>]) -> RangeOrValue<V> + Send + Sync>),
+}
+
+impl<V: Debug, T: FieldName> Debug for RangeOrValue<V, T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Range { range, step } => f.debug_struct("Range").field("range", range).field("step", step).finish(),
+            Self::Value(value) => f.debug_tuple("Value").field(value).finish(),
+            Self::Dynamic(_) => f.write_str("Dynamic"),
+        }
+    }
 }
 
 impl<V: PartialEq, T: FieldName> PartialEq for RangeOrValue<V, T> {
@@ -851,7 +861,7 @@ impl<V: PartialEq, T: FieldName> PartialEq for RangeOrValue<V, T> {
                 Self::Range { range: rhs_range, step: rhs_step },
             ) => lhs_range == rhs_range && lhs_step == rhs_step,
             (Self::Value(lhs), Self::Value(rhs)) => lhs == rhs,
-            (Self::Dynamic(lhs), Self::Dynamic(rhs)) => std::ptr::fn_addr_eq(*lhs, *rhs),
+            (Self::Dynamic(lhs), Self::Dynamic(rhs)) => Arc::ptr_eq(lhs, rhs),
             _ => false,
         }
     }
@@ -954,7 +964,7 @@ pub fn add_range_or_value<'a, V: 'a + 'static, T: FieldName + 'static>(
             grid_params.push(NamedRange::from_grid_value_sets(vec![GridValueSet::with_pending_fields(
                 vec![],
                 vec![],
-                vec![PendingOptField::from_range_or_value(name, *resolve)],
+                vec![PendingOptField::from_range_or_value(name, Arc::clone(resolve))],
             )]));
         }
     }
@@ -1056,6 +1066,13 @@ impl<V, T: FieldName> RangeOrValue<V, T>
 where
     V: Clone + 'static,
 {
+    pub fn dynamic<F>(resolve: F) -> Self
+    where
+        F: Fn(&[NamedVal<T>]) -> RangeOrValue<V> + Send + Sync + 'static,
+    {
+        Self::Dynamic(Arc::new(resolve))
+    }
+
     pub fn expect_value(&self) -> Result<&V, ThoError> {
         match self {
             RangeOrValue::Range { .. } => Err(ThoError::new_with_error(

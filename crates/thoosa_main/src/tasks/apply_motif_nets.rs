@@ -463,7 +463,7 @@ where
 
                     let r = OOMHandler::new(
                         vec![
-                            Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
+                            Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
                             Adjusters::RunContext(Box::new(DumpToCpu::new())),
                             Adjusters::Input(Box::new(StepAlignedSplitsAdjuster::new_with_overlap(
                                 [-1, min_split_len].into(),

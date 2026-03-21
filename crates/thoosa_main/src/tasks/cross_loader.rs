@@ -412,7 +412,7 @@ where
                     vec![
                         Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                             MAX_PERMITS,
-                            *PermitStep::TWENTY,
+                            *PermitStep::FIFTY,
                         ))),
                         Adjusters::RunContext(Box::new(DumpToCpu::new())),
                         Adjusters::Input(Box::new(CrossLoaderAdjuster::new())),

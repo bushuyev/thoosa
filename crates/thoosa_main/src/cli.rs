@@ -73,8 +73,9 @@ use tokio::time::MissedTickBehavior;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CopyCtx;
-use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, NotchBandFilter, SavGolFilter, MedianFilter};
-use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, SgZeroPaddingRangeOrValue};
+
+use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, NotchBandFilter, SavGolFilter, MedianFilter, AverageFilter};
+use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, SgZeroPaddingRangeOrValue};
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use thoosa_shared::runner::cache_areas::CacheArea;
 use thoosa_shared::runner::common::{OutId, RunCtx};
@@ -1063,15 +1064,17 @@ fn median_window_from_find_and_select(named_vals: &[NamedVal<FindAndSelectMotifs
     )
 }
 
-fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, step:u32) -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
-    let median_window = |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| {
+fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
+
+    let median_window = move |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| {
         match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
             None => RangeOrValue::Value(100),
             Some(value) => {
                 let window = value.val().to_i64(0) as u32;
-                info!("Window: window={window}");
-                // RangeOrValue::Value(window)
-                RangeOrValue::Range{ range: Range { start: window/2/*min_k*/, end: window * 2/*max_k*/ }, step: Some((10/*step*/,0)) }
+                // info!("Window: window={window}");
+                let end = window.saturating_mul(max_k);
+                let start = window / min_k;
+                RangeOrValue::Range { range: Range { start, end }, step: Some(((end-start)/steps, 0)) }
             }
         }
     };
@@ -1079,21 +1082,22 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, step:u32) -> FindMoti
         id: None,
         step: RangeOrValue::Value(10),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 100, end: 1001 }, step: Some((200, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 100, end: 5001 }, step: Some((500, 0)) },
         freq_filter: Some(vec![
-            MedianFilter(MedianFilterParamsRangeOrValue {
-                window: RangeOrValue::Dynamic(median_window),
+            AverageFilter(AverageFilterParamsRangeOrValue {
+                window: RangeOrValue::dynamic(median_window),
             }),
-            SavGolFilter(SavGolFilterParamsRangeOrValue {
-                window_len: RangeOrValue::Dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
-                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: Some((1, 0)) },
-                stride: RangeOrValue::Value(10),
-                padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
-            }),
+            // SavGolFilter(SavGolFilterParamsRangeOrValue {
+            //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
+            //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: Some((1, 0)) },
+            //     stride: RangeOrValue::Value(10),
+            //     padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
+            // }),
         ]),
         slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
             aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
+                q: RangeOrValue::Value(0.05),
+                // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
             }),
         }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
@@ -1101,7 +1105,10 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, step:u32) -> FindMoti
 }
 
 
-fn run_all_find_motifs_config_0<P: FieldName + 'static>(median_window: fn(&[NamedVal<P>]) -> RangeOrValue<u32>) -> FindMotifsRunConfigRangeOrValue<P> {
+fn run_all_find_motifs_config_0<P: FieldName + 'static, F>(median_window: F) -> FindMotifsRunConfigRangeOrValue<P>
+where
+    F: Fn(&[NamedVal<P>]) -> RangeOrValue<u32> + Send + Sync + Clone + 'static,
+{
     FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10),
@@ -1109,10 +1116,10 @@ fn run_all_find_motifs_config_0<P: FieldName + 'static>(median_window: fn(&[Name
         window: RangeOrValue::Range { range: Range { start: 100, end: 1001 }, step: Some((200, 0)) },
         freq_filter: Some(vec![
             MedianFilter(MedianFilterParamsRangeOrValue {
-                window: RangeOrValue::Dynamic(median_window),
+                window: RangeOrValue::dynamic(median_window.clone()),
             }),
             SavGolFilter(SavGolFilterParamsRangeOrValue {
-                window_len: RangeOrValue::Dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
+                window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
                 poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: None },
                 stride: RangeOrValue::Value(10),
                 padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
@@ -1272,7 +1279,7 @@ fn run_all_select_motifs_config_test_1<P: FieldName + 'static>() -> SelectMotifs
 fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
     let find_and_select =  FindAndSelect::GridOnly {
-        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 10),
+        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 4),
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
         select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
     };
@@ -2303,7 +2310,7 @@ where
     debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
 
     let mut run_configs: Vec<RC> = grid_run_configs.to_run_configs();
-    info!("run_all_grid_step: run_configs.len={}", run_configs.len());
+    info!("run_all_grid_step: run_configs.len={} ", run_configs.len());
     debug!("run_all_grid_step: run_configs={run_configs:?}");
 
     let mut run_ids = if presave {
@@ -2467,7 +2474,7 @@ where
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, import_resources_with_pure_sets, run_all, run_all_config_0, run_all_config_test_1, run_grid, run_plot, Cli, FindAndSelect, RunAllArgs};
+    use crate::cli::{import_resources, import_resources_with_pure_sets, median_window_from_find_and_select, run_all, run_all_config_0, run_all_config_test_1, run_all_find_motifs_config_0, run_all_find_motifs_config_grid_0, run_grid, run_plot, Cli, FindAndSelect, RunAllArgs};
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Info, Trace, Warn};
@@ -2590,7 +2597,6 @@ mod cli_tests {
             "run-all",
             "--find-resources", "group:find",
             "--select-resources", "group:select",
-            "--run-config-cnt", "1",
             "--resolution", "high",
         ]);
 
@@ -2602,30 +2608,8 @@ mod cli_tests {
 
     #[test]
     fn test_run_all_config_0_preserves_dynamic_find_and_select_fields() {
-        let all_configs = run_all_config_0(&RunAllArgs {
-            find_resources: "group:find".to_string(),
-            select_resources: "group:select".to_string(),
-            max_chunk_size: 20_000,
-            train_resource_group: "train".to_string(),
-            valid_resource_group: "valid".to_string(),
-            train_motifs_epoch_size: 10,
-            max_motif_net_loss: 0.3,
-            selected_motif_nets_limit: None,
-            motif_slices_step: 100,
-            with_plots: false,
-            resolution: Resolution::Normal,
-            labels: None,
-        });
-
-        let FindAndSelect::WithOpt {find_and_select_run_config_range_or_value, .. } = all_configs.find_and_select else {
-            panic!("no find_and_select_run_config_range_or_value")
-        };
-
-        let freq_filter = find_and_select_run_config_range_or_value
-            .find_motifs_run_config
-            .freq_filter
-            .as_ref()
-            .expect("find-and-select sample config should include freq_filter");
+        let config = run_all_find_motifs_config_0::<FindAndSelectMotifsRunConfigFields, _>(median_window_from_find_and_select);
+        let freq_filter = config.freq_filter.as_ref().expect("find-and-select sample config should include freq_filter");
 
         let median_window = match &freq_filter[0] {
             thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::MedianFilter(params) => &params.window,
@@ -2642,7 +2626,27 @@ mod cli_tests {
             Val::UInt(123),
         )]);
 
-        assert_eq!(resolved, RangeOrValue::Value(123));
+        assert_eq!(resolved, RangeOrValue::Range { range: Range { start: 61, end: 246 }, step: None });
+    }
+
+    #[test]
+    fn test_run_all_find_motifs_config_grid_0_uses_captured_window_bounds() {
+        let config = run_all_find_motifs_config_grid_0(3, 4, 7);
+        let freq_filter = config.freq_filter.as_ref().expect("grid sample config should include freq_filter");
+
+        let median_window = match &freq_filter[0] {
+            thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::MedianFilter(params) => &params.window,
+            other => panic!("expected median filter in grid sample config, got {other:?}"),
+        };
+
+        let resolve = match median_window {
+            RangeOrValue::Dynamic(resolve) => resolve,
+            other => panic!("expected dynamic median window in grid sample config, got {other:?}"),
+        };
+
+        let resolved = resolve(&[NamedVal::new(FindMotifsRunConfigFields::Window, Val::UInt(120))]);
+
+        assert_eq!(resolved, RangeOrValue::Range { range: Range { start: 40, end: 480 }, step: Some((7, 0)) });
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

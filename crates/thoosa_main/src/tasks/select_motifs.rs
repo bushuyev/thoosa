@@ -1160,7 +1160,7 @@ where
                 ..
             } = OOMHandler::new(
                 vec![
-                    Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
+                    Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
                     Adjusters::RunContext(Box::new(DumpToCpu::new())),
                     Adjusters::Input(Box::new(SelectMotifsAdjuster::new(find_motifs_run_config.window as i64))),
                 ],
