@@ -15,7 +15,7 @@ use tch::{IndexOp, Tensor};
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
 use thoosa_shared::runner::common::{DropIf, OutId, RunCtx};
-use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::runner::tmp_cache::TmpCached;
 use thoosa_common::debug_plot;
@@ -38,7 +38,7 @@ use tch::Kind::Float;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-use thoosa_shared::runner::permits::MAX_PERMITS;
+use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::traits::Adjustable;
@@ -49,7 +49,10 @@ use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::runner::cache_areas::CacheArea;
-use crate::tasks::stage_ids::MOTIF_LOADER;
+use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
 pub struct MotifLoaderInput {
@@ -109,19 +112,20 @@ impl WithId for MotifLoaderInput {
 pub struct MotifLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     id: MonoKey,
     store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
+    sync_motif_loader: Arc<SyncMotifLoader<C>>,
     pd: PhantomData<C>,
 }
 
 impl<L, C> MotifLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     pub fn new(
         store: Arc<Box<dyn Store>>,
@@ -133,6 +137,7 @@ where
             store,
             loader,
             ws: Arc::clone(&ws),
+            sync_motif_loader: Arc::new(SyncMotifLoader::new()),
             pd: Default::default(),
         }
     }
@@ -141,7 +146,7 @@ where
 impl<L, C> OutId for MotifLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -155,10 +160,190 @@ pub struct MotifMeta {
     pub window:u32
 }
 
+#[derive(Debug)]
+struct LoadedMotifResource {
+    resource_id: ResourceId,
+    slices: Vec<u32>,
+    raw_tensor: ThoTensor<ChannelsData2, SynKey>,
+}
+
+#[derive(Debug)]
+struct SyncMotifLoaderInput {
+    id: SynKey,
+    motif_id: DataId,
+    select_motifs_run_id: Option<Vec<RunId>>,
+    find_motifs_run_id: RunId,
+    channel: i64,
+    window: u32,
+    loaded_resources: Vec<LoadedMotifResource>,
+    descr: &'static str,
+}
+
+impl SyncMotifLoaderInput {
+    fn new(
+        id: SynKey,
+        motif_id: DataId,
+        select_motifs_run_id: Option<Vec<RunId>>,
+        find_motifs_run_id: RunId,
+        channel: i64,
+        window: u32,
+        loaded_resources: Vec<LoadedMotifResource>,
+        descr: &'static str,
+    ) -> Self {
+        Self { id, motif_id, select_motifs_run_id, find_motifs_run_id, channel, window, loaded_resources, descr }
+    }
+}
+
+impl Input for SyncMotifLoaderInput {}
+
+impl WithId for SyncMotifLoaderInput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Data for SyncMotifLoaderInput {
+    type Metrics = MonoMetrics<0, 1>;
+    type M = CpuOrGpu<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        self.loaded_resources.len().into()
+    }
+
+    fn device(&self) -> usize {
+        self.loaded_resources.first().map(|resource| resource.raw_tensor.device()).unwrap_or(0)
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.loaded_resources.iter().map(|resource| resource.raw_tensor.mem_size()).sum()
+    }
+}
+
+impl Select<()> for SyncMotifLoaderInput {
+    type Output = SyncMotifLoaderInput;
+
+    fn subview(&self, _selector: ()) -> Result<Self::Output, ThoError> {
+        let mut loaded_resources = Vec::with_capacity(self.loaded_resources.len());
+        for resource in &self.loaded_resources {
+            loaded_resources.push(LoadedMotifResource {
+                resource_id: resource.resource_id,
+                slices: resource.slices.clone(),
+                raw_tensor: ThoTensor::new(resource.raw_tensor.id().clone(), resource.raw_tensor.t_ref().shallow_clone())?,
+            });
+        }
+        Ok(Self {
+            id: self.id.clone(),
+            motif_id: self.motif_id.clone(),
+            select_motifs_run_id: self.select_motifs_run_id.clone(),
+            find_motifs_run_id: self.find_motifs_run_id,
+            channel: self.channel,
+            window: self.window,
+            loaded_resources,
+            descr: self.descr,
+        })
+    }
+}
+
+#[async_trait]
+impl thoosa_shared::CopyToDevice for SyncMotifLoaderInput {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
+        let mut loaded_resources = Vec::with_capacity(self.loaded_resources.len());
+        for resource in &self.loaded_resources {
+            loaded_resources.push(LoadedMotifResource {
+                resource_id: resource.resource_id,
+                slices: resource.slices.clone(),
+                raw_tensor: resource.raw_tensor.copy_to_device(dst_device).await?,
+            });
+        }
+        Ok(Self {
+            id: self.id.clone(),
+            motif_id: self.motif_id.clone(),
+            select_motifs_run_id: self.select_motifs_run_id.clone(),
+            find_motifs_run_id: self.find_motifs_run_id,
+            channel: self.channel,
+            window: self.window,
+            loaded_resources,
+            descr: self.descr,
+        })
+    }
+}
+
+#[derive(Debug, Named)]
+struct SyncMotifLoader<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    id: SynKey,
+    pd: PhantomData<C>,
+}
+
+impl<C> SyncMotifLoader<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn new() -> Self {
+        Self {
+            id: (MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader").into(),
+            pd: PhantomData,
+        }
+    }
+}
+
+impl<C> Adjustable for SyncMotifLoader<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{}
+
+impl<C> OutId for SyncMotifLoader<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        &self.id + input_id
+    }
+}
+
+impl<C> Stage for SyncMotifLoader<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type In<'a> = SyncMotifLoaderInput;
+    type Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>;
+    type Ctx = C;
+}
+
+impl<C> SyncStage for SyncMotifLoader<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let motif = build_motif_slices_from_loaded_resources(
+            input.motif_id.clone(),
+            input.select_motifs_run_id.as_ref(),
+            input.find_motifs_run_id,
+            input.channel,
+            input.window,
+            &input.loaded_resources,
+            ctx.device_idx(),
+            input.descr,
+        )?;
+        Ok(DataWithExtra::new(
+            motif,
+            MotifMeta {
+                channel: input.channel,
+                find_motifs_run_id: input.find_motifs_run_id,
+                window: input.window,
+            },
+        ))
+    }
+}
+
 impl<L, C> Stage for MotifLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     type In<'a> = MotifLoaderInput;
     type Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>;
@@ -169,7 +354,7 @@ where
 impl<L, C> AsyncStage for MotifLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifLoader::run"))]
@@ -181,8 +366,8 @@ where
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
-        let device_idx = ctx.device_idx();
         let cache_area = ctx.cache_area();
+        let input_id = input.id().clone();
 
         let (motif_id, select_motifs_run_id) = with_data!(ctx.branch(Some("motif_loader_input"), false, false), input; |_ctx, input: &MotifLoaderInput| {
             Ok::<_, ThoError>((input.motif_id.clone(), input.select_motifs_run_id.clone()))
@@ -192,23 +377,67 @@ where
         let select_motifs_run_id_for_key = select_motifs_run_id.clone();
         let (channel, find_motifs_run_id, slices, resources_map) = self
             .store
-            .list_motif_slices(motif_id_value.0, select_motifs_run_id, Some(1000), None)//TODO config max_slices
-            .await?;//TODO config
+            .list_motif_slices(motif_id_value.0, select_motifs_run_id, Some(1000), None)
+            .await?;
 
         debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
 
-        let (window, motif) = load_motif_slices(motif_id_value, select_motifs_run_id_for_key, find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "motif loader").await?;
+        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
+            find_motifs_run_id,
+            &self.store.list_run_config_values(find_motifs_run_id).await?,
+        )?;
+        let window = find_motifs_run_config.window;
+        let resource_ids_slices = slices.iter().fold(HashMap::new(), |mut acc, slice| {
+            acc.entry(slice.0).or_insert_with(Vec::new).push(slice.1);
+            acc
+        });
+        assert!(!resource_ids_slices.is_empty());
+        let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config, &self.ws)?;
+        let loaded_resources = load_motif_resource_tensors(
+            motif_id_value.clone(),
+            find_motifs_run_id,
+            resources_map,
+            resource_ids_slices,
+            configurable_loader,
+            ctx.branch(Some("motif_loader_load_resource_tensors"), false, false),
+            "motif loader",
+        )
+        .await?;
 
-
-        //debug_plot!(&motif.as_ref(), "motif_{motif_id}")?;
-
-        Ok(Arc::new(DevicesWrap::wrap(
-            DataWithExtra::new(
-                motif,
-                MotifMeta{channel, find_motifs_run_id, window },
+        let sync_input = Arc::new(DevicesWrap::wrap(
+            SyncMotifLoaderInput::new(
+                input_id.clone(),
+                motif_id_value,
+                select_motifs_run_id_for_key,
+                find_motifs_run_id,
+                channel,
+                window,
+                loaded_resources,
+                "motif loader",
             ),
             cache_area.into(),
-        )))
+        ));
+        let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn CachableIdTr>> = HashMap::new();
+        let motif = OOMHandler::new(
+            vec![
+                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
+                Adjusters::RunContext(Box::new(DumpToCpu::new())),
+            ],
+            None,
+        )
+        .run(
+            &self.sync_motif_loader,
+            sync_input,
+            ctx.branch(Some("motif_loader_sync"), false, false),
+            Contexts::new(
+                NoopInputContext(None),
+                NoopRunnableContext {},
+                PermitsAndDumpToCpuAdjustableContex::new(PermitsAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
+            ),
+        )
+        .await?;
+
+        Ok(Arc::new(DevicesWrap::wrap(motif, cache_area.into())))
     }
 }
 ///To load slices not belonging to a motif
@@ -320,6 +549,79 @@ where
     }
 }
 
+async fn load_motif_resource_tensors<L, C>(
+    motif_id: DataId,
+    find_motifs_run_id: u32,
+    resources_map: HashMap<ResourceId, Resource>,
+    resource_ids_slices: HashMap<ResourceId, Vec<u32>>,
+    configurable_loader: Arc<LoaderStageChoice<L, C>>,
+    mut ctx: C,
+    descr: &str,
+) -> Result<Vec<LoadedMotifResource>, ThoError>
+where
+    C: 'static + RunCtx,
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
+{
+    let mut loaded_resources = Vec::with_capacity(resource_ids_slices.len());
+    for (resource_id, slices) in resource_ids_slices {
+        debug!("load_motif_resource_tensors: motif_id={motif_id} resource_id={resource_id} slices={slices:?} descr={descr}");
+
+        let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
+        let resource_cache = Arc::new(DevicesWrap::wrap(resource, ctx.cache_area().into()));
+        let raw_tensor = Arc::clone(&configurable_loader)
+            .run_cached(resource_cache, ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false, false))
+            .await?;
+        let raw_tensor = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}_clone")), false, false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>| {
+            ThoTensor::new(raw_tt.id().clone(), raw_tt.t_ref().shallow_clone())
+        })?;
+        loaded_resources.push(LoadedMotifResource { resource_id, slices, raw_tensor });
+    }
+    debug!("load_motif_resource_tensors: motif_id={motif_id} find_motifs_run_id={find_motifs_run_id} loaded_resources={} descr={descr}", loaded_resources.len());
+    Ok(loaded_resources)
+}
+
+fn build_motif_slices_from_loaded_resources(
+    motif_id: DataId,
+    select_motifs_run_id: Option<&Vec<RunId>>,
+    find_motifs_run_id: u32,
+    channel: i64,
+    window: u32,
+    loaded_resources: &[LoadedMotifResource],
+    device_idx: usize,
+    descr: &str,
+) -> Result<ThoTensor<MotifSlices, SynKey>, ThoError> {
+    let total_slices = loaded_resources.iter().map(|resource| resource.slices.len()).sum::<usize>() as i64;
+    let motif_t = ThoTensor::<MotifSlices, DataId>::zeros(
+        motif_id.clone(),
+        [total_slices, window as i64],
+        (Float, ThoDevice::from(device_idx).into()),
+    )?;
+    let mut slice_i = 0i64;
+
+    for resource in loaded_resources {
+        let size = resource.raw_tensor.t_ref().size();
+        for &slice in &resource.slices {
+            let in_range = channel + 1 <= size[0] && (slice + window) as i64 <= size[1];
+            if !in_range {
+                warn!("build_motif_slices_from_loaded_resources: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={} in find_motifs_run_id={find_motifs_run_id} in {descr}", resource.resource_id);
+            } else {
+                debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id} slice_i={slice_i} slice={slice:?} size={size:?} resource_id={} descr={descr}", resource.resource_id);
+                motif_t.t.f_get(slice_i)?.f_copy_(&resource.raw_tensor.t.f_i((channel, slice as i64..(slice + window) as i64))?)?;
+                slice_i += 1;
+            }
+        }
+    }
+
+    let motif_id = select_motifs_run_id
+        .map(|run_ids| {
+            run_ids.iter().fold(mono_key!(motif_t.id().0, "motif").into(), |acc: SynKey, run_id| {
+                &acc + mono_key!(*run_id, "select_motifs_run_id")
+            })
+        })
+        .unwrap_or_else(|| mono_key!(motif_t.id().0, "motif").into());
+    ThoTensor::new(motif_id, motif_t.t.f_i((0..slice_i, ..))?)
+}
+
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_slices"))]
 pub(crate) async fn load_motif_slices<L, C>(
     motif_id: DataId,
@@ -346,73 +648,39 @@ where
         &store.list_run_config_values(find_motifs_run_id).await?,
     )?;
 
-    let resource_ids_slices = slices
-        .iter()
-        .fold(HashMap::new(), |mut a, slice| {
-            a.entry(slice.0.clone()) //TODO clone
-                .or_insert_with(|| vec![])
-                .push(slice.1);
-            a
-        });
+    let resource_ids_slices = slices.iter().fold(HashMap::new(), |mut acc, slice| {
+        acc.entry(slice.0).or_insert_with(Vec::new).push(slice.1);
+        acc
+    });
 
     assert!(!resource_ids_slices.is_empty());
 
     let window = find_motifs_run_config.window;
 
-    debug!("load_motif_slices: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?}  device_idx={device_idx}");
-
-    //it won't be dumped to cpu - add to TmpCache
-    let motif_t = Arc::new(DevicesWrap::wrap(ThoTensor::<MotifSlices, DataId>::zeros(motif_id.clone(), [resource_ids_slices.values().map(|slices|slices.len()).sum::<usize>() as i64, window as i64], (Float, ThoDevice::from(ctx.device_idx()).into()))?, CacheArea::default()));
+    debug!("load_motif_slices: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?} device_idx={device_idx}");
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
-    let mut slice_i = 0;
-    for (resource_id, slices) in resource_ids_slices {
-        debug!("load_motif_slices: motif_id={motif_id} resource_id={resource_id} slices={slices:?}");
-
-        let resource = resources_map
-            .get(&resource_id)
-            .cloned()
-            .expect(&format!("no resource with id={resource_id}"));
-        let resource_cache = Arc::new(DevicesWrap::wrap(resource, ctx.cache_area().into()));
-
-        //into is needed because mock needs SynKey or &str
-        let raw_tensor = Arc::clone(&configurable_loader)
-            .run_cached(resource_cache, ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false, false))
-            .await?;
-
-        let size = raw_tensor.size();
-
-
-        with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false, false), raw_tensor, motif_t; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>, motif_tt:&ThoTensor::<MotifSlices, DataId>|{
-            for slice in slices {
-                let r = MonoMetrics::<1,2>::from([channel + 1, (slice + window) as i64]) <= *size;
-                if !r {
-                    warn!("load_motif_slices: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id}  in {descr}");
-                } else {
-                    debug!("load_motif_slices: motif_id={motif_id} slice_i={slice_i} slice={slice:?} size={size:?}");
-
-                    motif_tt.t.f_get(slice_i)?.f_copy_(&raw_tt.t.f_i((channel, slice as i64 .. (slice + window) as i64))?)?;
-                    slice_i+=1;
-                }
-            }
-
-            Ok::<_, ThoError>(())
-        })?;
-
-
-    }
-    //chop if there were skipped slices
-    with_data!(ctx.branch(Some(&format!("motif")), false, false), motif_t; |_ctx, motif_tt:&ThoTensor::<MotifSlices, DataId>|{
-        let motif_id = select_motifs_run_id
-            .as_ref()
-            .map(|run_ids| {
-                run_ids.iter().fold(mono_key!(motif_tt.id().0, "motif").into(), |acc: SynKey, run_id| {
-                    &acc + mono_key!(*run_id, "select_motifs_run_id")
-                })
-            })
-            .unwrap_or_else(|| mono_key!(motif_tt.id().0, "motif").into());
-        ThoTensor::new(motif_id, motif_tt.t.f_i((0..slice_i, ..))?)
-    }).map(|v|(window, v))
+    let loaded_resources = load_motif_resource_tensors(
+        motif_id.clone(),
+        find_motifs_run_id,
+        resources_map,
+        resource_ids_slices,
+        configurable_loader,
+        ctx.branch(Some("load_motif_resource_tensors"), false, false),
+        descr,
+    )
+    .await?;
+    let motif = build_motif_slices_from_loaded_resources(
+        motif_id,
+        select_motifs_run_id.as_ref(),
+        find_motifs_run_id,
+        channel,
+        window,
+        &loaded_resources,
+        device_idx,
+        descr,
+    )?;
+    Ok((window, motif))
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_slices_"))]
@@ -520,6 +788,9 @@ pub mod mock_motif_loader {
     use std::sync::Arc;
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use thoosa_shared::runner::cache_areas::CacheArea;
+use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
     use thoosa_shared::runner::common::{MockRunCtx, OutId, RunCtx};
     use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use thoosa_shared::ThoError;
@@ -624,6 +895,9 @@ mod tests {
     use thoosa_shared::runner::common::{mock_run_ctx, RunCtx};
     use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use thoosa_shared::runner::cache_areas::CacheArea;
+use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
     use thoosa_shared::runner::common::runnable::AsyncStage;
     use thoosa_shared::runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
