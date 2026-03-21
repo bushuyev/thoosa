@@ -154,7 +154,7 @@ pub fn metric_scalar_for_motif(motif_slices: &Tensor, metric: Metrics, aggr: Agg
             let stats = common_stats.first().ok_or_else(|| ThoError::new("metric_scalar_for_motif: no common stats for motif"))?;
             return metric.common_stats_value(stats);
         }
-        Metrics::NormThickness => norm_thickness(motif_slices, 1.0, 1e-8)?,
+        Metrics::NormThickness => norm_thickness(motif_slices, 1e-8)?,
         Metrics::InlierRatioRunConfig => inlier_ratio(motif_slices, 4.5, 1e-8)?,
         Metrics::CoherenceRunConfig => coherence(motif_slices, 10, 1e-8)?,
         Metrics::InterestingAmp01 => interesting_amp_01(motif_slices, 0.05, 0.95, 1.0, 1e-8)?,

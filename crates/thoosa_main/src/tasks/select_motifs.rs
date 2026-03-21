@@ -50,6 +50,7 @@ use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
 use crate::cli::Commands::SelectMotifs;
 use crate::tasks::slices_stats::{Aggr, Metrics};
@@ -1151,7 +1152,7 @@ where
                 || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
                 "SelectMotifsStage/run/read_ws",
             )
-            .channels() as u32;
+            .channels();
 
             let ClcResourcesMotifsDistOutput {
                 find_motifs_run_id,
@@ -1304,7 +1305,7 @@ where
 
     fn clc_criterion_score(motif_slices: &Tensor, criterion: &MotifCriterion) -> Result<f64, ThoError> {
         let score_t = match criterion {
-            MotifCriterion::NormThickness(v) => norm_thickness(motif_slices, v.k, v.eps)?,
+            MotifCriterion::NormThickness(v) => norm_thickness(motif_slices, v.eps)?,
             MotifCriterion::InlierRatio(v) => inlier_ratio(motif_slices, v.k, v.eps)?,
             MotifCriterion::Coherence(v) => coherence(motif_slices, v.k.round().max(1.0) as i64, v.eps)?,
             MotifCriterion::InterestingAmp01(v) => interesting_amp_01(motif_slices, v.q_lo, v.q_hi, v.a0, v.eps)?,
@@ -1371,7 +1372,7 @@ where
 
         let criteria_constraints = select_motifs_run_config.motif_criteria.constraints();
         if criteria_constraints.is_empty() {
-            debug!("SelectMotifsStage::run: no motif criteria configured");
+            warn!("SelectMotifsStage::run: no motif criteria configured");
             return Ok(self.find_motif_run_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).map(|v| SelectedMotifEvaluation {
                 motif_id: *v,
                 avg_score: 1.0,
@@ -1390,6 +1391,7 @@ where
 
         let mut motif_ids_filtered = Vec::with_capacity(motif_ids.len());
 
+        let eta_guard = CollectEtaInvocationGuard::new("filter_motifs_by_criteria", motif_ids.len(), 1);
         for motif_id in motif_ids {
             let motif_data = Arc::clone(&self.clc_dist.motif_loader)
                 .run_cached(
@@ -1416,7 +1418,7 @@ where
                     }
                     score_sum += criterion_score;
                     avg_score = score_sum / (idx + 1) as f64;
-                    criterion_scores.push((criterion_constraint.key, criterion_score));
+                    criterion_scores.push((criterion_constraint.key, criterion_score));//for opt
                     debug!("SelectMotifsStage::run: motif_id={motif_id} criterion_constraint={criterion_constraint:?} criterion_score={criterion_score:.6} avg_score={avg_score:.6}");
                 }
 
@@ -1430,6 +1432,8 @@ where
             if let Some(selected_motif) = selected_motif {
                 motif_ids_filtered.push(selected_motif);
             }
+
+            collect_eta_record_completion(eta_guard.id());
         }
 
         debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered extended_motif_ids.len={}", motif_ids_filtered.len());
@@ -1479,6 +1483,7 @@ where
 
         let mut run_results = Vec::with_capacity(self.run_configs.len());
         debug!("SelectMotifsStage::run: self.run_configs.len={}", self.run_configs.len());
+        let eta_guard = CollectEtaInvocationGuard::new("SelectMotifsStage::run", self.run_configs.len(), 1);
         for select_motifs_run_config in self.run_configs.iter() {
 
             if let Some(extend_config) = select_motifs_run_config.extend_config.as_ref() {
@@ -1514,6 +1519,7 @@ where
             let selected_motif_ids_scores = selected_motifs.iter().map(SelectedMotifEvaluation::to_savable_score).collect::<Vec<_>>();
             run_results.push(SelectMotifsRunResult::new(select_motifs_run_config.clone(), selected_motif_ids_scores, constraint_metrics));
 
+            collect_eta_record_completion(eta_guard.id());
         }
 
 
@@ -2030,7 +2036,7 @@ pub mod tests {
         ).await?;
 
         let _criteria_mocks = mock_criteria::build()
-            .with_norm_thickness(|x, _k, _eps| {
+            .with_norm_thickness(|x, _eps| {
                 let score = if x.size()[0] == 10 { 0.3 } else { 0.8 };
                 Ok(Tensor::from(score).to_kind(x.kind()).to_device(x.device()))
             })
@@ -2046,7 +2052,7 @@ pub mod tests {
 
         let mut select_motifs_run_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
         select_motifs_run_config.motif_criteria = MotifCriteria {
-            norm_thickness: Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { k: 5.0, eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN }),
+            norm_thickness: Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN }),
             inlier_ratioRunConfig: Some(InlierRatioConstraint { criterion: InlierRatioRunConfig { k: 3.0, eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN }),
             coherenceRunConfig: Some(CoherenceConstraint { criterion: CoherenceRunConfig { k: 3.0, eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN }),
             interesting_amp_01: None,
@@ -2110,7 +2116,7 @@ pub mod tests {
         let norm_thickness_calls_clone = Arc::clone(&norm_thickness_calls);
         let inlier_ratio_calls_clone = Arc::clone(&inlier_ratio_calls);
         let _criteria_mocks = mock_criteria::build()
-            .with_norm_thickness(move |x, _k, _eps| {
+            .with_norm_thickness(move |x, _eps| {
                 norm_thickness_calls_clone.fetch_add(1, Ordering::SeqCst);
                 let score = if x.size()[0] == 2 { 0.8 } else { 0.9 };
                 Ok(Tensor::from(score).to_kind(x.kind()).to_device(x.device()))
@@ -2125,7 +2131,7 @@ pub mod tests {
         let mut select_motifs_run_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
         select_motifs_run_config.extend_config = None;
         select_motifs_run_config.motif_criteria = MotifCriteria {
-            norm_thickness: Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { k: 5.0, eps: 1e-8 }, min: 0.7 }),
+            norm_thickness: Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { eps: 1e-8 }, min: 0.7 }),
             inlier_ratioRunConfig: Some(InlierRatioConstraint { criterion: InlierRatioRunConfig { k: 3.0, eps: 1e-8 }, min: 0.65 }),
             coherenceRunConfig: None,
             interesting_amp_01: None,
@@ -2421,7 +2427,7 @@ pub mod tests {
         ]).finish());
 
         let _criteria_mocks = mock_criteria::build()
-            .with_norm_thickness(|x, _k, _eps| {
+            .with_norm_thickness(|x, _eps| {
                 let score = if x.double_value(&[2, 0]) > 1.0 { 0.3 } else { 0.8 };
                 Ok(Tensor::from(score).to_kind(x.kind()).to_device(x.device()))
             })
@@ -2429,7 +2435,7 @@ pub mod tests {
 
         let mut select_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
         select_config.extend_config = None;
-        select_config.motif_criteria.norm_thickness = Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { k: 5.0, eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN });
+        select_config.motif_criteria.norm_thickness = Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN });
         select_config.threshold = 0.5;
         select_config.min_slices = Some(1);
         select_config.max_slices = Some(10);
