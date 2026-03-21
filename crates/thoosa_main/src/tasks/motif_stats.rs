@@ -36,6 +36,7 @@ use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotif
 use crate::tasks::motif_loader::{load_motif_slices_, MotifLoaderInput, MotifMeta};
 use crate::tasks::random_slices_stats::random_non_overlapping_slices;
 use crate::tasks::slices_stats::{metric_scalar_for_motif, Aggr, Metrics};
+use crate::tasks::stage_ids::{MOTIF_STATS, MOTIF_STATS_SYNC_STAGE};
 
 const DEFAULT_Q_LO: f64 = 0.05;
 const DEFAULT_Q_HI: f64 = 0.95;
@@ -366,7 +367,7 @@ where
 {
     pub fn new(q_lo: f64, q_hi: f64, scale_q: f64, eps: f64) -> Self {
         Self {
-            id: SynKey::new([mono_key!("MotifStatsSyncStage", "stage")]),
+            id: (MOTIF_STATS_SYNC_STAGE, "MotifStatsSyncStage").into(),
             q_lo,
             q_hi,
             scale_q,
@@ -392,7 +393,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        input_id.clone()
+        &self.id + input_id
     }
 }
 
@@ -500,7 +501,7 @@ where
         motif_loader: Arc<ML>,
     ) -> Self {
         Self {
-            id: SynKey::new([mono_key!("MotifStats", "stage")]),
+            id: (MOTIF_STATS, "MotifStats").into(),
             store,
             loader,
             ws,
@@ -518,7 +519,7 @@ where
     ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = thoosa_shared::data_with_extra::DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx = C> + Cached + OutId + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        input_id.clone()
+        &self.id + input_id
     }
 }
 
