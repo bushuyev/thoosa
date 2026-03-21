@@ -1378,25 +1378,30 @@ where
             max_slices,
         ));
 
-        let mut motif_ids_filtered = Vec::with_capacity(motif_ids.len());
-        let eta_guard = CollectEtaInvocationGuard::new("filter_motifs_by_criteria", motif_ids.len(), 1);
-        for motif_id in motif_ids {
-            let motif_stats = Arc::clone(&criteria_stats)
-                .run_cached(
-                    Arc::new(DevicesWrap::wrap(
-                        MotifStatsInput::from_motif_input(
-                            MotifLoaderInput::new(((*motif_id), "motif_id").into(), Some(vec![select_motifs_run_id])),
-                            Vec::<Metrics>::new(),
-                            Aggr::Mean(1.0),
-                            None,
-                        ),
-                        CacheArea::default(),
-                    )),
-                    ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false),
-                )
-                .await?;
+        let motifs_len = motif_ids.len();
+        let mut motif_ids_filtered = Vec::with_capacity(motifs_len);
 
-            let selected_motif = with_data!(ctx.branch(Some("select_motifs_filter_motif_stats"), false, false), motif_stats; |_ctx, motif_stats: &MotifStatsOutput| {
+        let futures = motif_ids.into_iter().map(|motif_id|{
+            let criteria_stats = Arc::clone(&criteria_stats);
+            let mut ctx = ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false);
+
+            async move {
+                let motif_stats = Arc::clone(&criteria_stats)
+                    .run_cached(
+                        Arc::new(DevicesWrap::wrap(
+                            MotifStatsInput::from_motif_input(
+                                MotifLoaderInput::new(((*motif_id), "motif_id").into(), Some(vec![select_motifs_run_id])),
+                                Vec::<Metrics>::new(),
+                                Aggr::Mean(1.0),
+                                None,
+                            ),
+                            CacheArea::default(),
+                        )),
+                        ctx.branch(Some("select_motifs_filter_motif_stats"), false, false),
+                    )
+                    .await?;
+
+                let selected_motif = with_data!(ctx, motif_stats; |_ctx, motif_stats: &MotifStatsOutput| {
                 let criteria_evaluation = match motif_stats.criteria_evaluation() {
                     Some(criteria_evaluation) => criteria_evaluation,
                     None => return Ok::<Option<SelectedMotifEvaluation>, ThoError>(None),
@@ -1411,12 +1416,23 @@ where
                 }))
             })?;
 
-            if let Some(selected_motif) = selected_motif {
-                motif_ids_filtered.push(selected_motif);
-            }
+                // if let Some(selected_motif) = selected_motif {
+                //     motif_ids_filtered.push(selected_motif);
+                // }
+                Ok::<_, ThoError>(())
 
-            collect_eta_record_completion(eta_guard.id());
-        }
+            }
+        });
+
+        let run_results = collect_futures_with_progress(
+            futures,
+            motifs_len,
+            crate::buffer_limits::SELECT_MOTIFS_STAGE_RUN_CONFIGS,
+            StreamBuffering::Unordered,
+            "filter_motifs_by_criteria",
+        ).await;
+
+
 
         debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered extended_motif_ids.len={}", motif_ids_filtered.len());
         Ok(motif_ids_filtered)
@@ -1463,46 +1479,64 @@ where
         .channels() as usize;
         let total_size = resources.iter().map(|resource| resource.length() as usize).sum::<usize>();
 
-        let mut run_results = Vec::with_capacity(self.run_configs.len());
+        let run_configs_len = self.run_configs.len();
+
         debug!("SelectMotifsStage::run: self.run_configs.len={}", self.run_configs.len());
-        let eta_guard = CollectEtaInvocationGuard::new("SelectMotifsStage::run", self.run_configs.len(), 1);
-        for select_motifs_run_config in self.run_configs.iter() {
+        let eta_guard = CollectEtaInvocationGuard::new("SelectMotifsStage::run", run_configs_len, 1);
 
-            if let Some(extend_config) = select_motifs_run_config.extend_config.as_ref() {
-                let channels_motifs_added_slices = self.extend_motifs_for_run_config(
-                    select_motifs_run_config,
-                    extend_config,
-                    Arc::clone(&resources),
-                    num_channels,
-                    total_size,
-                    ctx.branch("extend_motifs_for_run_config".into(), false, false),
-                ).await?;
 
-                debug!("SelectMotifsStage::run: extend_motifs_for_run_config done");
+        let futures = self.run_configs.iter().map(|select_motifs_run_config|{
+            let mut ctx_for_futs = ctx.branch("SelectMotifsStage::run, run_configs_futures_cycle".into(), false, false);
+            let resources_for_futs = Arc::clone(&resources);
+            let self_for_futs = Arc::clone(&self);
 
-                let select_motifs_run_config_id = select_motifs_run_config.id.expect("no select_motifs_run_config_id");
-                for (channel, motif_slices) in channels_motifs_added_slices.into_iter().enumerate() {
-                    for (motif_id, slices) in motif_slices {
-                        debug!("SelectMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
+            async move {
+                if let Some(extend_config) = select_motifs_run_config.extend_config.as_ref() {
 
-                        self.store.add_slices_to_motif(select_motifs_run_config_id, motif_id.vals[0].to_data_id().0, channel as i64, slices).await?
+                    let channels_motifs_added_slices = self_for_futs.extend_motifs_for_run_config(
+                        select_motifs_run_config,
+                        extend_config,
+                        resources_for_futs,
+                        num_channels,
+                        total_size,
+                        ctx_for_futs.branch("extend_motifs_for_run_config".into(), false, false),
+                    ).await?;
+
+                    debug!("SelectMotifsStage::run: extend_motifs_for_run_config done");
+
+                    let select_motifs_run_config_id = select_motifs_run_config.id.expect("no select_motifs_run_config_id");
+                    for (channel, motif_slices) in channels_motifs_added_slices.into_iter().enumerate() {
+                        for (motif_id, slices) in motif_slices {
+                            debug!("SelectMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
+
+                            self_for_futs.store.add_slices_to_motif(select_motifs_run_config_id, motif_id.vals[0].to_data_id().0, channel as i64, slices).await?
+                        }
                     }
                 }
+
+                let selected_motifs = self_for_futs
+                    .filter_motifs_by_criteria(select_motifs_run_config, ctx_for_futs.branch("filter_motifs_by_criteria".into(), false, false))
+                    .await?;
+
+                let constraint_metrics = match output_mode {
+                    SelectMotifsOutputMode::Standalone => None,
+                    SelectMotifsOutputMode::WithConstraintMetrics => Some(Self::clc_constraint_metrics(select_motifs_run_config, selected_motifs.as_slice())),
+                };
+                let selected_motif_ids_scores = selected_motifs.iter().map(SelectedMotifEvaluation::to_savable_score).collect::<Vec<_>>();
+
+
+
+                Ok::<_, ThoError>(SelectMotifsRunResult::new(select_motifs_run_config.clone(), selected_motif_ids_scores, constraint_metrics))
             }
+        });
 
-            let selected_motifs = self
-                .filter_motifs_by_criteria(select_motifs_run_config, ctx.branch("filter_motifs_by_criteria".into(), false, false))
-                .await?;
-
-            let constraint_metrics = match output_mode {
-                SelectMotifsOutputMode::Standalone => None,
-                SelectMotifsOutputMode::WithConstraintMetrics => Some(Self::clc_constraint_metrics(select_motifs_run_config, selected_motifs.as_slice())),
-            };
-            let selected_motif_ids_scores = selected_motifs.iter().map(SelectedMotifEvaluation::to_savable_score).collect::<Vec<_>>();
-            run_results.push(SelectMotifsRunResult::new(select_motifs_run_config.clone(), selected_motif_ids_scores, constraint_metrics));
-
-            collect_eta_record_completion(eta_guard.id());
-        }
+        let run_results = collect_futures_with_progress(
+            futures,
+            run_configs_len,
+            crate::buffer_limits::SELECT_MOTIFS_STAGE_RUN_CONFIGS,
+            StreamBuffering::Unordered,
+            "SelectMotifsStage::run",
+        ).await;
 
 
         debug!("SelectMotifsStage::run: run_results={run_results:?}");
