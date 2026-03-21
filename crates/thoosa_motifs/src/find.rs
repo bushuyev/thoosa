@@ -250,7 +250,7 @@ pub struct SelectMotifsParams {
 
 #[derive(Debug, Args, Clone)]
 pub struct SelectMotifsArgs {
-    #[arg(long)]
+    #[arg(long, value_delimiter = ',')]
     pub find_motifs_run_ids: Vec<RunId>,
 
     #[arg(long)]

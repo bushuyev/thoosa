@@ -200,8 +200,8 @@ mod tests {
         let batch = make_batch_with(&motif, 32, cfg)?;
         assert_eq!(batch.size().as_slice(), &[32, 6]);
 
-        let score_k_lo = norm_thickness(&batch, 1.0, 1e-8)?.double_value(&[]);
-        let score_k_hi = norm_thickness(&batch, 12.0, 1e-8)?.double_value(&[]);
+        let score_k_lo = norm_thickness(&batch, 1e-8)?.double_value(&[]);
+        let score_k_hi = norm_thickness(&batch, 1e-8)?.double_value(&[]);
 
         debug!("score_k_lo={score_k_lo} score_k_hi={score_k_hi}");
 
