@@ -18,12 +18,13 @@ use thoosa_common::find_motifs_run_config::InputFilter;
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, Padding};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{CachableIdTr, WithId};
-use thoosa_shared::comp_id::{MonoKey, SynKey};
+use thoosa_shared::comp_id::SynKey;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::stage_ids::FREQ_FILTER;
 use crate::tasks::transforms::smoothing::{median, moving_average};
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 
@@ -61,7 +62,7 @@ pub struct FreqFilter<C>
 where
     C: RunCtx + 'static,
 {
-    id:MonoKey,
+    id: SynKey,
     filters: Vec<PreparedFilter>,
     _ctx: PhantomData<C>,
     num_channels:i64,
@@ -181,7 +182,10 @@ where
         }
 
         Ok(Self {
-            id: mono_key!(find_motifs_run_config_id, "FreqFilter"),
+            id: SynKey::new([
+                mono_key!(FREQ_FILTER, "FreqFilter"),
+                mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id={find_motifs_run_config_id}")),
+            ]),
             filters,
             _ctx: PhantomData,
             num_channels,

@@ -26,7 +26,7 @@ where
     <A::Out as Data>::M: DevicesWrapCopyMode<A::Out>,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    B::Out: Data + WithId<ID = SynKey> + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>
 {
     id: SynKey,
@@ -47,7 +47,7 @@ where
     <A::Out as Data>::M: DevicesWrapCopyMode<A::Out>,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    B::Out: Data + WithId<ID = SynKey> + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>
 
 {
@@ -67,7 +67,7 @@ where
     <A::Out as Data>::M: DevicesWrapCopyMode<A::Out>,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    B::Out: Data + WithId<ID = SynKey> + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>,
     //
     //
@@ -76,8 +76,7 @@ where
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID
     {
-        // format!("me_{}_input_{}", self.id, input_id).into()
-        self.stage_b.out_id(&self.stage_a.out_id(input_id))
+        &self.id + &self.stage_b.out_id(&self.stage_a.out_id(input_id))
     }
 }
 
@@ -92,7 +91,7 @@ where
     <A::Out as Data>::M: DevicesWrapCopyMode<A::Out>,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    B::Out: Data + WithId<ID = SynKey> + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>
 {
     pub fn new<I:Into<SynKey>>(id:I, stage_a: Arc<A>, stage_b: Arc<B>) -> ABStage<A, B, C> {
@@ -115,7 +114,7 @@ where
     <A::Out as Data>::M: DevicesWrapCopyMode<A::Out>,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    B::Out: Data + WithId<ID = SynKey> + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>
 {
     type ID = SynKey;
@@ -137,7 +136,7 @@ where
     <A::Out as Data>::M: DevicesWrapCopyMode<A::Out>,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    B::Out: Data + WithId<ID = SynKey> + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
@@ -167,7 +166,7 @@ where
     <A::Out as Data>::M: DevicesWrapCopyMode<A::Out>,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId + Send + Sync + CopyToDevice + 'static,
+    B::Out: Data + WithId<ID = SynKey> + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>,
     for<'i> ABStage<A, B, C>: Stage<In<'i>=A::In<'i>>,
     ABStage<A, B, C>: Stage<Out=B::Out, Ctx=C>,
