@@ -505,7 +505,7 @@ mod tests {
             }),
             motif_criteria: MotifCriteriaRangeOrValue {
                 norm_thickness: Some(NormThicknessConstraintRangeOrValue {
-                    criterion: NormThicknessRunConfigRangeOrValue { k: RangeOrValue::Value(5.0), eps: RangeOrValue::Value(1e-8) },
+                    criterion: NormThicknessRunConfigRangeOrValue {eps: RangeOrValue::Value(1e-8) },
                     min: RangeOrValue::Value(MotifCriteria::DEFAULT_CRITERION_MIN),
                 }),
                 inlier_ratioRunConfig: Some(InlierRatioConstraintRangeOrValue {
@@ -759,9 +759,6 @@ impl FromHashmap for ExtendMotifsConfig {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
 pub struct NormThicknessRunConfig {
-    #[in_map]
-    #[run_config]
-    pub k: f64,
 
     #[in_map]
     #[run_config]
@@ -1231,7 +1228,6 @@ impl FromHashmap for MotifCriteria {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct NormThickness {
-    pub k: f64,
     pub eps: f64,
 }
 
@@ -1337,7 +1333,7 @@ impl MotifCriteria {
         if let Some(v) = self.norm_thickness.as_ref() {
             constraints.push(MotifCriterionConstraint {
                 key: Self::NORM_THICKNESS_MIN_KEY,
-                criterion: MotifCriterion::NormThickness(NormThickness { k: v.criterion.k, eps: v.criterion.eps }),
+                criterion: MotifCriterion::NormThickness(NormThickness { eps: v.criterion.eps }),
                 min: v.min,
             });
         }
@@ -1427,7 +1423,7 @@ impl From<&MotifCriteria> for Vec<MotifCriterion> {
     fn from(value: &MotifCriteria) -> Self {
         let mut criteria = Vec::new();
         if let Some(v) = value.norm_thickness.as_ref() {
-            criteria.push(MotifCriterion::NormThickness(NormThickness { k: v.criterion.k, eps: v.criterion.eps }));
+            criteria.push(MotifCriterion::NormThickness(NormThickness { eps: v.criterion.eps }));
         }
         if let Some(v) = value.inlier_ratioRunConfig.as_ref() {
             criteria.push(MotifCriterion::InlierRatio(InlierRatio { k: v.criterion.k, eps: v.criterion.eps }));

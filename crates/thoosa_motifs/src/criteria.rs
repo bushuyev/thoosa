@@ -4,7 +4,7 @@ use tch::{Kind, TchError, Tensor};
 use tch::Kind::Float;
 use tracing::debug;
 
-type NormThicknessMockFn = Arc<dyn Fn(&Tensor, f64, f64) -> Result<Tensor, TchError> + Send + Sync>;
+type NormThicknessMockFn = Arc<dyn Fn(&Tensor, f64) -> Result<Tensor, TchError> + Send + Sync>;
 type InlierRatioMockFn = Arc<dyn Fn(&Tensor, f64, f64) -> Result<Tensor, TchError> + Send + Sync>;
 type CoherenceMockFn = Arc<dyn Fn(&Tensor, i64, f64) -> Result<Tensor, TchError> + Send + Sync>;
 
@@ -20,9 +20,9 @@ fn criteria_mocks() -> &'static RwLock<CriteriaMocks> {
     MOCKS.get_or_init(|| RwLock::new(CriteriaMocks::default()))
 }
 
-fn maybe_norm_thickness_mock(x: &Tensor, k: f64, eps: f64) -> Option<Result<Tensor, TchError>> {
+fn maybe_norm_thickness_mock(x: &Tensor, eps: f64) -> Option<Result<Tensor, TchError>> {
     let mock_fn = criteria_mocks().read().norm_thickness.as_ref().map(Arc::clone);
-    mock_fn.map(|mock_fn| mock_fn(x, k, eps))
+    mock_fn.map(|mock_fn| mock_fn(x, eps))
 }
 
 fn maybe_inlier_ratio_mock(x: &Tensor, k: f64, eps: f64) -> Option<Result<Tensor, TchError>> {
@@ -64,7 +64,7 @@ pub mod mock_criteria {
     impl MockCriteriaBuilder {
         pub fn with_norm_thickness<F>(mut self, f: F) -> Self
         where
-            F: Fn(&Tensor, f64, f64) -> Result<Tensor, TchError> + Send + Sync + 'static,
+            F: Fn(&Tensor, f64) -> Result<Tensor, TchError> + Send + Sync + 'static,
         {
             self.mocks.norm_thickness = Some(Arc::new(f) as NormThicknessMockFn);
             self
@@ -147,8 +147,8 @@ fn f_quantile_1d(v: &Tensor, q: f64) -> Result<Tensor, TchError> {
 /// thickness = mean_t( q90(x[:,t]) - q10(x[:,t]) )
 /// amp       = q95(consensus) - q05(consensus)
 /// score     = 1 / (1 + k * thickness / (amp + eps))
-pub fn norm_thickness(x: &Tensor, k: f64, eps: f64) -> Result<Tensor, TchError> {
-    if let Some(mocked) = maybe_norm_thickness_mock(x, k, eps) {
+pub fn norm_thickness(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
+    if let Some(mocked) = maybe_norm_thickness_mock(x, eps) {
         return mocked;
     }
     let sz = x.size();
@@ -1000,7 +1000,7 @@ mod tests {
             ])
                 .view([3, 4]);
 
-            let s = norm_thickness(&x, 5.0, 1e-8)?;
+            let s = norm_thickness(&x, 1e-8)?;
             assert_close(f64_of_scalar(&s), 1.0, 1e-12);
             Ok(())
         }
@@ -1025,7 +1025,7 @@ mod tests {
             ])
             .view([3, 4]);
 
-            let s = norm_thickness(&x, 5.0, 1e-8)?;
+            let s = norm_thickness(&x, 1e-8)?;
             assert_close(f64_of_scalar(&s), 0.8, 1e-6);
             Ok(())
         }

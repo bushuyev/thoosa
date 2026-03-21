@@ -1140,7 +1140,6 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
                 criterion: NormThicknessRunConfigRangeOrValue {
-                    k: RangeOrValue::Value(0.0),
                     eps: RangeOrValue::Value(1e-8),
                 },
                 min: RangeOrValue::Value(0.75),
@@ -1183,7 +1182,6 @@ fn run_all_select_motifs_config_0<P: FieldName + 'static>() -> SelectMotifsRunCo
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
                 criterion: NormThicknessRunConfigRangeOrValue {
-                    k: RangeOrValue::Value(0.0),
                     eps: RangeOrValue::Value(1e-8),
                 },
                 min: RangeOrValue::Value(0.75),
@@ -1243,7 +1241,7 @@ fn run_all_select_motifs_config_test_1<P: FieldName + 'static>() -> SelectMotifs
         extend_config: None,
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
-                criterion: NormThicknessRunConfigRangeOrValue { k: RangeOrValue::Value(5.0), eps: RangeOrValue::Value(1e-8) },
+                criterion: NormThicknessRunConfigRangeOrValue {  eps: RangeOrValue::Value(1e-8) },
                 min: RangeOrValue::Value(0.5),
             }),
             inlier_ratioRunConfig: Some(thoosa_common::find_motifs_run_config::InlierRatioConstraintRangeOrValue {
