@@ -14,7 +14,7 @@ use crate::Cause;
 // use crate::common::runnable::Runnable;
 use crate::traits::{Adjustable, CachableIdTr};
 use crate::runner::common::{DropIf, RunCtx};
-use crate::runner::permits::NumPermits;
+use crate::runner::permits::{NumPermits, MAX_PERMITS};
 use crate::runner::adjusters::dump_to_cpu::*;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
@@ -182,6 +182,9 @@ where
 
         let degrade = if adjust_context.to_acquire() < self.max {
             *adjust_context.to_acquire_mut() += self.step;
+            if adjust_context.to_acquire() > MAX_PERMITS {
+                *adjust_context.to_acquire_mut() = MAX_PERMITS;
+            }
 
             true
         } else {
