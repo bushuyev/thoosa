@@ -49,7 +49,7 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_shared::traits::{Data, DataId, SimpleId, WithId};
+use thoosa_shared::traits::{Data, SimpleId, WithId};
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -892,7 +892,7 @@ impl MotifNetParams {
     }
 
     //TODO
-    pub fn motif_net(&self, motif: Option<Arc<ThoTensor<MotifSlices, DataId>>>) -> Result<Node, ThoError> {
+    pub fn motif_net(&self, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> Result<Node, ThoError> {
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => lin_motif_node(v),
             MotifNetTypeParams::ConvNetParams(v) => conv_motif_node(v),
@@ -1033,7 +1033,7 @@ net.closure(
 
 }
 
-pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTensor<MotifSlices, DataId>>>) -> Result<Node, ThoError> {
+pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> Result<Node, ThoError> {
     debug!("cosine_motif_node: params={params:?}");
 
     let mut builder = SeqBuilder::new(params.num_features, None)?;

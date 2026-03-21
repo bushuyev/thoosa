@@ -6,6 +6,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
 use thoosa_named_derive::Named;
+use thoosa_shared::traits::DataId;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ElvVal {
@@ -107,6 +108,17 @@ impl MonoKey {
     #[cfg(any(debug_assertions, tho_debug))]
     pub fn name(&self) -> &str {
         self.name.as_ref()
+    }
+
+    pub fn to_data_id(&self) -> DataId{
+        match &self.val {
+            ElvVal::Str(val) => {
+                panic!("can't convert {val} to data_id")
+            }
+            ElvVal::Num(val) => {
+                DataId(*val as u32)//TODO as
+            }
+        }
     }
 }
 

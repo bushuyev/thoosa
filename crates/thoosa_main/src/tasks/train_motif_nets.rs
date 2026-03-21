@@ -53,7 +53,7 @@ use crate::tasks::train_net::{TrainNet, TrainNetInput};
 
 #[derive(Debug, Default)]
 struct CurrentRandomSlices {
-    slices: Option<Arc<DevicesWrap<ThoTensor<MotifSlices, DataId>>>>,
+    slices: Option<Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>>,
     uses: u32,
 }
 
@@ -232,13 +232,13 @@ where
             let epoch_size = self.epoch_size;
             async move {
 
-                let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>> = motif_loader.run(
-                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(motif_id_rate.0.into(), Some(vec![select_motifs_run_id])), CacheArea::default())),
+                let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = motif_loader.run(
+                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::new((motif_id_rate.0, "motif_id").into(), Some(vec![select_motifs_run_id])), CacheArea::default())),
                     ctx.branch(Some("train_motif_nets_motif_loader"), false, false),
                 ).await?;
 
 
-                let (t, motif_width) = with_data!(ctx.branch(Some("train_motif_nets_motif_width"), false, false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
+                let (t, motif_width) = with_data!(ctx.branch(Some("train_motif_nets_motif_width"), false, false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
                     Ok::<_, ThoError>((Arc::new(motif.data().clone())/*TODO clone*/, motif.extra().window))
                 })?;
 
@@ -329,7 +329,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
-    motif_id: DataId,
+    motif_id: SynKey,
     batch_size: u32,
     epoch_size: u32,//number of cycles done on same slices
 
@@ -351,7 +351,7 @@ where
 {
 
     pub async fn new(
-        motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>,
+        motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>,
         random_slices_loader: Arc<RandomSlicesLoader<L, C>>,
         batch_size:i64,
         device_idx:usize,
@@ -362,7 +362,7 @@ where
         debug!("MotifsBatch::new: motif={motif:?}");
 
         let ctx_for_split = ctx.branch(Some("motifs_batch_split"), false, false);
-        with_data!(ctx_for_split, motif; |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>|{
+        with_data!(ctx_for_split, motif; |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
             let motif_meta = motif.extra().clone();
 
             let num_motif_slices = motif.data().t_ref().size()[0];
@@ -400,7 +400,7 @@ where
         })
     }
 
-    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id:&DataId, descr: &str) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
+    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id:&SynKey, descr: &str) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
         let random_slices = self.current_random_slices().await?;
 
         let num_slices = (self.batch_size / 2) as i64;
@@ -411,7 +411,7 @@ where
                 "MotifsBatch/make_batch/lock_ctx",
             );
             guard.branch(Some("motifs_batch_make"), false, false)
-        }, motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, DataId>|{
+        }, motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, SynKey>|{
 
             debug!("MotifsBatch::make_batch: descr={descr} num_slices={num_slices}");
 
@@ -430,7 +430,7 @@ where
         })
     }
 
-    async fn current_random_slices(&self) -> Result<Arc<DevicesWrap<ThoTensor<MotifSlices, DataId>>>, ThoError> {
+    async fn current_random_slices(&self) -> Result<Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, ThoError> {
         let epoch_size = self.epoch_size.max(1);
         {
             let mut current_random_slices = self.random_slices.lock();
@@ -447,7 +447,7 @@ where
         let random_slices = Arc::clone(&self.random_slices_loader)
             .run(
                 Arc::new(DevicesWrap::wrap(
-                    SlicesLoaderInput::new(self.motif_id.clone(), self.random_slices_limit),
+                    SlicesLoaderInput::new(self.motif_id.vals[0].to_data_id(), self.random_slices_limit),
                     CacheArea::default(),
                 )),
                 {
