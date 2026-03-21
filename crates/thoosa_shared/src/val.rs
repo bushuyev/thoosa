@@ -113,7 +113,7 @@ pub enum PendingOptField<T: FieldName> {
 }
 
 impl<T: FieldName + 'static> PendingOptField<T> {
-    pub fn from_range_or_value<V>(name: T, resolve: fn(&[NamedVal<T>]) -> RangeOrValue<V>) -> Self
+    pub fn from_range_or_value<V>(name: T, resolve: Arc<dyn Fn(&[NamedVal<T>]) -> RangeOrValue<V> + Send + Sync>) -> Self
     where
         for<'a> Val: From<&'a V>,
         for<'a> Hyperparameter<T>: From<(T, &'a Range<V>)>,

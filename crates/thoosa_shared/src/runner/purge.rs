@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use futures_util::StreamExt;
 use futures_util::future::{BoxFuture, Shared};
 use futures_util::stream;
-use log::{debug, trace};
+use log::{debug, info, trace, warn};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -14,6 +14,7 @@ use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::traits::{CachableIdTr, Data};
+use crate::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use crate::runner::common::cachable::WithDataRef;
 
 pub const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
@@ -88,19 +89,21 @@ where
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
 
+        // let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("purge_gpu_{:?}", self.type_name()), items.len(), 1);
         stream::iter(items)
             //TODO  limit config
             .for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, fut)| async move {
                 match fut.await {
                     Ok(v) => {
                         if let Err(e) = v.dump_to_cpu(device_idx).await {
-                            debug!("purge_gpu failed: key={key:?} err={e:?}");
+                            warn!("purge_gpu failed: key={key:?} err={e:?}");
                         } else {
-                            debug!("purge_gpu ok: key={key:?}");
+                            info!("purge_gpu ok: key={key:?}");
                         }
                     }
-                    Err(e) => debug!("purge_gpu: Err key={key:?} err={e:?}"),
+                    Err(e) => warn!("purge_gpu: Err key={key:?} err={e:?}"),
                 }
+                // collect_eta_record_completion(dump_eta_guard.id());
             })
             .await;
 

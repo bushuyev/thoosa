@@ -73,7 +73,7 @@ impl Arbiter {
         needed: NumPermits,
         requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoError> {
-        assert!(needed <= self.capacity);
+        assert!(needed <= self.capacity, "send_acquire_rq: needed={needed} self.capacity={}", self.capacity);
 
 
         let (reply, recv) = oneshot::channel();
