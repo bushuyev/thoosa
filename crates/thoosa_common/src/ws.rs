@@ -1110,7 +1110,7 @@ mod tests {
                             MotifNetTypeParams::CosineNetParams(v) => v,
                             _ => unreachable!(),
                         },
-                              Some(Arc::new(ThoTensor::new(DataId(0), Tensor::rand(
+                              Some(Arc::new(ThoTensor::new(((0u32), "motif_id").into(), Tensor::rand(
                                   [
                                       123,
                                       1234i64,

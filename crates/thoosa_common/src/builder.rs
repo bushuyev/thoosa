@@ -8,7 +8,8 @@ use crate::batches::BatchLengths;
 use crate::dims::{AnyDims, Dims, MotifSlices};
 use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, my_linear};
 use thoosa_shared::{panic_to_err, ThoError};
-use thoosa_shared::traits::{DataId, SimpleId};
+use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::traits::SimpleId;
 use crate::tho_tensor::ThoTensor;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
@@ -92,7 +93,7 @@ pub enum Node {
         kernel: u32,
         a: f64,
         b: f64,
-        init: Option<Arc<ThoTensor<MotifSlices, DataId>>>
+        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>
     },
     SharpeningHead1d {
         path: String,
@@ -483,7 +484,7 @@ impl SeqBuilder {
         &mut self,
         path: P,
         kernel: u32,
-        init: Option<Arc<ThoTensor<MotifSlices, DataId>>>,
+        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
         a: f64,
         b: f64
     ) -> Result<&mut Self, ThoError> {

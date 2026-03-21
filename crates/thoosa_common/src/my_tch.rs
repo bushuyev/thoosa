@@ -13,7 +13,8 @@ use tch::nn::{
 };
 
 use thoosa_shared::{panic_to_err, ThoError};
-use thoosa_shared::traits::{DataId, SimpleId};
+use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::traits::SimpleId;
 use crate::batches::BatchLengths;
 use crate::builder::{clc_avg_pool1d_out, clc_conv1d_out, clc_max_pool1d_out, Node};
 // use crate::{data, utils};
@@ -431,7 +432,7 @@ pub struct MyCosineConv1d {
 
 impl MyCosineConv1d {
 
-    pub fn new(vs: &Path, l: i64, init: Option<Arc<ThoTensor<MotifSlices, DataId>>>, a: f64, b: f64) -> Result<Self, TchError> {
+    pub fn new(vs: &Path, l: i64, init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>, a: f64, b: f64) -> Result<Self, TchError> {
         debug!("MyCosineConv1d: l={l}");
         let kernel = match init {
             None => {

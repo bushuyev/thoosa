@@ -2211,11 +2211,11 @@ async fn plot_motif<C>(
 where
     C:RunCtx + Adjustable{
     let select_motif_run_ids_sfx = select_motif_run_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
-    let motif_loader_input = MotifLoaderInput::new(DataId(motif_id as u32), select_motif_run_ids);
+    let motif_loader_input = MotifLoaderInput::new(((motif_id as u32), "motif_id").into(), select_motif_run_ids);
     let motif_id_arc = Arc::new(DevicesWrap::wrap(motif_loader_input.clone(), CacheArea::default()));
     let metrics = Metrics::all();
     let clc_input = Arc::new(DevicesWrap::wrap(
-        MotifStatsInput::from_motif_input(motif_loader_input, metrics.clone(), Aggr::Mean(1.0)),
+        MotifStatsInput::from_motif_input(motif_loader_input, metrics.clone(), Aggr::Mean(1.0), None),
         CacheArea::default(),
     ));
 
@@ -2244,7 +2244,7 @@ where
 
 
     let metrics_for_plot_ref = Arc::clone(&metrics_for_plot);
-    let r = motif.with_data_ref(0, ctx.branch(Some("plot_motif_data"), false, false), None, move |motif: &DataWithExtra<ThoTensor<_, DataId>, MotifMeta>, _ctx| {
+    let r = motif.with_data_ref(0, ctx.branch(Some("plot_motif_data"), false, false), None, move |motif: &DataWithExtra<ThoTensor<_, SynKey>, MotifMeta>, _ctx| {
             let run_id = motif.extra().find_motifs_run_id;
             let channel = motif.extra().channel;
 
@@ -3067,7 +3067,7 @@ mod cli_tests {
         let run_id = 7777772;
 
         let motif = Arc::clone(&motif_loader_impl).run(
-            Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(DataId(motif_id as u32), None), CacheArea::default())),
+            Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(((motif_id as u32), "motif_id").into(), None), CacheArea::default())),
             ctx.branch(Some("plot_motif_loader"), false, false),
         ).await?;
 
