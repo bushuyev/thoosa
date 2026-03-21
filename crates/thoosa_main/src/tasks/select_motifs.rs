@@ -159,7 +159,7 @@ impl SelectedMotifEvaluation {
 pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
 
@@ -180,7 +180,7 @@ where
 impl <L, ML, C> Debug for SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SelectMotifsStage")
@@ -194,7 +194,7 @@ where
 impl  <L, ML, C> WithId for SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     type ID = SynKey;
@@ -255,7 +255,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         let channel_masks_motif_ids = output.into_iter().try_fold(
             (
                 (0..self.channels).map(|c|vec![]).collect::<Vec<Vec<Tensor>>>(),
-                (0..self.channels).map(|c|vec![]).collect::<Vec<Vec<DataId>>>()
+                (0..self.channels).map(|c|vec![]).collect::<Vec<Vec<SynKey>>>()
             ),
 
             |mut channel_masks, partial_output| -> Result<_, ThoError> {
@@ -742,7 +742,7 @@ where
 impl <L, ML, C> SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
 
@@ -884,7 +884,7 @@ where
         num_channels: usize,
         total_size: usize,
         mut ctx: C,
-    ) -> Result<Vec<HashMap<DataId, HashSet<IdSlice>>>, ThoError> {
+    ) -> Result<Vec<HashMap<SynKey, HashSet<IdSlice>>>, ThoError> {
         let slices_selector_metric = Self::slices_selector_metric_to_stats(extend_config.slices_selector_metric);
         let slices_selector_aggr = Self::slices_selector_aggr_to_stats(extend_config.slices_selector_aggr);
         // This stays inside the run-config loop.
@@ -898,7 +898,7 @@ where
         )
         .await?;
 
-        let channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<DataId, HashSet<IdSlice>>>>> =
+        let channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<SynKey, HashSet<IdSlice>>>>> =
             Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
 
         let run_configs__stacked_motifs_dbg = &run_configs__stacked_motifs;
@@ -926,6 +926,7 @@ where
                         let motifs_stats = Self::clc_stacked_motifs_statistics(
                             clc_dist,
                             Arc::clone(&motif_data),
+                            &select_motifs_run_config,
                             slices_selector_metric,
                             slices_selector_aggr,
                             ctx_to_move.branch("clc_stacked_motifs_statistics".into(), false, false),
@@ -977,6 +978,7 @@ where
     async fn clc_stacked_motifs_statistics(
         load_and_clc_dist: Arc<MotifStats<ML, L, C>>,
         motif_data: Arc<DevicesWrap<StackedMotifsOutput>>,
+        select_motifs_run_config: &SelectMotifsRunConfig,
         slices_selector_metric: Metrics,
         slices_selector_aggr: Aggr,
         mut ctx: C,
@@ -1010,7 +1012,7 @@ where
                     let result = (async {
                         let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.clone());
                         let clc_input = Arc::new(DevicesWrap::wrap(
-                            MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric], slices_selector_aggr),
+                            MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric], slices_selector_aggr, Some(select_motifs_run_config)),
                             cache_area,
                         ));
                         let motif_stat: f32 = load_and_clc_dist
@@ -1098,7 +1100,7 @@ where
         motif_data: Arc<DevicesWrap<StackedMotifsOutput>>,
         motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>,
         resources: Arc<Vec<Resource>>,
-        channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<DataId, HashSet<IdSlice>>>>>,
+        channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<SynKey, HashSet<IdSlice>>>>>,
         max_batch: i64,//TODO rename max chunk size
         total_size: usize,
         mut ctx: C,
@@ -1395,11 +1397,11 @@ where
         for motif_id in motif_ids {
             let motif_data = Arc::clone(&self.clc_dist.motif_loader)
                 .run_cached(
-                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(DataId(*motif_id), Some(vec![select_motifs_run_config.id.expect("no select_motifs_run_config")])), CacheArea::default())),
+                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(((*motif_id), "motif_id").into(), Some(vec![select_motifs_run_config.id.expect("no select_motifs_run_config")])), CacheArea::default())),
                     ctx.branch(Some("select_motifs_filter_motif_loader"), false, false),
                 ).await?;
 
-            let selected_motif = with_data!(ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>| {
+            let selected_motif = with_data!(ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>| {
                 let motif_slices = motif_data.data().t_ref();
                 debug!("SelectMotifsStage::run: motif_id={motif_id} criteria_constraints={criteria_constraints:?} threshold={threshold:.6} motif_slices={motif_slices:?}");
 
@@ -1446,7 +1448,7 @@ where
 impl <L,ML, C> Stage  for  SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 
 {
@@ -1459,7 +1461,7 @@ where
 impl <L, ML, C> AsyncStage  for  SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::run"))]
@@ -1503,7 +1505,7 @@ where
                     for (motif_id, slices) in motif_slices {
                         debug!("SelectMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
 
-                        self.store.add_slices_to_motif(select_motifs_run_config_id, *motif_id, channel as i64, slices).await?
+                        self.store.add_slices_to_motif(select_motifs_run_config_id, motif_id.vals[0].to_data_id().0, channel as i64, slices).await?
                     }
                 }
             }
@@ -1672,7 +1674,7 @@ pub mod tests {
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
         ]).finish());
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
@@ -1747,7 +1749,7 @@ pub mod tests {
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
+            (MotifLoaderInput::find_motif_slices_only((mono_key!(1, "motif").into())), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
         ]).finish());
 
 
@@ -1827,9 +1829,9 @@ pub mod tests {
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(motifs_ids[0])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(DataId(motifs_ids[0])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_t)),
+            (MotifLoaderInput::find_motif_slices_only((mono_key!(1, "motif").into())), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_t)),
             (MotifLoaderInput::all_slices(DataId(motifs_ids[1])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_1_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(DataId(motifs_ids[1])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_1_t)),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(motifs_ids[1], "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_1_t)),
         ]).finish());
 
 
@@ -1964,13 +1966,13 @@ pub mod tests {
         let motif_1_0_t = motifs_tensor(100, 4, MotifKind::Sin);
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(channel_0_motif_0)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_0_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(DataId(channel_0_motif_0)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_0_t)),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(channel_0_motif_0, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_0_t)),
 
             (MotifLoaderInput::all_slices(DataId(channel_0_motif_1)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_1_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(DataId(channel_0_motif_1)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_1_t)),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(channel_0_motif_1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_1_t)),
 
             (MotifLoaderInput::all_slices(DataId(channel_1_motif_0)), (MotifMeta { channel: 1, find_motifs_run_id, window: 100 }, motif_1_0_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(DataId(channel_1_motif_0)), (MotifMeta { channel: 1, find_motifs_run_id, window: 100 }, motif_1_0_t)),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(channel_1_motif_0, "motif").into()), (MotifMeta { channel: 1, find_motifs_run_id, window: 100 }, motif_1_0_t)),
         ]).finish());
 
 
@@ -2018,10 +2020,10 @@ pub mod tests {
         let loader = Arc::new(mock_tensor_loader::build().finish());
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::new(DataId(1), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[9, 4], (Kind::Float, tch::Device::Cpu)))),
-            (MotifLoaderInput::new(DataId(2), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[10, 4], (Kind::Float, tch::Device::Cpu)))),
-            (MotifLoaderInput::new(DataId(3), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[101, 4], (Kind::Float, tch::Device::Cpu)))),
-            (MotifLoaderInput::new(DataId(4), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[100, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[9, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[10, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new((3u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[101, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new((4u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[100, 4], (Kind::Float, tch::Device::Cpu)))),
         ]).finish());
 
         let stage = SelectMotifsStage::new(
@@ -2098,14 +2100,14 @@ pub mod tests {
         let loader = Arc::new(mock_tensor_loader::build().finish());
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (
-                MotifLoaderInput::new(DataId(101), Some(vec![select_motifs_run_id])),
+                MotifLoaderInput::new((101u32, "motif_id").into(), Some(vec![select_motifs_run_id])),
                 (
                     MotifMeta { channel: 0, find_motifs_run_id, window: 4 },
                     Tensor::zeros([2, 4], FLOAT_CPU),
                 ),
             ),
             (
-                MotifLoaderInput::new(DataId(102), Some(vec![select_motifs_run_id])),
+                MotifLoaderInput::new((102u32, "motif_id").into(), Some(vec![select_motifs_run_id])),
                 (
                     MotifMeta { channel: 0, find_motifs_run_id, window: 4 },
                     Tensor::zeros([4, 4], FLOAT_CPU),
@@ -2229,8 +2231,8 @@ pub mod tests {
         let find_motifs_run_config = Arc::new(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 3, None, None));
 
         let channels_motif_ids = vec![
-            vec![DataId(11), DataId(11), DataId(12)],
-            vec![DataId(13)],
+            vec![(11u32, "motif_id").into(), (11u32, "motif_id").into(), (12u32, "motif_id").into()],
+            vec![(13u32, "motif_id").into()],
         ];
         let motifs_t = Tensor::zeros([2, 4, 3], FLOAT_CPU);
         let motifs = ThoTensor::new(SynKey::new([mono_key!("motifs", "test_motifs")]), motifs_t)?;
@@ -2242,21 +2244,21 @@ pub mod tests {
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (
-                MotifLoaderInput::find_motif_slices_only(DataId(11)),
+                MotifLoaderInput::find_motif_slices_only((11u32, "motif_id").into()),
                 (
                     MotifMeta { channel: 0, find_motifs_run_id, window: 3 },
                     Tensor::from_slice(&[0.0f32, 0.0, 0.0, 3.0, 0.0, 0.0]).view([2, 3]),
                 ),
             ),
             (
-                MotifLoaderInput::find_motif_slices_only(DataId(12)),
+                MotifLoaderInput::find_motif_slices_only((12u32, "motif_id").into()),
                 (
                     MotifMeta { channel: 0, find_motifs_run_id, window: 3 },
                     Tensor::from_slice(&[0.0f32, 0.0, 0.0, 4.0, 0.0, 0.0]).view([2, 3]),
                 ),
             ),
             (
-                MotifLoaderInput::find_motif_slices_only(DataId(13)),
+                MotifLoaderInput::find_motif_slices_only((13u32, "motif_id").into()),
                 (
                     MotifMeta { channel: 1, find_motifs_run_id, window: 3 },
                     Tensor::from_slice(&[0.0f32, 0.0, 0.0, 5.0, 0.0, 0.0]).view([2, 3]),
@@ -2268,9 +2270,11 @@ pub mod tests {
         let clc_dist = Arc::new(MotifStats::new(store, loader, Arc::clone(&ws), motif_loader));
 
         let mut ctx = mock_run_ctx::default(0);
+        let select_motifs_run_config = SelectMotifsRunConfig::new_(Some(101), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
         let motifs_stats = SelectMotifsStage::<MockTensorLoader, MockMotifLoader, MockRunCtx>::clc_stacked_motifs_statistics(
             clc_dist,
             motif_data,
+            &select_motifs_run_config,
             Metrics::EucDist,
             Aggr::Mean(1.0),
             ctx.branch("test_clc_stacked_motifs_statistics".into(), false, false),
@@ -2422,8 +2426,8 @@ pub mod tests {
             .view([3, 3]);
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::new(DataId(21), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_21_t)),
-            (MotifLoaderInput::new(DataId(22), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_22_t)),
+            (MotifLoaderInput::new((21u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_21_t)),
+            (MotifLoaderInput::new((22u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_22_t)),
         ]).finish());
 
         let _criteria_mocks = mock_criteria::build()
@@ -2765,7 +2769,7 @@ pub mod tests {
                                 None,
                             )?,
                             vec![
-                                0.into()
+                                (0u32, "motif_id").into()
                             ]
                         )
                     ),
@@ -2795,7 +2799,7 @@ pub mod tests {
                                 None,
                             )?,
                             vec![
-                                0.into()
+                                (0u32, "motif_id").into()
                             ]
                         )
                     ),

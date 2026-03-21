@@ -47,40 +47,50 @@ use thoosa_shared::resource::{Resource, ResourceId};
 use crate::tasks::find_motifs::{config_to_stage, FilteredLoaderStage, LoaderStageChoice};
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use crate::tasks::transforms::freq_filter::FreqFilter;
-use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::runner::cache_areas::CacheArea;
+use crate::tasks::stage_ids::MOTIF_LOADER;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
 pub struct MotifLoaderInput {
+    pub id:SynKey,
     select_motifs_run_id: Option<Vec<RunId>>,
-    motif_id:DataId
+    motif_id:SynKey
 }
 
 
 #[cfg(test)]
 impl From<u32> for MotifLoaderInput{
     fn from(value: u32) -> Self {
-        MotifLoaderInput::find_motif_slices_only(DataId(value))
+        MotifLoaderInput::find_motif_slices_only(mono_key!(value, "motif_id").into())
     }
 }
 
 impl MotifLoaderInput {
     pub fn all_slices(motif_id: DataId) -> Self {
         Self {
-            motif_id,
+            id: mono_key!(motif_id.0, "motif_id").into(),
+            motif_id: mono_key!(motif_id.0, "motif_id").into(),
             select_motifs_run_id: None //all slices loaded
         }
     }
 
-    pub fn find_motif_slices_only(motif_id: DataId) -> Self {
+    pub fn find_motif_slices_only(motif_id: SynKey) -> Self {
         Self {
+            id: motif_id.clone(),
             motif_id,
             select_motifs_run_id: Some(vec![]) //only slices found during find_motifs loaded
         }
     }
 
-    pub fn new(motif_id: DataId, select_motifs_run_id: Option<Vec<RunId>>) -> Self {
-        Self { select_motifs_run_id, motif_id }// slices found during find_motifs + select_motifs_run_id
+    pub fn new(motif_id: SynKey, select_motifs_run_id: Option<Vec<RunId>>) -> Self {
+        Self {
+            id: select_motifs_run_id.iter().flat_map(|v|v).fold(motif_id.clone(), |a, v:&RunId|{
+                &a + mono_key!(*v, "select_motifs_run_id")
+            }),
+            select_motifs_run_id,
+            motif_id
+        }// slices found during find_motifs + select_motifs_run_id
     }
 }
 impl Input for MotifLoaderInput {
@@ -88,10 +98,10 @@ impl Input for MotifLoaderInput {
 
 //TODO composite id with select_motifs_run_id
 impl WithId for MotifLoaderInput {
-    type ID = DataId;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
-        &self.motif_id
+        &self.id
     }
 }
 
@@ -101,6 +111,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + 'static,
 {
+    id: MonoKey,
     store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
@@ -118,6 +129,7 @@ where
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Self {
         Self {
+            id: mono_key!(MOTIF_LOADER, "MotifLoader"),
             store,
             loader,
             ws: Arc::clone(&ws),
@@ -132,7 +144,7 @@ where
     C: RunCtx + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        input_id.clone()
+        &self.id + input_id
     }
 }
 
@@ -149,7 +161,7 @@ where
     C: RunCtx + 'static,
 {
     type In<'a> = MotifLoaderInput;
-    type Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>;
+    type Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>;
 
     type Ctx = C;
 }
@@ -176,15 +188,16 @@ where
             Ok::<_, ThoError>((input.motif_id.clone(), input.select_motifs_run_id.clone()))
         })?;
 
-        let motif_id_value = motif_id.clone().0;
+        let motif_id_value = motif_id.vals[0].to_data_id();
+        let select_motifs_run_id_for_key = select_motifs_run_id.clone();
         let (channel, find_motifs_run_id, slices, resources_map) = self
             .store
-            .list_motif_slices(motif_id_value, select_motifs_run_id, Some(1000), None)//TODO config max_slices
+            .list_motif_slices(motif_id_value.0, select_motifs_run_id, Some(1000), None)//TODO config max_slices
             .await?;//TODO config
 
         debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
 
-        let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "motif loader").await?;
+        let (window, motif) = load_motif_slices(motif_id_value, select_motifs_run_id_for_key, find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "motif loader").await?;
 
 
         //debug_plot!(&motif.as_ref(), "motif_{motif_id}")?;
@@ -248,7 +261,7 @@ where
     C: RunCtx + 'static,
 {
     type In<'a> = SlicesLoaderInput;
-    type Out = ThoTensor<MotifSlices, DataId>;
+    type Out = ThoTensor<MotifSlices, SynKey>;
 
     type Ctx = C;
 }
@@ -293,7 +306,7 @@ where
 
 
         let cache_area = ctx.cache_area().into();
-        let (window, motif) = load_motif_slices(motif_id.clone(), find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "random loader").await?;
+        let (window, motif) = load_motif_slices(motif_id.into(), None, find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "random loader").await?;
 
         // debug_plot!(&motif.as_ref(), "random_motif_{motif_id}")?;
 
@@ -310,6 +323,7 @@ where
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_slices"))]
 pub(crate) async fn load_motif_slices<L, C>(
     motif_id: DataId,
+    select_motifs_run_id: Option<Vec<RunId>>,
     find_motifs_run_id: u32,
     channel: i64,
     resources_map: HashMap<ResourceId, Resource>,
@@ -319,7 +333,7 @@ pub(crate) async fn load_motif_slices<L, C>(
     mut ctx: C,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     descr: &str
-) -> Result<(u32, ThoTensor<MotifSlices, DataId>), ThoError>
+) -> Result<(u32, ThoTensor<MotifSlices, SynKey>), ThoError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
@@ -389,7 +403,15 @@ where
     }
     //chop if there were skipped slices
     with_data!(ctx.branch(Some(&format!("motif")), false, false), motif_t; |_ctx, motif_tt:&ThoTensor::<MotifSlices, DataId>|{
-        ThoTensor::new(motif_tt.id().clone(), motif_tt.t.f_i((0..slice_i, ..))?)
+        let motif_id = select_motifs_run_id
+            .as_ref()
+            .map(|run_ids| {
+                run_ids.iter().fold(mono_key!(motif_tt.id().0, "motif").into(), |acc: SynKey, run_id| {
+                    &acc + mono_key!(*run_id, "select_motifs_run_id")
+                })
+            })
+            .unwrap_or_else(|| mono_key!(motif_tt.id().0, "motif").into());
+        ThoTensor::new(motif_id, motif_tt.t.f_i((0..slice_i, ..))?)
     }).map(|v|(window, v))
 }
 
@@ -404,7 +426,7 @@ pub(crate) async fn load_motif_slices_<L, C>(
     mut ctx: C,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     descr: &str
-) -> Result<(u32, ThoTensor<ChannelsMotifsSlices, DataId>), ThoError>
+) -> Result<(u32, ThoTensor<ChannelsMotifsSlices, SynKey>), ThoError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
@@ -477,7 +499,7 @@ where
     }
     //chop if there were skipped slices
     with_data!(ctx.branch(Some("motif_"), false, false), motif_t; |_ctx, motif_tt:&ThoTensor<AnyDims, DataId>|{
-        ThoTensor::new(motif_tt.id().clone(), motif_tt.t.f_i((.., 0..slice_i, ..))?)
+        ThoTensor::new((motif_tt.id().0, "motif").into(), motif_tt.t.f_i((.., 0..slice_i, ..))?)
     }).map(|v| (window, v))
 }
 
@@ -510,6 +532,7 @@ pub mod mock_motif_loader {
     use tokio::task::block_in_place;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_common::dims::MotifSlices;
+    use thoosa_shared::comp_id::SynKey;
     use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
     mock! {
         #[derive(Debug, Named)]
@@ -520,7 +543,7 @@ pub mod mock_motif_loader {
             type Ctx = MockRunCtx;
 
             type In<'a> = MotifLoaderInput;
-            type Out = DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>;
+            type Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>;
         }
 
         impl OutId for MotifLoader {
@@ -533,7 +556,7 @@ pub mod mock_motif_loader {
         #[async_trait]
         impl Cached for MotifLoader {
 
-            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>, ThoError >>>>;
+            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, ThoError >>>>;
             async fn run_cached(
                 self: Arc<Self>,
                 input: Arc<DevicesWrap<<MockMotifLoader as Stage>::In<'static>>>,
@@ -555,8 +578,8 @@ pub mod mock_motif_loader {
         where
             H: IntoIterator<Item=(MotifLoaderInput, (MotifMeta, Tensor))>,
         {
-            let data_map: Arc<HashMap<MotifLoaderInput, Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
-                (k.clone(), Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(k.motif_id.into(), v.1).unwrap(), v.0), CacheArea::default())))
+            let data_map: Arc<HashMap<MotifLoaderInput, Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
+                (k.clone(), Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(k.motif_id, v.1).unwrap(), v.0), CacheArea::default())))
             }).collect());
 
             self.mock.expect_run_cached().returning(move |input, ctx| {
@@ -618,6 +641,7 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_motifs::distance::average_euclidean_distance;
+    use thoosa_shared::comp_id::SynKey;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_motifs() -> Result<(), ThoError> {
@@ -629,7 +653,7 @@ mod tests {
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
         let resource_b = Resource::new(2, 1, "tensor_b", 1000);
         let mut store = MockStoreBuilder::new()
-            .with_list_motif_slices(10u32, None, None, None, Ok((0i64, run_id, vec![
+            .with_list_motif_slices(10u32, Some(vec![]), None, None, Ok((0i64, run_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
                 TensorIdSliceIdx(2, 100)
@@ -664,6 +688,7 @@ mod tests {
             || ctx.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").cache_area(),
             "MotifLoader::test_load_motif/ctx_read_cache_area",
         );
+        // TODO: replace the test-only u32 -> MotifLoaderInput conversion with explicit constructors.
         let input_id = Arc::new(DevicesWrap::wrap(10u32.into(), CacheArea::default()));
 
         let motif = motif_loader
@@ -683,7 +708,7 @@ mod tests {
         )
         .branch(Some("motif_loader_test_data"), false, false);
         let r = motif.with_data_ref(0,
-            ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, _ctx|{
+            ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, _ctx|{
                         let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
 
                         trace!("motif.t={} dist={dist}", t.data().t_ref());
@@ -747,7 +772,7 @@ mod tests {
         );
         let input = Arc::new(DevicesWrap::wrap(SlicesLoaderInput{ motif_id: DataId::from(&motif_id), limit: 10 }, CacheArea::default()));
 
-        let slices:Arc<DevicesWrap<ThoTensor<MotifSlices, DataId>>> = random_slices_loader
+        let slices:Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>> = random_slices_loader
             .run(
                 Arc::clone(&input),
                 thoosa_shared::with_perf_log(
@@ -765,7 +790,7 @@ mod tests {
         .branch(Some("random_slices_loader_data"), false, false);
         let r = slices.with_data_ref(
             0,
-            ctx_for_data, None, |t: &ThoTensor<MotifSlices, DataId>, _ctx| {
+            ctx_for_data, None, |t: &ThoTensor<MotifSlices, SynKey>, _ctx| {
                 let dist = average_euclidean_distance(t.t_ref()).unwrap();
 
                 trace!("random slices: \t{} dist={dist}", t.t_ref());

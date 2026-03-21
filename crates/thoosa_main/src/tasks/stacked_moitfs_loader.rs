@@ -77,11 +77,11 @@ impl StackedMotifsOutputId {
 #[derive(Debug)]
 pub struct StackedMotifsOutput {
     id:SynKey,
-    pub motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SynKey>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>,
+    pub motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SynKey>, (Vec<Vec<SynKey>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>,
 }
 
 impl StackedMotifsOutput {
-    pub fn new(id: SynKey, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SynKey>, (Vec<Vec<DataId>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>) -> Self {
+    pub fn new(id: SynKey, motifs: DataWithExtra<ThoTensor<ChannelsMotifsSlices, SynKey>, (Vec<Vec<SynKey>>, Arc<FindMotifsRunConfig>, Vec<Arc<SelectMotifsRunConfig>>)>) -> Self {
         Self { id, motifs }
     }
 
@@ -130,7 +130,7 @@ impl Output for StackedMotifsOutput {}
 #[derive(Debug, Cached, Named)]
 pub struct StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     id:MonoKey,
@@ -143,7 +143,7 @@ where
 
 impl <ML, C> OutId for StackedMotifsLoader<ML, C>
 where
-ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
 C: RunCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -154,7 +154,7 @@ C: RunCtx + Adjustable + 'static
 
 impl <ML, C> StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     pub fn new(
@@ -175,7 +175,7 @@ where
 
 impl <ML, C> Stage for StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 
 {
@@ -187,7 +187,7 @@ where
 // #[async_trait]
 impl <ML, C> AsyncStage for StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 
 {
@@ -228,7 +228,7 @@ where
                 let mut ctx = ctx.branch(Some("stacked_motifs_loader_task"), false, false);
 
                 async move {
-                    let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only(motif_id.into()).clone(), cache_area.into()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
+                    let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()).clone(), cache_area.into()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
 
                     match motif_loader_clone.run_cached(
                         motif_id_wrap, ctx.branch(Some("stacked_motifs_loader_motif"), false, false)
@@ -257,7 +257,7 @@ where
         .flatten()
         .collect::<Vec<_>>();
 
-        with_data!(ctx.branch(Some("stacked_motifs_loaded"), false, false), [loaded_motifs];|_ctx, data:&[&DataWithExtra<ThoTensor<MotifSlices, DataId>, MotifMeta>]|{
+        with_data!(ctx.branch(Some("stacked_motifs_loaded"), false, false), [loaded_motifs];|_ctx, data:&[&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>]|{
 
             let channels_motifs = data.iter().fold(
 
@@ -288,7 +288,7 @@ where
             assert!(max_motif_slices > 0, "no motif slices for {data:?}");
             //no more awaits - DeviceWrapper is not needed
 
-            let mut channels_motif_ids = vec![Vec::<DataId>::new(); num_channels as usize];//contains channels x motif ids * number of slices in the motif
+            let mut channels_motif_ids = vec![Vec::<SynKey>::new(); num_channels as usize];//contains channels x motif ids * number of slices in the motif
             let mut channels_motifs_tensors_vec = vec![];
             for c in 0..num_channels {
 

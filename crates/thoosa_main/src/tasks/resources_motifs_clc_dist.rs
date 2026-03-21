@@ -456,14 +456,14 @@ impl<'a> Input for ClcResourcesMotifsDistInput<'a> {}
 pub struct ClcResourcesMotifsDistOutput {
     pub id: SynKey,
     pub find_motifs_run_id: RunId,
-    pub channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<DataId>)>>,
+    pub channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<SynKey>)>>,
     pub resources_iter: SlicesIter,
 }
 
 impl ClcResourcesMotifsDistOutput {
     pub fn new(
         find_motifs_run_id: RunId,
-        channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<DataId>)>>,
+        channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<SynKey>)>>,
         resources_iter: SlicesIter,
     ) -> Self {
         debug!("ClcResourcesMotifsDistOutput::new: select_motifs_run_id={find_motifs_run_id} channel_masks_dists_ids={channel_masks_dists_ids:?} resources_iter={resources_iter:?}");
