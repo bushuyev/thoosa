@@ -32,11 +32,10 @@ use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ComparisonMethod as RunConfigMetrics, ExtendMotifsConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, MotifCriteria, MotifCriterion, MotifSelector, SelectMotifsRunConfig};
+use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ComparisonMethod as RunConfigMetrics, ExtendMotifsConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, MotifCriteria, MotifSelector, SelectMotifsRunConfig};
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
-use thoosa_motifs::criteria::{coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01, interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio, interesting_turning_points_ratio_peaked_01, interesting_turning_points_ratio_trapezoid_01, interesting_tv_norm_01, norm_thickness, periodicity_acf_01, periodicity_acf_01_frac};
 use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
@@ -1305,28 +1304,6 @@ where
         Ok(())
     }
 
-    fn clc_criterion_score(motif_slices: &Tensor, criterion: &MotifCriterion) -> Result<f64, ThoError> {
-        let score_t = match criterion {
-            MotifCriterion::NormThickness(v) => norm_thickness(motif_slices, v.eps)?,
-            MotifCriterion::InlierRatio(v) => inlier_ratio(motif_slices, v.k, v.eps)?,
-            MotifCriterion::Coherence(v) => coherence(motif_slices, v.k.round().max(1.0) as i64, v.eps)?,
-            MotifCriterion::InterestingAmp01(v) => interesting_amp_01(motif_slices, v.q_lo, v.q_hi, v.a0, v.eps)?,
-            MotifCriterion::InterestingTvNorm01(v) => interesting_tv_norm_01(motif_slices, v.amp_q_lo, v.amp_q_hi, v.tv0, v.eps)?,
-            MotifCriterion::InterestingCurvatureNorm01(v) => interesting_curvature_norm_01(motif_slices, v.amp_q_lo, v.amp_q_hi, v.curv0, v.eps)?,
-            MotifCriterion::InterestingTurningPointsRatio(v) => interesting_turning_points_ratio_trapezoid_01(motif_slices, 2, 3, 5, 7)?,
-            MotifCriterion::InterestingBandEnergyRatio01(v) => interesting_band_energy_ratio_01(motif_slices, v.fs, v.f_lo, v.f_hi, v.eps)?,
-            MotifCriterion::InterestingEntropyGauss01(v) => interesting_entropy_gauss_01(motif_slices, v.h0, v.sigma, v.eps)?,
-            MotifCriterion::InterestingEntropyBand01(v) => interesting_entropy_band_01(motif_slices, v.h_min, v.h_max, v.eps)?,
-            MotifCriterion::PeriodicityAcf(v) => periodicity_acf_01_frac(motif_slices, v.struct_lag_max, v.lag_min, v.lag_max, v.struct0, v.peak_good, v.peak_bad, v.eps)?,
-        };
-        let raw_score = score_t.f_double_value(&[])?;
-        if raw_score.is_finite() {
-            Ok(raw_score.clamp(0.0, 1.0))
-        } else {
-            warn!("SelectMotifsStage::run: got non-finite criterion score={raw_score}, treating it as 0.0");
-            Ok(0.0)
-        }
-    }
 
     fn clc_constraint_metrics(select_motifs_run_config: &SelectMotifsRunConfig, selected_motifs: &[SelectedMotifEvaluation]) -> HashMap<String, f32> {
         let constraints = select_motifs_run_config.motif_criteria.constraints();
@@ -1386,44 +1363,47 @@ where
         debug!("SelectMotifsStage::run: 1. motif_ids.len={}", motif_ids.len());
 
         let threshold = select_motifs_run_config.threshold as f64;
-
         let min_slices = select_motifs_run_config.min_slices.unwrap_or(10) as i64;
         let max_slices = select_motifs_run_config.max_slices.unwrap_or(100) as i64;
         assert!(min_slices <= max_slices, "SelectMotifsStage::filter_motifs_by_criteria: min_slices={min_slices} must be <= max_slices={max_slices}");
+        let select_motifs_run_id = select_motifs_run_config.id.expect("no select_motifs_run_config");
+        let criteria_stats = Arc::new(MotifStats::with_criteria_constraints(
+            Arc::clone(&self.store),
+            Arc::clone(&self.loader),
+            Arc::clone(&self.ws),
+            Arc::clone(&self.clc_dist.motif_loader),
+            Some(select_motifs_run_id),
+            criteria_constraints.clone(),
+            min_slices,
+            max_slices,
+        ));
 
         let mut motif_ids_filtered = Vec::with_capacity(motif_ids.len());
-
         let eta_guard = CollectEtaInvocationGuard::new("filter_motifs_by_criteria", motif_ids.len(), 1);
         for motif_id in motif_ids {
-            let motif_data = Arc::clone(&self.clc_dist.motif_loader)
+            let motif_stats = Arc::clone(&criteria_stats)
                 .run_cached(
-                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(((*motif_id), "motif_id").into(), Some(vec![select_motifs_run_config.id.expect("no select_motifs_run_config")])), CacheArea::default())),
-                    ctx.branch(Some("select_motifs_filter_motif_loader"), false, false),
-                ).await?;
+                    Arc::new(DevicesWrap::wrap(
+                        MotifStatsInput::from_motif_input(
+                            MotifLoaderInput::new(((*motif_id), "motif_id").into(), Some(vec![select_motifs_run_id])),
+                            Vec::<Metrics>::new(),
+                            Aggr::Mean(1.0),
+                            None,
+                        ),
+                        CacheArea::default(),
+                    )),
+                    ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false),
+                )
+                .await?;
 
-            let selected_motif = with_data!(ctx.branch(Some("select_motifs_filter_motif_criteria"), false, false), motif_data; |_ctx, motif_data: &DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>| {
-                let motif_slices = motif_data.data().t_ref();
-                debug!("SelectMotifsStage::run: motif_id={motif_id} criteria_constraints={criteria_constraints:?} threshold={threshold:.6} motif_slices={motif_slices:?}");
-
-                if motif_slices.size()[0] < min_slices || motif_slices.size()[0] > max_slices {
-                    return Ok::<Option<SelectedMotifEvaluation>, ThoError>(None);
-                }
-                let mut score_sum = 0.0f64;
-                let mut avg_score = 1.0;
-                let mut criterion_scores = Vec::with_capacity(criteria_constraints.len());
-
-
-                for (idx, criterion_constraint) in criteria_constraints.iter().enumerate() {
-                    let criterion_score = Self::clc_criterion_score(motif_slices, &criterion_constraint.criterion)?;
-                    if criterion_score < criterion_constraint.min as f64 {
-                        return Ok::<Option<SelectedMotifEvaluation>, ThoError>(None);
-                    }
-                    score_sum += criterion_score;
-                    avg_score = score_sum / (idx + 1) as f64;
-                    criterion_scores.push((criterion_constraint.key, criterion_score));//for opt
-                    debug!("SelectMotifsStage::run: motif_id={motif_id} criterion_constraint={criterion_constraint:?} criterion_score={criterion_score:.6} avg_score={avg_score:.6}");
-                }
-
+            let selected_motif = with_data!(ctx.branch(Some("select_motifs_filter_motif_stats"), false, false), motif_stats; |_ctx, motif_stats: &MotifStatsOutput| {
+                let criteria_evaluation = match motif_stats.criteria_evaluation() {
+                    Some(criteria_evaluation) => criteria_evaluation,
+                    None => return Ok::<Option<SelectedMotifEvaluation>, ThoError>(None),
+                };
+                let avg_score = criteria_evaluation.avg_score();
+                let criterion_scores = criteria_evaluation.criterion_scores().to_vec();
+                debug!("SelectMotifsStage::run: motif_id={motif_id} threshold={threshold:.6} avg_score={avg_score:.6} criterion_scores={criterion_scores:?}");
                 Ok::<Option<SelectedMotifEvaluation>, ThoError>((avg_score >= threshold).then_some(SelectedMotifEvaluation {
                     motif_id: *motif_id,
                     avg_score,
