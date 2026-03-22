@@ -1390,7 +1390,7 @@ where
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(
                             MotifStatsInput::from_motif_input(
-                                MotifLoaderInput::new(((*motif_id), "motif_id").into(), Some(vec![select_motifs_run_id])),
+                                MotifLoaderInput::new((*motif_id, "motif_id").into(), Some(vec![select_motifs_run_id])),
                                 Vec::<Metrics>::new(),
                                 Aggr::Mean(1.0),
                                 None,
