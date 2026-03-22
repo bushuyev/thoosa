@@ -331,17 +331,13 @@ where
 {
     motif_id: SynKey,
     batch_size: u32,
-    epoch_size: u32,//number of cycles done on same slices
-
-    train_motifs:Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>,
-    valid_motifs:Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>,
-    
+    epoch_size: u32,
+    train_motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>,
+    valid_motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>,
     random_slices_loader: Arc<RandomSlicesLoader<L, C>>,
-    random_slices: Mutex<CurrentRandomSlices>,//TODO this is unreachable for dumping to CPU
+    random_slices: Mutex<CurrentRandomSlices>,
     random_slices_limit: u32,
-    motif_meta:MotifMeta,
-    device_idx:usize,
-    ctx: Mutex<C>,
+    motif_meta: MotifMeta,
 }
 
 impl<L, C> MotifsBatch<L, C>
@@ -349,13 +345,12 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx,
 {
-
     pub async fn new(
         motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>,
         random_slices_loader: Arc<RandomSlicesLoader<L, C>>,
-        batch_size:i64,
-        device_idx:usize,
-        cache_area:u64,
+        batch_size: i64,
+        _device_idx: usize,
+        cache_area: u64,
         mut ctx: C,
         epoch_size: u32,
     ) -> Result<Self, ThoError> {
@@ -369,14 +364,14 @@ where
             debug!("MotifsBatch::new: motif.data={:?}", motif.data());
             assert!(num_motif_slices > 1);
             let num_validation_slices = (num_motif_slices as f32 * 0.2) as i64;
-            let num_validation_slices = if num_validation_slices <= 0 {1} else {num_validation_slices};
+            let num_validation_slices = if num_validation_slices <= 0 { 1 } else { num_validation_slices };
             let split = num_motif_slices - num_validation_slices;
 
             debug!("MotifsBatch::new: motif={:?} num_motif_slices={num_motif_slices} num_validation_slices={num_validation_slices} split={split}", motif.extra());
 
             let motifs_t = motif.data().t_ref();
-            let train_motifs = motifs_t.i((0..split, .. ));
-            let valid_motifs = motifs_t.i((split.., .. ));
+            let train_motifs = motifs_t.i((0..split, ..));
+            let valid_motifs = motifs_t.i((split.., ..));
 
             debug_plot!(&train_motifs, "train_motif_net_new_train_motif_{}", motif.id())?;
             debug_plot!(&train_motifs, "train_motif_net_new_valid_motifs_{}", motif.id())?;
@@ -386,7 +381,7 @@ where
 
             Ok::<_, ThoError>(Self {
                 motif_id: motif.id().clone(),
-                train_motifs:  Arc::new(DevicesWrap::wrap(train_motifs, cache_area.into())),
+                train_motifs: Arc::new(DevicesWrap::wrap(train_motifs, cache_area.into())),
                 valid_motifs: Arc::new(DevicesWrap::wrap(valid_motifs, cache_area.into())),
                 random_slices_loader,
                 random_slices: Mutex::new(CurrentRandomSlices::default()),
@@ -394,28 +389,18 @@ where
                 motif_meta,
                 batch_size: batch_size as u32,
                 epoch_size,
-                device_idx,
-                ctx: Mutex::new(ctx)
             })
         })
     }
 
-    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id:&SynKey, descr: &str) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
-        let random_slices = self.current_random_slices().await?;
-
+    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id: &SynKey, descr: &str, mut ctx: C) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
+        let random_slices = self.current_random_slices(ctx.branch(Some("motifs_batch_random_slices"), false, false)).await?;
         let num_slices = (self.batch_size / 2) as i64;
 
-        with_data!({
-            let mut guard = thoosa_shared::with_perf_log(
-                || self.ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "MotifsBatch/make_batch/lock_ctx",
-            );
-            guard.branch(Some("motifs_batch_make"), false, false)
-        }, motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, SynKey>|{
-
+        with_data!(ctx.branch(Some("motifs_batch_make"), false, false), motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, SynKey>|{
             debug!("MotifsBatch::make_batch: descr={descr} num_slices={num_slices}");
 
-            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;//TODO config
+            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
             let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
 
             debug_plot!(&motifs.as_ref(), "motifs_batch_make_batch_{motif_id}_{descr}", plot_repeats=11)?;
@@ -430,7 +415,7 @@ where
         })
     }
 
-    async fn current_random_slices(&self) -> Result<Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, ThoError> {
+    async fn current_random_slices(&self, mut ctx: C) -> Result<Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, ThoError> {
         let epoch_size = self.epoch_size.max(1);
         {
             let mut current_random_slices = self.random_slices.lock();
@@ -450,13 +435,7 @@ where
                     SlicesLoaderInput::new(self.motif_id.vals[0].to_data_id(), self.random_slices_limit),
                     CacheArea::default(),
                 )),
-                {
-                    let mut guard = thoosa_shared::with_perf_log(
-                        || self.ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                        "TrainMotifNets/current_random_slices/lock_ctx",
-                    );
-                    guard.branch(Some("motifs_batch_random_slices"), false, false)
-                },
+                ctx.branch(Some("motifs_batch_random_slices_loader"), false, false),
             )
             .await?;
 
@@ -467,30 +446,21 @@ where
     }
 }
 
-#[async_trait]
-impl<L, C> AsyncDataBatch<Slice, MotifProbability> for MotifsBatch<L, C>
+impl<L, C> AsyncDataBatch<Slice, MotifProbability, C> for MotifsBatch<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx,
 {
-    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
-        futures_util::stream::once( self.make_batch(Arc::clone(&self.train_motifs), &self.motif_id, "train"))//TODO this corresponds to number of resources in label training , replace with configurable val?
-        .map(|fut_res|{
-            fut_res.map(|v|{
-                (v.0, None,  v.1.into())
-            })
-        })
-        .boxed()
+    fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
+        futures_util::stream::once(self.make_batch(Arc::clone(&self.train_motifs), &self.motif_id, "train", ctx))
+            .map(|fut_res| fut_res.map(|v| (v.0, None, v.1.into())))
+            .boxed()
     }
 
-    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
-        futures_util::stream::once( self.make_batch(Arc::clone(&self.valid_motifs), &self.motif_id, "valid"))
+    fn valid_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
+        futures_util::stream::once(self.make_batch(Arc::clone(&self.valid_motifs), &self.motif_id, "valid", ctx))
             .take(self.epoch_size as usize)
-            .map(|fut_res|{
-                fut_res.map(|v|{
-                    (v.0, None, v.1.into())
-                })
-            })
+            .map(|fut_res| fut_res.map(|v| (v.0, None, v.1.into())))
             .boxed()
     }
 }

@@ -10,7 +10,7 @@ use futures_util::future::BoxFuture;
 use futures::FutureExt;
 use futures_util::stream::BoxStream;
 use log::{debug, info, trace};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use polars_arrow::io::iterator::StreamingIterator;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Device, Reduction, Tensor};
@@ -27,7 +27,7 @@ use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
+use thoosa_common::batches::{spawn_prefetched_batch_stream, AsyncDataBatch, BatchLengths};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
@@ -365,7 +365,7 @@ where
 
 
                     let train_net = Arc::new(TrainNet::new(
-                        move |ctx_for_batch:C,rc:&TrainLabelNetsRunConfig| {
+                        move |_ctx_for_batch:C,rc:&TrainLabelNetsRunConfig| {
 
                             let applied_motif_loader = Arc::clone(&applied_motif_loader);
 
@@ -376,7 +376,7 @@ where
                                    Arc::clone(&resources_1_valid),
                                    Arc::clone(&resources_0_train),
                                    Arc::clone(&resources_0_valid),
-                                   Box::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
+                                   Arc::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
                                        async move {
                                            let (x, lengths, y) = with_data!(
                                                ctx.branch(Some("train_label_nets_batch_data"), false, false),
@@ -406,8 +406,7 @@ where
 
                                            Ok((x.into(), lengths, y.into()))
                                        }.boxed()
-                                   }),
-                                ctx_for_batch
+                                   })
                                ))).boxed()
 
 
@@ -501,7 +500,7 @@ where
 }
 
 #[allow(type_alias_bounds)]
-type BuildBatchFn<LD:Data + WithId + Send + Sync + 'static, X:Dims+ 'static, Y:Dims+ 'static, C> = Box<dyn Fn(
+type BuildBatchFn<LD:Data + WithId + Send + Sync + 'static, X:Dims+ 'static, Y:Dims+ 'static, C> = Arc<dyn Fn(
     Vec<Arc<DevicesWrap<LD>>>,
     Vec<Arc<DevicesWrap<LD>>>, C
 
@@ -525,7 +524,6 @@ where
     resources_0_valid:Arc<Vec<Resource>>,
     loader: Arc<L>,
     build_batch_fn: BuildBatchFn<LD, X, Y, C>,
-    ctx: parking_lot::Mutex<C>
 }
 
 impl <L, C, LD, X, Y> Debug for  ResourcesBatch<L, C, LD, X, Y>
@@ -559,7 +557,6 @@ where
         resources_0_train:Arc<Vec<Resource>>,
         resources_0_valid:Arc<Vec<Resource>>,
         build_batch_fn:BuildBatchFn<LD, X, Y, C>,
-        ctx: C
     ) -> Self {
         debug!("ResourcesBatch::new: resources_1_train={resources_1_train:?}");
         debug!("ResourcesBatch::new: resources_1_valid={resources_1_valid:?}");
@@ -584,13 +581,11 @@ where
             half_batch_size,
             loader,
             build_batch_fn,
-            ctx: parking_lot::Mutex::new(ctx)
         }
     }
 }
 
-#[async_trait]
-impl <L,C, LD, X, Y> AsyncDataBatch<X, Y> for ResourcesBatch<L, C, LD, X, Y>
+impl <L,C, LD, X, Y> AsyncDataBatch<X, Y, C> for ResourcesBatch<L, C, LD, X, Y>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + OutId + 'static,
     C:RunCtx+'static,
@@ -599,34 +594,31 @@ where
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
-    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
-        //TODO if self.batch_size > train_len?
+    fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
 
-
         Self::build_batch_stream(
-            &self.build_batch_fn,
+            Arc::clone(&self.build_batch_fn),
             batches,
             Arc::clone(&self.loader),
-            &self.ctx,
+            ctx,
             Arc::clone(&self.resources_1_train),
             Arc::clone(&self.resources_0_train)
         )
     }
 
-    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
+    fn valid_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
 
-
         Self::build_batch_stream(
-            &self.build_batch_fn,
+            Arc::clone(&self.build_batch_fn),
             batches,
             Arc::clone(&self.loader),
-            &self.ctx,
+            ctx,
             Arc::clone(&self.resources_1_valid),
             Arc::clone(&self.resources_0_valid)
         )
@@ -642,68 +634,56 @@ where
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
-    fn build_batch_stream<'a>(build_batch_fn:&'a BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, ctx: &'a parking_lot::Mutex<C>, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'a, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
+    fn build_batch_stream(build_batch_fn: BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, mut ctx: C, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
+        let futures = resource_indexes_for_batches.into_iter().map(move |batch_keys| {
+            let build_batch_fn = Arc::clone(&build_batch_fn);
+            let loader = Arc::clone(&loader);
+            let x_1 = Arc::clone(&x_1);
+            let x_0 = Arc::clone(&x_0);
+            let mut ctx_for_build_fn = ctx.branch(Some("for_build_fn"), false, false);
 
-        futures_util::stream::iter(resource_indexes_for_batches)
-            .map(move |batch_keys| {
-                let loader = Arc::clone(&loader);
-                let x_1 = Arc::clone(&x_1);
-                let x_0 = Arc::clone(&x_0);
-                let mut ctx_for_build_fn = {
-                    let mut guard = thoosa_shared::with_perf_log(|| ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "ResourcesBatch::build_batch_stream/ctx_lock");
-                    guard.branch(Some("for_build_fn"), false, false)
-                };
-                async move {
-                    debug!("ResourcesBatch::build_batch_stream: ctx={ctx:?}");
-                    let batch_len = batch_keys.len();
+            async move {
+                let batch_len = batch_keys.len();
+                let futures = batch_keys.into_iter().map(|index| {
+                    let loader = Arc::clone(&loader);
+                    let x_1 = Arc::clone(&x_1);
+                    let x_0 = Arc::clone(&x_0);
+                    let ctx_x1 = ctx_for_build_fn.branch(Some("x_1_batch_loader"), false, false);
+                    let ctx_x0 = ctx_for_build_fn.branch(Some("x_0_batch_loader"), false, false);
 
-                    // load samples for this batch concurrently
-                    let futures = batch_keys
-                        .into_iter()
-                        .map(|index| {
-                            let loader = Arc::clone(&loader);
-                            let x_1 = Arc::clone(&x_1);
-                            let x_0 = Arc::clone(&x_0);
+                    async move {
+                        try_join!(
+                            Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_1[index].clone(), CacheArea::default())), ctx_x1),
+                            Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_0[index].clone(), CacheArea::default())), ctx_x0)
+                        )
+                    }
+                });
 
-                            debug!("ResourcesBatch::build_batch_stream: before move");
+                let (x_1_wrapped, x_0_wrapped) = collect_futures_with_progress(
+                    futures,
+                    batch_len,
+                    crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
+                    StreamBuffering::Ordered,
+                    "ResourcesBatch::build_batch_stream",
+                )
+                .await
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .fold((vec![], vec![]), |mut a, v| {
+                    a.0.push(v.0);
+                    a.1.push(v.1);
+                    a
+                });
 
-                            let ( ctx_x1, ctx_x0) = {
+                (build_batch_fn)(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).await
+            }
+        });
 
-                                (ctx_for_build_fn.branch(Some("x_1_batch_loader"), false, false), ctx_for_build_fn.branch(Some("x_0_batch_loader"), false, false))
-                            };
-                            async move {
-                                (async {
-                                    try_join!(
-                                        Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_1[index].clone(), CacheArea::default())), ctx_x1),
-                                        Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_0[index].clone(), CacheArea::default())), ctx_x0)
-                                    )
-                                })
-                                .await
-                            }
-                        });
-
-                    let (x_1_wrapped, x_0_wrapped) = collect_futures_with_progress(
-                        futures,
-                        batch_len,
-                        crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
-                        StreamBuffering::Ordered,
-                        "ResourcesBatch::build_batch_stream",
-                    )
-                    .await
-                    .into_iter()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .fold((vec![], vec![]), |mut a, v| {
-                        a.0.push(v.0); //1
-                        a.1.push(v.1); //0
-                        a
-                    });
-
-                    build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).await
-                }
-            })
-            .buffer_unordered(crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_STREAM_BUFFER_UNORDERED_LIMIT)//TODO config
-            .boxed()
+        spawn_prefetched_batch_stream(
+            futures,
+            crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_STREAM_BUFFER_UNORDERED_LIMIT,
+        )
     }
 
 }
@@ -1040,7 +1020,7 @@ mod tests {
             resources_1_valid,
             resources_0_train,
             resources_0_valid,
-            Box::new(|x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, mut ctx: MockRunCtx|{
+            Arc::new(|x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, mut ctx: MockRunCtx|{
                 async move {
                     let ctx_for_data = ctx.branch(Some("train_label_nets_batch_data"), false, false);
                     with_data!(ctx_for_data, [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<ChannelsData2, SynKey>], x_0:&[&ThoTensor<ChannelsData2, SynKey>]|{
@@ -1054,14 +1034,13 @@ mod tests {
                     })
                 }.boxed()
             }),
-            mock_run_ctx::default(0)
         );
 
-        let mut batch = resource_batch.train_batch_stream().await;
+        let mut batch = resource_batch.train_batch_stream(mock_run_ctx::default(0));
         let (_batch_x, _lengths,  _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 
-        let mut batch = resource_batch.valid_batch_stream().await;
+        let mut batch = resource_batch.valid_batch_stream(mock_run_ctx::default(0));
         let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 

@@ -8,7 +8,7 @@ use futures::FutureExt;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use log::{debug, trace};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::future::ready;
@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Reduction, Tensor};
-use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
+use thoosa_common::batches::{spawn_prefetched_batch_stream, AsyncDataBatch, BatchLengths};
 use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch};
 use thoosa_common::runs::{Logits, NetResources, SavableResult};
 use thoosa_common::tho_device::ThoDevice;
@@ -214,12 +214,12 @@ where
             let valid_resources = Arc::new(valid_resources);
 
             let train_net = Arc::new(TrainNet::new(
-                move |ctx: C, rc: &TrainFinalNetRunConfig| {
+                move |_ctx: C, rc: &TrainFinalNetRunConfig| {
                     let label_loader = Arc::clone(&label_loader);
                     let train_resources = Arc::clone(&train_resources);
                     let valid_resources = Arc::clone(&valid_resources);
 
-                    ready(LogitsResourcesBatch::new(label_loader, rc.common_training_args.batch_size, train_resources, valid_resources, labels_len, ctx)).boxed()
+                    ready(LogitsResourcesBatch::new(label_loader, rc.common_training_args.batch_size, train_resources, valid_resources, labels_len)).boxed()
                 },
                 move |rc: &TrainFinalNetRunConfig, vs: &VarStore| {
                     let net_params = FinalNetParams::new(num_label_nets, labels_len as u32, rc.net.num_layers);
@@ -267,7 +267,6 @@ where
     valid_resources: Arc<Vec<(Resource, Vec<f32>)>>,
     loader: Arc<L>,
     labels_len: usize,
-    ctx: Mutex<C>,
 }
 
 impl<L, C> Debug for LogitsResourcesBatch<L, C>
@@ -285,7 +284,7 @@ where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + OutId + 'static,
     C: RunCtx + 'static,
 {
-    pub fn new(loader: Arc<L>, batch_size: u32, train_resources: Arc<Vec<(Resource, Vec<f32>)>>, valid_resources: Arc<Vec<(Resource, Vec<f32>)>>, labels_len: usize, ctx: C) -> Result<Self, ThoError> {
+    pub fn new(loader: Arc<L>, batch_size: u32, train_resources: Arc<Vec<(Resource, Vec<f32>)>>, valid_resources: Arc<Vec<(Resource, Vec<f32>)>>, labels_len: usize) -> Result<Self, ThoError> {
         if train_resources.is_empty() || valid_resources.is_empty() {
             return Err(ThoError::new("LogitsResourcesBatch::new: empty resources"));
         }
@@ -301,112 +300,99 @@ where
             valid_resources,
             loader,
             labels_len,
-            ctx: Mutex::new(ctx),
         })
     }
 
-    fn build_batch_stream<'a>(loader: Arc<L>, ctx: &'a Mutex<C>, resources: Arc<Vec<(Resource, Vec<f32>)>>, batch_size: u32, labels_len: usize) -> BoxStream<'a, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
+    fn build_batch_stream(loader: Arc<L>, resources: Arc<Vec<(Resource, Vec<f32>)>>, batch_size: u32, labels_len: usize, mut ctx: C) -> BoxStream<'static, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(resources.len(), batch_size, &mut rand::rng());
+        let futures = batches.into_iter().map(move |batch_keys| {
+            let loader = Arc::clone(&loader);
+            let resources = Arc::clone(&resources);
+            let mut ctx_for_batch = ctx.branch(Some("final_net_batch"), false, false);
 
-        futures_util::stream::iter(batches)
-            .map(move |batch_keys| {
-                let loader = Arc::clone(&loader);
-                let resources = Arc::clone(&resources);
-                async move {
-                    let batch_len = batch_keys.len();
-                    let futures = batch_keys
-                        .into_iter()
-                        .map(|index| {
-                            let loader = Arc::clone(&loader);
-                            let (resource, labels) = resources[index].clone();
-                            let ctx_for_loader = {
-                                let mut guard = thoosa_shared::with_perf_log(
-                                    || ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                                    "TrainFinalNet/build_batch_stream/lock_ctx",
-                                );
-                                guard.branch(Some("final_net_batch_loader"), false, false)
-                            };
+            async move {
+                let batch_len = batch_keys.len();
+                let futures = batch_keys.into_iter().map(|index| {
+                    let loader = Arc::clone(&loader);
+                    let (resource, labels) = resources[index].clone();
+                    let ctx_for_loader = ctx_for_batch.branch(Some("final_net_batch_loader"), false, false);
 
-                            async move {
-                                (async {
-                                    let out = Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(resource, CacheArea::default())), ctx_for_loader).await?;
-                                    Ok::<_, ThoError>((out, labels))
-                                })
-                                .await
-                            }
-                        });
+                    async move {
+                        let out = Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(resource, CacheArea::default())), ctx_for_loader).await?;
+                        Ok::<_, ThoError>((out, labels))
+                    }
+                });
 
-                    let (outputs, labels) = collect_futures_with_progress(
-                        futures,
-                        batch_len,
-                        crate::buffer_limits::LOGITS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
-                        StreamBuffering::Ordered,
-                        "LogitsResourcesBatch::build_batch_stream",
-                    )
-                    .await
-                    .into_iter()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .fold((vec![], vec![]), |mut a, v| {
-                        a.0.push(v.0);
-                        a.1.push(v.1);
-                        a
-                    });
+                let (outputs, labels) = collect_futures_with_progress(
+                    futures,
+                    batch_len,
+                    crate::buffer_limits::LOGITS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
+                    StreamBuffering::Ordered,
+                    "LogitsResourcesBatch::build_batch_stream",
+                )
+                .await
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .fold((vec![], vec![]), |mut a, v| {
+                    a.0.push(v.0);
+                    a.1.push(v.1);
+                    a
+                });
 
-                    let (device_idx, ctx_for_build) = {
-                        let mut guard = thoosa_shared::with_perf_log(
-                            || ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                            "TrainFinalNet/build_batch_stream/lock_ctx",
-                        );
-                        (guard.device_idx(), guard.branch(Some("final_net_batch_build"), false, false))
-                    };
+                let device_idx = ctx_for_batch.device_idx();
+                let ctx_for_build = ctx_for_batch.branch(Some("final_net_batch_build"), false, false);
 
-                    with_data!(ctx_for_build, [outputs]; |_ctx, xs:&[&ThoTensor<LabelProbability, SynKey>]|{
-                        let x = Tensor::f_stack(
-                            xs.iter()
-                                .map(|x| x.t_ref().f_flatten(0, 1))
-                                .collect::<Result<Vec<_>, _>>()?
-                                .as_slice(),
-                            0,
-                        )?;
-                        let device = ThoDevice::from(device_idx).into();
-                        let y = Tensor::f_stack(
-                            labels.iter()
-                                .map(|labels| {
-                                    if labels.len() != labels_len {
-                                        return Err(ThoError::new("LogitsResourcesBatch::build: bad label size"));
-                                    }
-                                    let t = Tensor::f_from_slice(labels.as_slice())?;
-                                    Ok(t.f_to_device(device)?)
-                                })
-                                .collect::<Result<Vec<_>, _>>()?
-                                .as_slice(),
-                            0,
-                        )?;
+                with_data!(ctx_for_build, [outputs]; |_ctx, xs:&[&ThoTensor<LabelProbability, SynKey>]|{
+                    let x = Tensor::f_stack(
+                        xs.iter()
+                            .map(|x| x.t_ref().f_flatten(0, 1))
+                            .collect::<Result<Vec<_>, _>>()?
+                            .as_slice(),
+                        0,
+                    )?;
+                    let device = ThoDevice::from(device_idx).into();
+                    let y = Tensor::f_stack(
+                        labels.iter()
+                            .map(|labels| {
+                                if labels.len() != labels_len {
+                                    return Err(ThoError::new("LogitsResourcesBatch::build: bad label size"));
+                                }
+                                let t = Tensor::f_from_slice(labels.as_slice())?;
+                                Ok(t.f_to_device(device)?)
+                            })
+                            .collect::<Result<Vec<_>, _>>()?
+                            .as_slice(),
+                        0,
+                    )?;
 
-                        debug!("LogitsResourcesBatch::build_batch_stream: x=\n{x} y=\n{y}");
+                    debug!("LogitsResourcesBatch::build_batch_stream: x=
+{x} y=
+{y}");
 
-                        Ok::<_, ThoError>((x.into(), None, y.into()))
-                    })
-                }
-            })
-            .buffer_unordered(crate::buffer_limits::LOGITS_RESOURCES_BATCH_STREAM_BUFFER_UNORDERED_LIMIT)
-            .boxed()
+                    Ok::<_, ThoError>((x.into(), None, y.into()))
+                })
+            }
+        });
+
+        spawn_prefetched_batch_stream(
+            futures,
+            crate::buffer_limits::LOGITS_RESOURCES_BATCH_STREAM_BUFFER_UNORDERED_LIMIT,
+        )
     }
 }
 
-#[async_trait]
-impl<L, C> AsyncDataBatch<LabelProbability, LabelsProbabilities> for LogitsResourcesBatch<L, C>
+impl<L, C> AsyncDataBatch<LabelProbability, LabelsProbabilities, C> for LogitsResourcesBatch<L, C>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + OutId + 'static,
     C: RunCtx + 'static,
 {
-    async fn train_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
-        Self::build_batch_stream(Arc::clone(&self.loader), &self.ctx, Arc::clone(&self.train_resources), self.batch_size, self.labels_len)
+    fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
+        Self::build_batch_stream(Arc::clone(&self.loader), Arc::clone(&self.train_resources), self.batch_size, self.labels_len, ctx)
     }
 
-    async fn valid_batch_stream(&self) -> BoxStream<'_, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
-        Self::build_batch_stream(Arc::clone(&self.loader), &self.ctx, Arc::clone(&self.valid_resources), self.batch_size, self.labels_len)
+    fn valid_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
+        Self::build_batch_stream(Arc::clone(&self.loader), Arc::clone(&self.valid_resources), self.batch_size, self.labels_len, ctx)
     }
 }
 

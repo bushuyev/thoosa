@@ -123,7 +123,7 @@ pub struct TrainNet<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
     C: RunCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
-    B:AsyncDataBatch<DX, DY> + 'static,
+    B:AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
@@ -150,7 +150,7 @@ impl<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> Debug for TrainNet<C, B, BF, D
 where
     C: RunCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
-    B:AsyncDataBatch<DX, DY> + 'static,
+    B:AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
@@ -169,7 +169,7 @@ impl<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> TrainNet<C, B, BF, DX, DY, P, 
 where
     C: RunCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
-    B:AsyncDataBatch<DX, DY> + 'static,
+    B:AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
@@ -266,7 +266,7 @@ where
 
                 debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?}",maybe_cuda_mem(&device));
 
-                let mut batches = batch.train_batch_stream().await;
+                let mut batches = batch.train_batch_stream(ctx.branch(Some("train_batch"), false, false));
                 debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
                 let epoch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_in_{descr}"), 10/*TODO size hint*/, 1);
@@ -301,7 +301,7 @@ where
 
                     debug!("TrainNet::run_inner, valid: descr={descr}  0. cuda_mem={:?}",maybe_cuda_mem(&device));
 
-                    let mut batches = batch.valid_batch_stream().await;
+                    let mut batches = batch.valid_batch_stream(ctx.branch(Some("valid_batch"), false, false));
                     debug!("TrainNet::run_inner, valid: descr={descr}  1. cuda_mem={:?}",maybe_cuda_mem(&device));
                     let mut valid_loss_sum = 0f32;
                     let mut valid_loss_count = 0u32;
@@ -371,7 +371,7 @@ impl<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> Stage for TrainNet<C, B, BF, D
 where
     C: RunCtx + Adjustable + 'static,
     DX: Dims, DY: Dims,
-    B:AsyncDataBatch<DX, DY>,
+    B:AsyncDataBatch<DX, DY, C>,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
@@ -391,7 +391,7 @@ impl<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> AsyncStage for TrainNet<C, B, 
 where
     C: RunCtx + Adjustable + 'static,
     DX: Dims + 'static, DY: Dims + 'static,
-    B:AsyncDataBatch<DX, DY> + 'static,
+    B:AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
@@ -864,9 +864,9 @@ mod tests {
         let train_stream_calls = Arc::new(AtomicUsize::new(0));
         let valid_stream_calls = Arc::new(AtomicUsize::new(0));
         let mock_test_batch = Arc::new(
-            mock_async_data_batch::build::<DummyX, DummyY>()
-                .with_train_stream_calls(Arc::clone(&train_stream_calls), make_stream)
-                .with_valid_stream_calls(Arc::clone(&valid_stream_calls), make_stream)
+            mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>()
+                .with_train_stream_calls(Arc::clone(&train_stream_calls), |_ctx| make_stream())
+                .with_valid_stream_calls(Arc::clone(&valid_stream_calls), |_ctx| make_stream())
                 .finish(),
         );
         let mut ctx = mock_run_ctx::default(0);
