@@ -522,7 +522,7 @@ mod tests {
                 interesting_entropy_band_01: None,
                 periodicity_acf_01: None,
             },
-            threshold: RangeOrValue::Range { range: 0.4..0.6, step: Some((0.1, 1)) },
+            avg_threshold: RangeOrValue::Range { range: 0.4..0.6, step: Some((0.1, 1)) },
             min_slices: None,
             max_slices: None,
             extend_max_slices: None,
@@ -534,9 +534,9 @@ mod tests {
         assert!(run_configs[0].motif_criteria.norm_thickness.is_some());
         assert!(run_configs[0].motif_criteria.inlier_ratioRunConfig.is_some());
         assert!(run_configs[0].motif_criteria.coherenceRunConfig.is_none());
-        assert!((run_configs[0].threshold - 0.4).abs() < 1e-6, "unexpected threshold: {}", run_configs[0].threshold);
-        assert!((run_configs[1].threshold - 0.5).abs() < 1e-6, "unexpected threshold: {}", run_configs[1].threshold);
-        assert!((run_configs[2].threshold - 0.6).abs() < 1e-6, "unexpected threshold: {}", run_configs[2].threshold);
+        assert!((run_configs[0].avg_threshold - 0.4).abs() < 1e-6, "unexpected threshold: {}", run_configs[0].avg_threshold);
+        assert!((run_configs[1].avg_threshold - 0.5).abs() < 1e-6, "unexpected threshold: {}", run_configs[1].avg_threshold);
+        assert!((run_configs[2].avg_threshold - 0.6).abs() < 1e-6, "unexpected threshold: {}", run_configs[2].avg_threshold);
     }
 
     #[test]
@@ -1489,7 +1489,7 @@ pub struct SelectMotifsRunConfig {
 
     #[in_map]
     #[run_config]
-    pub threshold: f32,//TODO remove
+    pub avg_threshold: f32,
 
     #[in_map]
     #[run_config]
@@ -1511,7 +1511,7 @@ impl SelectMotifsRunConfig {
 
     pub fn new_with_fields(id: Option<RunId>, extend_config: Option<ExtendMotifsConfig>, motif_criteria: MotifCriteria, threshold: f32) -> Self {
         Self::validate_threshold(threshold);
-        Self { id, extend_config, motif_criteria, threshold, min_slices: None, max_slices: None, extend_max_slices: None }
+        Self { id, extend_config, motif_criteria, avg_threshold: threshold, min_slices: None, max_slices: None, extend_max_slices: None }
     }
 
     // #[cfg(test)]

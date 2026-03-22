@@ -1346,7 +1346,7 @@ where
         select_motifs_run_config: &SelectMotifsRunConfig,
         mut ctx: C,
     ) -> Result<Vec<SelectedMotifEvaluation>, ThoError> {
-        assert!((0.0..=1.0).contains(&select_motifs_run_config.threshold), "SelectMotifsRunConfig::threshold must be within 0..1, got {}", select_motifs_run_config.threshold);
+        assert!((0.0..=1.0).contains(&select_motifs_run_config.avg_threshold), "SelectMotifsRunConfig::threshold must be within 0..1, got {}", select_motifs_run_config.avg_threshold);
         debug!("SelectMotifsStage::run: 0. self.find_motif_run_ids_motif_ids={:?}", self.find_motif_run_ids_motif_ids);
 
         let criteria_constraints = select_motifs_run_config.motif_criteria.constraints();
@@ -1362,7 +1362,7 @@ where
         let motif_ids = self.find_motif_run_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).collect::<Vec<_>>();
         debug!("SelectMotifsStage::run: 1. motif_ids.len={}", motif_ids.len());
 
-        let threshold = select_motifs_run_config.threshold as f64;
+        let threshold = select_motifs_run_config.avg_threshold as f64;
         let min_slices = select_motifs_run_config.min_slices.unwrap_or(10) as i64;
         let max_slices = select_motifs_run_config.max_slices.unwrap_or(100) as i64;
         assert!(min_slices <= max_slices, "SelectMotifsStage::filter_motifs_by_criteria: min_slices={min_slices} must be <= max_slices={max_slices}");
@@ -1379,7 +1379,7 @@ where
         ));
 
         let motifs_len = motif_ids.len();
-        let mut motif_ids_filtered = Vec::with_capacity(motifs_len);
+
 
         let futures = motif_ids.into_iter().map(|motif_id|{
             let criteria_stats = Arc::clone(&criteria_stats);
@@ -1401,25 +1401,20 @@ where
                     )
                     .await?;
 
-                let selected_motif = with_data!(ctx, motif_stats; |_ctx, motif_stats: &MotifStatsOutput| {
-                let criteria_evaluation = match motif_stats.criteria_evaluation() {
-                    Some(criteria_evaluation) => criteria_evaluation,
-                    None => return Ok::<Option<SelectedMotifEvaluation>, ThoError>(None),
-                };
-                let avg_score = criteria_evaluation.avg_score();
-                let criterion_scores = criteria_evaluation.criterion_scores().to_vec();
-                debug!("SelectMotifsStage::run: motif_id={motif_id} threshold={threshold:.6} avg_score={avg_score:.6} criterion_scores={criterion_scores:?}");
-                Ok::<Option<SelectedMotifEvaluation>, ThoError>((avg_score >= threshold).then_some(SelectedMotifEvaluation {
-                    motif_id: *motif_id,
-                    avg_score,
-                    criterion_scores,
-                }))
-            })?;
-
-                // if let Some(selected_motif) = selected_motif {
-                //     motif_ids_filtered.push(selected_motif);
-                // }
-                Ok::<_, ThoError>(())
+                with_data!(ctx, motif_stats; |_ctx, motif_stats: &MotifStatsOutput| {
+                    let criteria_evaluation = match motif_stats.criteria_evaluation() {
+                        Some(criteria_evaluation) => criteria_evaluation,
+                        None => return Ok::<Option<SelectedMotifEvaluation>, ThoError>(None),
+                    };
+                    let avg_score = criteria_evaluation.avg_score();
+                    let criterion_scores = criteria_evaluation.criterion_scores().to_vec();
+                    debug!("SelectMotifsStage::run: motif_id={motif_id} threshold={threshold:.6} avg_score={avg_score:.6} criterion_scores={criterion_scores:?}");
+                    Ok::<Option<SelectedMotifEvaluation>, ThoError>((avg_score >= threshold).then_some(SelectedMotifEvaluation {
+                        motif_id: *motif_id,
+                        avg_score,
+                        criterion_scores,
+                    }))
+                })
 
             }
         });
@@ -1430,12 +1425,13 @@ where
             crate::buffer_limits::SELECT_MOTIFS_STAGE_RUN_CONFIGS,
             StreamBuffering::Unordered,
             "filter_motifs_by_criteria",
-        ).await;
+        ).await
+        .into_iter().filter_map(|v| v).collect::<Vec<SelectedMotifEvaluation>>();
 
 
+        debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered extended_motif_ids.len={}", run_results.len());
 
-        debug!("SelectMotifsStage::run: run_config={select_motifs_run_config:?} filtered extended_motif_ids.len={}", motif_ids_filtered.len());
-        Ok(motif_ids_filtered)
+        Ok(run_results)
     }
 
 }
@@ -2080,7 +2076,7 @@ pub mod tests {
             interesting_entropy_band_01: None,
             periodicity_acf_01: None,
         };
-        select_motifs_run_config.threshold = 0.5;
+        select_motifs_run_config.avg_threshold = 0.5;
         select_motifs_run_config.min_slices = Some(10);
         select_motifs_run_config.max_slices = Some(100);
 
@@ -2159,7 +2155,7 @@ pub mod tests {
             interesting_entropy_band_01: None,
             periodicity_acf_01: None,
         };
-        select_motifs_run_config.threshold = 0.5;
+        select_motifs_run_config.avg_threshold = 0.5;
         select_motifs_run_config.min_slices = Some(1);
         select_motifs_run_config.max_slices = Some(10);
 
@@ -2363,7 +2359,7 @@ pub mod tests {
 
         let mut select_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
         select_config.extend_config = None;
-        select_config.threshold = 0.0;
+        select_config.avg_threshold = 0.0;
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
             &ws,
@@ -2454,7 +2450,7 @@ pub mod tests {
         let mut select_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
         select_config.extend_config = None;
         select_config.motif_criteria.norm_thickness = Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN });
-        select_config.threshold = 0.5;
+        select_config.avg_threshold = 0.5;
         select_config.min_slices = Some(1);
         select_config.max_slices = Some(10);
 
