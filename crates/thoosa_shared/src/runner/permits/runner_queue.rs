@@ -17,7 +17,8 @@ use crate::runner::permits::{DropSignal, NumPermits, PermitSource, RunnerPerm};
 pub struct Arbiter {
     #[allow(dead_code)]
     sem: Arc<Semaphore>, //TODO for statistics
-    notify: Arc<Notify>,
+    worker_notify: Arc<Notify>,
+    hint_notify: Arc<Notify>,
     tx: Option<mpsc::Sender<Req>>,
     capacity: NumPermits,
     worker: Option<JoinHandle<()>>,
@@ -43,13 +44,15 @@ impl Arbiter {
 
         let (tx, rx) = mpsc::channel::<Req>(1024);
         let sem = Arc::new(Semaphore::new(capacity as usize));
-        let notify = Arc::new(Notify::new());
+        let worker_notify = Arc::new(Notify::new());
+        let hint_notify = Arc::new(Notify::new());
         let shutdown = Arc::new(AtomicBool::new(false));
         let granted_counts: Arc<DashMap<Arc<dyn CachableIdTr>, usize>> = Arc::new(DashMap::new());
 
         let worker = Self::spawn(
             Arc::clone(&sem),
-            Arc::clone(&notify),
+            Arc::clone(&worker_notify),
+            Arc::clone(&hint_notify),
             Arc::clone(&shutdown),
             Arc::clone(&granted_counts),
             rx,
@@ -58,7 +61,8 @@ impl Arbiter {
         );
         Self {
             sem,
-            notify,
+            worker_notify,
+            hint_notify,
             tx: Some(tx),
             capacity,
             worker: Some(worker),
@@ -107,7 +111,8 @@ impl Arbiter {
         debug!("Arbiter::shutdown: self.granted_counts={:?}", self.granted_counts);
 
         self.shutdown.store(true, Ordering::Release);
-        self.notify.notify_waiters();
+        self.worker_notify.notify_waiters();
+        self.hint_notify.notify_waiters();
         // if let Some(tx) = self.tx.take() {
         //     drop(tx);
         // }
@@ -118,7 +123,8 @@ impl Arbiter {
 
     fn spawn(
         sem: Arc<Semaphore>,
-        notify: Arc<Notify>,
+        worker_notify: Arc<Notify>,
+        hint_notify: Arc<Notify>,
         shutdown: Arc<AtomicBool>,
         granted_counts: Arc<DashMap<Arc<dyn CachableIdTr>, usize>>,
         mut rx: mpsc::Receiver<Req>,
@@ -183,7 +189,8 @@ impl Arbiter {
                 rq: Req,
                 inner: tokio::sync::OwnedSemaphorePermit,
                 granted_counts: &DashMap<Arc<dyn CachableIdTr>, usize>,
-                notify: &Arc<Notify>,
+                worker_notify: &Arc<Notify>,
+                hint_notify: &Arc<Notify>,
                 drop_tx: &mpsc::UnboundedSender<(Arc<dyn CachableIdTr>, u8)>,
             ) {
                 let n = inner.num_permits();
@@ -199,7 +206,8 @@ impl Arbiter {
                 let perm = RunnerPerm::with_drop_signal(
                     inner,
                     DropSignal::new(
-                        Arc::clone(notify),
+                        Arc::clone(worker_notify),
+                        Arc::clone(hint_notify),
                         drop_tx.clone(),
                         Arc::clone(&rq.requester_id),
                     ),
@@ -276,7 +284,8 @@ impl Arbiter {
                                     rq,
                                     inner,
                                     &granted_counts,
-                                    &notify,
+                                    &worker_notify,
+                                    &hint_notify,
                                     &drop_tx,
                                 );
                                 fail_counts.remove(sid);
@@ -325,7 +334,8 @@ impl Arbiter {
                                     rq,
                                     inner,
                                     &granted_counts,
-                                    &notify,
+                                    &worker_notify,
+                                    &hint_notify,
                                     &drop_tx,
                                 );
                                 fail_counts.remove(&requester_id);
@@ -401,7 +411,7 @@ impl Arbiter {
                         }
                     }
 
-                    _ = notify.notified() => {
+                    _ = worker_notify.notified() => {
                         debug!("Arbiter::spawn, select, notified");
                         // permit dropped -> try again
                     }
@@ -457,7 +467,8 @@ impl Debug for Arbiter {
 impl Drop for Arbiter {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
-        self.notify.notify_waiters();
+        self.worker_notify.notify_waiters();
+        self.hint_notify.notify_waiters();
         self.tx.take();
         if let Some(handle) = self.worker.take() {
             if let Ok(rt) = tokio::runtime::Handle::try_current() {
@@ -493,7 +504,7 @@ impl PermitSource for Arbiter {
     async fn wait_for_permits_hint(&self) {
         //TODO conf timeout
         debug!("PermitsDebug: wait_for_permits_hint");
-        let _ = timeout(Duration::from_millis(10000), self.notify.notified()).await;
+        let _ = timeout(Duration::from_millis(10000), self.hint_notify.notified()).await;
     }
 
     //TODO #[cfg(debug_assertions)]

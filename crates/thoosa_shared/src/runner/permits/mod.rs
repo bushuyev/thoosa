@@ -57,19 +57,22 @@ pub struct RunnerPerm {
 }
 
 pub struct DropSignal {
-    notify: Arc<Notify>,//Arc to Arbiter::notify
-    drop_tx: mpsc::UnboundedSender<(Arc<dyn CachableIdTr>, u8)>,
+    worker_notify: Arc<Notify>,//Arc to Arbiter worker notify, for triggering next loop at crates/thoosa_shared/src/runner/permits/runner_queue.rs:404
+    hint_notify: Arc<Notify>,//Arc to Arbiter hint notify, for waking wait_for_permits_hint without stealing worker wakeups
+    drop_tx: mpsc::UnboundedSender<(Arc<dyn CachableIdTr>, u8)>,//for tracking granted_counts in crates/thoosa_shared/src/runner/permits/runner_queue.rs:141 - used for debug only
     requester_id: Arc<dyn CachableIdTr>,
 }
 
 impl DropSignal {
     pub fn new(
-        notify: Arc<Notify>,
+        worker_notify: Arc<Notify>,
+        hint_notify: Arc<Notify>,
         drop_tx: mpsc::UnboundedSender<(Arc<dyn CachableIdTr>, u8)>,
         requester_id: Arc<dyn CachableIdTr>,
     ) -> Self {
         Self {
-            notify,
+            worker_notify,
+            hint_notify,
             drop_tx,
             requester_id,
         }
@@ -124,7 +127,8 @@ impl Drop for RunnerPerm {
             debug!("PermitsDebug: Drop for RunnerPerm::drop: drop_signal.requester_id={:?} num_permits={permits_to_drop:?}", drop_signal.requester_id);
 
             let _ = drop_signal.drop_tx.send((drop_signal.requester_id, permits_to_drop));
-            drop_signal.notify.notify_one(); //requesters also wait on same notify
+            drop_signal.worker_notify.notify_one();
+            drop_signal.hint_notify.notify_one();
         }
     }
 }
