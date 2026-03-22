@@ -650,10 +650,7 @@ where
                 let x_1 = Arc::clone(&x_1);
                 let x_0 = Arc::clone(&x_0);
                 let mut ctx_for_build_fn = {
-                    let mut guard = thoosa_shared::with_perf_log(
-                        || ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                        "ResourcesBatch::build_batch_stream/ctx_lock",
-                    );
+                    let mut guard = thoosa_shared::with_perf_log(|| ctx.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "ResourcesBatch::build_batch_stream/ctx_lock");
                     guard.branch(Some("for_build_fn"), false, false)
                 };
                 async move {

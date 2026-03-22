@@ -423,8 +423,7 @@ where
             }
             let filtered_input = match &apply_motif_net.freq_filter {
                 Some(freq_filter) => {
-                    let freq_filter_ctx = ctx.branch(Some(&format!("apply_motif_nets_prefilter_{group_key:?}")), true, false);
-                    freq_filter.clone().run_cached(Arc::clone(&input), freq_filter_ctx).await?
+                    freq_filter.clone().run_cached(Arc::clone(&input), ctx.branch(Some(&format!("apply_motif_nets_prefilter_{group_key:?}")), true, false)).await?
                 }
                 None => Arc::clone(&input),
             };
@@ -629,7 +628,7 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
     async fn with_data_ref<R, F, P>(
         &self,
         _to_device_idx: usize,
-        permits_ctx: P,
+        mut permits_ctx: P,
         _trace_ctx: Option<&'static str>,
         do_run: F,
     ) -> Result<R, ThoError>
@@ -638,8 +637,9 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
         P: RunCtx,
     {
         debug!("ApplyMotifNetInputWrapper::with_data_ref: 00. ctx.id={:?}", permits_ctx.id());
+        // let x_ctx = permits_ctx.branch(Some("xxx"), false, false);
 
-        with_data!(permits_ctx, self.batch, self.motif_net; move |ctx:P, batch:&ThoTensor<ChannelsData2, SynKey>, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+        with_data!(permits_ctx, self.batch, self.motif_net; move |mut ctx:P, batch:&ThoTensor<ChannelsData2, SynKey>, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
             let input = ApplyMotifNetInput::new(batch, motif_net);
 
             debug!("ApplyMotifNetInputWrapper::with_data_ref: 0. ctx.id={:?}", ctx.id());
@@ -647,6 +647,7 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
             let r = do_run(&input, &ctx);
 
             let id = ctx.id().clone();
+            // ctx.drop_permits(DropIf::Always);
             drop(ctx);
 
             debug!("ApplyMotifNetInputWrapper::with_data_ref: 1. ctx.id={id:?}");
@@ -823,10 +824,8 @@ pub fn apply_motif_net_forward(
     let out_t = out.as_ref().f_view([-1])?.f_sigmoid()?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out_t.size={:?}", out_t.size());
 
-    let t_plot = t.f_view((1, -1))?;
-    let out_plot = out_t.f_view((1, -1))?;
-    debug_plot!(&t_plot, "apply_motif_net_run_input_{input_id}")?;
-    debug_plot!(&out_plot, "apply_motif_net_run_input_motif_applied_{input_id}_{motif_id}")?;
+    debug_plot!(&t.f_view((1, -1))?, "apply_motif_net_run_input_{input_id}")?;
+    debug_plot!(&out_t.f_view((1, -1))?, "apply_motif_net_run_input_motif_applied_{input_id}_{motif_id}")?;
 
     ThoTensor::new(out_id, out_t)
 }
