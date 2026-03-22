@@ -89,9 +89,10 @@ where
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
 
-        // let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("purge_gpu_{:?}", self.type_name()), items.len(), 1);
+        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("purge_gpu_{:?}", self.type_name()), items.len(), 1);
+        let dump_eta_guard_id = dump_eta_guard.id();
         stream::iter(items)
-            //TODO  limit config
+
             .for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, fut)| async move {
                 match fut.await {
                     Ok(v) => {
@@ -103,7 +104,7 @@ where
                     }
                     Err(e) => warn!("purge_gpu: Err key={key:?} err={e:?}"),
                 }
-                // collect_eta_record_completion(dump_eta_guard.id());
+                collect_eta_record_completion(dump_eta_guard_id);
             })
             .await;
 
