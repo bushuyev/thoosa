@@ -711,7 +711,7 @@ impl AsRef<CommonTrainingRunConfig> for TrainMotifsNetsRunConfig {
 pub struct CommonTrainingRunConfig {
     #[in_map]
     #[run_config]
-    pub cycles: u32,
+    pub epochs: u32,
 
     #[in_map]
     #[run_config]
@@ -737,7 +737,7 @@ impl CommonTrainingRunConfig {
         lr: f64,
     ) -> Self {
         Self {
-            cycles,
+            epochs: cycles,
             batch_size,
             lr,
             patience: 0,
@@ -750,7 +750,7 @@ impl CommonTrainingRunConfig {
 impl Default for CommonTrainingRunConfig {
     fn default() -> Self {
         CommonTrainingRunConfig {
-            cycles: 10,
+            epochs: 10,
             batch_size: 10,
             lr: 0.0001,
             patience: 5,

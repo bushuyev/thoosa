@@ -456,7 +456,7 @@ where
                             t
                         },
                         |rc:&TrainLabelNetsRunConfig|{
-                            rc.common_training_args.cycles
+                            rc.common_training_args.epochs
                         },
                         1,
                         format!("label_{label}")
@@ -901,7 +901,7 @@ mod tests {
         let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
-                    NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(100)),
+                    NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), Val::Int(100)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(8)),
                     // NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), Val::Int(3)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::SlicesLen)), Val::Int(1000)),//TODO used as num features in any_len_label_node
