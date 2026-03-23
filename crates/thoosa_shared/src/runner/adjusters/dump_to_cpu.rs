@@ -92,7 +92,7 @@ where
             // DumpToCpu is special: only dump when we hold MAX_PERMITS to avoid
             // dumping tensors still in use by other tasks.
             let requested_permits = MAX_PERMITS - adjustable.acquired_permits();
-            match GlobalCtx::global().acquire_many(
+            match super::acquire_many_waiting_once(
                 adjustable.device_idx(),
                 requested_permits,
                 Arc::new(adjustable.id().clone()) as Arc<dyn CachableIdTr>,
@@ -104,8 +104,6 @@ where
                 Err(e) => {
                     debug!("DumpToCpu::adjust: can't acquire {requested_permits} permits, adjustable.id={:?} retry_count={} got {e:?}  ", adjustable.id(), adjust_context.dump_to_cpu_retry_count_mut());
                     adjustable.drop_permits(DropIf::Always);
-
-                    GlobalCtx::global().wait_for_permits_hint(adjustable.device_idx()).await;
 
                     return Err(AdjusterError::AdjustFailed(adjustable));
                 }

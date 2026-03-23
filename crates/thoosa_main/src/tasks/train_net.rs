@@ -262,7 +262,7 @@ where
 
             let mut saved_best = false;
             let epochs_eta_guard = CollectEtaInvocationGuard::new(&format!("train_{descr}"), epochs as usize, 1);
-            for idx in 1..epochs {
+            for idx in 0..epochs {
 
                 debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?}",maybe_cuda_mem(&device));
 

@@ -1,5 +1,5 @@
 use crate::dims::{Dims, ThoBatch};
-use futures_util::stream::{BoxStream, FuturesUnordered};
+use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use std::fmt::Debug;
 use std::future::Future;
@@ -51,53 +51,81 @@ impl<DX: Dims, DY: Dims, C: RunCtx, B: AsyncDataBatch<DX, DY, C>> AsyncDataBatch
     }
 }
 
-// Spawn batch-build futures so they keep making progress even while the caller awaits train_step.
-pub fn spawn_prefetched_batch_stream<T, F, I>(futures: I, buffer_limit: usize) -> BoxStream<'static, Result<T, ThoError>>
+// Prefetch at most one batch ahead. Reserve channel capacity before starting the next batch
+// so we never build more than one unconsumed batch in the background.
+pub fn prefetch_next_batch_stream<T, F, I>(futures: I) -> BoxStream<'static, Result<T, ThoError>>
 where
     T: Send + 'static,
     F: Future<Output = Result<T, ThoError>> + Send + 'static,
     I: IntoIterator<Item = F> + Send + 'static,
     I::IntoIter: Send + 'static,
 {
-    let limit = buffer_limit.max(1);
-    let (tx, rx) = tokio::sync::mpsc::channel(limit);
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
 
     tokio::spawn(async move {
-        let mut iter = futures.into_iter();
-        let mut pending = FuturesUnordered::new();
-        let mut exhausted = false;
-
-        loop {
-            while pending.len() < limit {
-                match iter.next() {
-                    Some(fut) => pending.push(tokio::spawn(fut)),
-                    None => {
-                        exhausted = true;
-                        break;
-                    }
-                }
-            }
-
-            if pending.is_empty() {
-                break;
-            }
-
-            let item = match pending.next().await.expect("pending checked above") {
-                Ok(item) => item,
-                Err(e) => Err(ThoError::new(format!("spawn_prefetched_batch_stream join error: {e}"))),
+        for fut in futures {
+            let permit = match tx.reserve().await {
+                Ok(permit) => permit,
+                Err(_) => break,
             };
-
-            if tx.send(item).await.is_err() {
-                break;
-            }
-
-            if exhausted && pending.is_empty() {
-                break;
-            }
+            permit.send(fut.await);
         }
     });
 
     futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|item| (item, rx)) }).boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefetch_next_batch_stream;
+    use futures_util::StreamExt;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use thoosa_shared::ThoError;
+    use tokio::sync::Semaphore;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn prefetch_next_batch_stream_prefetches_only_one_batch_ahead() -> Result<(), ThoError> {
+        let started = Arc::new(AtomicUsize::new(0));
+        let release_batches = Arc::new(Semaphore::new(0));
+        let started_for_futures = Arc::clone(&started);
+        let release_batches_for_futures = Arc::clone(&release_batches);
+
+        let futures = (0..3).map(move |i| {
+            let started = Arc::clone(&started_for_futures);
+            let release_batches = Arc::clone(&release_batches_for_futures);
+
+            async move {
+                started.fetch_add(1, Ordering::SeqCst);
+                if i > 0 {
+                    let permit = release_batches.acquire().await.expect("semaphore closed");
+                    permit.forget();
+                }
+                Ok::<_, ThoError>(i)
+            }
+        });
+
+        let mut stream = prefetch_next_batch_stream(futures);
+        let first = stream.next().await.expect("first batch should be present")?;
+        assert_eq!(first, 0);
+
+        tokio::time::timeout(Duration::from_millis(100), async {
+            while started.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("second batch should start in background");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(started.load(Ordering::SeqCst), 2);
+
+        release_batches.add_permits(2);
+        let second = stream.next().await.expect("second batch should be present")?;
+        let third = stream.next().await.expect("third batch should be present")?;
+        assert_eq!(second, 1);
+        assert_eq!(third, 2);
+
+        Ok(())
+    }
 }
 
 pub mod mock_async_data_batch {
