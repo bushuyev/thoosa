@@ -237,7 +237,7 @@ where
 
                     t
                 },
-                |rc: &TrainFinalNetRunConfig| rc.common_training_args.cycles,
+                |rc: &TrainFinalNetRunConfig| rc.common_training_args.epochs,
                 1,
                 "final".to_string(),
             ));
@@ -526,7 +526,7 @@ mod tests {
         let run_configs = OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
-                    NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Cycles), Val::Int(2)),
+                    NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), Val::Int(2)),
                     NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(2)),
                     NamedVal::new(TrainFinalNetRunConfigFields::Net(FinalNetArgsFields::NumLayers), Val::Int(1)),
                 ]),

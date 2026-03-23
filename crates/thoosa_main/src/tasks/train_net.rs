@@ -179,8 +179,8 @@ where
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
-    pub fn new(batch:BF, net:NF, opt_config:Arc<OptConfig>, run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >, loss_fn:LossFp, optimizer:FO, x_f:XF, cycles:FC, validation_step: u32, descr: String) -> Self {
-        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, epochs: cycles, validation_step, descr }
+    pub fn new(batch:BF, net:NF, opt_config:Arc<OptConfig>, run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >, loss_fn:LossFp, optimizer:FO, x_f:XF, epochs:FC, validation_step: u32, descr: String) -> Self {
+        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, epochs, validation_step, descr }
     }
 
     fn run_inner(
@@ -843,7 +843,7 @@ mod tests {
                 id: Some(1),
                 num_layers: RangeOrValue::Range { range: 1..3, step: None },
                 common_config: CommonTrainingRunConfigRangeOrValue{
-                    cycles: RangeOrValue::Value(10),
+                    epochs: RangeOrValue::Value(10),
                     batch_size: RangeOrValue::Value(10),
                     lr: RangeOrValue::Value(0.0001),
                     patience: RangeOrValue::Value(5),
