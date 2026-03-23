@@ -447,9 +447,7 @@ where
                             Ok(pred_y.binary_cross_entropy_with_logits::<Tensor>(&target, None, None, Reduction::Mean).set_requires_grad(true))
                         },
                         move |rc:&TrainLabelNetsRunConfig, vs: &VarStore|{
-                            let o = AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e|e.into());
-                            debug!("TrainLabelNets::run, optimizer: run optimizer: o={o:?}");
-                            o
+                            rc.common_training_args.build_optimizer(vs)
                         },
                         |t:ThoBatch<MotifProbability>| {
                             debug!("TrainLabelNets::run, x_f: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());

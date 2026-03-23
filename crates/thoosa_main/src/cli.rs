@@ -46,7 +46,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{load_final_model, opt_train, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
+use thoosa_common::train_nets::{load_final_model, opt_train, AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
 use thoosa_common::utils::{cuda_mem, from, lin_t, list_devices, plot_series, plot_series_with_sidebar_values, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_common::my_tch::ThoModule;
@@ -1305,6 +1305,13 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
+
+            optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+                beta1: RangeOrValue::Value(0.9),
+                beta2: RangeOrValue::Value(0.999),
+                wd: RangeOrValue::Value(0.01),
+                amsgrad: RangeOrValue::Value(false),
+            }),
         },
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
         //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
@@ -1342,6 +1349,12 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
+            optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+                beta1: RangeOrValue::Value(0.9),
+                beta2: RangeOrValue::Value(0.999),
+                wd: RangeOrValue::Value(0.01),
+                amsgrad: RangeOrValue::Value(false),
+            }),
         },
 
         // net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
@@ -1376,6 +1389,12 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
+            optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+                beta1: RangeOrValue::Value(0.9),
+                beta2: RangeOrValue::Value(0.999),
+                wd: RangeOrValue::Value(0.01),
+                amsgrad: RangeOrValue::Value(false),
+            }),
         },
         net: FinalNetArgsRangeOrValue {
             num_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
@@ -1422,6 +1441,12 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
+        optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+            beta1: RangeOrValue::Value(0.9),
+            beta2: RangeOrValue::Value(0.999),
+            wd: RangeOrValue::Value(0.01),
+            amsgrad: RangeOrValue::Value(false),
+        }),
     };
     let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
         epochs: RangeOrValue::Value(150),
@@ -1429,6 +1454,12 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
+        optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+            beta1: RangeOrValue::Value(0.9),
+            beta2: RangeOrValue::Value(0.999),
+            wd: RangeOrValue::Value(0.01),
+            amsgrad: RangeOrValue::Value(false),
+        }),
     };
     let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
         epochs: RangeOrValue::Value(150),
@@ -1436,6 +1467,12 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
+        optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+            beta1: RangeOrValue::Value(0.9),
+            beta2: RangeOrValue::Value(0.999),
+            wd: RangeOrValue::Value(0.01),
+            amsgrad: RangeOrValue::Value(false),
+        }),
     };
 
 
