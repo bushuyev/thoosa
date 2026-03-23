@@ -949,7 +949,7 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        // init_tracing();
+
         let _global_ctx = GlobalCtx::init_devices(2);
 
         let device_idx = 1;
@@ -995,12 +995,12 @@ mod tests {
         Ok::<_, ThoError>(())
     }
 
-    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        // init_tracing();
+
         let _global_ctx = GlobalCtx::init_devices(2);
 
         const MUL_K: f64 = 2.;
@@ -1141,7 +1141,7 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        // init_tracing();
+
         let _global_ctx = GlobalCtx::init_devices(2);
 
         let (free_mem, _total_mem) = cuda_mem();
@@ -1215,33 +1215,6 @@ mod tests {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    fn init_tracing() {
-        /*let filter = EnvFilter::from_default_env()
-            // Tokio’s internal resource events:
-            .add_directive("runtime::resource::state_update=trace".parse().unwrap())
-            // Optional: see more runtime resource logs
-            .add_directive("runtime::resource=trace".parse().unwrap())
-            // Your own app logs:
-            .add_directive("tokio_rwlock_tracing=trace".parse().unwrap())
-            .add_directive("trace".parse().unwrap());
-
-        fmt().with_env_filter(filter).compact().init();*/
-
-        let filter = EnvFilter::from_default_env()
-            // .add_directive("runtime::resource::state_update=trace".parse().unwrap())
-            // .add_directive("runtime::resource=trace".parse().unwrap())
-            .add_directive("tokio::sync::rwlock=trace".parse().unwrap())
-            .add_directive("debug".parse().unwrap());
-
-        fmt()
-            .with_env_filter(filter)
-            .with_line_number(true)
-            .with_span_events(FmtSpan::FULL)
-            // .event_format(InlineSpanNames) - doesn't really add more info. with #[instrument] put on methods span names apper in the log
-            .init();
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_with_thotensor() -> Result<(), ThoError> {
 
@@ -1263,13 +1236,14 @@ mod tests {
             //ThoTensor is sync so &ThoTensor is Send =
             async {
                 GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await?;
-                //can't drop self.id=simple_id!("test"), locked
+                //[WARN] should be logged - can't drop self.id=simple_id!("test"), locked
                 Ok::<_, ThoError>(())
             }.await?;
 
             //copies from cpu
             // let v = &wrap.load_from_any_device_(1).await?;
             debug!("tensor={tensor_0:?}, v={v:?}");
+            //TODO asserts
 
             Ok::<(), ThoError>(())
 
@@ -1280,6 +1254,7 @@ mod tests {
 
         Ok(())
     }
+    
 
 
 }
