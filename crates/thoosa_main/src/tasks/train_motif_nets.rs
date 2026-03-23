@@ -453,6 +453,7 @@ where
 {
     fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
         futures_util::stream::once(self.make_batch(Arc::clone(&self.train_motifs), &self.motif_id, "train", ctx))
+            .take(self.epoch_size as usize)
             .map(|fut_res| fut_res.map(|v| (v.0, None, v.1.into())))
             .boxed()
     }
