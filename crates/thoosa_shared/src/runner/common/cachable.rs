@@ -384,6 +384,9 @@ where
 {
 
     fn wrap(o:O, cache_area: CacheArea) -> DevicesWrap<O> where Self:Sized {
+        #[cfg(test)]
+        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        
         let id = o.id().clone();
         let size = o.size();
         let device_ordinal = o.device();
