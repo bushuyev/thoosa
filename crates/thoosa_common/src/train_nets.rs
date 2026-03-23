@@ -25,7 +25,7 @@ use std::fmt::{Debug, Formatter};
 use std::{fmt, fs};
 use std::path::PathBuf;
 
-use tch::nn::{init, ConvConfig, LinearConfig, VarStore};
+use tch::nn::{init, ConvConfig, LinearConfig, Optimizer, OptimizerConfig, VarStore};
 use tch::Device::Cpu;
 use tch::{nn, Device, Kind, Tensor};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
@@ -706,6 +706,30 @@ impl AsRef<CommonTrainingRunConfig> for TrainMotifsNetsRunConfig {
     }
 }
 
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+struct AdamW {
+    #[in_map]
+    #[run_config]
+    beta1:f32,
+
+    #[in_map]
+    #[run_config]
+    beta2:f32,
+
+    #[in_map]
+    #[run_config]
+    pub wd: f64,
+
+    #[in_map]
+    #[run_config]
+    amsgrad:bool
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+pub enum Optimizers {
+    AdamW(AdamW)
+}
+
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct CommonTrainingRunConfig {
@@ -727,7 +751,11 @@ pub struct CommonTrainingRunConfig {
 
     #[in_map]
     #[run_config]
-    pub min_delta:f32
+    pub min_delta:f32,
+
+    #[in_map]
+    #[run_config]
+    optimizer: Optimizers
 }
 
 impl CommonTrainingRunConfig {
@@ -742,7 +770,29 @@ impl CommonTrainingRunConfig {
             lr,
             patience: 0,
             min_delta: 0.0,
+            optimizer: Optimizers::AdamW(AdamW {
+                beta1: 0.9, beta2: 0.999, wd: 0.01, amsgrad: false
+            }),
         }
+    }
+
+    pub fn build_optimizer(&self, vs: &VarStore)->Result<Optimizer, ThoError>{
+
+        debug!("CommonTrainingRunConfig::build_optimizer: optimizer={:?}", self.optimizer);
+
+        match &self.optimizer {
+            Optimizers::AdamW(AdamW{ beta1, beta2, wd, amsgrad }) => {
+                tch::nn::AdamW{
+                    beta1: *beta1 as f64,
+                    beta2: *beta2 as f64,
+                    wd: *wd,
+                    eps: 1e-8,
+                    amsgrad: *amsgrad,
+                }.build(&vs, self.lr).map_err(|e|e.into())
+            }
+        }
+
+
     }
 }
 
@@ -755,6 +805,9 @@ impl Default for CommonTrainingRunConfig {
             lr: 0.0001,
             patience: 5,
             min_delta: 1e-4_f32,
+            optimizer: Optimizers::AdamW(AdamW {
+                beta1: 0.9, beta2: 0.999, wd: 0.01, amsgrad: false
+            }),
         }
     }
 }

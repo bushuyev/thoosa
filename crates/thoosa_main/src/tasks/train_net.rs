@@ -744,7 +744,7 @@ mod tests {
     use thoosa_common::dims::{Batch, Dims, ThoBatch};
     use thoosa_common::my_tch::{my_linear, ThoModule};
     #[allow(unused_imports)]
-    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, OptConfig};
+    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, OptimizersRangeOrValue, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, OptConfig};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -753,6 +753,7 @@ mod tests {
     use thoosa_shared::traits::MonoMetrics;
     use crate::tasks::train_net::{TrainNet, TrainNetInput};
     use futures::FutureExt;
+    use thoosa_common::train_nets::{AdamWRangeOrValue, Optimizers};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
 
@@ -848,6 +849,12 @@ mod tests {
                     lr: RangeOrValue::Value(0.0001),
                     patience: RangeOrValue::Value(5),
                     min_delta: RangeOrValue::Value(0.0001),
+                    optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+                        beta1: RangeOrValue::Value(0.9),
+                        beta2: RangeOrValue::Value(0.999),
+                        wd: RangeOrValue::Value(0.01),
+                        amsgrad: RangeOrValue::Value(false),
+                    }),
                 },
             }
             .opt_run_configs().expect("DummyRunConfigRangeOrValue::opt_run_configs should not fail"),
