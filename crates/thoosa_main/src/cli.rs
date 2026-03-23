@@ -1299,7 +1299,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
-            cycles: RangeOrValue::Value(100),
+            epochs: RangeOrValue::Value(100),
             batch_size: RangeOrValue::Value(10),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
@@ -1337,7 +1337,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
-            cycles: RangeOrValue::Value(300),
+            epochs: RangeOrValue::Value(300),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -1371,7 +1371,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
-            cycles: RangeOrValue::Value(100),
+            epochs: RangeOrValue::Value(100),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -1416,7 +1416,7 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
 
     /////////////////////train_motifs
     let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(150),
+        epochs: RangeOrValue::Value(150),
         batch_size: RangeOrValue::Value(10),
         // lr: RangeOrValue::Value(0.0001),
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
@@ -1424,14 +1424,14 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         min_delta: RangeOrValue::Value(1e-4_f32),
     };
     let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(150),
+        epochs: RangeOrValue::Value(150),
         batch_size: RangeOrValue::Value(10),
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
     };
     let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
-        cycles: RangeOrValue::Value(150),
+        epochs: RangeOrValue::Value(150),
         batch_size: RangeOrValue::Value(10),
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
         patience: RangeOrValue::Value(10),
