@@ -72,6 +72,8 @@ mod tests {
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use crate::utils::lin_for_size;
     use std::ops::Add;
+    use std::time::Duration;
+    use futures_util::StreamExt;
     use thoosa_shared::runner::tmp_cache::TmpCached;
 
     #[ctor::ctor]
@@ -1216,7 +1218,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_with_thotensor() -> Result<(), ThoError> {
+    async fn test_with_tho_tensor() -> Result<(), ThoError> {
 
 
         GlobalCtx::init_devices(2);
@@ -1254,7 +1256,111 @@ mod tests {
 
         Ok(())
     }
-    
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_with_data() -> Result<(), ThoError> {
+        async fn load_/*from_any_device_*/(i: i32) -> i32 { // load_steps invoked from with_data! crates/thoosa_macros/thoosa_with_data/src/lib.rs:143
+            i * 10
+        }
+
+        fn make_batch_stream(
+            hold_permit_while_unpolled: bool,
+        ) -> (
+            futures_util::stream::BoxStream<'static, i32>,
+            Arc<tokio::sync::RwLock<()>>,
+            Arc<std::sync::atomic::AtomicUsize>,
+            Arc<tokio::sync::Notify>,
+        ) {
+            let full_access_to_gpu = Arc::new(tokio::sync::RwLock::new(()));//emulates Arbiter - write lock - 100 permits, read lock 1 permit
+            let full_access_to_gpu_for_batch = Arc::clone(&full_access_to_gpu);
+            let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let started_for_batch = Arc::clone(&started);
+            let resume = Arc::new(tokio::sync::Notify::new());
+            let resume_for_batch = Arc::clone(&resume);
+
+            let batch = futures::stream::iter(0..3).map(move |i| {
+                let full_access_to_gpu_for_batch = Arc::clone(&full_access_to_gpu_for_batch);
+                let started = Arc::clone(&started_for_batch);
+                let resume = Arc::clone(&resume_for_batch);
+
+                async move {
+                    let guard = full_access_to_gpu_for_batch.read().await;//1 permit saved into ctx if there are no permits yet at crates/thoosa_macros/thoosa_with_data/src/lib.rs:127
+                    started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let data = load_(i).await;
+
+                    debug!("with_data: {i} started={}", started.load(std::sync::atomic::Ordering::SeqCst));
+
+                    if i == 0 {
+                        while started.load(std::sync::atomic::Ordering::SeqCst) < 3 {
+                            tokio::task::yield_now().await;
+                        }
+                        drop(guard);
+                        data
+                    } else {
+                        if !hold_permit_while_unpolled {
+                            drop(guard);
+                        }
+                        resume.notified().await;
+                        data
+                    }
+                }
+            })
+                .buffer_unordered(3)
+                .boxed();
+
+            (batch, full_access_to_gpu, started, resume)
+        }
+
+        let (mut blocked_batch, full_access_to_gpu, started, resume) = make_batch_stream(true);
+        let i = tokio::time::timeout(Duration::from_millis(100), blocked_batch.next())
+            .await
+            .expect("first batch should arrive")
+            .expect("buffer_unordered should produce one ready batch");
+        assert_eq!(i, 0);
+        assert_eq!(started.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        // train cycle at crates/thoosa_main/src/tasks/train_net.rs:273.
+        // Buffered batch futures 1 and 2 are no longer being polled, but still hold read guards.
+        let got_all_gpu = tokio::time::timeout(Duration::from_millis(100), async move {
+            let _guard = full_access_to_gpu.write().await; // oom_handler.run at crates/thoosa_main/src/tasks/train_net.rs:278 when it's trying to get 100% GPU
+            debug!("got all gpu");
+        }).await;
+        assert!(got_all_gpu.is_err(), "writer should starve while buffered batch futures keep read guards alive");
+
+        resume.notify_waiters();
+        let mut remaining = vec![];
+        while remaining.len() < 2 {
+            remaining.push(tokio::time::timeout(Duration::from_millis(100), blocked_batch.next()).await.expect("blocked batch should resume once polled again").expect("stream should still have items"));
+        }
+        remaining.sort();
+        assert_eq!(remaining, vec![10, 20]);
+
+        let (mut releasable_batch, full_access_to_gpu, started, resume) = make_batch_stream(false);
+        let i = tokio::time::timeout(Duration::from_millis(100), releasable_batch.next())
+            .await
+            .expect("first batch should arrive")
+            .expect("buffer_unordered should produce one ready batch");
+        assert_eq!(i, 0);
+        assert_eq!(started.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        let got_all_gpu = tokio::time::timeout(Duration::from_millis(100), async move {
+            let _guard = full_access_to_gpu.write().await;
+            debug!("got all gpu after pending futures released their permits");
+        }).await;
+        assert!(got_all_gpu.is_ok(), "writer should succeed once unpolled futures stop holding permits");
+
+        resume.notify_waiters();
+        let mut remaining = vec![];
+        while remaining.len() < 2 {
+            remaining.push(tokio::time::timeout(Duration::from_millis(100), releasable_batch.next()).await.expect("releasable batch should resume once polled again").expect("stream should still have items"));
+        }
+        remaining.sort();
+        assert_eq!(remaining, vec![10, 20]);
+
+        Ok(())
+
+    }
+
 
 
 }
