@@ -4,11 +4,12 @@ use std::ops::Add;
 use std::sync::Arc;
 use std::{iter, usize};
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
-use log::debug;
+use log::{debug, error};
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::{Cause, ThoError};
 use tokio::task::JoinSet;
+use tokio::time::error::Elapsed;
 use tokio_utils::Pool;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
@@ -203,7 +204,7 @@ pub async fn copy_d2h_from_ptr(
 
                 let stream = buf_stream.1.clone();
                 // from cuda to pinned buffer
-                tokio::task::spawn_blocking(move || {//---
+                match tokio::time::timeout(tokio::time::Duration::from_secs(2), tokio::task::spawn_blocking(move || { //---
                     let raw = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
                         buf_ptr as *mut c_void,
                         src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
@@ -216,15 +217,32 @@ pub async fn copy_d2h_from_ptr(
                     }
 
                     stream.synchronize();
-//---
+                    //---
                     Ok(())
-
                 })
-                .await
-                .map_err(|e| Cause::External {
-                    type_name: std::any::type_name::<tokio::task::JoinError>(),
-                    source: Arc::new(e),
-                })??;
+                ).await {
+                    Ok(r) => {
+                        match r {
+                            Ok(v) => {
+                                Ok(v)
+                            }
+                            Err(e) => {
+                                error!("copy_d2h: e={e:?}");
+                                Err(Cause::External {
+                                    type_name: std::any::type_name::<tokio::task::JoinError>(),
+                                    source: Arc::new(e),
+                                })
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("copy_d2h: timeout e={e:?}");
+                        Err(Cause::External {
+                            type_name: std::any::type_name::<Elapsed>(),
+                            source: Arc::new(e),
+                        })
+                    }
+                }??;
 //---
                 tokio::task::spawn_blocking(move || {
                     std::ptr::copy_nonoverlapping(

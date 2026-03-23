@@ -623,6 +623,10 @@ where
             Arc::clone(&self.resources_0_valid)
         )
     }
+
+    fn num_batches(&self) -> usize {
+        self.resources_1_train.len() / self.half_batch_size as usize
+    }
 }
 
 impl<L, C, LD, X, Y> ResourcesBatch<L, C, LD, X, Y>
@@ -676,7 +680,7 @@ where
                     a
                 });
 
-                (build_batch_fn)(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).await
+                build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).await
             }
         });
 
