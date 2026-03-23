@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Reduction, Tensor};
-use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
+use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
 use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch};
 use thoosa_common::runs::{Logits, NetResources, SavableResult};
 use thoosa_common::tho_device::ThoDevice;
@@ -375,9 +375,7 @@ where
             }
         });
 
-        futures_util::stream::iter(futures)
-            .buffer_unordered(crate::buffer_limits::LOGITS_RESOURCES_BATCH_STREAM_BUFFER_UNORDERED_LIMIT)
-            .boxed()
+        prefetch_next_batch_stream(futures)
     }
 }
 

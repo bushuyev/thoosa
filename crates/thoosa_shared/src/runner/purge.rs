@@ -31,8 +31,8 @@ pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
     async fn debug_gpu(
         &self,
         _device_idx: usize,
-    ) -> Result<(), ThoError> {
-        Ok(())
+    ) -> Result<u64, ThoError> {
+        Ok(0)
     }
 
     async fn purge_cpu(&self, i: u64) -> usize;
@@ -111,7 +111,7 @@ where
         Ok(())
     }
 
-    async fn debug_gpu(&self, device_idx: usize) -> Result<(), ThoError> {
+    async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
         let items: Vec<(K, Arc<DevicesWrap<O>>)> = self
             .iter()
             .filter_map(|entry| {
@@ -132,9 +132,9 @@ where
             }
         }
 
-        debug!("debug_gpu: device_idx={device_idx} type_name={:?} self.len={} on_gpu: {gpu_size}", self.type_name(), self.len());
+        debug!("debug_gpu: device_idx={device_idx} type_name={:?} self.len={} on_gpu: {gpu_size} bytes", self.type_name(), self.len());
 
-        Ok(())
+        Ok(gpu_size)
     }
 }
 

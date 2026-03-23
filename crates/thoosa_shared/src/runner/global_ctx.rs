@@ -219,13 +219,21 @@ impl GlobalCtx {
             ).await;
             maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
         };
-
+        debug!("debug_caches: debug_gpu: device_idx={device_idx}");
+        let mut total_gpu_mem = 0;
         for (type_name, map) in maps {
-            info!("GlobalCtx::debug_caches: type_name={type_name}");
-            if let Err(e) = map.debug_gpu(device_idx).await {
-                error!("GlobalCtx::debug_caches: failed with {e:?}");
+            info!("GlobalCtx::debug_gpu: type_name={type_name}");
+            match map.debug_gpu(device_idx).await {
+                Ok(v) => {
+                    total_gpu_mem+=v;
+                }
+                Err(e) => {
+                    error!("GlobalCtx::debug_gpu: failed with {e:?}");
+                }
             }
         }
+
+        info!("GlobalCtx::debug_gpu: device_idx={device_idx} total_gpu_mem={total_gpu_mem}");
     }
 
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
