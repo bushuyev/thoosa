@@ -386,7 +386,7 @@ where
     fn wrap(o:O, cache_area: CacheArea) -> DevicesWrap<O> where Self:Sized {
         #[cfg(test)]
         let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-        
+
         let id = o.id().clone();
         let size = o.size();
         let device_ordinal = o.device();
@@ -608,8 +608,9 @@ where
                     wrap.ensure_copied(device_idx, 0, data.as_ref(), false).await?;
 
                     debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done device_idx={device_idx}", wrap.id);
+                } else {
+                    drop(lock.take());
                 }
-                drop(lock.take());
             } else {
                 // If it's locked, assume it's the current task's input. DumpToCpu only runs with
                 // MAX_PERMITS or when cache_area.assigned_count() == 0 (from purge_gpu_closure added in run_cached), so no other tasks should be running; skipping avoids deadlock.

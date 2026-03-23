@@ -27,7 +27,7 @@ use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
+use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
@@ -680,9 +680,7 @@ where
             }
         });
 
-        futures_util::stream::iter(futures)
-            .buffer_unordered(crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_STREAM_BUFFER_UNORDERED_LIMIT)
-            .boxed()
+        prefetch_next_batch_stream(futures)
     }
 
 }

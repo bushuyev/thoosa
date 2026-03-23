@@ -121,7 +121,7 @@ where
 
         if permits_to_acquire > 0 {
 
-            match GlobalCtx::global().acquire_many(
+            match super::acquire_many_waiting_once(
                 adjustable.device_idx(),
                 permits_to_acquire,
                 Arc::new(adjustable.id().clone()) as Arc<dyn CachableIdTr>
@@ -146,10 +146,6 @@ where
                             adjustable.drop_permits(DropIf::Always);
 
                             *adjust_context.to_acquire_mut() = 0;
-
-                            debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name:?} before wait_for_permits_hint");
-
-                            GlobalCtx::global().wait_for_permits_hint(adjustable.device_idx()).await;
 
                             debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name:?} about to return AdjustFailed");
 
