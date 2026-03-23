@@ -39,6 +39,10 @@ pub trait AsyncDataBatch<DX: Dims, DY: Dims, C: RunCtx>: Debug + Send + Sync {
     fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<DX>, Option<BatchLengths>, ThoBatch<DY>), ThoError>>;
 
     fn valid_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<DX>, Option<BatchLengths>, ThoBatch<DY>), ThoError>>;
+
+    fn num_batches(&self) -> usize {
+        0
+    }
 }
 
 impl<DX: Dims, DY: Dims, C: RunCtx, B: AsyncDataBatch<DX, DY, C>> AsyncDataBatch<DX, DY, C> for Arc<B> {
@@ -49,6 +53,7 @@ impl<DX: Dims, DY: Dims, C: RunCtx, B: AsyncDataBatch<DX, DY, C>> AsyncDataBatch
     fn valid_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<DX>, Option<BatchLengths>, ThoBatch<DY>), ThoError>> {
         self.as_ref().valid_batch_stream(ctx)
     }
+
 }
 
 // Prefetch at most one batch ahead. Reserve channel capacity before starting the next batch
@@ -72,7 +77,9 @@ where
         }
     });
 
-    futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|item| (item, rx)) }).boxed()
+    futures_util::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    }).boxed()
 }
 
 #[cfg(test)]

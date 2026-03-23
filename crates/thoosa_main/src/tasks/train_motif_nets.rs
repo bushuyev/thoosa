@@ -464,6 +464,10 @@ where
             .map(|fut_res| fut_res.map(|v| (v.0, None, v.1.into())))
             .boxed()
     }
+
+    fn num_batches(&self) -> usize {
+        self.epoch_size as usize
+    }
 }
 
 
