@@ -135,6 +135,10 @@ pub struct AverageFilterParams {
     #[in_map]
     #[run_config]
     pub window: u32,
+
+    #[in_map]
+    #[run_config]
+    pub step: u32,
 }
 
 impl InputFilterLengthAdjuster for AverageFilterParams {
