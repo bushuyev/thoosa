@@ -203,8 +203,9 @@ pub async fn copy_d2h_from_ptr(
                 let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
 
                 let stream = buf_stream.1.clone();
+
                 // from cuda to pinned buffer
-                match tokio::time::timeout(tokio::time::Duration::from_secs(2), tokio::task::spawn_blocking(move || { //---
+                match tokio::time::timeout(tokio::time::Duration::from_secs(2), tokio::task::spawn_blocking(move || { //--- //TODO conf
                     let raw = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
                         buf_ptr as *mut c_void,
                         src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,

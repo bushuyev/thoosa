@@ -1113,7 +1113,7 @@ where
         id: None,
         step: RangeOrValue::Value(10),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 100, end: 5001 }, step: Some((500, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 100, end: 1001 }, step: Some((500, 0)) },
         freq_filter: Some(vec![
             // MedianFilter(MedianFilterParamsRangeOrValue {
             //     window: RangeOrValue::dynamic(median_window.clone()),
@@ -1214,7 +1214,7 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
         avg_threshold: RangeOrValue::Value(0.8),
         min_slices: Some(RangeOrValue::Value(5)),
         max_slices: Some(RangeOrValue::Value(100)),
-        extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+        extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
     }
 }
 
@@ -1292,14 +1292,14 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
         },
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        find_and_select_motifs_opt_config: OptConfig::new(50, 10),
+        find_and_select_motifs_opt_config: OptConfig::new(30, 10),
     };
 
     /////////////////////train_motifs
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(100),
+            epochs: RangeOrValue::Value(10),
             batch_size: RangeOrValue::Value(10),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
@@ -1344,7 +1344,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(300),
+            epochs: RangeOrValue::Value(100),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -1400,15 +1400,14 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             num_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
         },
     };
-    let train_opt_config = Arc::new(OptConfig::new(100, 10));
     AllConfigs{
         find_and_select,
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
         train_final_net_run_config_range_or_value,
         train_motifs_opt_config: Arc::new(OptConfig::new(10, 3)),
-        train_labels_opt_config: Arc::new(OptConfig::new(100, 10)),
-        train_final_opt_config: Arc::new(OptConfig::new(100, 10))
+        train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
+        train_final_opt_config: Arc::new(OptConfig::new(30, 10))
     }
 }
 
