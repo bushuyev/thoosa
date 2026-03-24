@@ -690,7 +690,10 @@ where
                 }
 
                 collect_eta_record_oom_all_failed();
-                warn!("OOMHandler::run, error: ctx_id={ctx_id:?} out_key={out_key:?} os_thread_id={} all failed: input.mem_size={:?} semaphore={:?}", os_thread_id(), input.mem_size(), GlobalCtx::global().debug_semaphore(device_idx));
+
+                warn!("OOMHandler::run, error: ctx_id={ctx_id:?} out_key={out_key:?} os_thread_id={} all failed: input.mem_size={:?} ", os_thread_id(), input.mem_size());
+                #[cfg(tho_debug)]
+                warn!("OOMHandler::run, error: semaphore={:?}",  GlobalCtx::global().debug_semaphore(device_idx));
                 #[cfg(tho_debug)]
                 GlobalCtx::global().debug_caches(device_idx).await;
 

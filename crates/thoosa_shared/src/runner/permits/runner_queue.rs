@@ -1,3 +1,4 @@
+use std::any::Any;
 use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -24,7 +25,7 @@ pub struct Arbiter {
     worker: Option<JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
 
-    // #[cfg(debug_assertions)] TODO
+    #[cfg(tho_debug)]
     granted_counts: Arc<DashMap<Arc<dyn CachableIdTr>, usize>>,
     #[allow(dead_code)]
     device_idx: usize
@@ -67,6 +68,7 @@ impl Arbiter {
             capacity,
             worker: Some(worker),
             shutdown,
+            #[cfg(tho_debug)]
             granted_counts,
             device_idx,
         }
@@ -89,7 +91,7 @@ impl Arbiter {
         tx.send(Req {
             needed,
             reply,
-            requester_id: requester_id.clone(),
+            requester_id: Arc::clone(&requester_id),
         })
         .await
         .map_err(|e| Cause::External {
@@ -108,6 +110,10 @@ impl Arbiter {
     }
 
     pub async fn shutdown(&self) {
+        #[cfg(not(tho_debug))]
+        debug!("Arbiter::shutdown");
+
+        #[cfg(tho_debug)]
         debug!("Arbiter::shutdown: self.granted_counts={:?}", self.granted_counts);
 
         self.shutdown.store(true, Ordering::Release);
@@ -142,107 +148,9 @@ impl Arbiter {
             let mut super_id: Option<Arc<dyn CachableIdTr>> = None;
             const SUPERTASK_FAIL_THRESHOLD: u32 = 3;
 
-            let (drop_tx, mut drop_rx) = mpsc::unbounded_channel::<(Arc<dyn CachableIdTr>, u8)>();
-            let granted_counts_for_drop_loop = Arc::clone(&granted_counts);
-            tokio::spawn(async move {
-
-                while let Some(dropped) = drop_rx.recv().await {
-                    let id = &dropped.0;
-                    let n = dropped.1 as usize;
-
-                    debug!("Arbiter::spawn, drop loop: {id:?} dropped {n} permits");
-
-                    if let Some(mut vref) = granted_counts_for_drop_loop.get_mut(id) {
-                        if *vref >= n {
-                            *vref -= n;
-                        } else {
-                            warn!("Arbiter::spawn, drop loop: removing {n} which is more than currently granted {} for id={id:?}", *vref);
-                            *vref = 0;
-                        }
-
-                        let now = *vref;
-                        drop(vref);
-                        if now == 0 {
-                            debug!("Arbiter::spawn, drop loop: removing {id:?}");
-
-                            granted_counts_for_drop_loop.remove(id);
-                        }
-                    } else {
-                        warn!("Arbiter::spawn, drop loop: drop for unknown id={id:?}");
-                    }
-                }
-            });
 
             let mut rx_closed = false;
 
-            #[inline]
-            fn same_id(a: &Arc<dyn CachableIdTr>, b: &Arc<dyn CachableIdTr>) -> bool {
-                a.as_ref().eq(b.as_ref())
-            }
-
-            fn fail_req(rq: Req, err: ThoError) {
-                debug!("Arbiter::fail_req: rq={rq:?}");
-                let _ = rq.reply.send(Err(err));
-            }
-
-            fn grant_req(
-                rq: Req,
-                inner: tokio::sync::OwnedSemaphorePermit,
-                granted_counts: &DashMap<Arc<dyn CachableIdTr>, usize>,
-                worker_notify: &Arc<Notify>,
-                hint_notify: &Arc<Notify>,
-                drop_tx: &mpsc::UnboundedSender<(Arc<dyn CachableIdTr>, u8)>,
-            ) {
-                let n = inner.num_permits();
-
-                debug!("Arbiter::grant_req, rq.requester_id={:?} num_permits={n}", rq.requester_id);
-
-
-                granted_counts
-                    .entry(rq.requester_id.clone())
-                    .and_modify(|v| *v += n)
-                    .or_insert(n);
-
-                let perm = RunnerPerm::with_drop_signal(
-                    inner,
-                    DropSignal::new(
-                        Arc::clone(worker_notify),
-                        Arc::clone(hint_notify),
-                        drop_tx.clone(),
-                        Arc::clone(&rq.requester_id),
-                    ),
-                );
-
-                let _ = rq.reply.send(Ok(perm));
-            }
-
-            // Replace queued request for same requester (latest wins). Old waiter gets an error.
-            fn upsert_req(q: &mut VecDeque<Req>, req: Req) {
-                if let Some(existing) = q.iter_mut().find(|r| same_id(&r.requester_id, &req.requester_id)) {
-                    let old_reply = std::mem::replace(&mut existing.reply, req.reply);
-                    existing.needed = req.needed;
-                    warn!("Arbiter::upsert_req: got another request from same sender: {:?}", req.requester_id);
-
-                    let _ = old_reply.send(Err(
-                        Cause::SomethingElse("replaced by newer request".into()).into()//TODO separate cause of this
-                    ));
-                } else {
-                    debug!("Arbiter::upsert_req: req={:?}", req);
-                    q.push_back(req);
-                }
-            }
-
-            fn purge_non_super(q: &mut VecDeque<Req>, sid: &Arc<dyn CachableIdTr>) {
-                let mut kept: VecDeque<Req> = VecDeque::with_capacity(q.len());
-                while let Some(rq) = q.pop_front() {
-                    if same_id(&rq.requester_id, sid) {
-                        kept.push_back(rq);
-                    } else {
-                        let _ = rq.reply.send(Err(Cause::OutOfPermits.into()));
-                    }
-                }
-                *q = kept;
-            }
 
             loop {
                 if shutdown.load(Ordering::Acquire) {
@@ -257,15 +165,13 @@ impl Arbiter {
                     granted_counts.clear();
                     break;
                 }
-
-
                 // 1) Try to make progress without waiting.
                 let mut progressed = false;
 
                 if let Some(sid) = super_id.as_ref() {
                     debug!("Arbiter::spawn, loop: super_id={sid:?}");
                     // Only attempt to serve sid; do NOT pop&lose on failure.
-                    if let Some(pos) = q.iter().position(|r| same_id(&r.requester_id, sid)) {
+                    if let Some(pos) = q.iter().position(|r| Self::same_id(&r.requester_id, sid)) {
                         let needed = {
                             // borrow ends here
                             let rq = &q[pos];
@@ -280,13 +186,13 @@ impl Arbiter {
 
                                 debug!("Arbiter::spawn, loop: super_id={sid:?} got inner={inner:?}");
 
-                                grant_req(
+                                Self::grant_req(
                                     rq,
                                     inner,
                                     &granted_counts,
                                     &worker_notify,
                                     &hint_notify,
-                                    &drop_tx,
+                                    device_idx,
                                 );
                                 fail_counts.remove(sid);
                                 super_id = None;
@@ -299,7 +205,7 @@ impl Arbiter {
                             Err(e) => {//means Closed
                                 let rq = q.remove(pos).expect("pos valid");
                                 debug!("Arbiter::spawn(super): got e={e:?}, super_id={sid:?} removed");
-                                fail_req(rq, Cause::SomethingElse("semaphore closed".into()).into());
+                                Self::fail_req(rq, Cause::SomethingElse("semaphore closed".into()).into());
                                 super_id = None;
                                 progressed = true;
                             }
@@ -330,13 +236,13 @@ impl Arbiter {
                                 debug!("Arbiter::spawn, loop: no sid, got inner={inner:?}");
 
                                 let rq = q.pop_front().expect("front existed");
-                                grant_req(
+                                Self::grant_req(
                                     rq,
                                     inner,
                                     &granted_counts,
                                     &worker_notify,
                                     &hint_notify,
-                                    &drop_tx,
+                                    device_idx,
                                 );
                                 fail_counts.remove(&requester_id);
                                 progressed = true;
@@ -355,19 +261,19 @@ impl Arbiter {
                                 *c += 1;
                                 if *c >= SUPERTASK_FAIL_THRESHOLD {
                                     super_id = Some(requester_id.clone());
-                                    purge_non_super(&mut q, &requester_id);
+                                    Self::purge_non_super(&mut q, &requester_id);
                                     q.push_back(rq);
 
                                     break;
                                 } else {
-                                    fail_req(rq, Cause::OutOfPermits.into());
+                                    Self::fail_req(rq, Cause::OutOfPermits.into());
                                 }
                                 continue;
                             }
                             Err(e) => {
                                 let rq = q.pop_front().expect(&format!("pop_front failed on NoPermits e={e:?}"));
                                 debug!("Arbiter::spawn: device_idx={device_idx} got e={e:?}");
-                                fail_req(rq, Cause::SomethingElse("semaphore closed".into()).into());
+                                Self::fail_req(rq, Cause::SomethingElse("semaphore closed".into()).into());
                                 progressed = true;
                                 continue;
                             }
@@ -388,7 +294,7 @@ impl Arbiter {
 
                                 if let Some(sid) = super_id.as_ref() {
 
-                                    if !same_id(&req.requester_id, sid) {
+                                    if !Self::same_id(&req.requester_id, sid) {
                                         debug!("Arbiter::spawn, select, recv: sid={sid:?} req.requester_id={:?} sending OutOfPermits error", req.requester_id);
 
                                         let _ = req.reply.send(Err(Cause::OutOfPermits.into()));
@@ -396,12 +302,12 @@ impl Arbiter {
                                         debug!("Arbiter::spawn, select, recv: sid={sid:?} req.requester_id={:?} sending double request error", req.requester_id);
 
                                         // let _ = req.reply.send(Err(Cause::SomethingElse(format!("Got double request for super_id={sid:?}")).into()));
-                                        //TODO this shold never happen but somehow still does - same super_id is received for the second time although it doesn't appear in the send logs.
-                                        upsert_req(&mut q, req);
+                                        //TODO this should never happen but still occurs rarely - same super_id is received for the second time although it doesn't appear in the send logs.
+                                        Self::upsert_req(&mut q, req);
                                     }
 
                                 } else {
-                                    upsert_req(&mut q, req);
+                                    Self::upsert_req(&mut q, req);
                                 }
                             }
                             None => {
@@ -428,6 +334,74 @@ impl Arbiter {
         })
     }
 
+    #[inline]
+    fn same_id(a: &Arc<dyn CachableIdTr>, b: &Arc<dyn CachableIdTr>) -> bool {
+        a.as_ref().eq(b.as_ref())
+    }
+
+    fn fail_req(rq: Req, err: ThoError) {
+        debug!("Arbiter::fail_req: rq={rq:?}");
+        let _ = rq.reply.send(Err(err));
+    }
+
+    fn grant_req(
+        rq: Req,
+        inner: tokio::sync::OwnedSemaphorePermit,
+        granted_counts: &DashMap<Arc<dyn CachableIdTr>, usize>,
+        worker_notify: &Arc<Notify>,
+        hint_notify: &Arc<Notify>,
+        device_idx: usize,
+    ) {
+        let n = inner.num_permits();
+
+        debug!("Arbiter::grant_req, rq.requester_id={:?} num_permits={n}", rq.requester_id);
+
+
+        granted_counts
+            .entry(Arc::clone(&rq.requester_id))
+            .and_modify(|v| *v += n)
+            .or_insert(n);
+
+        let perm = RunnerPerm::with_drop_signal(
+            inner,
+            DropSignal::new(
+                Arc::clone(worker_notify),
+                Arc::clone(hint_notify),
+                device_idx,
+                Arc::clone(&rq.requester_id),
+            ),
+        );
+
+        let _ = rq.reply.send(Ok(perm));
+    }
+
+    // Replace queued request for same requester (latest wins). Old waiter gets an error.
+    fn upsert_req(q: &mut VecDeque<Req>, req: Req) {
+        if let Some(existing) = q.iter_mut().find(|r| Self::same_id(&r.requester_id, &req.requester_id)) {
+            let old_reply = std::mem::replace(&mut existing.reply, req.reply);
+            existing.needed = req.needed;
+            warn!("Arbiter::upsert_req: got another request from same sender: {:?}", req.requester_id);
+
+            let _ = old_reply.send(Err(
+                Cause::SomethingElse("replaced by newer request".into()).into()//TODO separate cause of this
+            ));
+        } else {
+            debug!("Arbiter::upsert_req: req={:?}", req);
+            q.push_back(req);
+        }
+    }
+
+    fn purge_non_super(q: &mut VecDeque<Req>, sid: &Arc<dyn CachableIdTr>) {
+        let mut kept: VecDeque<Req> = VecDeque::with_capacity(q.len());
+        while let Some(rq) = q.pop_front() {
+            if Self::same_id(&rq.requester_id, sid) {
+                kept.push_back(rq);
+            } else {
+                let _ = rq.reply.send(Err(Cause::OutOfPermits.into()));
+            }
+        }
+        *q = kept;
+    }
 
 }
 
@@ -439,25 +413,29 @@ impl Debug for Arbiter {
         writeln!(f, "device_idx={}", self.device_idx)?;
         writeln!(f, "sem.available_permits={}", self.sem.available_permits())?;
 
-        writeln!(f, "  granted_counts: {{")?;
+        #[cfg(tho_debug)]
+        {
+            writeln!(f, "  granted_counts: {{")?;
 
-        let mut entries: Vec<(String, usize)> = self.granted_counts
+            let mut entries: Vec<(String, usize)> = self.granted_counts
                 .iter()
                 .map(|e| (e.key().clone(), *e.value()))
                 .collect::<Vec<(Arc<dyn CachableIdTr>, usize)>>()
                 .drain(..)
                 .map(|(k, v)| (format!("{k:?}"), v)).collect();
 
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let mut sum = 0;
-        for entry in entries {
-            sum+= entry.1;
-            writeln!(f, "    {:?}: {:?},", entry.0, entry.1)?;
+            let mut sum = 0;
+            for entry in entries {
+                sum += entry.1;
+                writeln!(f, "    {:?}: {:?},", entry.0, entry.1)?;
+            }
+            writeln!(f, "  }}")?;
+            writeln!(f, "granted_counts.sum={sum}")?;
         }
 
-        writeln!(f, "  }}")?;
-        writeln!(f, "granted_counts.sum={sum}")?;
+
         write!(f, "}}")
 
     }
@@ -497,7 +475,13 @@ impl PermitSource for Arbiter {
         n: NumPermits,
         requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoError> {
-        debug!("PermitsDebug: PermitSourcacquire:  n={n} requester_id={requester_id:?} granted_counts sum={}", self.granted_counts.iter().map(|e|*e.value()).sum::<usize>());
+
+        #[cfg(not(tho_debug))]
+        debug!("PermitSource for Arbiter::acquire:  n={n} requester_id={requester_id:?}");
+
+        #[cfg(tho_debug)]
+        debug!("PermitSource for Arbiter::acquire:  n={n} requester_id={requester_id:?} granted_counts sum={}", self.granted_counts.iter().map(|e|*e.value()).sum::<usize>());
+
         self.send_acquire_rq(n, requester_id).await
     }
 
@@ -507,7 +491,7 @@ impl PermitSource for Arbiter {
         let _ = timeout(Duration::from_millis(10000), self.hint_notify.notified()).await;
     }
 
-    //TODO #[cfg(debug_assertions)]
+    #[cfg(tho_debug)]
     fn move_permits(&self, from:&SynKey, to:&SynKey) {
         if from.eq(to) {
             return;
@@ -525,13 +509,46 @@ impl PermitSource for Arbiter {
         }
     }
 
+    #[cfg(tho_debug)]
+    fn remove_granted_counts(&self, requester_id: Arc<dyn CachableIdTr>, count: u8) {
+        let id = requester_id;
+        let n = count as usize;
+
+        debug!("Arbiter::remove_granted_counts: {id:?} dropped {n} permits");
+        debug!("Arbiter::remove_granted_counts: self.granted_counts={:?}", self.granted_counts);
+
+        if let Some(mut vref) = self.granted_counts.get_mut(&id) {
+            if *vref >= n {
+                *vref -= n;
+            } else {
+                warn!("Arbiter::remove_granted_counts: removing {n} which is more than currently granted {} for id={id:?}", *vref);
+                *vref = 0;
+            }
+
+            let now = *vref;
+            drop(vref);
+            if now == 0 {
+                debug!("Arbiter::remove_granted_counts: removing {id:?}");
+
+                self.granted_counts.remove(&id);
+            }
+        } else {
+            warn!("Arbiter::remove_granted_counts: drop for unknown id={id:?}");
+        }
+    }
+
     async fn shutdown(&self) {
         Arbiter::shutdown(self).await;
+    }
+
+    fn as_any<'a>(&'a self) -> &'a dyn Any {
+        self
     }
 }
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use rand::random_range;
     use tokio::task::JoinSet;
@@ -568,20 +585,58 @@ mod tests {
     use log::debug;
     use std::sync::Arc;
     use crate::mono_key;
+    use crate::runner::global_ctx::GlobalCtx;
     use crate::simple_id;
     use crate::runner::permits::MAX_PERMITS;
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    #[cfg(tho_debug)]
     async fn test_one_by_one() -> Result<(), ThoError> {
-        let arb = Arc::new(Arbiter::new(100, 0));
+
+        let ctx = GlobalCtx::init_devices(1);
+        let arb = ctx.debug_semaphore(0).as_any().downcast_ref::<Arbiter>().unwrap();
+
+
         let mut aaa_permits = vec![];
         aaa_permits.push(arb.send_acquire_rq(10, Arc::new(mono_key!(0, "aaa")) as Arc<dyn CachableIdTr>).await?);
-
+        // tokio::time::sleep(Duration::from_millis(100)).await;
         debug!("aaa_permits={aaa_permits:?}");
+        debug!("arb.granted_counts={:?}", arb.granted_counts);
         assert_eq!(aaa_permits.len(), 1);
 
         assert_eq!(aaa_permits[0].num_permits(), 10);
+
+        drop(aaa_permits);
+
+        debug!("arb.granted_counts={:?}", arb.granted_counts);
+
+        assert!(arb.granted_counts.is_empty());
+
+        let bbb_key = Arc::new(mono_key!(1, "bbb"));
+        let perm_bbb_51_0 = arb.send_acquire_rq(51, Arc::clone(&bbb_key) as Arc<dyn CachableIdTr>).await?;
+        debug!("perm_bbb_51_0={:?}", perm_bbb_51_0);
+
+        let perm_bbb_49_1 = arb.send_acquire_rq(49, Arc::clone(&bbb_key) as Arc<dyn CachableIdTr>).await?;
+        debug!("arb={:?}", arb);
+
+        assert_eq!(arb.granted_counts.len(), 1);
+        assert_eq!(*arb.granted_counts.get(&(Arc::clone(&bbb_key) as Arc<dyn CachableIdTr>)).expect("no entry for bbb").value(), 100);
+        debug!("arb={:?}", arb);
+
+        drop(perm_bbb_51_0);
+        // tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(*arb.granted_counts.get(&(Arc::clone(&bbb_key) as Arc<dyn CachableIdTr>)).expect("no entry for bbb").value(), 49);
+        drop(perm_bbb_49_1);
+        // tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(arb.granted_counts.get(&(bbb_key as Arc<dyn CachableIdTr>)).is_none());
+
+
+        let ccc_key = Arc::new(mono_key!(2, "ccc"));
+        let perm_ccc_100 = arb.send_acquire_rq(100, Arc::clone(&ccc_key) as Arc<dyn CachableIdTr>).await?;
+        debug!("arb={:?}", arb);
+        debug!("perm_ccc_100={:?}", perm_ccc_100);
+        assert_eq!(*arb.granted_counts.get(&(ccc_key as Arc<dyn CachableIdTr>)).expect("no entry for bbb").value(), 100);
 
         Ok(())
     }
@@ -589,7 +644,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_fifo_arbiter() -> Result<(), ()> {
-        let arb = Arc::new(Arbiter::new(100, 0));
+        let ctx = GlobalCtx::init_devices(1);
+        let arb = Arc::new(ctx.debug_semaphore(0).as_any().downcast_ref::<Arbiter>().unwrap());
+
 
         let tasks = [
             SomeTask::new(0, 80, 20),
@@ -685,30 +742,33 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg(tho_debug)]
     async fn granted_counts_are_cleared_on_drop() {
         use tokio::time::{Duration, sleep};
 
-        let arb = Arbiter::new(2, 0);
+        let ctx = GlobalCtx::init_devices(1);
+        let arb = ctx.debug_semaphore(0).as_any().downcast_ref::<Arbiter>().unwrap();
+
         let requester_id = Arc::new(simple_id!("granted-tracking")) as Arc<dyn CachableIdTr>;
 
         let permit_0 = arb
-            .send_acquire_rq(1, Arc::clone(&requester_id))
+            .send_acquire_rq(50, Arc::clone(&requester_id))
             .await
             .unwrap();
-        assert_eq!(arb.granted_counts.get(&requester_id).unwrap().value(), &1usize);
+        assert_eq!(arb.granted_counts.get(&requester_id).unwrap().value(), &50usize);
 
         let permit_1 = arb
-            .send_acquire_rq(1, Arc::clone(&requester_id))
+            .send_acquire_rq(50, Arc::clone(&requester_id))
             .await
             .unwrap();
-        assert_eq!(arb.granted_counts.get(&requester_id).unwrap().value(), &2usize);
+        assert_eq!(arb.granted_counts.get(&requester_id).unwrap().value(), &100usize);
 
         debug!("arb={arb:?}");
 
         drop(permit_1);
         sleep(Duration::from_millis(30)).await;
 
-        assert_eq!(arb.granted_counts.get(&requester_id).unwrap().value(), &1);
+        assert_eq!(arb.granted_counts.get(&requester_id).unwrap().value(), &50);
 
         drop(permit_0);
         sleep(Duration::from_millis(30)).await;
@@ -735,8 +795,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    #[cfg(tho_debug)]
     async fn test_task_keeps_permits() -> Result<(), ThoError>{
-        let arb = Arbiter::new(MAX_PERMITS, 0);
+        let ctx = GlobalCtx::init_devices(1);
+        let arb = ctx.debug_semaphore(0).as_any().downcast_ref::<Arbiter>().unwrap();
+
 
         let root_key:SynKey = mono_key!(0, "root").into();
 
@@ -777,5 +840,16 @@ mod tests {
         assert!(arb.granted_counts.is_empty());
 
         Ok(())
+    }
+
+    #[test]
+    fn test_0(){
+        let dm = DashMap::new();
+        let key_aaa = Arc::new("aaa");
+        let key_aaa_clone = Arc::clone(&key_aaa);
+        dm.insert(key_aaa, 777);
+
+        debug!("v={}", dm.get(&key_aaa_clone).unwrap().value());
+
     }
 }
