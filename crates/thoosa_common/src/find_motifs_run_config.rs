@@ -1501,7 +1501,7 @@ pub struct SelectMotifsRunConfig {
 
     #[in_map]
     #[run_config]
-    pub extend_max_slices: Option<MaxSlices>
+    pub extend_max_slices: Option<MaxSlices>//TODO move into extend_config
 }
 
 impl SelectMotifsRunConfig {
