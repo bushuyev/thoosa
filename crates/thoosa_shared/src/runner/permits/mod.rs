@@ -129,16 +129,21 @@ impl RunnerPerm {
 impl Drop for RunnerPerm {
     fn drop(&mut self) {
 
-        let permits_to_drop = self.num_permits() as u8;
+
+        #[cfg(tho_debug)]
+        if let Some(drop_signal) = self.drop_signal.take() {
+            let permits_to_drop = self.num_permits() as u8;
+
+            debug!("PermitsDebug: Drop for RunnerPerm::drop: drop_signal={drop_signal:?}");
+
+            GlobalCtx::global().debug_semaphore_remove_perm(drop_signal.device_idx, drop_signal.requester_id, permits_to_drop);
+        }
         drop(self.inner.take());
         // Releasing permits is done by tokio::OwnedSemaphorePermit’s Drop.
         //  wake the arbiter to re-check the head of queue
         if let Some(drop_signal) = self.drop_signal.take() {
             debug!("PermitsDebug: Drop for RunnerPerm::drop: drop_signal={drop_signal:?}");
 
-
-            #[cfg(tho_debug)]
-            GlobalCtx::global().debug_semaphore_remove_perm(drop_signal.device_idx, drop_signal.requester_id, permits_to_drop);
 
             drop_signal.worker_notify.notify_one();
             drop_signal.hint_notify.notify_one();
