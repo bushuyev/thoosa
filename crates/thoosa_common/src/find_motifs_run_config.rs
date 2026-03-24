@@ -488,7 +488,7 @@ mod tests {
             None,
             100,
             100,
-            Some(vec![AverageFilter(AverageFilterParams { window: 11 })]),
+            Some(vec![AverageFilter(AverageFilterParams { window: 11, step: 1 })]),
             None,
         );
         let adjust = config.input_len_adjuster();
@@ -610,7 +610,7 @@ mod tests {
             id: Some(246),
             step: 100,
             window: 1000,
-            freq_filter: Some(vec![AverageFilter(AverageFilterParams { window: 11 })]),
+            freq_filter: Some(vec![AverageFilter(AverageFilterParams { window: 11, step: 1 })]),
             slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
         };
