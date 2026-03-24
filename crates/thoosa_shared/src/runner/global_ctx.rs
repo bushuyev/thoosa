@@ -66,7 +66,7 @@ impl GlobalCtx {
 
             is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
 
-            caches_areas: parking_lot::RwLock::new(CacheAreasKeeper::new(1000)),//100 * 64 cache areas
+            caches_areas: parking_lot::RwLock::new(CacheAreasKeeper::new(1000)), //100 * 64 cache areas
 
             cache_age: Default::default(),
             purge_lock: tokio::sync::Mutex::new(()),
@@ -205,9 +205,14 @@ impl GlobalCtx {
         }
     }
 
-    // #[cfg(debug_assertions)] TODO
+    #[cfg(any(test, tho_debug))]
     pub fn debug_semaphore(&self, device_idx:usize) -> &Box<dyn PermitSource>{
         &self.semaphores[device_idx]
+    }
+
+    #[cfg(tho_debug)]
+    pub fn debug_semaphore_remove_perm(&self, device_idx:usize, requester_id:Arc<dyn CachableIdTr>, count:u8) {
+        self.semaphores[device_idx].remove_granted_counts(requester_id, count);
     }
 
     // #[cfg(debug_assertions)] TODO
@@ -400,7 +405,11 @@ pub mod mock_global_ctx {
 
         async fn wait_for_permits_hint(&self) {}
 
+        #[cfg(tho_debug)]
         fn move_permits(&self, _from: &SynKey, _to: &SynKey) {}
+
+        #[cfg(tho_debug)]
+        fn remove_granted_counts(&self, requester_id: Arc<dyn CachableIdTr>, count: u8) {}
     }
 
     #[derive(Debug)]
@@ -416,15 +425,23 @@ pub mod mock_global_ctx {
             num_permits: NumPermits,
             out_id: Arc<dyn CachableIdTr>,
         ) -> Result<RunnerPerm, ThoError> {
+
             self.real.debug_semaphore(self.device_idx).acquire(num_permits, out_id).await
         }
 
         async fn wait_for_permits_hint(&self) {
+
             self.real.debug_semaphore(self.device_idx).wait_for_permits_hint().await;
         }
 
+        #[cfg(tho_debug)]
         fn move_permits(&self, from: &SynKey, to: &SynKey) {
             self.real.debug_semaphore(self.device_idx).move_permits(from, to);
+        }
+
+        #[cfg(tho_debug)]
+        fn remove_granted_counts(&self, requester_id: Arc<dyn CachableIdTr>, count: u8) {
+            self.real.debug_semaphore(self.device_idx).remove_granted_counts(requester_id, count);
         }
     }
 
@@ -432,7 +449,7 @@ pub mod mock_global_ctx {
         Box::new(DummyPermitSource)
     }
 
-    fn delegating_semaphore(real: &'static GlobalCtx, device_idx: usize) -> Box<dyn PermitSource> {
+    pub fn delegating_semaphore(real: &'static GlobalCtx, device_idx: usize) -> Box<dyn PermitSource> {
         Box::new(DelegatingPermitSource { real, device_idx })
     }
 

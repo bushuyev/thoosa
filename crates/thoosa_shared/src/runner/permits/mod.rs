@@ -1,3 +1,4 @@
+use std::any::Any;
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
@@ -7,6 +8,7 @@ use crate::ThoError;
 use crate::traits::CachableIdTr;
 use tokio::sync::{Notify, OwnedSemaphorePermit, mpsc};
 use crate::comp_id::SynKey;
+use crate::runner::global_ctx::GlobalCtx;
 
 pub mod runner_queue;
 
@@ -41,11 +43,18 @@ pub trait PermitSource: Debug + Send + Sync {
 
     async fn wait_for_permits_hint(&self);
 
-    //TODO #[cfg(debug_assertions)]
+    #[cfg(tho_debug)]
     fn move_permits(&self, from:&SynKey, to:&SynKey);
+
+    #[cfg(tho_debug)]
+    fn remove_granted_counts(&self, requester_id:Arc<dyn CachableIdTr>, count:u8);
 
     async fn shutdown(&self) {
 
+    }
+
+    fn as_any<'a>(&'a self) -> &'a dyn Any {
+        todo!()
     }
 }
 
@@ -56,10 +65,11 @@ pub struct RunnerPerm {
     drop_signal: Option<DropSignal>,
 }
 
+#[derive(Debug)]
 pub struct DropSignal {
     worker_notify: Arc<Notify>,//Arc to Arbiter worker notify, for triggering next loop at crates/thoosa_shared/src/runner/permits/runner_queue.rs:404
     hint_notify: Arc<Notify>,//Arc to Arbiter hint notify, for waking wait_for_permits_hint without stealing worker wakeups
-    drop_tx: mpsc::UnboundedSender<(Arc<dyn CachableIdTr>, u8)>,//for tracking granted_counts in crates/thoosa_shared/src/runner/permits/runner_queue.rs:141 - used for debug only
+    device_idx: usize,
     requester_id: Arc<dyn CachableIdTr>,
 }
 
@@ -67,13 +77,13 @@ impl DropSignal {
     pub fn new(
         worker_notify: Arc<Notify>,
         hint_notify: Arc<Notify>,
-        drop_tx: mpsc::UnboundedSender<(Arc<dyn CachableIdTr>, u8)>,
+        device_idx:usize,
         requester_id: Arc<dyn CachableIdTr>,
     ) -> Self {
         Self {
             worker_notify,
             hint_notify,
-            drop_tx,
+            device_idx,
             requester_id,
         }
     }
@@ -124,9 +134,12 @@ impl Drop for RunnerPerm {
         // Releasing permits is done by tokio::OwnedSemaphorePermit’s Drop.
         //  wake the arbiter to re-check the head of queue
         if let Some(drop_signal) = self.drop_signal.take() {
-            debug!("PermitsDebug: Drop for RunnerPerm::drop: drop_signal.requester_id={:?} num_permits={permits_to_drop:?}", drop_signal.requester_id);
+            debug!("PermitsDebug: Drop for RunnerPerm::drop: drop_signal={drop_signal:?}");
 
-            let _ = drop_signal.drop_tx.send((drop_signal.requester_id, permits_to_drop));
+
+            #[cfg(tho_debug)]
+            GlobalCtx::global().debug_semaphore_remove_perm(drop_signal.device_idx, drop_signal.requester_id, permits_to_drop);
+
             drop_signal.worker_notify.notify_one();
             drop_signal.hint_notify.notify_one();
         }

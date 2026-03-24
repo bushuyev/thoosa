@@ -135,6 +135,9 @@ where
                 Err(te) => {
                     match te.what() {
                         Cause::OutOfPermits => {
+                            #[cfg(not(tho_debug))]
+                            debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name:?} acquired_permits={acquired_permits} Error: {te:?} device_idx={}", adjustable.device_idx());
+                            #[cfg(tho_debug)]
                             debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name:?} acquired_permits={acquired_permits} Error: {te:?} device_idx={} debug_semaphore={:?}", adjustable.device_idx(), GlobalCtx::global().debug_semaphore(adjustable.device_idx()));
 
                            /* if adjustable.read().device_idx() != 0 {

@@ -1,5 +1,7 @@
 export LD_LIBRARY_PATH=$LIBTORCH/lib/ && ...
 
+RUSTFLAGS="--cfg tho_debug" cargo build --release
+
 cargo nextest run --release   --config 'build.rustflags=["--cfg","tho_debug"]'
 cargo nextest run --release   --config 'build.rustflags=["--cfg","tho_debug_plots=\"batch_motif_,batch_random_motif_in_batch_\""]'
 cargo nextest run --release   --config 'build.rustflags=["--cfg","tho_debug_plots=\"apply_motif_net_run_input_motif_applied_\""]'
