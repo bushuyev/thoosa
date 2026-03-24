@@ -54,6 +54,7 @@ enum PreparedFilter {
     },
     MovingAverage {
         window: u32,
+        step: u32,
     },
 }
 
@@ -176,6 +177,7 @@ where
                     }
                     filters.push(PreparedFilter::MovingAverage {
                         window: moving_average_config.window,
+                        step: moving_average_config.step,
                     });
                 }
             }
@@ -235,8 +237,8 @@ where
                     debug!("FreqFilter::apply_tho_tensor, Median: id={} window={} filtered_t.size={:?} filtered_t_out.size={:?}", input_tensor.id(), window, filtered_t.size(), filtered_t_out.size());
                     filtered_t = filtered_t_out;
                 }
-                PreparedFilter::MovingAverage { window } => {
-                    let filtered_t_out = moving_average(&filtered_t, *window)?;
+                PreparedFilter::MovingAverage { window, step } => {
+                    let filtered_t_out = moving_average(&filtered_t, *window, *step as i64)?;
                     debug!("FreqFilter::apply_tho_tensor, MovingAverage: id={} window={} filtered_t.size={:?} filtered_t_out.size={:?}", input_tensor.id(), window, filtered_t.size(), filtered_t_out.size());
                     filtered_t = filtered_t_out;
                 }
@@ -418,12 +420,12 @@ mod tests {
     #[test]
     fn test_apply_tho_tensor_with_moving_average_filter() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-        let freq_filter = FreqFilter::<RunCtxWithPermits>::new(&[InputFilter::AverageFilter(AverageFilterParams { window: 4 })], &ws, 0)?;
+        let freq_filter = FreqFilter::<RunCtxWithPermits>::new(&[InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], &ws, 0)?;
         let input_t = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("moving_average", "moving_average")]), input_t)?;
 
         let output = freq_filter.apply_tho_tensor(&input)?;
-        let expected = moving_average(input.as_ref(), 4)?;
+        let expected = moving_average(input.as_ref(), 4, 1)?;
 
         assert!(output.as_ref().allclose(&expected, 1e-5, 1e-5, false));
 

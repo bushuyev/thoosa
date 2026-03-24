@@ -1092,6 +1092,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
         freq_filter: Some(vec![
             AverageFilter(AverageFilterParamsRangeOrValue {
                 window: RangeOrValue::dynamic(median_window),
+                step: RangeOrValue::Value(2),
             }),
             // SavGolFilter(SavGolFilterParamsRangeOrValue {
             //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
@@ -1119,13 +1120,14 @@ where
         id: None,
         step: RangeOrValue::Value(10),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 100, end: 1001 }, step: Some((500, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((40, 0)) },
         freq_filter: Some(vec![
             // MedianFilter(MedianFilterParamsRangeOrValue {
             //     window: RangeOrValue::dynamic(median_window.clone()),
             // }),
             AverageFilter(AverageFilterParamsRangeOrValue {
                 window: RangeOrValue::dynamic(median_window),
+                step: RangeOrValue::Value(10),
             }),
             // SavGolFilter(SavGolFilterParamsRangeOrValue {
             //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
@@ -1136,7 +1138,7 @@ where
         ]),
         slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
             aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                q: RangeOrValue::Range { range: 0.0..0.1, step: None },
+                q: RangeOrValue::Range { range: 0.0..0.05, step: None },
             }),
         }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),

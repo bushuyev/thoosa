@@ -299,7 +299,7 @@ fn odd_window(window: u32, filter_name: &str) -> Result<i64, ThoError> {
     Ok(normalized as i64)
 }
 
-fn windows_with_replicate_padding(x: &Tensor, window: i64, filter_name: &str) -> Result<Tensor, ThoError> {
+fn windows_with_replicate_padding(x: &Tensor, window: i64, filter_name: &str, step: i64) -> Result<Tensor, ThoError> {
     let size = x.size();
     if size.len() != 2 {
         return Err(ThoError::new(format!("{filter_name}: expected input of shape [C, Data], got {size:?}")));
@@ -316,7 +316,7 @@ fn windows_with_replicate_padding(x: &Tensor, window: i64, filter_name: &str) ->
     let right = x.f_narrow(1, data_len - 1, 1)?.f_repeat([1, radius].as_slice())?;
     let padded = Tensor::f_cat(&[&left, x, &right], 1)?;
 
-    Ok(padded.f_unfold(1, window, 1)?)
+    Ok(padded.f_unfold(1, window, step)?)
 }
 
 /// Median filter for multichannel 1D data.
@@ -336,7 +336,7 @@ fn windows_with_replicate_padding(x: &Tensor, window: i64, filter_name: &str) ->
 /// - `window` must be > 3 after odd normalization
 pub fn median(x: &Tensor, window: u32) -> Result<Tensor, ThoError> {
     let window = odd_window(window, "median")?;
-    let windows = windows_with_replicate_padding(x, window, "median")?;
+    let windows = windows_with_replicate_padding(x, window, "median", 1)?;
     let radius = window / 2;
 
     // Sort each window and take the middle value.
@@ -363,9 +363,9 @@ pub fn median(x: &Tensor, window: u32) -> Result<Tensor, ThoError> {
 ///
 /// Requirements:
 /// - `window` must be > 3 after odd normalization
-pub fn moving_average(x: &Tensor, window: u32) -> Result<Tensor, ThoError> {
+pub fn moving_average(x: &Tensor, window: u32, step: i64) -> Result<Tensor, ThoError> {
     let window = odd_window(window, "moving average")?;
-    let windows = windows_with_replicate_padding(x, window, "moving_average")?;
+    let windows = windows_with_replicate_padding(x, window, "moving_average", step)?;
     let moving_average = windows.f_mean_dim(2, false, None)?;
 
     debug!("moving_average: x.size={:?} windows.size={:?} moving_average.size={:?}", x.size(), windows.size(), moving_average.size());
@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn test_moving_average_replicates_edges() -> Result<(), ThoError> {
         let input = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
-        let output = moving_average(&input, 4)?;
+        let output = moving_average(&input, 4, 1)?;
         let expected = Tensor::from_slice(&[1.6f32, 2.2, 3.0, 3.8, 4.4, 4.4, 3.8, 3.0, 2.2, 1.6]).f_view([2, 5])?;
 
         assert!(output.allclose(&expected, 1e-5, 1e-5, false));
