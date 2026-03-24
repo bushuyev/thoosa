@@ -194,6 +194,7 @@ impl RunCtx for RunCtxWithPermits {
         }
         branched_ctx.device_idx = self.device_idx;
 
+        #[cfg(tho_debug)]
         GlobalCtx::global().debug_semaphore(self.device_idx).move_permits(&self.id, &branched_ctx.id);
 
 
@@ -276,6 +277,7 @@ impl Drop for RunCtxWithPermits {
                 {
                     let id_len = self.id.as_slice().len();
                     assert!(id_len > 1);
+                    #[cfg(tho_debug)]
                     GlobalCtx::global().debug_semaphore(self.device_idx).move_permits(&self.id, &return_to_id);
                 }
             }
