@@ -849,12 +849,12 @@ mod tests {
                     lr: RangeOrValue::Value(0.0001),
                     patience: RangeOrValue::Value(5),
                     min_delta: RangeOrValue::Value(0.0001),
-                    optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+                    optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
                         beta1: RangeOrValue::Value(0.9),
                         beta2: RangeOrValue::Value(0.999),
                         wd: RangeOrValue::Value(0.01),
                         amsgrad: RangeOrValue::Value(false),
-                    }),
+                    })),
                 },
             }
             .opt_run_configs().expect("DummyRunConfigRangeOrValue::opt_run_configs should not fail"),

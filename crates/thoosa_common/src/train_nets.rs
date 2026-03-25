@@ -755,10 +755,16 @@ pub struct CommonTrainingRunConfig {
 
     #[in_map]
     #[run_config]
-    optimizer: Optimizers
+    optimizer: Option<Optimizers>
 }
 
 impl CommonTrainingRunConfig {
+    fn default_optimizer() -> Optimizers {
+        Optimizers::AdamW(AdamW {
+            beta1: 0.9, beta2: 0.999, wd: 0.01, amsgrad: false
+        })
+    }
+
     pub fn new(
         cycles: u32,
         batch_size: u32,
@@ -770,29 +776,26 @@ impl CommonTrainingRunConfig {
             lr,
             patience: 0,
             min_delta: 0.0,
-            optimizer: Optimizers::AdamW(AdamW {
-                beta1: 0.9, beta2: 0.999, wd: 0.01, amsgrad: false
-            }),
+            optimizer: Some(Self::default_optimizer()),
         }
     }
 
     pub fn build_optimizer(&self, vs: &VarStore)->Result<Optimizer, ThoError>{
+        let optimizer = self.optimizer.clone().unwrap_or_else(Self::default_optimizer);
 
-        debug!("CommonTrainingRunConfig::build_optimizer: optimizer={:?}", self.optimizer);
+        debug!("CommonTrainingRunConfig::build_optimizer: optimizer={optimizer:?}");
 
-        match &self.optimizer {
+        match optimizer {
             Optimizers::AdamW(AdamW{ beta1, beta2, wd, amsgrad }) => {
                 tch::nn::AdamW{
-                    beta1: *beta1 as f64,
-                    beta2: *beta2 as f64,
-                    wd: *wd,
+                    beta1: beta1 as f64,
+                    beta2: beta2 as f64,
+                    wd,
                     eps: 1e-8,
-                    amsgrad: *amsgrad,
+                    amsgrad,
                 }.build(&vs, self.lr).map_err(|e|e.into())
             }
         }
-
-
     }
 }
 
@@ -805,9 +808,7 @@ impl Default for CommonTrainingRunConfig {
             lr: 0.0001,
             patience: 5,
             min_delta: 1e-4_f32,
-            optimizer: Optimizers::AdamW(AdamW {
-                beta1: 0.9, beta2: 0.999, wd: 0.01, amsgrad: false
-            }),
+            optimizer: Some(CommonTrainingRunConfig::default_optimizer()),
         }
     }
 }
