@@ -95,6 +95,15 @@ pub struct RunConfigEntry {
     pub run_on: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunConfigFilter {
+    pub id: Option<RunId>,
+    pub run_config_type: Option<String>,
+    pub descr_substr: Option<String>,
+    pub run_on_from: Option<String>,
+    pub run_on_to: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunMotifEntry {
     pub motif_id: u32,
@@ -246,6 +255,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError>;
     async fn list_run_configs_by_ids(&self, ids: &[RunId]) -> Result<Vec<RunConfigEntry>, ThoError>;
 
+    async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> Result<Vec<RunConfigEntry>, ThoError>;
     async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError>;
 
     async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
@@ -424,6 +434,7 @@ mock! {
         async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
         async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError>;
         async fn list_run_configs_by_ids(&self, ids: &[RunId]) -> Result<Vec<RunConfigEntry>, ThoError>;
+        async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> Result<Vec<RunConfigEntry>, ThoError>;
         async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError>;
         async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
         async fn list_run_motifs(&self, run_id: RunId) -> Result<Vec<RunMotifEntry>, ThoError>;
@@ -2115,6 +2126,57 @@ impl Store for SqlStore {
         .await
     }
 
+    async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> Result<Vec<RunConfigEntry>, ThoError> {
+        self.with_reader_conn("list_run_configs_filtered", move |conn| {
+            let mut where_clauses = vec![];
+            let mut params = vec![];
+
+            if let Some(id) = filter.id {
+                where_clauses.push("rc.id = ?");
+                params.push(Value::Integer(id as i64));
+            }
+            if let Some(run_config_type) = filter.run_config_type.as_ref() {
+                where_clauses.push("rc.type = ?");
+                params.push(Value::Text(run_config_type.clone()));
+            }
+            if let Some(descr_substr) = filter.descr_substr.as_ref() {
+                where_clauses.push("rc.descr LIKE ? COLLATE NOCASE");
+                params.push(Value::Text(format!("%{descr_substr}%")));
+            }
+            if let Some(run_on_from) = filter.run_on_from.as_ref() {
+                where_clauses.push("rc.run_on >= ?");
+                params.push(Value::Text(run_on_from.clone()));
+            }
+            if let Some(run_on_to) = filter.run_on_to.as_ref() {
+                where_clauses.push("rc.run_on <= ?");
+                params.push(Value::Text(run_on_to.clone()));
+            }
+
+            let where_sql = if where_clauses.is_empty() {
+                "1 = 1".to_string()
+            } else {
+                where_clauses.join(" AND ")
+            };
+            let query = format!(
+                "WITH RECURSIVE matched(id) AS (SELECT rc.id FROM run_configs rc WHERE {}), visible(id) AS (SELECT id FROM matched UNION SELECT rci.input_run_id FROM run_configs_input rci JOIN visible v ON rci.run_id = v.id) SELECT rc.id, rc.type, rc.descr, rc.run_on FROM run_configs rc JOIN visible v ON v.id = rc.id ORDER BY rc.id DESC",
+                where_sql,
+            );
+
+            let mut stmt = conn.prepare(query.as_str())?;
+            stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
+                Ok(RunConfigEntry {
+                    id: row.get::<usize, RunId>(0)?,
+                    run_config_type: row.get::<usize, String>(1)?,
+                    descr: row.get::<usize, String>(2)?,
+                    run_on: row.get::<usize, String>(3)?,
+                })
+            })?
+            .map(|value| value.map_err(ThoError::from))
+            .collect::<Result<Vec<RunConfigEntry>, ThoError>>()
+        })
+        .await
+    }
+
     async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError> {
         self.with_reader_conn("list_run_config_types", move |conn| {
             let run_config_types = {
@@ -2169,13 +2231,7 @@ impl Store for SqlStore {
         self.with_reader_conn("list_run_motifs", move |conn| {
             let selected_motifs = {
                 let mut stmt = conn.prepare(
-                    "SELECT sm.motif_id, m.channel_id, sm.rate, m.run_id, COUNT(s.motif_id), COUNT(DISTINCT s.resource_id) \
-                     FROM selected_motifs sm \
-                     JOIN motifs m ON m.id=sm.motif_id \
-                     LEFT JOIN slices s ON s.motif_id=sm.motif_id \
-                     WHERE sm.run_id=? \
-                     GROUP BY sm.motif_id, m.channel_id, sm.rate, m.run_id \
-                     ORDER BY m.channel_id ASC, sm.rate DESC, sm.motif_id ASC",
+                    "SELECT sm.motif_id, m.channel_id, sm.rate, m.run_id,                       (SELECT COUNT(*) FROM slices s WHERE s.motif_id = sm.motif_id) AS slices_cnt,                       (SELECT COUNT(DISTINCT s.resource_id) FROM slices s WHERE s.motif_id = sm.motif_id) AS resources_cnt                      FROM selected_motifs sm                      JOIN motifs m ON m.id = sm.motif_id                      WHERE sm.run_id = ?                      ORDER BY m.channel_id ASC, sm.rate DESC, sm.motif_id ASC",
                 )?;
 
                 stmt.query_map([run_id], |row| {
@@ -2192,18 +2248,13 @@ impl Store for SqlStore {
             };
 
             if !selected_motifs.is_empty() {
-                debug!("list_run_motifs: run_id={run_id} selected_motifs={selected_motifs:?}");
+                debug!("list_run_motifs: run_id={run_id} selected_motifs_count={}", selected_motifs.len());
                 return Ok(selected_motifs);
             }
 
             let motifs = {
                 let mut stmt = conn.prepare(
-                    "SELECT m.id, m.channel_id, m.run_id, COUNT(s.motif_id), COUNT(DISTINCT s.resource_id) \
-                     FROM motifs m \
-                     LEFT JOIN slices s ON s.motif_id=m.id \
-                     WHERE m.run_id=? \
-                     GROUP BY m.id, m.channel_id, m.run_id \
-                     ORDER BY m.channel_id ASC, m.id ASC",
+                    "SELECT m.id, m.channel_id, m.run_id                      FROM motifs m                      WHERE m.run_id = ?                      ORDER BY m.channel_id ASC, m.id ASC",
                 )?;
 
                 stmt.query_map([run_id], |row| {
@@ -2212,14 +2263,14 @@ impl Store for SqlStore {
                         channel_id: row.get::<usize, usize>(1)?,
                         score: None,
                         source_run_id: row.get::<usize, RunId>(2)?,
-                        slices_cnt: row.get::<usize, usize>(3)?,
-                        resources_cnt: row.get::<usize, usize>(4)?,
+                        slices_cnt: 0,
+                        resources_cnt: 0,
                     })
                 })?
                 .collect::<Result<Vec<_>, Error>>()?
             };
 
-            debug!("list_run_motifs: run_id={run_id} motifs={motifs:?}");
+            debug!("list_run_motifs: run_id={run_id} motifs_count={}", motifs.len());
             Ok(motifs)
         })
         .await
@@ -2893,6 +2944,10 @@ impl SqlStore {
                 (),
             )?;
 
+            t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_type ON run_configs (type);", ())?;
+            t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_run_on ON run_configs (run_on);", ())?;
+            t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_input_run_id ON run_configs_input (run_id);", ())?;
+
             //key - resource id  //TODO remove ord_id?
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_resources (
@@ -2930,6 +2985,7 @@ impl SqlStore {
             )",
                 (),
             )?;
+            t.execute("CREATE INDEX IF NOT EXISTS idx_motifs_run_id ON motifs (run_id);", ())?;
 
             //motif_id in UNIQUE constraint is needed when new slices are added from different find_motifs in same select_motifs run.
             t.execute(
@@ -2944,6 +3000,11 @@ impl SqlStore {
             )",
                 (),
             )?;
+            // The UNIQUE index on (motif_id, run_id, resource_id, slice_idx) already covers the
+            // motif_id-led access pattern used by list_run_motifs. Keep inserts fast by ensuring
+            // we do not maintain extra slices indexes.
+            t.execute("DROP INDEX IF EXISTS idx_slices_motif_id;", ())?;
+            t.execute("DROP INDEX IF EXISTS idx_slices_motif_id_resource_id;", ())?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS slice_matches (
@@ -2965,6 +3026,7 @@ impl SqlStore {
             )",
                 (),
             )?;
+            t.execute("CREATE INDEX IF NOT EXISTS idx_selected_motifs_run_id_motif_id ON selected_motifs (run_id, motif_id);", ())?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS selected_nets (
@@ -3467,7 +3529,7 @@ mod store_tests {
     use thoosa_shared::{TensorIdSliceIdx, cdt, cdt_for_dir, MotifSlice};
 
     use crate::{
-        MotifTrackerStore, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoError,
+        MotifTrackerStore, RunConfigFilter, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoError,
     };
     use std::path::PathBuf;
 
@@ -4257,6 +4319,36 @@ mod store_tests {
 
         let loaded_by_ids = store.list_run_configs_by_ids(&[run_id_1, run_id_3]).await?;
         assert_eq!(vec![run_id_3, run_id_1], loaded_by_ids.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_list_run_configs_filtered_returns_matches_and_ancestors() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
+
+        let root_run_id = store.save_run_config(None, &"root", "root", "", HashMap::new()).await?;
+        let select_run_id = store.save_run_config(Some(&[root_run_id]), &"SelectMotifsRunConfig", "alpha motif selection", "", HashMap::new()).await?;
+        let child_run_id = store.save_run_config(Some(&[select_run_id]), &"TrainMotifsNetsRunConfig", "child", "", HashMap::new()).await?;
+        let _other_run_id = store.save_run_config(None, &"OtherRunConfig", "beta", "", HashMap::new()).await?;
+
+        let by_id = store.list_run_configs_filtered(RunConfigFilter {
+            id: Some(select_run_id),
+            ..RunConfigFilter::default()
+        }).await?;
+        assert_eq!(vec![select_run_id, root_run_id], by_id.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
+
+        let by_type = store.list_run_configs_filtered(RunConfigFilter {
+            run_config_type: Some("TrainMotifsNetsRunConfig".to_string()),
+            ..RunConfigFilter::default()
+        }).await?;
+        assert_eq!(vec![child_run_id, select_run_id, root_run_id], by_type.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
+
+        let by_descr = store.list_run_configs_filtered(RunConfigFilter {
+            descr_substr: Some("alpha".to_string()),
+            ..RunConfigFilter::default()
+        }).await?;
+        assert_eq!(vec![select_run_id, root_run_id], by_descr.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
 
         Ok(())
     }
