@@ -19,6 +19,7 @@ use crate::{os_thread_id, panic_to_err_async};
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
 use thoosa_shared::{Cause, ThoError};
+use crate::runner::permits::MAX_PERMITS;
 
 #[derive(Debug)]
 pub enum AdjusterError<A: Adjustable> {
@@ -238,18 +239,29 @@ where
     pd_rc: PhantomData<(RC, &'z RCC)>,
 }
 
+#[cfg(any(test, feature = "mock_global_ctx"))]
+fn oom_executor(_device_idx: usize) -> &'static crate::runner::dyn_mpsc::DynamicTaskExecutor {
+    static EXECUTOR: std::sync::OnceLock<crate::runner::dyn_mpsc::DynamicTaskExecutor> = std::sync::OnceLock::new();
+    EXECUTOR.get_or_init(|| crate::runner::dyn_mpsc::DynamicTaskExecutor::new(16, std::num::NonZeroUsize::new(1).expect("non-zero")))
+}
+
+#[cfg(not(any(test, feature = "mock_global_ctx")))]
+fn oom_executor(device_idx: usize) -> &'static crate::runner::dyn_mpsc::DynamicTaskExecutor {
+    GlobalCtx::global().get_executor(device_idx)
+}
+
 impl<'a, 'z, R, IC, RC, RCC, S> OOMHandler<'a, 'z, R, IC, RC, RCC, S>
 where
-    R: SyncStage + Adjustable + OutId + 'a,
-    R::Ctx: Adjustable,
+    R: SyncStage + Adjustable + OutId + Send + Sync + 'static + 'a,
+    R::Ctx: Adjustable + Send + Sync + 'static,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
-    S: Adjustable + Debug + Clone + Default+ 'static,//S - for Select<Selector>, 'static is for Any in WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
+    S: Adjustable + Debug + Clone + Default + Send + 'static,//S - for Select<Selector>, 'static is for Any in WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
     // <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Data + Send + Sync,
-    R::Out: WithId + Send + Sync,
+    R::Out: WithId + Send + Sync + 'static,
 {
     pub fn new(
         adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
@@ -271,7 +283,7 @@ where
         contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoError>
     where
-        W: WithSelectDataRef<S>,
+        W: WithSelectDataRef<S> + Send + Sync + 'static,
         W: WithId<ID = <R::In<'z> as WithId>::ID>,
         for<'f> <W as WithDataRef>::O<'f>: Borrow<<R as Stage>::In<'f>>,
     {
@@ -282,32 +294,35 @@ where
             run_context,
             contexts,
             |task, input, selector, device_idx, run_ctx| async move {
-                if let Some(selector) = selector {
-                    input
-                        .with_selected_data_ref(
-                                device_idx,
-                                run_ctx,
-                                selector,
-                                None,
-                                |data, ctx| {
-                                    Arc::clone(&task)
-                                        .do_run(data.borrow(), ctx)
-                                },
-                            )
-                            .await
-                } else {
-                    input
-                        .with_data_ref(
-                                device_idx,
-                                run_ctx,
-                                None,
-                                |data, ctx| {
-                                    Arc::clone(&task)
-                                        .do_run(data.borrow(), ctx)
-                                },
-                            )
-                            .await
-                }
+                let handle = tokio::runtime::Handle::current();
+
+                oom_executor(device_idx).submit((MAX_PERMITS - run_ctx.acquired_permits()).into(), async move {
+                    tokio::task::spawn_blocking(move || {
+                        handle.block_on(async move {
+                            if let Some(selector) = selector {
+                                input
+                                    .with_selected_data_ref(
+                                        device_idx,
+                                        run_ctx,
+                                        selector,
+                                        None,
+                                        |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
+                                    )
+                                    .await
+                            } else {
+                                input
+                                    .with_data_ref(
+                                        device_idx,
+                                        run_ctx,
+                                        None,
+                                        |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
+                                    )
+                                    .await
+                            }
+                        })
+                    })
+                    .await?
+                }).await?
             },
         )
         .await
@@ -441,7 +456,7 @@ where
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default + 'static,
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Send + Sync,
-    R::Out: WithId + Send + Sync,
+    R::Out: WithId + Send + Sync + 'static,
     W: WithSelectDataRef<S>,
     W: WithId<ID = <R::In<'z> as WithId>::ID>,
     Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx) -> Fut + Copy,

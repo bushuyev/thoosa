@@ -92,13 +92,13 @@ where
     ) -> Result<<R as Stage>::Out, ThoError>
     where
         for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
-        W:WithId<ID=<R::In<'z> as WithId>::ID>,
+        W: WithId<ID = <R::In<'z> as WithId>::ID> + Send + Sync + 'static,
 
-        R: SyncStage + Adjustable + 'static,
+        R: SyncStage + Adjustable + Send + Sync + 'static,
         for<'i> <R as Stage>::In<'i>: Debug + Adjustable + Data,
         for<'a> <R as Stage>::In<'a>: WithId,
-        R::Out: Send + Sync,
-        R::Ctx: Adjustable,
+        R::Out: Send + Sync + 'static,
+        R::Ctx: Adjustable + Send + Sync + 'static,
         R: OutId,
         S: From<Range<<<R as Stage>::In<'z> as Data>::Metrics>>,
         for <'i> <R::In<'i> as Data>::Metrics:  AddAssign<<R::In<'i> as Data>::Metrics>,
