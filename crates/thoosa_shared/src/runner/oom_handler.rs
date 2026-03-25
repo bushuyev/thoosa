@@ -282,6 +282,16 @@ where
             run_context,
             contexts,
             |task, input, selector, device_idx, run_ctx| async move {
+
+                let exec = GlobalCtx::global().get_executor(device_idx);
+
+                exec
+                    .submit(0, async move {
+                        123
+                    })
+                    .await?;
+
+
                 if let Some(selector) = selector {
                     input
                         .with_selected_data_ref(

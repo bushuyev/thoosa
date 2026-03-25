@@ -8,6 +8,7 @@ use log::{debug, error, info};
 use mockall::automock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::num::NonZeroUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
@@ -19,10 +20,12 @@ use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
 use crate::{with_async_perf_log, with_perf_log, LOCK_TIMEOUT};
 use crate::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
+use crate::runner::dyn_mpsc::DynamicTaskExecutor;
 
 #[derive(Debug)]
 pub struct GlobalCtx {
     semaphores: Vec<Box<dyn PermitSource>>,
+    executors: Vec<DynamicTaskExecutor>,
     num_devices: usize,
     device_locks: Vec<Arc<AsyncRwLock<()>>>,
     caches: tokio::sync::RwLock<HashMap<&'static str, &'static dyn FuturesRunnerMapPurger>>,
@@ -62,6 +65,9 @@ impl GlobalCtx {
                 .map(|_| Arc::new(AsyncRwLock::new(())))
                 .collect(),
 
+            executors: (1..num_devices).map(|_| DynamicTaskExecutor::new(1024, NonZeroUsize::new(4).unwrap()))
+                .collect(),
+
             caches: tokio::sync::RwLock::new(HashMap::new()),
 
             is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
@@ -73,6 +79,10 @@ impl GlobalCtx {
             purger: Purger::new(),
             shutting_down: false.into()
         }
+    }
+
+    pub fn get_executor(&self, device:usize)-> &DynamicTaskExecutor {
+        &self.executors[device]
     }
 
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>, cache_area: u64) ->Result<(), ThoError>{
