@@ -65,7 +65,7 @@ impl GlobalCtx {
                 .map(|_| Arc::new(AsyncRwLock::new(())))
                 .collect(),
 
-            executors: (1..num_devices).map(|_| DynamicTaskExecutor::new(1024, NonZeroUsize::new(4).unwrap()))
+            executors: (0..num_devices).map(|_| DynamicTaskExecutor::new(1024, NonZeroUsize::new(4).unwrap()))
                 .collect(),
 
             caches: tokio::sync::RwLock::new(HashMap::new()),
