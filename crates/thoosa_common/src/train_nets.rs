@@ -179,6 +179,12 @@ impl TrainLabelNetsRunConfigResult {
     }
 }
 
+fn run_config_values_with_loss(values: impl Iterator<Item = (String, Val)>, loss: f32) -> HashMap<String, Val> {
+    let mut values = values.collect::<HashMap<_, _>>();
+    values.insert("loss".to_string(), loss.into());
+    values
+}
+
 #[async_trait]
 impl SavableResult for TrainLabelNetsRunConfigResult {
     fn value(&self) -> f32 {
@@ -203,12 +209,10 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
             &TrainLabelNetsRunConfig::type_name(),
             "Label",
             "todo",
-            self.train_label_nets_run_config
-                .to_properties_iter(None)
-                .collect(),
+            run_config_values_with_loss(self.train_label_nets_run_config.to_properties_iter(None), self.loss),
         ).await?;
 
-        ws.read()
+        let path = ws.read()
             .save_label_net(
                 run_config_id,
                 &self.label,
@@ -216,6 +220,8 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
                 &self.label_node_params,
             )
             .expect("save_label_net failed");
+
+        store.save_selected_net(self.train_label_nets_run_id.unwrap_or(run_config_id), path, self.loss).await?;
 
         Ok(run_config_id)
     }
@@ -266,9 +272,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
             &TrainFinalNetRunConfig::type_name(),
             "Final",
             "todo",
-            self.train_final_net_run_config
-                .to_properties_iter(None)
-                .collect(),
+            run_config_values_with_loss(self.train_final_net_run_config.to_properties_iter(None), self.loss),
         ).await?;
 
         ws.read()
@@ -1282,6 +1286,7 @@ impl LabelNetParams {
         }
     }
 
+
 }
 
 fn self_attention_masked_mean(h: &Tensor, lengths: Option<&BatchLengths>) -> Result<Tensor, ThoError> {
@@ -1749,6 +1754,7 @@ impl TrainMotifNetResult {
         }
     }
 
+
 }
 
 #[derive(Debug, DummyData)]
@@ -1834,7 +1840,7 @@ impl SavableResult for TrainMotifNetResult {
             &TrainMotifsNetsRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
             "TrainMotifNetResult",
             "todo",
-            self.run_config_values.to_properties_iter(None).collect(),
+            run_config_values_with_loss(self.run_config_values.to_properties_iter(None), self.loss),
         ).await?;
 
         let path = ws.read().save_motif_net(
@@ -2318,7 +2324,7 @@ mod train_tests {
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::{OptRunConfigs, RunId};
+    use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
     use thoosa_shared::test_utils::set_panic_hook;
     use thoosa_shared::val::Val;
     use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, slices_len, CopyToDevice, ThoError};
@@ -3772,6 +3778,7 @@ mod train_tests {
             Ok(())
         }
 
+
         #[test]
         fn heavy_test_train_demo_by_order(){
             train_demo_by_order(
@@ -3780,6 +3787,57 @@ mod train_tests {
                 700usize..=1000usize
             ).unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn test_save_train_label_net_result_persists_selected_net_and_loss() -> Result<(), ThoError> {
+        let store = Arc::new(SqlStore::in_mem().await?);
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
+        let source_run_id = store.save_run_config(None, "TrainMotifsNetsRunConfig", "source", "todo", HashMap::new()).await?;
+        let parent_run_id = store.save_run_config(Some(&[source_run_id]), TrainLabelNetsRunConfig::type_name(), "TrainLabelNetsResult", "todo", HashMap::new()).await?;
+        let mut result = crate::train_nets::TrainLabelNetsRunConfigResult::new(
+            vec![source_run_id],
+            "alpha".to_string(),
+            0.125,
+            LabelNetParams::new(4, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(16, 2))),
+            TrainLabelNetsRunConfig::new(None, CommonTrainingRunConfig::default(), LabelNetTypeArgs::LinNet(LinNetArgs::new(2, 16))),
+            VarStore::new(Cpu),
+        );
+        result.set_train_label_nets_run_id(parent_run_id);
+
+        let child_run_id = crate::runs::SavableResult::save(&mut result, &store, &ws).await?;
+        let run_config_values = store.list_run_config_values(child_run_id).await?;
+        let selected_nets = store.list_selected_nets(parent_run_id, None, None).await?;
+
+        assert_eq!(Some(&Val::Real(0.125)), run_config_values.get("loss"));
+        assert_eq!(vec![child_run_id], store.list_output_run_ids(parent_run_id).await?);
+        assert_eq!(vec![(PathBuf::from(format!("alpha/{child_run_id}")), 0.125)], selected_nets);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_save_train_final_net_result_persists_loss_in_run_config_values() -> Result<(), ThoError> {
+        let store = Arc::new(SqlStore::in_mem().await?);
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
+        let label_run_id_0 = store.save_run_config(None, TrainLabelNetsRunConfig::type_name(), "label_0", "todo", HashMap::new()).await?;
+        let label_run_id_1 = store.save_run_config(None, TrainLabelNetsRunConfig::type_name(), "label_1", "todo", HashMap::new()).await?;
+        let mut result = crate::train_nets::TrainFinalNetsRunConfigResult::new(
+            Some(&vec![label_run_id_0, label_run_id_1]),
+            0.25,
+            VarStore::new(Cpu),
+            FinalNetParams::new(4, 2, 3),
+            TrainFinalNetRunConfig::new(None, CommonTrainingRunConfig::default(), FinalNetArgs::new(3)),
+        );
+
+        let run_id = crate::runs::SavableResult::save(&mut result, &store, &ws).await?;
+        let run_config_values = store.list_run_config_values(run_id).await?;
+
+        assert_eq!(Some(&Val::Real(0.25)), run_config_values.get("loss"));
+
+        Ok(())
     }
 
 }
