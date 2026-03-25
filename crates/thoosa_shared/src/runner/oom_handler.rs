@@ -19,6 +19,7 @@ use crate::{os_thread_id, panic_to_err_async};
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
 use thoosa_shared::{Cause, ThoError};
+use crate::runner::permits::MAX_PERMITS;
 
 #[derive(Debug)]
 pub enum AdjusterError<A: Adjustable> {
@@ -295,7 +296,7 @@ where
             |task, input, selector, device_idx, run_ctx| async move {
                 let handle = tokio::runtime::Handle::current();
 
-                oom_executor(device_idx).submit(0, async move {
+                oom_executor(device_idx).submit((MAX_PERMITS - run_ctx.acquired_permits()).into(), async move {
                     tokio::task::spawn_blocking(move || {
                         handle.block_on(async move {
                             if let Some(selector) = selector {
