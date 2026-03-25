@@ -256,9 +256,16 @@ struct App {
     view_mode: ViewMode,
     view_popup_selected_idx: usize,
     pending_gg: Option<(SelectedArea, Instant)>,
+    pending_plot_open: Option<PendingMotifPlotOpen>,
     progress_state: CollectEtaProgressState,
     progress_status: String,
     progress_last_update: Option<Instant>,
+}
+
+struct PendingMotifPlotOpen {
+    motif_id: u32,
+    started_at: Instant,
+    task: JoinHandle<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -350,6 +357,7 @@ impl App {
             view_mode: ViewMode::RunConfigs,
             view_popup_selected_idx: 0,
             pending_gg: None,
+            pending_plot_open: None,
             progress_state: CollectEtaProgressState::default(),
             progress_status: "Waiting for progress socket.".to_string(),
             progress_last_update: None,
@@ -1442,17 +1450,7 @@ impl App {
             return true;
         }
 
-        if self.toggle_selected_run_inline_motifs().await {
-            return true;
-        }
-
-        if self.load_selected_run_motifs().await {
-            self.selected_area = SelectedArea::RightMotifs;
-            self.prefer_right_motifs = true;
-            return true;
-        }
-
-        false
+        self.toggle_selected_run_inline_motifs().await
     }
 
     async fn open_selected_run_right(&mut self) -> bool {
@@ -1460,10 +1458,10 @@ impl App {
             return true;
         }
 
-        if self.expand_selected_run_inline_motifs().await {
-            return true;
-        }
+        self.expand_selected_run_inline_motifs().await
+    }
 
+    async fn open_selected_run_motifs(&mut self) -> bool {
         if self.load_selected_run_motifs().await {
             self.selected_area = SelectedArea::RightMotifs;
             self.prefer_right_motifs = true;
@@ -1650,34 +1648,45 @@ impl App {
         }
     }
 
-    async fn open_selected_motif_plot(&mut self) {
+    fn open_selected_motif_plot(&mut self) {
+        if let Some(pending_plot_open) = &self.pending_plot_open {
+            self.status = Some(format!("Already opening plot for motif_id={}.", pending_plot_open.motif_id));
+            return;
+        }
+
         let Some(selected_motif) = self.selected_motif().cloned() else {
             self.status = Some("No motif selected.".to_string());
             return;
         };
 
-        match resolve_motif_plot_target(&self.ws_path, selected_motif.motif_id).await {
-            Ok(target_path) => {
-                let target_path = if target_path.is_absolute() { target_path } else { self.ws_path.join(target_path) };
-                if !target_path.exists() {
-                    self.status = Some(format!("Generating plot for motif_id={}...", selected_motif.motif_id));
-                    if let Err(err) = generate_motif_plot(&self.ws_path, selected_motif.motif_id).await {
-                        self.status = Some(format!("Failed to generate plot for motif_id={}: {err}", selected_motif.motif_id));
-                        return;
-                    }
-                }
+        let motif_id = selected_motif.motif_id;
+        let ws_path = self.ws_path.clone();
+        self.status = Some(format!("Opening plot for motif_id={motif_id}..."));
+        self.pending_plot_open = Some(PendingMotifPlotOpen {
+            motif_id,
+            started_at: Instant::now(),
+            task: tokio::spawn(async move { open_motif_plot_task(ws_path, motif_id).await }),
+        });
+    }
 
-                match open_path_in_system_viewer(&target_path) {
-                    Ok(()) => {
-                        self.status = Some(format!("Opened plot: {}", target_path.display()));
-                    }
-                    Err(err) => {
-                        self.status = Some(format!("Failed to open plot {}: {err}", target_path.display()));
-                    }
-                }
+    async fn poll_pending_plot_open(&mut self) {
+        let Some(is_finished) = self.pending_plot_open.as_ref().map(|pending_plot_open| pending_plot_open.task.is_finished()) else {
+            return;
+        };
+        if !is_finished {
+            return;
+        }
+
+        let pending_plot_open = self.pending_plot_open.take().expect("pending plot open exists");
+        match pending_plot_open.task.await {
+            Ok(status) => {
+                self.status = Some(status);
+            }
+            Err(err) if err.is_cancelled() => {
+                self.status = Some(format!("Opening plot for motif_id={} was cancelled.", pending_plot_open.motif_id));
             }
             Err(err) => {
-                self.status = Some(format!("Failed to resolve plot for motif_id={}: {err}", selected_motif.motif_id));
+                self.status = Some(format!("Plot task failed for motif_id={}: {err}", pending_plot_open.motif_id));
             }
         }
     }
@@ -1735,6 +1744,7 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         drain_progress_events(app, &mut progress_rx);
+        app.poll_pending_plot_open().await;
         terminal.draw(|frame| render(frame, app))?;
 
         if event::poll(Duration::from_millis(200))? {
@@ -1783,10 +1793,10 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                                 app.refresh_selected_details().await;
                             }
                             KeyCode::Tab if key.modifiers.is_empty() => {
-                                if app.load_selected_run_motifs().await {
-                                    app.selected_area = SelectedArea::RightMotifs;
-                                    app.prefer_right_motifs = true;
-                                }
+                                app.open_selected_run_motifs().await;
+                            }
+                            KeyCode::Char('m') if key.modifiers.is_empty() => {
+                                app.open_selected_run_motifs().await;
                             }
                             KeyCode::Enter if key.modifiers.is_empty() => {
                                 app.open_selected_run_from_left().await;
@@ -1831,7 +1841,7 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                                 app.prefer_right_motifs = false;
                             }
                             KeyCode::Enter | KeyCode::Char('p') if key.modifiers.is_empty() => {
-                                app.open_selected_motif_plot().await;
+                                app.open_selected_motif_plot();
                             }
                             KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
                                 app.move_motif_down(1);
@@ -2006,6 +2016,10 @@ async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    if let Some(pending_plot_open) = app.pending_plot_open.take() {
+        pending_plot_open.task.abort();
+        let _ = pending_plot_open.task.await;
+    }
     progress_task.abort();
     let _ = progress_task.await;
     terminal.show_cursor()?;
@@ -2034,21 +2048,7 @@ fn render(frame: &mut Frame<'_>, app: &App) {
         render_view_popup(frame, app);
     }
 
-    let status_line = match app.selected_area {
-        SelectedArea::LeftRunConfigs => format!(
-            "area: run tree | sort(run_on): {} (s toggle) | j/k, Up/Down lazy-load | Ctrl-d/u page | gg top | G bottom | Enter toggle/load | Left/Right collapse/expand/load | Tab motifs | / search | t type | T reset filters | r reload | Space panels | q quit",
-            app.sort_order_label()
-        ),
-        SelectedArea::RightMotifs => "area: motifs | j/k, Up/Down | Ctrl-d/u page | gg top | G bottom | Enter/p open plot | Tab/Left back | Space panels | q quit".to_string(),
-        SelectedArea::ProgressView => "area: progress | Space panels | q quit".to_string(),
-        SelectedArea::TypeFilterPopup => {
-            "area: type-filter | j/k, Up/Down | Ctrl-d/u page | gg top | G bottom | Enter apply type | Esc close | T reset filters".to_string()
-        }
-        SelectedArea::SearchPopup => "area: search | j/k, Up/Down | type to edit | Backspace delete | Enter apply | Enter/Left/Right on type select | Ctrl-r reset draft | Esc close".to_string(),
-        SelectedArea::SearchTypePopup => "area: search type | j/k, Up/Down | Ctrl-d/u page | gg top | G bottom | Enter choose | Esc close".to_string(),
-        SelectedArea::ViewPopup => "area: panels | j/k, Up/Down | Ctrl-d/u page | gg top | G bottom | Enter apply | Esc close".to_string(),
-    };
-    frame.render_widget(Paragraph::new(status_line), outer[1]);
+    render_status_line(frame, app, outer[1]);
 }
 
 fn render_run_configs_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -2154,10 +2154,7 @@ fn format_run_tree_row(app: &App, row: &VisibleRunConfigRow) -> String {
 }
 
 fn render_run_value_lines(app: &App) -> Vec<String> {
-    let mut right_lines = vec![
-        format!("db: {}", app.db_path.display()),
-        String::new(),
-    ];
+    let mut right_lines = vec![];
 
     if let Some(run_entry) = app.selected_run_entry() {
         right_lines.push(format!("run_id: {}", run_entry.id));
@@ -2190,10 +2187,10 @@ fn render_run_value_lines(app: &App) -> Vec<String> {
                 if motifs.is_empty() {
                     "motifs: none".to_string()
                 } else {
-                    "motifs: press Tab to view".to_string()
+                    "motifs: press m to view".to_string()
                 }
             })
-            .unwrap_or_else(|| "motifs: press Tab to load".to_string());
+            .unwrap_or_else(|| "motifs: press m to load".to_string());
         right_lines.push(motifs_line);
         right_lines.push(String::new());
     }
@@ -2224,10 +2221,7 @@ fn format_run_motif_row(motif: &RunMotifEntry) -> String {
 }
 
 fn render_motif_detail_lines(app: &App) -> Vec<String> {
-    let mut lines = vec![
-        format!("db: {}", app.db_path.display()),
-        String::new(),
-    ];
+    let mut lines = vec![];
 
     if let Some(run_entry) = app.selected_run_entry() {
         lines.push(format!("run_id: {}", run_entry.id));
@@ -2272,6 +2266,100 @@ fn render_progress_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .block(Block::default().title("progress").borders(Borders::ALL))
         .wrap(Wrap { trim: false });
     frame.render_widget(progress, area);
+}
+
+fn render_status_line(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    if area.width == 0 {
+        return;
+    }
+
+    let left = status_hint_text(app);
+    let max_right_width = (area.width as usize).saturating_sub(1).min(((area.width as usize) * 2 / 5).max(24));
+    let right = status_right_text(app, max_right_width);
+    let right_width = right.chars().count().min(area.width as usize) as u16;
+    if right_width >= area.width {
+        frame.render_widget(Paragraph::new(right), area);
+        return;
+    }
+
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(1), Constraint::Length(right_width)])
+        .split(area);
+    frame.render_widget(Paragraph::new(left), layout[0]);
+    frame.render_widget(Paragraph::new(right), layout[1]);
+}
+
+fn status_hint_text(app: &App) -> String {
+    match app.selected_area {
+        SelectedArea::LeftRunConfigs => format!(
+            "run tree | sort:{} (s) | j/k move | Ctrl-d/u page | gg/G | Enter toggle | Left/Right tree | m/Tab motifs | / search | t type | T clear | r reload | Space view | q quit",
+            app.sort_order_label()
+        ),
+        SelectedArea::RightMotifs => "motifs | j/k move | Ctrl-d/u page | gg/G | Enter/p plot | Tab/Left back | Space view | q quit".to_string(),
+        SelectedArea::ProgressView => "progress | Space view | q quit".to_string(),
+        SelectedArea::TypeFilterPopup => "type-filter | j/k move | Ctrl-d/u page | gg/G | Enter apply | Esc close | T clear".to_string(),
+        SelectedArea::SearchPopup => "search | j/k move | type to edit | Backspace delete | Enter apply | Enter/Left/Right type | Ctrl-r reset | Esc close".to_string(),
+        SelectedArea::SearchTypePopup => "search type | j/k move | Ctrl-d/u page | gg/G | Enter choose | Esc close".to_string(),
+        SelectedArea::ViewPopup => "view | j/k move | Ctrl-d/u page | gg/G | Enter apply | Esc close".to_string(),
+    }
+}
+
+fn status_right_text(app: &App, max_width: usize) -> String {
+    if let Some(pending_plot_open) = &app.pending_plot_open {
+        return truncate_status_right(
+            format!("opening motif {} {}", pending_plot_open.motif_id, endless_progress_bar(pending_plot_open.started_at, 12)).as_str(),
+            max_width,
+        );
+    }
+
+    truncate_status_left(format!("db: {}", app.db_path.display()).as_str(), max_width)
+}
+
+fn truncate_status_left(text: &str, max_width: usize) -> String {
+    if text.chars().count() <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let tail = text.chars().rev().take(max_width - 3).collect::<Vec<char>>().into_iter().rev().collect::<String>();
+    format!("...{tail}")
+}
+
+fn truncate_status_right(text: &str, max_width: usize) -> String {
+    if text.chars().count() <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let head = text.chars().take(max_width - 3).collect::<String>();
+    format!("{head}...")
+}
+
+fn endless_progress_bar(started_at: Instant, width: usize) -> String {
+    if width == 0 {
+        return "[]".to_string();
+    }
+
+    let segment_len = width.clamp(1, 4);
+    let travel = width.saturating_sub(segment_len);
+    let tick = (started_at.elapsed().as_millis() / 120) as usize;
+    let offset = if travel == 0 {
+        0
+    } else {
+        let cycle = travel * 2;
+        let phase = tick % cycle.max(1);
+        if phase <= travel { phase } else { cycle - phase }
+    };
+    let mut chars = vec![' ' ; width];
+    for idx in 0..segment_len {
+        chars[offset + idx] = '=';
+    }
+    format!("[{}]", chars.into_iter().collect::<String>())
 }
 
 fn render_type_filter_popup(frame: &mut Frame<'_>, app: &App) {
@@ -2762,6 +2850,25 @@ async fn generate_motif_plot(ws_path: &Path, motif_id: u32) -> Result<(), String
     }
 }
 
+async fn open_motif_plot_task(ws_path: PathBuf, motif_id: u32) -> String {
+    match resolve_motif_plot_target(&ws_path, motif_id).await {
+        Ok(target_path) => {
+            let target_path = if target_path.is_absolute() { target_path } else { ws_path.join(target_path) };
+            if !target_path.exists() {
+                if let Err(err) = generate_motif_plot(&ws_path, motif_id).await {
+                    return format!("Failed to generate plot for motif_id={motif_id}: {err}");
+                }
+            }
+
+            match open_path_in_system_viewer(&target_path) {
+                Ok(()) => format!("Opened plot: {}", target_path.display()),
+                Err(err) => format!("Failed to open plot {}: {err}", target_path.display()),
+            }
+        }
+        Err(err) => format!("Failed to resolve plot for motif_id={motif_id}: {err}"),
+    }
+}
+
 fn parse_plot_target_path(stdout: &[u8]) -> Result<PathBuf, String> {
     let stdout = String::from_utf8_lossy(stdout);
     for line in stdout.lines() {
@@ -2875,6 +2982,15 @@ mod tests {
         assert_eq!("7", value_to_string(&Val::UInt(7)));
         assert_eq!("abc", value_to_string(&Val::Str("abc".to_string())));
         assert_eq!("true", value_to_string(&Val::Bool(true)));
+    }
+
+
+    #[test]
+    fn test_render_run_value_lines_excludes_db_path() {
+        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+
+        assert!(!render_run_value_lines(&app).iter().any(|line| line.starts_with("db: ")));
     }
 
     #[test]
@@ -3140,7 +3256,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_open_selected_run_right_opens_motifs_for_leaf() {
+    async fn test_open_selected_run_motifs_opens_motifs_for_leaf() {
         let mut store = MockStore::new();
         store.expect_list_run_motifs().times(1).returning(|run_id| {
             assert_eq!(86439, run_id);
@@ -3164,14 +3280,14 @@ mod tests {
         app.rebuild_run_config_tree(&[], &HashMap::new());
         app.rebuild_visible_run_configs(Some(86439));
 
-        assert!(app.open_selected_run_right().await);
+        assert!(app.open_selected_run_motifs().await);
         assert_eq!(app.selected_area, SelectedArea::RightMotifs);
         assert!(app.prefer_right_motifs);
         assert_eq!(1, app.selected_run_motifs.len());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_open_selected_run_from_left_opens_motifs_for_leaf() {
+    async fn test_open_selected_run_motifs_opens_motifs_even_with_children() {
         let mut store = MockStore::new();
         store.expect_list_run_motifs().times(1).returning(|run_id| {
             assert_eq!(86439, run_id);
@@ -3186,19 +3302,31 @@ mod tests {
         });
         let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
-        app.all_run_configs = vec![RunConfigEntry {
-            id: 86439,
-            run_config_type: "SelectMotifsRunConfig".to_string(),
-            descr: "motif selection".to_string(),
-            run_on: "2026-03-18 18:48:40".to_string(),
-        }];
-        app.rebuild_run_config_tree(&[], &HashMap::new());
+        app.all_run_configs = vec![
+            RunConfigEntry {
+                id: 86439,
+                run_config_type: "SelectMotifsRunConfig".to_string(),
+                descr: "motif selection".to_string(),
+                run_on: "2026-03-18 18:48:40".to_string(),
+            },
+            RunConfigEntry {
+                id: 86440,
+                run_config_type: "TrainMotifsNetsRunConfig".to_string(),
+                descr: "train motif nets".to_string(),
+                run_on: "2026-03-18 18:49:40".to_string(),
+            },
+        ];
+        app.rebuild_run_config_tree(&[(86440, 86439)], &HashMap::new());
+        if let Some(node) = app.run_config_tree.get_mut(&86439) {
+            node.expanded = false;
+        }
         app.rebuild_visible_run_configs(Some(86439));
 
-        assert!(app.open_selected_run_from_left().await);
+        assert!(app.open_selected_run_motifs().await);
         assert_eq!(app.selected_area, SelectedArea::RightMotifs);
         assert!(app.prefer_right_motifs);
         assert_eq!(1, app.selected_run_motifs.len());
+        assert!(!app.run_config_tree.get(&86439).map(|node| node.expanded).unwrap_or(true));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
