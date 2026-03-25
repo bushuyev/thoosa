@@ -1,23 +1,17 @@
-
 use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
 use ambassador::{delegatable_trait, Delegate};
 use async_trait::async_trait;
-use log::{debug, error};
+use log::debug;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::sync::Arc;
-use mockall_double::double;
-use crate::Cause;
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
 use crate::traits::{Adjustable, CachableIdTr};
-use crate::runner::common::{DropIf, RunCtx};
-use crate::runner::permits::{NumPermits, MAX_PERMITS};
+use crate::runner::common::RunCtx;
+use crate::runner::permits::{NumPermits, RunnerPerm, MAX_PERMITS};
 use crate::runner::adjusters::dump_to_cpu::*;
-#[double]
-use crate::runner::global_ctx::GlobalCtx;
 
 pub struct PermitsAdjuster<C>
 where
@@ -110,65 +104,23 @@ where
     ) -> Result<<Self as Adjuster<C>>::A, AdjusterError<<Self as Adjuster<C>>::A>> {
         let acquired_permits = adjustable.acquired_permits();
         if adjust_context.to_acquire() <= acquired_permits {
-            //TODO warn
             return Ok(adjustable);
         }
 
         let permits_to_acquire = adjust_context.to_acquire() - acquired_permits;
-
-        let adjustable_name = adjustable.id().clone();//TODO clone for debug only
-        debug!("PermitsAdjuster::adjust: name={adjustable_name:?} thread={:?} self.max={} permits_to_acquire/{}/ = adjust_context.to_acquire()/{}/ - acquired_permits/{acquired_permits}/",std::thread::current().id(),self.max,   permits_to_acquire,      adjust_context.to_acquire());
+        let adjustable_name = adjustable.id().clone();
+        debug!("PermitsAdjuster::adjust: name={adjustable_name:?} thread={:?} self.max={} permits_to_acquire/{}/ = adjust_context.to_acquire()/{}/ - acquired_permits/{acquired_permits}/", std::thread::current().id(), self.max, permits_to_acquire, adjust_context.to_acquire());
 
         if permits_to_acquire > 0 {
-
-            match super::acquire_many_waiting_once(
-                adjustable.device_idx(),
-                permits_to_acquire,
-                Arc::new(adjustable.id().clone()) as Arc<dyn CachableIdTr>
-            ).await {
-                Ok(permit) => {
-                    debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name:?} acquired_permits={acquired_permits} permits_to_acquire={permits_to_acquire} acquired ok ");
-                    adjustable.add_permit(permit);
-                }
-
-                //can't acquire permits,
-                Err(te) => {
-                    match te.what() {
-                        Cause::OutOfPermits => {
-                            #[cfg(not(tho_debug))]
-                            debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name:?} acquired_permits={acquired_permits} Error: {te:?} device_idx={}", adjustable.device_idx());
-                            #[cfg(tho_debug)]
-                            debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name:?} acquired_permits={acquired_permits} Error: {te:?} device_idx={} debug_semaphore={:?}", adjustable.device_idx(), GlobalCtx::global().debug_semaphore(adjustable.device_idx()));
-
-                           /* if adjustable.read().device_idx() != 0 {
-                                //not on CPU, TODO
-                                if let Err(e) = A::purge_gpu_caches(Arc::clone(adjustable)).await {
-                                    debug!("PermitsAdjuster::adjust: purge_gpu_caches failed: {e:?}");
-                                };
-                            }*/
-                            adjustable.drop_permits(DropIf::Always);
-
-                            *adjust_context.to_acquire_mut() = 0;
-
-                            debug!("PermitsAdjuster::adjust: acquire_fn name={adjustable_name:?} about to return AdjustFailed");
-
-                            return Err(AdjusterError::AdjustFailed(adjustable));
-                        }
-                        inner => {
-                            error!("PermitsAdjuster::adjust: e={inner:?}");
-                            // Propagate unexpected errors to let caller decide.
-                            return Err(AdjusterError::SomethingElse);
-                        }
-                    }
-                }
-            };
+            debug!("PermitsAdjuster::adjust: name={adjustable_name:?} adding dummy permits={permits_to_acquire}");
+            adjustable.add_permit(RunnerPerm::dummy(permits_to_acquire));
         }
 
         Ok(adjustable)
     }
 
     fn degrade(&self, adjust_context: &mut C) -> bool {
-        let retry_count = {//if adjust_context.to_acquire() is reset in OutOfPermits/out of permits
+        let retry_count = {
             let retry_count = adjust_context.retry_count_mut();
             *retry_count += 1;
             *retry_count
@@ -177,7 +129,6 @@ where
         if retry_count > 1000 {
             return false
         }
-
 
         let degrade = if adjust_context.to_acquire() < self.max {
             *adjust_context.to_acquire_mut() += self.step;
@@ -218,8 +169,8 @@ impl<'a> RunCtxContext for PermitsAndDumpToCpuAdjustableContex<'a> {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
-    use crate::runner::global_ctx::mock_global_ctx::{AcquireBehavior, MockGlobalCtxBuildParams};
+    use crate::runner::common::PermitsCtx;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::run_ctx_2::RunCtxWithPermits;
 
     fn ctx(_name: &'static str, want: NumPermits) -> PermitsAdjustContextImpl {
@@ -229,48 +180,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn adjust_handles_out_of_permits() {
-        let mock_ctx = MockGlobalCtx::global_context();
-        mock_ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_with_params(MockGlobalCtxBuildParams {
-                    acquire_many: AcquireBehavior::Deny,
-                    ..Default::default()
-                }),
-            )) as &'static MockGlobalCtx
-        });
+    async fn adjust_adds_dummy_permits() {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-        let adjustable = RunCtxWithPermits::new(0, "permits_adjust_out_of_permits");
+        let adjustable = RunCtxWithPermits::new(0, "permits_adjust_dummy");
         let adjuster = PermitsAdjuster::<RunCtxWithPermits>::new(100, 10);
         let mut ac = ctx("test", 10);
 
-        let res = adjuster.adjust(adjustable, &mut ac).await;
-        assert!(matches!(res, Err(AdjusterError::AdjustFailed(_))));
-        // OutOfPermits path resets requested acquire to 0
-        assert_eq!(ac.to_acquire(), 0);
+        let res = adjuster.adjust(adjustable, &mut ac).await.unwrap();
+
+        assert_eq!(res.acquired_permits(), 10);
+        assert_eq!(ac.to_acquire(), 10);
     }
 
     #[tokio::test]
-    async fn adjust_propagates_other_errors() {
-        let mock_ctx = MockGlobalCtx::global_context();
-        mock_ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_with_params(MockGlobalCtxBuildParams {
-                    acquire_many: AcquireBehavior::Boom("ups"),
-                    ..Default::default()
-                }),
-            )) as &'static MockGlobalCtx
-        });
+    async fn adjust_is_noop_when_requested_permits_already_acquired() {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-        let adjustable = RunCtxWithPermits::new(0, "permits_adjust_other_errors");
+        let mut adjustable = RunCtxWithPermits::new(0, "permits_adjust_noop");
+        adjustable.add_permit(RunnerPerm::dummy(10));
         let adjuster = PermitsAdjuster::<RunCtxWithPermits>::new(100, 10);
         let mut ac = ctx("test", 10);
 
-        let res = adjuster.adjust(adjustable, &mut ac).await;
-        debug!("adjust_propagates_other_errors: res={res:?}");
-        assert!(matches!(
-            res,
-            Err(AdjusterError::SomethingElse)
-        ));
+        let res = adjuster.adjust(adjustable, &mut ac).await.unwrap();
+
+        assert_eq!(res.acquired_permits(), 10);
+        assert_eq!(ac.to_acquire(), 10);
     }
 }

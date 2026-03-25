@@ -1314,12 +1314,12 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
 
-            optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
                 amsgrad: RangeOrValue::Value(false),
-            }),
+            })),
         },
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
         //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
@@ -1357,12 +1357,12 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
-            optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
                 amsgrad: RangeOrValue::Value(false),
-            }),
+            })),
         },
 
         // net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
@@ -1397,12 +1397,12 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
-            optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
                 amsgrad: RangeOrValue::Value(false),
-            }),
+            })),
         },
         net: FinalNetArgsRangeOrValue {
             num_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
@@ -1448,12 +1448,12 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
-        optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+        optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
             beta1: RangeOrValue::Value(0.9),
             beta2: RangeOrValue::Value(0.999),
             wd: RangeOrValue::Value(0.01),
             amsgrad: RangeOrValue::Value(false),
-        }),
+        })),
     };
     let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
         epochs: RangeOrValue::Value(150),
@@ -1461,12 +1461,12 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
-        optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+        optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
             beta1: RangeOrValue::Value(0.9),
             beta2: RangeOrValue::Value(0.999),
             wd: RangeOrValue::Value(0.01),
             amsgrad: RangeOrValue::Value(false),
-        }),
+        })),
     };
     let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
         epochs: RangeOrValue::Value(150),
@@ -1474,12 +1474,12 @@ fn run_all_config_test_1(run_all_params: &RunAllArgs) -> AllConfigs {
         lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
         patience: RangeOrValue::Value(10),
         min_delta: RangeOrValue::Value(1e-4_f32),
-        optimizer: OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+        optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
             beta1: RangeOrValue::Value(0.9),
             beta2: RangeOrValue::Value(0.999),
             wd: RangeOrValue::Value(0.01),
             amsgrad: RangeOrValue::Value(false),
-        }),
+        })),
     };
 
 

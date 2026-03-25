@@ -63,6 +63,7 @@ pub type NumPermits = u8;
 pub struct RunnerPerm {
     inner: Option<OwnedSemaphorePermit>,
     drop_signal: Option<DropSignal>,
+    num_permits: NumPermits,
 }
 
 #[derive(Debug)]
@@ -93,6 +94,7 @@ impl DropSignal {
 impl Debug for RunnerPerm {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunnerPerm")
+            .field("num_permits", &self.num_permits)
             .field("v", &self.inner)
             .finish()
     }
@@ -101,21 +103,33 @@ impl Debug for RunnerPerm {
 impl RunnerPerm {
     #[inline]
     pub fn num_permits(&self) -> NumPermits {
-        self.inner.as_ref().map(|v|v.num_permits()).unwrap_or(0) as NumPermits
+        self.num_permits
     }
 
     #[cfg(test)]
     pub fn new(inner: OwnedSemaphorePermit) -> Self {
+        let num_permits = inner.num_permits() as NumPermits;
         Self {
             inner: Some(inner),
             drop_signal: None,
+            num_permits,
         }
     }
 
     pub fn with_drop_signal(inner: OwnedSemaphorePermit, drop_signal: DropSignal) -> Self {
+        let num_permits = inner.num_permits() as NumPermits;
         Self {
             inner: Some(inner),
             drop_signal: Some(drop_signal),
+            num_permits,
+        }
+    }
+
+    pub fn dummy(num_permits: NumPermits) -> Self {
+        Self {
+            inner: None,
+            drop_signal: None,
+            num_permits,
         }
     }
 
