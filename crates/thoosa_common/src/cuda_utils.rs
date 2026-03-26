@@ -933,3 +933,7 @@ where
         (f(), None)
     }
 }
+
+tokio::task_local! {
+    pub static CURRENT_GUARD: ThoStreamGuard;
+}
