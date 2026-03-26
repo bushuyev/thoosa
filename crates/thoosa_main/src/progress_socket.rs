@@ -195,6 +195,7 @@ mod tests {
             }],
             started_at_unix_ms: 111,
             oom_all_failed: 1,
+            oom_success: 0,
         })?;
 
         let second = timeout(Duration::from_secs(2), lines.next_line()).await??.expect("second line");
@@ -225,6 +226,7 @@ mod tests {
             ],
             started_at_unix_ms: 222,
             oom_all_failed: 2,
+            oom_success: 0,
         })?;
 
         let third = timeout(Duration::from_secs(2), lines.next_line()).await??.expect("third line");
