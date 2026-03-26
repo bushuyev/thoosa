@@ -11,7 +11,7 @@ use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, SimpleId, WithId};
 use torch_sys::IntList;
-use log::{debug, trace};
+use log::{debug, info, trace};
 use thoosa_shared::copy_mode::CpuOrGpu;
 
 impl<D: Dims, Id: Named + Debug + Clone> Dimensional for ThoTensor<D, Id> {
@@ -412,7 +412,10 @@ where
         };
 
         let copy_ctx = CopyCtx::instance(ctx_device);
-        let src = if self.t.is_contiguous() { None } else { Some(self.t.f_contiguous()?) };
+        let src = if self.t.is_contiguous() { None } else {
+            info!("f_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguous");
+            Some(self.t.f_contiguous()?)
+        };
         let src_ref = src.as_ref().unwrap_or(&self.t);
         debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?} src_contiguous={}", self.id, dst_device.ordinal(), src.is_none());
 

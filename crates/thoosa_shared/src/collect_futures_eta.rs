@@ -109,6 +109,7 @@ struct CollectEtaState {
     historical_interval_s: Option<f64>,
     historical_completed: u64,
     oom_all_failed: u64,
+    oom_success: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -116,6 +117,7 @@ pub struct CollectEtaProgressState {
     pub invocations: Vec<CollectEtaProgressInvocation>,
     pub started_at_unix_ms: u64,
     pub oom_all_failed: u64,
+    pub oom_success: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -155,6 +157,7 @@ impl CollectEtaTracker {
             invocations: vec![],
             started_at_unix_ms,
             oom_all_failed: 0,
+            oom_success: 0,
         });
         Self {
             next_id: AtomicU64::new(1),
@@ -249,6 +252,16 @@ impl CollectEtaTracker {
         let _ = self.progress_tx.send_replace(progress_state);
     }
 
+    fn record_oom_success(&self) {
+        let progress_state = {
+            let mut state = self.state_guard();
+            state.oom_success = state.oom_success.saturating_add(1);
+            self.build_snapshot(&state, Instant::now()).progress_state
+        };
+        let _ = self.progress_tx.send_replace(progress_state);
+    }
+
+
     fn build_snapshot(&self, state: &CollectEtaState, now: Instant) -> CollectEtaSnapshot {
         let mut snapshot = CollectEtaSnapshot {
             active_collectors: state.invocations.len(),
@@ -256,6 +269,7 @@ impl CollectEtaTracker {
                 invocations: vec![],
                 started_at_unix_ms: self.started_at_unix_ms,
                 oom_all_failed: state.oom_all_failed,
+                oom_success: state.oom_success,
             },
             ..Default::default()
         };
@@ -370,6 +384,10 @@ pub fn collect_eta_subscribe_progress() -> watch::Receiver<CollectEtaProgressSta
 
 pub fn collect_eta_record_oom_all_failed() {
     COLLECT_ETA_TRACKER.record_oom_all_failed();
+}
+
+pub fn collect_eta_record_oom_success() {
+    COLLECT_ETA_TRACKER.record_oom_success();
 }
 
 pub(crate) fn collect_eta_maybe_log(force: bool) {
