@@ -48,16 +48,15 @@ impl GlobalCtx {
         assert!(num_devices > 0);//TODO test if it works without GPU
 
 
-        let semaphores = (0..num_devices)
-            // .map(|_| Box::new(RunnerSemaphore::new(100)) as Box<dyn PermitSource>) //TODO config
-            .map(|device_idx| Box::new(Arbiter::new(MAX_PERMITS, device_idx)) as Box<dyn PermitSource>)
-            .collect();
-
-        debug!("GlobalCtx::new: semaphores={semaphores:?}");
+        // let semaphores = (0..num_devices)
+        //     // .map(|_| Box::new(RunnerSemaphore::new(100)) as Box<dyn PermitSource>) //TODO config
+        //     .map(|device_idx| Box::new(Arbiter::new(MAX_PERMITS, device_idx)) as Box<dyn PermitSource>)
+        //     .collect();
+        // debug!("GlobalCtx::new: semaphores={semaphores:?}");
 
 
         Self {
-            semaphores,
+            semaphores: vec![],
 
             num_devices,
 
