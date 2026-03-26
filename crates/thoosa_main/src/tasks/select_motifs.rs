@@ -29,6 +29,7 @@ use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Con
 use thoosa_shared::runner::tmp_cache::TmpCached;
 use thoosa_common::loader::rayon_pool;
 use thoosa_common::copy_ctx::CopyCtx;
+use thoosa_common::stream_stage::StreamStage;
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::tho_device::ThoDevice;
@@ -169,7 +170,7 @@ where
     stacked_motifs_loader:Arc<StackedMotifsLoader<ML, C>>,
     run_configs:Vec<SelectMotifsRunConfig>,//TODO map to Vec<Arc in new
     find_motifs_run_ids:Vec<RunId>,
-    clc_resources_motifs_dist:Arc<ClcResourcesMotifsDist<C>>,
+    clc_resources_motifs_dist:Arc<StreamStage<ClcResourcesMotifsDist<C>>>,
     max_batch:i64,//TODO to SelectMotifsSFixedConfig,
     clc_dist:Arc<MotifStats<ML, L, C>>,
 
@@ -820,11 +821,11 @@ where
             stacked_motifs_loader: Arc::new(StackedMotifsLoader::new(Arc::clone(ws), Arc::clone(&motif_loader), Arc::clone(store))),
             run_configs,
             find_motifs_run_ids,
-            clc_resources_motifs_dist: Arc::new(ClcResourcesMotifsDist::<C>::new(
+            clc_resources_motifs_dist: Arc::new(StreamStage::new(Arc::new(ClcResourcesMotifsDist::<C>::new(
                 channels,
                 #[cfg(test)]
                  fail_if_size_bigger_than
-            )),
+            )))),
             max_batch,
             clc_dist,
             find_motif_run_ids_motif_ids,
@@ -1126,7 +1127,7 @@ where
     async fn extend_with_one_find_run(
         loader: Arc<L>,
         ws: Arc<RwLock<Box<dyn Workspace>>>,
-        clc_resources_motifs_dist: Arc<ClcResourcesMotifsDist<C>>,
+        clc_resources_motifs_dist: Arc<StreamStage<ClcResourcesMotifsDist<C>>>,
         select_motifs_run_config: SelectMotifsRunConfig,
         find_motifs_run_config: Arc<FindMotifsRunConfig>,
         motif_data: Arc<DevicesWrap<StackedMotifsOutput>>,

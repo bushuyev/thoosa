@@ -24,6 +24,7 @@ use thoosa_common::batches::BatchLengths;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::builder::SeqBuilder;
 use thoosa_common::cuda_utils::with_cuda_stream;
+use thoosa_common::stream_stage::StreamStage;
 use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::my_tch::ThoModule;
@@ -65,7 +66,7 @@ where
     ws:Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
     store:Arc<Box<dyn Store>>,
     pd:PhantomData<C>,
-    apply_motif_nets: Vec<Arc<ApplyMotifNet<C>>>,
+    apply_motif_nets: Vec<Arc<StreamStage<ApplyMotifNet<C>>>>,
     pub slice_step: u32,//should be in the input
     pub motif_width:u32,
 }
@@ -193,6 +194,23 @@ where
 
     async fn build_final_output(self) -> Result<ThoTensor<MotifProbability, SynKey>, ThoError> {
         ThoTensor::new(self.output_id, self.output)
+    }
+}
+
+impl<'a, C> InputContext<'a, StreamStage<ApplyMotifNet<C>>> for ApplyMotifNetSplitsContext
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    async fn add_partial_output(&mut self, partial: ThoTensor<MotifProbability, SynKey>) {
+        <Self as InputContext<'a, ApplyMotifNet<C>>>::add_partial_output(self, partial).await
+    }
+
+    fn all_done(&self) -> bool {
+        <Self as InputContext<'a, ApplyMotifNet<C>>>::all_done(self)
+    }
+
+    async fn build_final_output(self) -> Result<ThoTensor<MotifProbability, SynKey>, ThoError> {
+        <Self as InputContext<'a, ApplyMotifNet<C>>>::build_final_output(self).await
     }
 }
 
@@ -368,7 +386,7 @@ where
             pd: PhantomData,
             apply_motif_nets: loaded_motif_nets_with_filters
                 .into_iter()
-                .map(|(net, motif_width, freq_filter_find_motifs_run_id, freq_filter)| Arc::new(ApplyMotifNet::new(
+                .map(|(net, motif_width, freq_filter_find_motifs_run_id, freq_filter)| Arc::new(StreamStage::new(Arc::new(ApplyMotifNet::new(
                     net,
                     motif_width,
                     freq_filter_find_motifs_run_id,
@@ -376,7 +394,7 @@ where
                     slice_step,//TODO shouldn't be same as one used when training motif net
                     #[cfg(test)]
                     fail_if_size_bigger_than
-                ))).collect(),
+                ))))).collect(),
             slice_step,
             motif_width
         })

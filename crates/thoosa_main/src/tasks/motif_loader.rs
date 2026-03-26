@@ -21,6 +21,7 @@ use thoosa_shared::runner::tmp_cache::TmpCached;
 use thoosa_common::debug_plot;
 use thoosa_common::dims::{AnyDims, Dims, MotifSlices};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+use thoosa_common::stream_stage::StreamStage;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
@@ -118,7 +119,7 @@ where
     store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    sync_motif_loader: Arc<SyncMotifLoader<C>>,
+    sync_motif_loader: Arc<StreamStage<SyncMotifLoader<C>>>,
     pd: PhantomData<C>,
 }
 
@@ -137,7 +138,7 @@ where
             store,
             loader,
             ws: Arc::clone(&ws),
-            sync_motif_loader: Arc::new(SyncMotifLoader::new()),
+            sync_motif_loader: Arc::new(StreamStage::new(Arc::new(SyncMotifLoader::new()))),
             pd: Default::default(),
         }
     }

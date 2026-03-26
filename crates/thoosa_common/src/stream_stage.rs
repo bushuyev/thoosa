@@ -1,3 +1,5 @@
+use std::future::Future;
+use std::ops::Deref;
 use std::sync::Arc;
 use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
@@ -46,6 +48,10 @@ where
 
         out
     }
+
+    fn consume<'f>(self: Arc<Self>, input: Self::In<'f>, ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send + 'f {
+        Arc::clone(&self.stage).consume(input, ctx)
+    }
 }
 
 impl <S> AsRef<S> for StreamStage<S>
@@ -53,6 +59,17 @@ where
     S:SyncStage
 {
     fn as_ref(&self) -> &S {
+        self.stage.as_ref()
+    }
+}
+
+impl<S> Deref for StreamStage<S>
+where
+    S: SyncStage,
+{
+    type Target = S;
+
+    fn deref(&self) -> &Self::Target {
         self.stage.as_ref()
     }
 }
