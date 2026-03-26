@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use crate::collect_futures_eta::collect_eta_record_oom_all_failed;
+use crate::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
 use crate::runner::common::{PermitsCtx, RunCtx};
 use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -658,6 +658,7 @@ where
                                         debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}", os_thread_id());
 
                                         if all_done {
+                                            collect_eta_record_oom_success();
                                             run_context.drop_permits(DropIf::Always);
 
                                             debug!("done in {i} steps");
