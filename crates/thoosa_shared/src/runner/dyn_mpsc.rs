@@ -11,6 +11,7 @@ use tokio::{
     sync::{mpsc, oneshot, watch},
     task::{JoinHandle, JoinSet},
 };
+use tracing::debug;
 
 type BoxFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 type JobId = u64;
@@ -240,6 +241,7 @@ impl DynamicTaskExecutor {
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
+        debug!("DynamicTaskExecutor::submit: max_other_parallel={max_other_parallel:?}");
         let parent = CURRENT_JOB
             .try_with(|job| {
                 if job.executor_id == self.executor_id {

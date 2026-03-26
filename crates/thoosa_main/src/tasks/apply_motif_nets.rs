@@ -819,15 +819,16 @@ impl <C> SyncStage for ApplyMotifNet<C> where
         }
 
         let out_id = self.out_id(input.id());
-        let slice_step = self.slice_step;
-        let (out, stream) = with_cuda_stream(_ctx.device_idx(), move ||{
-            apply_motif_net_forward(out_id.clone(), input.batch, input.motif_net, slice_step, input.id())
-        });
-        if let Some(stream) = stream {
-            stream.synchronize().map_err(|msg|ThoError::new(msg))?;
-        }
-
-        let out = out?;
+        // let slice_step = self.slice_step;
+        // let (out, stream) = with_cuda_stream(_ctx.device_idx(), move ||{
+        //     apply_motif_net_forward(out_id.clone(), input.batch, input.motif_net, slice_step, input.id())
+        // });
+        // if let Some(stream) = stream {
+        //     stream.synchronize().map_err(|msg|ThoError::new(msg))?;
+        // }
+        //
+        // let out = out?;
+        let out = apply_motif_net_forward(out_id, input.batch, input.motif_net, self.slice_step, input.id())?;
 
         trace!("ApplyMotifNet::do_run, self.id={:?} out=\n{}", self.id, out.t);
         debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.size={:?}", input.id(), out.size());
