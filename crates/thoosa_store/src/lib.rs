@@ -1020,11 +1020,13 @@ impl Store for SqlStore {
                 resource_ids.extend(Self::save_resources_labels_do_insert(resource_keys.into_iter(), import_id, &t)?);
             }
 
-            if let Some(reminder) = resource_labels_iter.into_remainder() {
-                if reminder.len() > 0 {
-                    resource_ids.extend(Self::save_resources_labels_do_insert(reminder, import_id, &t)?);
-                }
+            let remainder = resource_labels_iter.into_remainder();
+
+            if remainder.len() == 0 {
+            // if !remainder.is_empty() {
+                resource_ids.extend(Self::save_resources_labels_do_insert(remainder, import_id, &t)?);
             }
+
 
             t.commit()?;
             Ok(resource_ids)
@@ -1579,10 +1581,10 @@ impl Store for SqlStore {
                 while let Some(chunk) = slices_chunks.next() {
                     Self::insert_slices(&t, run_id, channel, motif_id, chunk.into_iter())?
                 }
-                if let Some(reminder) = slices_chunks.into_remainder() {
-                    if reminder.len() > 0 {
-                        Self::insert_slices(&t, run_id, channel, motif_id, reminder)?
-                    }
+                let remainder = slices_chunks.into_remainder();
+                if remainder.len() == 0 {
+                // if !remainder.is_empty() {
+                    Self::insert_slices(&t, run_id, channel, motif_id, remainder)?
                 }
             }
         }
@@ -1611,10 +1613,10 @@ impl Store for SqlStore {
             while let Some(chunk) = slices_chunks.next() {
                 Self::insert_slices(&t, run_id, channel, motif_id as i64, chunk.into_iter())?
             }
-            if let Some(reminder) = slices_chunks.into_remainder() {
-                if reminder.len() > 0 {
-                    Self::insert_slices(&t, run_id, channel, motif_id as i64, reminder)?
-                }
+            let remainder = slices_chunks.into_remainder();
+            if remainder.len() == 0 {
+            // if !remainder.is_empty() {
+                Self::insert_slices(&t, run_id, channel, motif_id as i64, remainder)?
             }
         }
         t.commit()?;
@@ -1669,12 +1671,12 @@ impl Store for SqlStore {
                     )?
                 }
 
-                if let Some(reminder) = slices_chunks.into_remainder() {
-                    if reminder.len() > 0 {
-                        Self::insert_slices_matches_chunk_from_tmp(
-                            &t, run_id, channel, motif_id, reminder,
-                        )?
-                    }
+                let remainder = slices_chunks.into_remainder();
+                if remainder.len() == 0 {
+                // if !remainder.is_empty() {
+                    Self::insert_slices_matches_chunk_from_tmp(
+                        &t, run_id, channel, motif_id, remainder,
+                    )?
                 }
             }
         }
@@ -2774,11 +2776,15 @@ impl SqlStore {
             Self::save_resources_labels_insert_labels(resource_labels.into_iter(), t);
         }
 
-        if let Some(reminder) = labels_iter.into_remainder() {
-            Self::save_resources_labels_insert_labels(reminder, t);
+
+        let remainder = labels_iter.into_remainder();
+        if remainder.len() == 0 {
+        // if !remainder.is_empty() {
+            Self::save_resources_labels_insert_labels(remainder, t);
         }
 
-        Ok(resource_ids)
+
+        Ok(resource_ids.clone())//TODO 1.96.0-nightly: why ?
     }
 
     fn save_resources_labels_insert_labels(

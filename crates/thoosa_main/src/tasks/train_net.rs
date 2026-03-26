@@ -28,6 +28,7 @@ use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
+use thoosa_common::stream_stage::StreamStage;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{opt_train, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult, CommonTrainingRunConfig};
 use thoosa_common::utils::{optimizer_mem_size, TrainListener};
@@ -228,6 +229,7 @@ where
             x_f,
             self.loss_fn,
         ));
+        let train_step_stream = Arc::new(StreamStage::new(Arc::clone(&train_step)));
 
         let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
@@ -241,7 +243,7 @@ where
         Box::pin(async move {
 
             let batch = (self.batch)(ctx.branch(Some("train_batch"), false, false), &run_config).await?;
-            debug!("TrainNet::run_inner: descr={descr} device={:?} cycles={}", train_step.device(), epochs);
+            debug!("TrainNet::run_inner: descr={descr} device={:?} cycles={}", train_step.as_ref().device(), epochs);
 
             let oom_handler = OOMHandler::new(
                 vec![
@@ -276,7 +278,7 @@ where
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?}", input.id());
 
                     oom_handler.run(
-                        &train_step,
+                        &train_step_stream,
                         Arc::clone(&input),
                         ctx.branch(Some("train_step"), false, false),
                         Contexts::new(
@@ -309,12 +311,12 @@ where
                     while let Some(Ok((x_t_0, mut lengths, y_t))) = batches.next().await {
                         tch::no_grad(||{
 
-                            let x_t = (train_step.x_f())(x_t_0);
+                            let x_t = (train_step.as_ref().x_f())(x_t_0);
 
 
-                            let pred_y = train_step.forward(&x_t, lengths.as_mut(), false)?;
+                            let pred_y = train_step.as_ref().forward(&x_t, lengths.as_mut(), false)?;
 
-                            let valid_loss = (train_step.loss_fn())(&pred_y.as_ref(), &y_t.as_ref())?;
+                            let valid_loss = (train_step.as_ref().loss_fn())(&pred_y.as_ref(), &y_t.as_ref())?;
                             let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
                             valid_loss_sum += valid_loss_f32;
                             valid_loss_count += 1;

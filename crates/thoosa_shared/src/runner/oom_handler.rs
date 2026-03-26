@@ -294,8 +294,13 @@ where
             run_context,
             contexts,
             |task, input, selector, device_idx, run_ctx| async move {
-                oom_executor(device_idx)
-                    .submit((MAX_PERMITS - run_ctx.acquired_permits()).into(), async move {
+
+
+                debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?}");
+
+                oom_executor(device_idx).submit((MAX_PERMITS - run_ctx.acquired_permits()).into(), async move {
+
+
                         if let Some(selector) = selector {
                             input
                                 .with_selected_data_ref_send(
@@ -529,7 +534,7 @@ where
                                                         Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
                                                     }
                                                     AdjusterError::SomethingElse => {
-                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))
+                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))//TODO zz
                                                     }
                                                 }
                                             }
@@ -558,7 +563,7 @@ where
                                                         Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
                                                     }
                                                     AdjusterError::SomethingElse => {
-                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))
+                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string()))) //TODO zz
                                                     }
                                                 }
                                             }
@@ -589,7 +594,7 @@ where
                                                         Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
                                                     }
                                                     AdjusterError::SomethingElse => {
-                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))
+                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))//TODO zz
                                                     }
                                                 }
                                             }
@@ -667,6 +672,7 @@ where
 
                                         match te.what() {
                                             Cause::OutOfMemory | Cause::AdjusterFailed => {
+                                                pref_oom_count();
                                                 debug!("OOMHandler::run, error: on oom ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                 if !adjuster.degrade(&mut contexts) {
