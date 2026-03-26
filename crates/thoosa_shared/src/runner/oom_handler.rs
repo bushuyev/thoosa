@@ -470,11 +470,13 @@ where
             runner(Arc::clone(&task), Arc::clone(&input), None, device_idx, run_context.branch(Some("oom_handler_run_initial"), false, false))
         }) {
             Err(te) => {
-                pref_oom_count();
+
                 debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={task:?} os_thread_id={}  te={te:?}", os_thread_id());
 
                 match te.what() {
                     Cause::OutOfMemory => {
+                        pref_oom_count();
+
                         debug!("OOMHandler::run, error: 1. ctx_id={ctx_id:?} task={task:?} os_thread_id={} before adjusters", os_thread_id());
 
                         let mut task = task;
