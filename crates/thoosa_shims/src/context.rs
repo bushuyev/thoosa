@@ -94,6 +94,7 @@ impl ThoCudaContext {
     }
 
     #[allow(dead_code)]
+    ///synchronizes device   (cuCtxSynchronize), use stream.synchronize
     pub fn synchronize(&self) -> Result<(), String> {
         unsafe { check(tho_cu_ctx_synchronize(), "cuCtxSynchronize") }
     }
