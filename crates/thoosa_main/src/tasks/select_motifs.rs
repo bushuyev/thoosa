@@ -439,7 +439,7 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
     async fn with_selected_data_ref<'o, R, F, P>(&self, _to_device_idx: usize, mut ctx: P, selector: SelectMotifsInputSelector, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         P: RunCtx,
-        for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>
     {
 
         debug!("SelectMotifsInputSelectorWrap::with_selected_data_ref: selector={selector:?}");
@@ -458,7 +458,7 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
                 let t = self.batch.get(i).ok_or_else(|| ThoError::new(format!("SelectMotifsInputSelectorWrap: invalid slice idx {i}")))?;
                 let channels = t.size().dim_0();
                 let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
-                let selected = Arc::new(DevicesWrap::wrap(t.with_selected_data(ctx.device_idx(), ctx.branch(Some("select_motifs_input_selected_slice"), false, false), selector, |data, _ctx|{
+                let selected = Arc::new(DevicesWrap::wrap(t.with_selected_data(ctx.device_idx(), ctx.branch(Some("select_motifs_input_selected_slice"), false, false), selector, |data, _ctx| {
                     Ok(data)
                 }).await?, CacheArea::default()));
                 let offset = self.resource_offsets.get(i).copied().unwrap_or(0);
@@ -487,6 +487,39 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
 
                 do_run(&inpt, &ctx)
         })
+    }
+}
+
+impl thoosa_shared::runner::common::cachable::WithDataRefSend for SelectMotifsInputSelectorWrap {
+    fn with_data_ref_send<R, F, P>(
+        &self,
+        to_device_idx: usize,
+        permits_ctx: P,
+        trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
+    where
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
+        P: RunCtx,
+    {
+        async move { self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run).await }
+    }
+}
+
+impl thoosa_shared::runner::common::cachable::WithSelectDataRefSend<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
+    fn with_selected_data_ref_send<'o, R, F, P>(
+        &self,
+        to_device_idx: usize,
+        ctx: P,
+        selector: SelectMotifsInputSelector,
+        trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
+    where
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
+        P: RunCtx,
+    {
+        async move { self.with_selected_data_ref(to_device_idx, ctx, selector, trace_ctx, do_run).await }
     }
 }
 

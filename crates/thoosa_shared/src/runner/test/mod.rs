@@ -14,7 +14,7 @@ use tokio::task::JoinSet;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use crate::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use crate::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
+use crate::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRefSend};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{Stage, SyncStage};
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
@@ -91,7 +91,7 @@ where
         required_ids: &'z HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
     ) -> Result<<R as Stage>::Out, ThoError>
     where
-        for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
+        for <'f> W: WithSelectDataRefSend<S, O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
         W: WithId<ID = <R::In<'z> as WithId>::ID> + Send + Sync + 'static,
 
         R: SyncStage + Adjustable + Send + Sync + 'static,

@@ -702,6 +702,39 @@ impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
     }
 }
 
+impl thoosa_shared::runner::common::cachable::WithDataRefSend for ApplyMotifNetInputWrapper {
+    fn with_data_ref_send<R, F, P>(
+        &self,
+        to_device_idx: usize,
+        permits_ctx: P,
+        trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
+    where
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
+        P: RunCtx,
+    {
+        async move { self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run).await }
+    }
+}
+
+impl thoosa_shared::runner::common::cachable::WithSelectDataRefSend<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
+    fn with_selected_data_ref_send<'o, R, F, P>(
+        &self,
+        to_device_idx: usize,
+        permits_ctx: P,
+        selector: ChannelsData2Selector,
+        trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
+    where
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
+        P: RunCtx,
+    {
+        async move { self.with_selected_data_ref(to_device_idx, permits_ctx, selector, trace_ctx, do_run).await }
+    }
+}
+
 #[derive(Debug)]
 struct ApplyMotifNet<C>
 where
