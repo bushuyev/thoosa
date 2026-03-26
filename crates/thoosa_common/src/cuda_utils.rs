@@ -4,6 +4,7 @@ use std::ops::Add;
 use std::sync::Arc;
 use std::{iter, usize};
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
+use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, error};
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
@@ -190,6 +191,7 @@ pub async fn copy_d2h_from_ptr(
             Box::new(iter.chain(iter::once((chunks, last)))) as Box<dyn Iterator<Item = (usize, usize)>>
         };
 
+
         iter.map(|(i, c_buf_size)| {
             let off = i * buf_size_bytes;
 
@@ -222,6 +224,12 @@ pub async fn copy_d2h_from_ptr(
                             error!("stream.synchronize: e={e:?}")
                         }
                     }
+
+                    std::ptr::copy_nonoverlapping(
+                        buf_ptr as *mut _,
+                        dst_off_ptr as *mut u8,
+                        c_buf_size,
+                    );
                     //---
                     Ok(())
 
@@ -232,18 +240,6 @@ pub async fn copy_d2h_from_ptr(
                         source: Arc::new(e),
                     })??;
 //---
-                tokio::task::spawn_blocking(move || {
-                    std::ptr::copy_nonoverlapping(
-                        buf_ptr as *mut _,
-                        dst_off_ptr as *mut u8,
-                        c_buf_size,
-                    );
-                })
-                .await
-                .map_err(|e| Cause::External {
-                    type_name: std::any::type_name::<tokio::task::JoinError>(),
-                    source: Arc::new(e),
-                })?;
 
 
                 drop(buf_stream);
@@ -376,13 +372,11 @@ pub async fn copy_h2d_from_ptr(
                         buf_ptr as *mut u8,
                         c_buf_size,
                     );
-                }).await.unwrap();
-
 
                 //----------------------------------------------------------
                 // 2. copy   pinned host buffer  →  GPU tensor   (CUDA)
                 //----------------------------------------------------------
-                tokio::task::spawn_blocking(move || {//---
+                //---
                     let raw = thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
                         dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
                         buf_ptr as *const c_void,
