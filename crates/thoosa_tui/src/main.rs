@@ -1344,7 +1344,7 @@ impl App {
     fn progress_lines(&self) -> Vec<String> {
         let mut lines = vec![format!("socket: {}", self.progress_status)];
         lines.push(format!("uptime: {}", format_progress_uptime(self.progress_state.started_at_unix_ms)));
-        lines.push(format!("success OOM runs: {}", self.progress_state.oom_all_failed));
+        lines.push(format!("success OOM runs: {}", self.progress_state.oom_success));
         lines.push(format!("failed OOM runs: {}", self.progress_state.oom_all_failed));
         match self.progress_last_update {
             Some(last_update) => {

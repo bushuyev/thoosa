@@ -1,4 +1,4 @@
-use log::{debug, warn};
+use log::{debug, info, trace, warn};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -310,6 +310,7 @@ impl CollectEtaTracker {
             }
             // info!("invocation: {} elapsed from start {} total={} completed={}", invocation.descr, invocation.started_at.elapsed().as_millis(), invocation.total, invocation.completed);
         }
+        trace!("{snapshot:?}");
         snapshot
     }
 

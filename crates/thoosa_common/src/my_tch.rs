@@ -1098,7 +1098,7 @@ fn self_attention_forward_t(
 
                 drop(key_valid);
 
-                raw_scores.f_masked_fill(&invalid_mask, -1e9)?
+                panic_to_err!(raw_scores.f_masked_fill(&invalid_mask, -1e9))?
             };
 
             drop(raw_scores);
