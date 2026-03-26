@@ -2,15 +2,12 @@ use cudarc::driver::sys;
 use std::ffi::c_void;
 use std::ops::Add;
 use std::sync::Arc;
-use std::{iter, usize};
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::{stream, StreamExt};
 use log::{debug, error};
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::{Cause, ThoError};
-use tokio::task::JoinSet;
-use tokio::time::error::Elapsed;
 use tokio_utils::Pool;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
@@ -181,76 +178,69 @@ pub async fn copy_d2h_from_ptr(
     unsafe {
         let dst_ptr: usize = dst_t.data_ptr() as usize;
 
-        let iter = (0..=chunks)
-            .into_iter()
-            .zip(iter::repeat(buf_size_bytes).take(chunks));
+        let chunk_ranges = (0..chunks)
+            .map(|i| (i, buf_size_bytes))
+            .chain((last != 0).then_some((chunks, last)))
+            .collect::<Vec<_>>();
 
-        let iter = if last == 0 {
-            Box::new(iter) as Box<dyn Iterator<Item = (usize, usize)>>
-        } else {
-            Box::new(iter.chain(iter::once((chunks, last)))) as Box<dyn Iterator<Item = (usize, usize)>>
-        };
+        let concurrency = 3; //chunk_ranges.len().max(1);
 
+        stream::iter(chunk_ranges)
+            .map(|(i, c_buf_size)| {
+                let off = i * buf_size_bytes;
 
-        iter.map(|(i, c_buf_size)| {
-            let off = i * buf_size_bytes;
+                let src_off_ptr = src_ptr.add(off as usize) as thoosa_shims::memcpy::CuDevicePtr;
+                let dst_off_ptr: usize = dst_ptr.add(off as usize);
 
-            let src_off_ptr = src_ptr.add(off as usize) as thoosa_shims::memcpy::CuDevicePtr;
-            let dst_off_ptr: usize = dst_ptr.add(off as usize);
+                let pool = Arc::clone(&bufs_pool);
+                async move {
+                    debug!("starting {i} thread_name={:?}", os_thread_id());
+                    let buf_stream = pool.acquire().await;
+                    let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
 
-            let pool = Arc::clone(&bufs_pool);
-            async move {
-                debug!("starting {i} thread_name={:?}", os_thread_id());
-                let buf_stream = pool.acquire().await;
-                let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
+                    let stream = buf_stream.1.clone();
 
-                let stream = buf_stream.1.clone();
-
-                tokio::task::spawn_blocking(move || {//---
-                    let raw = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
-                        buf_ptr as *mut c_void,
-                        src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
-                        c_buf_size,
-                        stream.as_mut_ptr(),
-                    );
-                    let r: sys::CUresult = std::mem::transmute(raw);
-                    if r != sys::CUresult::CUDA_SUCCESS {
-                        return Err::<(), Cause>(Cause::SomethingElse(format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")).into());
-                    }
-
-                    match stream.synchronize() {
-                        Ok(_) => {}
-                        Err(e) => {
-                            error!("stream.synchronize: e={e:?}")
+                    tokio::task::spawn_blocking(move || {
+                        let raw = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
+                            buf_ptr as *mut c_void,
+                            src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
+                            c_buf_size,
+                            stream.as_mut_ptr(),
+                        );
+                        let r: sys::CUresult = std::mem::transmute(raw);
+                        if r != sys::CUresult::CUDA_SUCCESS {
+                            return Err::<(), Cause>(Cause::SomethingElse(format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")).into());
                         }
-                    }
 
-                    std::ptr::copy_nonoverlapping(
-                        buf_ptr as *mut _,
-                        dst_off_ptr as *mut u8,
-                        c_buf_size,
-                    );
-                    //---
+                        match stream.synchronize() {
+                            Ok(_) => {}
+                            Err(e) => {
+                                error!("stream.synchronize: e={e:?}")
+                            }
+                        }
+
+                        std::ptr::copy_nonoverlapping(
+                            buf_ptr as *mut _,
+                            dst_off_ptr as *mut u8,
+                            c_buf_size,
+                        );
+                        Ok(())
+                    })
+                        .await
+                        .map_err(|e| Cause::External {
+                            type_name: std::any::type_name::<tokio::task::JoinError>(),
+                            source: Arc::new(e),
+                        })??;
+
+                    drop(buf_stream);
                     Ok(())
-
-                })
-                    .await
-                    .map_err(|e| Cause::External {
-                        type_name: std::any::type_name::<tokio::task::JoinError>(),
-                        source: Arc::new(e),
-                    })??;
-//---
-
-
-                drop(buf_stream);
-                Ok(())
-            }
-        })
-        .collect::<JoinSet<Result<(), Cause>>>()
-        .join_all()
-        .await
-        .into_iter()
-        .collect::<Result<(), Cause>>()?;
+                }
+            })
+            .buffer_unordered(concurrency)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<(), Cause>>()?;
     }
     Ok(dst_t)
 }
@@ -334,72 +324,66 @@ pub async fn copy_h2d_from_ptr(
         // CUdriver needs CUdeviceptr for the destination side
         let dst_base = dst_ptr as thoosa_shims::memcpy::CuDevicePtr;
 
-        // iterator over all full-sized + optional tail chunk
-        let iter = (0..=chunks).zip(iter::repeat(buf_size).take(chunks));
-        let iter: Box<dyn Iterator<Item = (usize, usize)>> = if last == 0 {
-            Box::new(iter)
-        } else {
-            Box::new(iter.chain(iter::once((chunks, last))))
-        };
-        
+        let chunk_ranges = (0..chunks)
+            .map(|i| (i, buf_size))
+            .chain((last != 0).then_some((chunks, last)))
+            .collect::<Vec<_>>();
 
-        // launch one asynchronous task per chunk
-        iter.map(|(i, c_buf_size)| {
-            let off = i * buf_size;
+        let concurrency = chunk_ranges.len().max(1);
 
-            // raw pointers for this chunk
-            let src_off_ptr = src_ptr.add(off);
-            let dst_off_ptr = dst_base + off as u64; // CUdeviceptr is a u64
+        stream::iter(chunk_ranges)
+            .map(|(i, c_buf_size)| {
+                let off = i * buf_size;
 
-            // clone the pool inside the async block
-            let pool = Arc::clone(bufs_pool);
+                // raw pointers for this chunk
+                let src_off_ptr = src_ptr.add(off);
+                let dst_off_ptr = dst_base + off as u64; // CUdeviceptr is a u64
 
-            async move {
-                debug!("copy_h2d_from_ptr: starting {i} thread_name={:?}", os_thread_id());
+                // clone the pool inside the async block
+                let pool = Arc::clone(bufs_pool);
 
-                // grab (pinned slice, stream) from the pool
-                let buf_stream = pool.acquire().await;
-                let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
-                // let stream = buf_stream.1.clone();
+                async move {
+                    debug!("copy_h2d_from_ptr: starting {i} thread_name={:?}", os_thread_id());
 
-                //----------------------------------------------------------
-                // 1. tokio::task::spawn_blocking(move || {copy   CPU-tensor  →  pinned host buffer   (memcpy)
-                //----------------------------------------------------------
-                debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={c_buf_size} thread_name={:?}", os_thread_id());
-                tokio::task::spawn_blocking(move || {
-                    std::ptr::copy_nonoverlapping(
-                        src_off_ptr as *const u8,
-                        buf_ptr as *mut u8,
-                        c_buf_size,
-                    );
+                    // grab (pinned slice, stream) from the pool
+                    let buf_stream = pool.acquire().await;
+                    let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
+                    // let stream = buf_stream.1.clone();
 
-                //----------------------------------------------------------
-                // 2. copy   pinned host buffer  →  GPU tensor   (CUDA)
-                //----------------------------------------------------------
-                //---
-                    let raw = thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
-                        dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
-                        buf_ptr as *const c_void,
-                        c_buf_size,
-                        buf_stream.1.as_mut_ptr(),
-                    );
-                    let r: sys::CUresult = std::mem::transmute(raw);
-                    if r != sys::CUresult::CUDA_SUCCESS {
-                        panic!("cuMemcpyHtoDAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}");
-                    }
-                    buf_stream.1.synchronize();
-                    drop(buf_stream); // return buffer/stream to pool
+                    //----------------------------------------------------------
+                    // 1. tokio::task::spawn_blocking(move || {copy   CPU-tensor  →  pinned host buffer   (memcpy)
+                    //----------------------------------------------------------
+                    debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={c_buf_size} thread_name={:?}", os_thread_id());
+                    tokio::task::spawn_blocking(move || {
+                        std::ptr::copy_nonoverlapping(
+                            src_off_ptr as *const u8,
+                            buf_ptr as *mut u8,
+                            c_buf_size,
+                        );
 
-                }).await.unwrap();//---
+                        //----------------------------------------------------------
+                        // 2. copy   pinned host buffer  →  GPU tensor   (CUDA)
+                        //----------------------------------------------------------
+                        let raw = thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
+                            dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
+                            buf_ptr as *const c_void,
+                            c_buf_size,
+                            buf_stream.1.as_mut_ptr(),
+                        );
+                        let r: sys::CUresult = std::mem::transmute(raw);
+                        if r != sys::CUresult::CUDA_SUCCESS {
+                            panic!("cuMemcpyHtoDAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}");
+                        }
+                        let _ = buf_stream.1.synchronize();
+                        drop(buf_stream); // return buffer/stream to pool
+                    }).await.unwrap();
 
-                // wait for GPU work to finish before recycling buffer
-
-
-            }
-        })
-        .collect::<JoinSet<()>>()
-        .join_all()
-        .await;
+                    // wait for GPU work to finish before recycling buffer
+                }
+            })
+            .buffer_unordered(concurrency)
+            .collect::<Vec<_>>()
+            .await;
     }
 
     Ok(dst_t)
