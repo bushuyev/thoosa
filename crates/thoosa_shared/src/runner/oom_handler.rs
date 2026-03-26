@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use crate::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
 use crate::runner::common::{PermitsCtx, RunCtx};
-use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
+use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRefSend};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::common::{DropIf, OutId};
 #[double]
@@ -283,7 +283,7 @@ where
         contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoError>
     where
-        W: WithSelectDataRef<S> + Send + Sync + 'static,
+        W: WithSelectDataRefSend<S> + Send + Sync + 'static,
         W: WithId<ID = <R::In<'z> as WithId>::ID>,
         for<'f> <W as WithDataRef>::O<'f>: Borrow<<R as Stage>::In<'f>>,
     {
@@ -294,35 +294,30 @@ where
             run_context,
             contexts,
             |task, input, selector, device_idx, run_ctx| async move {
-                let handle = tokio::runtime::Handle::current();
-
-                oom_executor(device_idx).submit((MAX_PERMITS - run_ctx.acquired_permits()).into(), async move {
-                    tokio::task::spawn_blocking(move || {
-                        handle.block_on(async move {
-                            if let Some(selector) = selector {
-                                input
-                                    .with_selected_data_ref(
-                                        device_idx,
-                                        run_ctx,
-                                        selector,
-                                        None,
-                                        |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
-                                    )
-                                    .await
-                            } else {
-                                input
-                                    .with_data_ref(
-                                        device_idx,
-                                        run_ctx,
-                                        None,
-                                        |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
-                                    )
-                                    .await
-                            }
-                        })
+                oom_executor(device_idx)
+                    .submit((MAX_PERMITS - run_ctx.acquired_permits()).into(), async move {
+                        if let Some(selector) = selector {
+                            input
+                                .with_selected_data_ref_send(
+                                    device_idx,
+                                    run_ctx,
+                                    selector,
+                                    None,
+                                    |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
+                                )
+                                .await
+                        } else {
+                            input
+                                .with_data_ref_send(
+                                    device_idx,
+                                    run_ctx,
+                                    None,
+                                    |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
+                                )
+                                .await
+                        }
                     })
                     .await?
-                }).await?
             },
         )
         .await
@@ -457,7 +452,7 @@ where
     S: Adjustable + Debug + Clone + Default + 'static,
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
-    W: WithSelectDataRef<S>,
+    W: WithSelectDataRefSend<S>,
     W: WithId<ID = <R::In<'z> as WithId>::ID>,
     Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx) -> Fut + Copy,
     Fut: Future<Output = Result<R::Out, ThoError>>,
