@@ -16,7 +16,7 @@ use crate::ws::Workspace;
 use clap::clap_derive::Args;
 use thoosa_shared::{mono_key, panic_to_err_async, CopyToDevice};
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
 use serde::{Deserialize, Serialize};
@@ -1942,7 +1942,8 @@ where
 
         debug!("opt_train: best_config={:?}", best_config);
 
-        debug!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={} min_var_store={min_var_store:?}", min_loss.read());
+        debug!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={}", min_loss.read());
+        trace!("opt_train: done opt, descr={descr} min_var_store={min_var_store:?}");//can cause Internal torch error: CUDA error: device-side assert triggered
         collect_eta_record_completion(grids_eta_guard.id());
     }
     Arc::into_inner(min_var_store)

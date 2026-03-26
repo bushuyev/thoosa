@@ -204,8 +204,7 @@ pub async fn copy_d2h_from_ptr(
 
                 let stream = buf_stream.1.clone();
 
-                // from cuda to pinned buffer
-                match tokio::time::timeout(tokio::time::Duration::from_secs(2), tokio::task::spawn_blocking(move || { //--- //TODO conf
+                tokio::task::spawn_blocking(move || {//---
                     let raw = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
                         buf_ptr as *mut c_void,
                         src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
@@ -217,33 +216,21 @@ pub async fn copy_d2h_from_ptr(
                         return Err::<(), Cause>(Cause::SomethingElse(format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")).into());
                     }
 
-                    stream.synchronize();
-                    //---
-                    Ok(())
-                })
-                ).await {
-                    Ok(r) => {
-                        match r {
-                            Ok(v) => {
-                                Ok(v)
-                            }
-                            Err(e) => {
-                                error!("copy_d2h: e={e:?}");
-                                Err(Cause::External {
-                                    type_name: std::any::type_name::<tokio::task::JoinError>(),
-                                    source: Arc::new(e),
-                                })
-                            }
+                    match stream.synchronize() {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!("stream.synchronize: e={e:?}")
                         }
                     }
-                    Err(e) => {
-                        error!("copy_d2h: timeout e={e:?}");
-                        Err(Cause::External {
-                            type_name: std::any::type_name::<Elapsed>(),
-                            source: Arc::new(e),
-                        })
-                    }
-                }??;
+                    //---
+                    Ok(())
+
+                })
+                    .await
+                    .map_err(|e| Cause::External {
+                        type_name: std::any::type_name::<tokio::task::JoinError>(),
+                        source: Arc::new(e),
+                    })??;
 //---
                 tokio::task::spawn_blocking(move || {
                     std::ptr::copy_nonoverlapping(

@@ -590,7 +590,7 @@ impl DistsMask {
         debug!("DistsMask::to_cpu: self.mask.device={:?}", self.mask.device());
 
         if let Some(stream) = self.stream_to_sync.as_ref() {
-            stream.synchronize();
+            stream.synchronize().map_err(|e|ThoError::new(e))?;
         }
 
         match self.mask_type {
@@ -890,10 +890,10 @@ impl CrossClcResultMerge for DistsMask {
         let right = other;
 
         if let Some(stream) = left.stream_to_sync.as_ref() {
-            stream.synchronize();
+            stream.synchronize().map_err(|e|ThoError::new(e))?;
         }
         if let Some(stream) = right.stream_to_sync.as_ref() {
-            stream.synchronize();
+            stream.synchronize().map_err(|e|ThoError::new(e))?;
         }
 
         let DistsMask {
@@ -1086,7 +1086,7 @@ impl CrossClcResultMerge for DistsMask {
 
         for part in &parts {
             if let Some(stream) = part.stream_to_sync.as_ref() {
-                stream.synchronize();
+                stream.synchronize().map_err(|e|ThoError::new(e))?;
             }
         }
 
