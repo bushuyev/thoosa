@@ -534,7 +534,7 @@ where
                                                         Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
                                                     }
                                                     AdjusterError::SomethingElse => {
-                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))
+                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))//TODO zz
                                                     }
                                                 }
                                             }
@@ -563,7 +563,7 @@ where
                                                         Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
                                                     }
                                                     AdjusterError::SomethingElse => {
-                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))
+                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string()))) //TODO zz
                                                     }
                                                 }
                                             }
@@ -594,7 +594,7 @@ where
                                                         Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
                                                     }
                                                     AdjusterError::SomethingElse => {
-                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))
+                                                        return Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string())))//TODO zz
                                                     }
                                                 }
                                             }
@@ -672,6 +672,7 @@ where
 
                                         match te.what() {
                                             Cause::OutOfMemory | Cause::AdjusterFailed => {
+                                                pref_oom_count();
                                                 debug!("OOMHandler::run, error: on oom ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 
                                                 if !adjuster.degrade(&mut contexts) {

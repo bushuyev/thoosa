@@ -18,15 +18,13 @@ type JobId = u64;
 type ExecutorId = u64;
 
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_EXECUTOR_ID: AtomicU64 = AtomicU64::new(1);
 
 tokio::task_local! {
     static CURRENT_JOB: CurrentJob;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct CurrentJob {
-    executor_id: ExecutorId,
     job_id: JobId,
     cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
 }
@@ -66,7 +64,7 @@ impl Job {
 
 #[derive(Debug)]
 struct LiveJob {
-    cap: usize,
+    cap: usize,//max_other_parallel + 1
     active: bool,
     suspend_depth: usize,
     waiting_resumes: Vec<oneshot::Sender<()>>,
@@ -202,7 +200,6 @@ impl Drop for ParentSuspendGuard {
 
 #[derive(Debug)]
 pub struct DynamicTaskExecutor {
-    executor_id: ExecutorId,
     tx: mpsc::Sender<Job>,
     limit_tx: watch::Sender<usize>,
     cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
@@ -211,7 +208,6 @@ pub struct DynamicTaskExecutor {
 
 impl DynamicTaskExecutor {
     pub fn new(queue_capacity: usize, initial_limit: NonZeroUsize) -> Self {
-        let executor_id = NEXT_EXECUTOR_ID.fetch_add(1, Ordering::Relaxed);
 
         let (tx, rx) = mpsc::channel(queue_capacity);
         let (limit_tx, limit_rx) = watch::channel(initial_limit.get());
@@ -220,11 +216,10 @@ impl DynamicTaskExecutor {
         let cmd_tx_for_tasks = cmd_tx.clone();
 
         let worker = tokio::spawn(async move {
-            Self::run_manager(rx, limit_rx, cmd_rx, cmd_tx_for_tasks, executor_id).await;
+            Self::run_manager(rx, limit_rx, cmd_rx, cmd_tx_for_tasks).await;
         });
 
         Self {
-            executor_id,
             tx,
             limit_tx,
             cmd_tx,
@@ -241,17 +236,10 @@ impl DynamicTaskExecutor {
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
-        debug!("DynamicTaskExecutor::submit: max_other_parallel={max_other_parallel:?}");
-        let parent = CURRENT_JOB
-            .try_with(|job| {
-                if job.executor_id == self.executor_id {
-                    Some(job.clone())
-                } else {
-                    None
-                }
-            })
-            .ok()
-            .flatten();
+
+        let parent = CURRENT_JOB.try_with(|job| job.clone()).ok();
+
+        debug!("DynamicTaskExecutor::submit: max_other_parallel={max_other_parallel:?} parent={parent:?}");
 
         let mut suspend_guard = ParentSuspendGuard::new(parent);
         suspend_guard.maybe_suspend().await?;
@@ -301,7 +289,6 @@ impl DynamicTaskExecutor {
         mut limit_rx: watch::Receiver<usize>,
         mut cmd_rx: mpsc::UnboundedReceiver<ManagerCmd>,
         cmd_tx_for_tasks: mpsc::UnboundedSender<ManagerCmd>,
-        executor_id: ExecutorId,
     ) {
         let mut pending = VecDeque::<Job>::new();
         let mut running = JoinSet::<()>::new();
@@ -318,6 +305,7 @@ impl DynamicTaskExecutor {
         let mut global_limit = *limit_rx.borrow();
 
         loop {
+            debug!("DynamicTaskExecutor::run_manager, loop: active_caps={active_caps:?} running.len={}, pending.len={}", running.len(), pending.len());
             Self::drain_finished(
                 &mut running,
                 &mut done_rx,
@@ -342,7 +330,6 @@ impl DynamicTaskExecutor {
                 global_limit,
                 &done_tx,
                 &cmd_tx_for_tasks,
-                executor_id,
             );
 
             if input_closed && pending.is_empty() && jobs.is_empty() {
@@ -434,7 +421,6 @@ impl DynamicTaskExecutor {
         global_limit: usize,
         done_tx: &mpsc::UnboundedSender<JobId>,
         cmd_tx_for_tasks: &mpsc::UnboundedSender<ManagerCmd>,
-        executor_id: ExecutorId,
     ) {
         loop {
             let mut spawned_any = false;
@@ -487,7 +473,6 @@ impl DynamicTaskExecutor {
                         CURRENT_JOB
                             .scope(
                                 CurrentJob {
-                                    executor_id,
                                     job_id,
                                     cmd_tx: cmd_tx_for_tasks,
                                 },
