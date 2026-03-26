@@ -183,7 +183,7 @@ pub async fn copy_d2h_from_ptr(
             .chain((last != 0).then_some((chunks, last)))
             .collect::<Vec<_>>();
 
-        let concurrency = 3; //chunk_ranges.len().max(1);
+        let concurrency = 32; //chunk_ranges.len().max(1);
 
         stream::iter(chunk_ranges)
             .map(|(i, c_buf_size)| {
@@ -329,7 +329,7 @@ pub async fn copy_h2d_from_ptr(
             .chain((last != 0).then_some((chunks, last)))
             .collect::<Vec<_>>();
 
-        let concurrency = chunk_ranges.len().max(1);
+        let concurrency = 32; //chunk_ranges.len().max(1);
 
         stream::iter(chunk_ranges)
             .map(|(i, c_buf_size)| {
