@@ -1,6 +1,6 @@
 use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputBatch1Selector, CrossUnfoldClcOutput};
 #[cfg(test)]
-use crate::tasks::cross_batch_clc::CrossUnfoldClc;
+use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossUnfoldClc};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
 use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::tensor_loader::RawTensorLoader;
@@ -1682,8 +1682,8 @@ mod tests {
         ));
 
 
-        let batch_clc = Arc::new(CrossUnfoldClc::new(
-            move |t_0, t_1, _input, _ctx, _| {
+        let batch_clc_fn: Box<dyn CrossBatchFn<DistsMask, (), RunCtxWithPermits>> = Box::new(
+            move |t_0: Tensor, t_1: Tensor, _input: &CrossInput<Arc<Resource>>, _ctx: &(), _: &RunCtxWithPermits| {
 
                 if let Some(limit) = oom_limit {
                     let batch_1_len = t_1.size()[1];
@@ -1702,6 +1702,9 @@ mod tests {
                 let dists_size = Some(dists.size());
                 Ok(DistsMask::new(mask, Some(dists), mask_type((mask_size, dists_size)), None)?)
             },
+        );
+        let batch_clc = Arc::new(CrossUnfoldClc::new(
+            batch_clc_fn,
             (),
             UnfoldParams::new(1, unfold_size, unfold_step),
         ));
