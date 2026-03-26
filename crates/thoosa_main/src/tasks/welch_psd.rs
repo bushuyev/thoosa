@@ -9,6 +9,7 @@ use parking_lot::RwLock;
 use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_common::dims::Dims;
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::stream_stage::StreamStage;
 use thoosa_common::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -327,7 +328,7 @@ where
             return Err(ThoError::new("WelchPSD: no resources to process"));
         }
 
-        let welch_stage = Arc::new(WelchPsdPerResource::<C>::new(sample_rate, nperseg, noverlap));
+        let welch_stage = Arc::new(StreamStage::new(Arc::new(WelchPsdPerResource::<C>::new(sample_rate, nperseg, noverlap))));
         let mut psd_sum: Option<Tensor> = None;
         let mut processed_resources = 0usize;
 
