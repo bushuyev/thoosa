@@ -946,6 +946,39 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
     }
 }
 
+impl thoosa_shared::runner::common::cachable::WithDataRefSend for CrossInputSelectorWrap {
+    fn with_data_ref_send<Rt, F, P>(
+        &self,
+        to_device_idx: usize,
+        permits_ctx: P,
+        trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send
+    where
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError> + Send,
+        P: RunCtx,
+    {
+        async move { self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run).await }
+    }
+}
+
+impl thoosa_shared::runner::common::cachable::WithSelectDataRefSend<CrossInputSelector> for CrossInputSelectorWrap {
+    fn with_selected_data_ref_send<'o, Rt, F, C>(
+        &self,
+        to_device_idx: usize,
+        run_ctx: C,
+        selector: CrossInputSelector,
+        trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send
+    where
+        for<'f> F: FnOnce(&Self::O<'f>, &C) -> Result<Rt, ThoError> + Send,
+        C: RunCtx,
+    {
+        async move { self.with_selected_data_ref(to_device_idx, run_ctx, selector, trace_ctx, do_run).await }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_clc {
     use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
