@@ -222,13 +222,14 @@ where
             Arc::new(move |batch: ThoBatch<DX>| (this.x_f)(batch))
         };
 
-        let train_step = StreamStage::new(Arc::new(TrainStep::new(
+        let train_step = Arc::new(TrainStep::new(
             device,
             node,
             optimizer,
             x_f,
             self.loss_fn,
-        )));
+        ));
+        let train_step_stream = Arc::new(StreamStage::new(Arc::clone(&train_step)));
 
         let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
@@ -277,7 +278,7 @@ where
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?}", input.id());
 
                     oom_handler.run(
-                        &train_step,
+                        &train_step_stream,
                         Arc::clone(&input),
                         ctx.branch(Some("train_step"), false, false),
                         Contexts::new(

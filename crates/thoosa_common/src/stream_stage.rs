@@ -1,6 +1,7 @@
 use std::sync::Arc;
-use thoosa_shared::runner::common::RunCtx;
+use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
+use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::ThoError;
 use crate::cuda_utils::with_cuda_stream;
 
@@ -54,4 +55,24 @@ where
     fn as_ref(&self) -> &S {
         self.stage.as_ref()
     }
+}
+
+impl<S> OutId for StreamStage<S>
+where
+    S: SyncStage + OutId,
+    for<'a> <S as Stage>::In<'a>: WithId,
+    <S as Stage>::Out: WithId,
+{
+    fn out_id<'a>(
+        &self,
+        input_id: &<<Self as Stage>::In<'a> as WithId>::ID,
+    ) -> <Self::Out as WithId>::ID {
+        self.stage.out_id(input_id)
+    }
+}
+
+impl<S> Adjustable for StreamStage<S>
+where
+    S: SyncStage + Adjustable,
+{
 }
