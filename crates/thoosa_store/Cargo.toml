@@ -14,12 +14,14 @@ log.workspace = true
 parking_lot.workspace = true
 mockall.workspace = true
 ctor.workspace = true
-rusqlite = { version = "0.37.0", features = ["bundled"] }
-tokio-rusqlite  = "0.7"
+rusqlite = { version = "0.37", features = ["bundled", "trace"] }
+#tokio-rusqlite  = {path = "../../../tokio-rusqlite"}
 zstd = "0.13"
 tokio.workspace = true
 futures-util.workspace = true
+futures.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
+crossbeam-channel.workspace = true
 [lints]
 workspace = true

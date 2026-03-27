@@ -11,11 +11,14 @@
 extern crate core;
 
 pub mod fs_store;
+mod tokio_rusqlite;
+
 pub use rusqlite;
 
 use bytemuck::{Pod, Zeroable};
 use parking_lot::{Mutex, RwLock};
 use std::array::IntoIter;
+use std::backtrace::Backtrace;
 use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -28,6 +31,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, StreamExt};
+
 use log::{debug, error, info, trace, warn};
 use mockall::{mock, PredicateBoxExt};
 use mockall::predicate::eq;
@@ -35,7 +39,7 @@ use rand::{Rng, RngExt};
 use rand::seq::SliceRandom;
 use rusqlite::types::Value;
 use rusqlite::{Connection, Error, OpenFlags, Transaction, params};
-
+use rusqlite::trace::TraceEvent;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::val::Val;
@@ -1022,7 +1026,7 @@ impl Store for SqlStore {
 
             let remainder = resource_labels_iter.into_remainder();
 
-            if remainder.len() == 0 {
+            if remainder.len() != 0 {
             // if !remainder.is_empty() {
                 resource_ids.extend(Self::save_resources_labels_do_insert(remainder, import_id, &t)?);
             }
@@ -1564,6 +1568,9 @@ impl Store for SqlStore {
 
         {
             for (group, slices) in groups {
+                if slices.is_empty() {
+                    continue
+                }
                 let motifs_inserted = t
                     .execute(
                         "INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)",
@@ -1582,7 +1589,7 @@ impl Store for SqlStore {
                     Self::insert_slices(&t, run_id, channel, motif_id, chunk.into_iter())?
                 }
                 let remainder = slices_chunks.into_remainder();
-                if remainder.len() == 0 {
+                if remainder.len() != 0 {
                 // if !remainder.is_empty() {
                     Self::insert_slices(&t, run_id, channel, motif_id, remainder)?
                 }
@@ -1614,7 +1621,7 @@ impl Store for SqlStore {
                 Self::insert_slices(&t, run_id, channel, motif_id as i64, chunk.into_iter())?
             }
             let remainder = slices_chunks.into_remainder();
-            if remainder.len() == 0 {
+            if remainder.len() != 0 {
             // if !remainder.is_empty() {
                 Self::insert_slices(&t, run_id, channel, motif_id as i64, remainder)?
             }
@@ -1649,6 +1656,9 @@ impl Store for SqlStore {
 
             //TODO split into insert motifs/insert slice_matches + move  group_slices from tracker store?
             for (group, slices) in groups {
+                if slices.is_empty() {
+                    continue
+                }
                 let motifs_inserted = t.execute(
                     "INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)",
                     [group as usize, run_id as usize, channel as usize],
@@ -1672,7 +1682,7 @@ impl Store for SqlStore {
                 }
 
                 let remainder = slices_chunks.into_remainder();
-                if remainder.len() == 0 {
+                if remainder.len() != 0 {
                 // if !remainder.is_empty() {
                     Self::insert_slices_matches_chunk_from_tmp(
                         &t, run_id, channel, motif_id, remainder,
@@ -1812,6 +1822,7 @@ impl Store for SqlStore {
     > {
         debug!("list_motif_slices: motif_id={motif_id} select_motifs_run_id={select_motifs_run_ids:?} limit={limit:?} all_but_in_run_id={all_but_in_run_id:?}");
         self.with_reader_conn("list_motif_slices", move |conn| {
+
             let (slice_filter_clause, slice_filter_params) = if all_but_in_run_id.is_none() {
                 match select_motifs_run_ids.as_ref() {
                     None => (String::new(), Vec::new()),
@@ -1894,7 +1905,7 @@ impl Store for SqlStore {
                     )?;
 
                 if all_but_in_run_id.is_none() {
-                    assert_eq!(channel_set.len(), 1, "channel_set={channel_set:?}");
+                    assert_eq!(channel_set.len(), 1, "channel_set={channel_set:?} motif_id={motif_id}");
                     (channel_set.into_iter().next().expect("channel"), run_id.expect("no run id"), slices.into_iter().collect(), resources_map)
                 } else {
                     let (run_id, channel_id) = all_but_in_run_id.expect("all_but_in_run_id");
@@ -2437,19 +2448,63 @@ impl Store for SqlStore {
 }
 
 fn init_sqlite_writer(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+    use rusqlite::trace::{TraceEvent, TraceEventCodes};
+
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+
+    // conn.trace_v2(
+    //     TraceEventCodes::SQLITE_TRACE_STMT
+    //         | TraceEventCodes::SQLITE_TRACE_PROFILE
+    //         | TraceEventCodes::SQLITE_TRACE_CLOSE,
+    //     Some(|ev: TraceEvent<'_>| {
+    //         debug_trace_event(ev);
+    //     }),
+    // );
+
     Ok(())
 }
 
 fn init_sqlite_reader(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+    use rusqlite::trace::{TraceEvent, TraceEventCodes};
+
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+
+    // conn.trace_v2(
+    //       TraceEventCodes::SQLITE_TRACE_STMT
+    //     | TraceEventCodes::SQLITE_TRACE_PROFILE
+    //     | TraceEventCodes::SQLITE_TRACE_CLOSE,
+    //     Some(|ev: TraceEvent<'_>| {
+    //         debug_trace_event(ev);
+    //
+    //     }),
+    // );
+
     Ok(())
 }
 
+fn debug_trace_event(ev: TraceEvent) {
+    match ev {
+        TraceEvent::Stmt(a, b) => {
+            debug!("[sqlite trace reader], TraceEvent::Stmt: {b:?}");
+        }
+        TraceEvent::Profile(a, b) => {
+            debug!("[sqlite trace reader], TraceEvent::Profile: {b:?}");
+        }
+        TraceEvent::Row(a) => {
+            debug!("[sqlite trace reader], TraceEvent::Row:");
+        }
+        TraceEvent::Close(a) => {
+            debug!("[sqlite trace reader], TraceEvent::Close:  backtrace={}", Backtrace::capture());
+        }
+        x => {
+            debug!("[sqlite trace reader] x");
+        }
+    }
+}
 
 //TODO move all prepare to init
 impl SqlStore {
@@ -2691,24 +2746,80 @@ impl SqlStore {
 
     async fn with_writer_conn<T, F>(&self, ctx: &'static str, f: F) -> Result<T, ThoError>
     where
-        T: Send + 'static,
+        T: Send + Debug + 'static,
         F: FnOnce(&mut Connection) -> Result<T, ThoError> + Send + 'static,
     {
-        self.writer
-            .call(f)
-            .await
-            .map_err(|e| Self::map_tokio_rusqlite_err(ctx, e))
+        // self.writer.call(move |conn| {
+        //     debug!("[db writer enter {ctx}");
+        //     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(conn)));
+        //     match res {
+        //         Ok(ok) => {
+        //             debug!("[db writer exit {ctx}: {:?}", ok.as_ref().map(|_| "ok"));
+        //             ok
+        //         }
+        //         Err(panic) => {
+        //             error!("[db writer PANIC in {ctx}: {:?}", panic);
+        //             Err(ThoError::new(format!("panic in sqlite closure: {ctx}")))
+        //         }
+        //     }
+        // }).await.map_err(|e| Self::map_tokio_rusqlite_err(ctx, e))
+        match panic_to_err_async!(
+            async {
+                self.writer
+                .call(f).await.map_err(|e| Self::map_tokio_rusqlite_err(ctx, e))
+            }
+        ) {
+            Ok(r) => {
+                trace!("with_writer_conn: got result={r:?}");
+                Ok(r)
+            }
+            Err(e) => {
+                error!("with_writer_conn: got error={e:?}");
+                Err(e)
+            }
+        }
+
     }
 
     async fn with_reader_conn<T, F>(&self, ctx: &'static str, f: F) -> Result<T, ThoError>
     where
-        T: Send + 'static,
+        T: Send + Debug + 'static,
         F: FnOnce(&mut Connection) -> Result<T, ThoError> + Send + 'static,
     {
-        self.reader()
-            .call(f)
-            .await
-            .map_err(|e| Self::map_tokio_rusqlite_err(ctx, e))
+        let reader_id = self.rr.fetch_add(1, Ordering::Relaxed) % self.readers.len();
+
+
+        match panic_to_err_async!(
+            async {
+                self.readers[reader_id]
+                .call(f).await.map_err(|e| Self::map_tokio_rusqlite_err(ctx, e))
+            }
+        ) {
+            Ok(r) => {
+                trace!("with_reader_conn: got result={r:?}");
+                Ok(r)
+            }
+            Err(e) => {
+                error!("with_reader_conn: got error={e:?}");
+                Err(e)
+            }
+        }
+
+
+        // self.readers[reader_id].call(move |conn| {
+        //     debug!("[db reader={reader_id}] enter {ctx}");
+        //     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(conn)));
+        //     match res {
+        //         Ok(ok) => {
+        //             debug!("[db reader={reader_id}] exit {ctx}: {:?}", ok.as_ref().map(|_| "ok"));
+        //             ok
+        //         }
+        //         Err(panic) => {
+        //             error!("[db reader={reader_id}] PANIC in {ctx}: {:?}", panic);
+        //             Err(ThoError::new(format!("panic in sqlite closure: {ctx}")))
+        //         }
+        //     }
+        // }).await.map_err(|e| Self::map_tokio_rusqlite_err(ctx, e))
     }
 
     fn reader(&self) -> &tokio_rusqlite::Connection {
@@ -2785,7 +2896,7 @@ impl SqlStore {
 
 
         let remainder = labels_iter.into_remainder();
-        if remainder.len() == 0 {
+        if remainder.len() != 0 {
         // if !remainder.is_empty() {
             Self::save_resources_labels_insert_labels(remainder, t);
         }
@@ -3267,9 +3378,7 @@ impl SqlStore {
         //     debug!("slice_matches: r={r:?}");
         // }
 
-        debug!(
-            "save_slices_groups_as_motifs_from_tmp_db: slice_matches_updated={slice_matches_updated}"
-        );
+        debug!("save_slices_groups_as_motifs_from_tmp_db: slice_matches_updated={slice_matches_updated}");
 
         Ok(())
     }
@@ -4783,8 +4892,11 @@ mod store_tests {
         group_ord: i64,
         slices: &[(ResourceId, i64)],
     ) -> Result<u32, ThoError> {
+        assert!(slices.len() > 0, "insert_motif_with_slices: no slices");
+
         let mut guard = store.conn().lock();
         let t = guard.transaction()?;
+
 
         t.execute(
             "INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)",

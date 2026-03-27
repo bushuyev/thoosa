@@ -53,9 +53,9 @@ torch-sys = "0.20"
 #tch = { path="../../tch-rs", features = ["cuda-tests"] }
 #torch-sys = { path="../../tch-rs/torch-sys" }
 parking_lot =  "0"
-crossbeam-utils = "0"
-crossbeam = "0.8.4"
-crossbeam-channel = "0"
+crossbeam-utils = "0.8"
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
 futures = "0"
 futures-util = "0"
 async-trait = "0"
