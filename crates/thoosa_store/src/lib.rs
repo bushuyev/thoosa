@@ -530,7 +530,7 @@ pub struct SqlStore {
     rr: AtomicUsize,
 }
 
-const SQL_STORE_READERS_CNT: usize = 4;
+const SQL_STORE_READERS_CNT: usize = 8;
 static IN_MEM_DB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug)]
@@ -2436,13 +2436,20 @@ impl Store for SqlStore {
     }
 }
 
-fn init_sqlite(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+fn init_sqlite_writer(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     Ok(())
 }
+
+fn init_sqlite_reader(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    Ok(())
+}
+
 
 //TODO move all prepare to init
 impl SqlStore {
@@ -2817,18 +2824,17 @@ impl SqlStore {
 
     pub async fn from_path<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
         let path_buf = path.as_ref().to_path_buf();
-        let writer = tokio_rusqlite::Connection::open(&path_buf).await?;
-        writer.call(init_sqlite).await?;
+        let writer = tokio_rusqlite::Connection::open_with_flags(&path_buf, OpenFlags::SQLITE_OPEN_READ_WRITE).await?;
+        writer.call(init_sqlite_writer).await?;
 
         let mut readers = Vec::with_capacity(SQL_STORE_READERS_CNT.max(1));
         for _ in 0..SQL_STORE_READERS_CNT.max(1) {
-            let reader = tokio_rusqlite::Connection::open(&path_buf).await?;
-            reader.call(init_sqlite).await?;
+            let reader = tokio_rusqlite::Connection::open_with_flags(&path_buf, OpenFlags::SQLITE_OPEN_READ_ONLY).await?;
+            reader.call(init_sqlite_reader).await?;
             readers.push(reader);
         }
 
-        let conn = Connection::open(path_buf)?;
-        Self::create_tables(conn, writer, readers)
+        Self::create_tables(Connection::open_with_flags(path_buf, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE)?, writer, readers)
     }
     // #[cfg(test)]
     pub async fn in_mem() -> Result<Box<dyn Store>, ThoError> {
@@ -2836,12 +2842,12 @@ impl SqlStore {
         let uri = format!("file:thoosa_store_{db_idx}?mode=memory&cache=shared");
 
         let writer = tokio_rusqlite::Connection::open_with_flags(&uri, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI).await?;
-        writer.call(init_sqlite).await?;
+        writer.call(init_sqlite_writer).await?;
 
         let mut readers = Vec::with_capacity(SQL_STORE_READERS_CNT.max(1));
         for _ in 0..SQL_STORE_READERS_CNT.max(1) {
             let reader = tokio_rusqlite::Connection::open_with_flags(&uri, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI).await?;
-            reader.call(init_sqlite).await?;
+            reader.call(init_sqlite_reader).await?;
             readers.push(reader);
         }
 
@@ -2851,7 +2857,7 @@ impl SqlStore {
     //TODO rename channel_id to channel - not a pk
     fn create_tables(mut conn: Connection, writer: tokio_rusqlite::Connection, readers: Vec<tokio_rusqlite::Connection>) -> Result<Box<dyn Store>, ThoError> {
         {
-            init_sqlite(&mut conn)?;
+            init_sqlite_writer(&mut conn)?;
 
             let t = conn.transaction()?;
 
