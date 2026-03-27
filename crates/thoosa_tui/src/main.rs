@@ -45,6 +45,9 @@ struct RunTreeNode {
 
 #[derive(Clone, Debug, PartialEq)]
 enum VisibleRunConfigRowKind {
+    RunOnDate {
+        run_on_date: String,
+    },
     RunConfig {
         run_id: u32,
     },
@@ -63,6 +66,15 @@ struct VisibleRunConfigRow {
 }
 
 impl VisibleRunConfigRow {
+    fn run_on_date_group(run_on_date: String, expanded: bool) -> Self {
+        Self {
+            kind: VisibleRunConfigRowKind::RunOnDate { run_on_date },
+            depth: 0,
+            has_children: true,
+            expanded,
+        }
+    }
+
     fn run_config(run_id: u32, depth: usize, has_children: bool, expanded: bool) -> Self {
         Self {
             kind: VisibleRunConfigRowKind::RunConfig { run_id },
@@ -83,14 +95,22 @@ impl VisibleRunConfigRow {
 
     fn run_id(&self) -> Option<u32> {
         match self.kind {
+            VisibleRunConfigRowKind::RunOnDate { .. } => None,
             VisibleRunConfigRowKind::RunConfig { run_id } => Some(run_id),
             VisibleRunConfigRowKind::Motif { .. } => None,
         }
     }
 
+    fn run_on_date(&self) -> Option<&str> {
+        match &self.kind {
+            VisibleRunConfigRowKind::RunOnDate { run_on_date } => Some(run_on_date.as_str()),
+            VisibleRunConfigRowKind::RunConfig { .. } | VisibleRunConfigRowKind::Motif { .. } => None,
+        }
+    }
+
     fn tree_motif(&self) -> Option<&RunMotifEntry> {
         match &self.kind {
-            VisibleRunConfigRowKind::RunConfig { .. } => None,
+            VisibleRunConfigRowKind::RunOnDate { .. } | VisibleRunConfigRowKind::RunConfig { .. } => None,
             VisibleRunConfigRowKind::Motif { motif, .. } => Some(motif),
         }
     }
@@ -290,6 +310,7 @@ struct App {
     selected_run_motifs: Vec<RunMotifEntry>,
     show_selected_run_motifs: bool,
     run_motifs_cache: HashMap<u32, Vec<RunMotifEntry>>,
+    collapsed_run_on_dates: HashSet<String>,
     selected_motif_idx: usize,
     motif_list_offset: usize,
     prefer_right_motifs: bool,
@@ -393,6 +414,7 @@ impl App {
             selected_run_motifs: vec![],
             show_selected_run_motifs: false,
             run_motifs_cache: HashMap::new(),
+            collapsed_run_on_dates: HashSet::new(),
             selected_motif_idx: 0,
             motif_list_offset: 0,
             prefer_right_motifs: false,
@@ -425,6 +447,10 @@ impl App {
 
     fn selected_tree_row(&self) -> Option<&VisibleRunConfigRow> {
         self.run_configs.get(self.selected_idx)
+    }
+
+    fn selected_run_on_date(&self) -> Option<&str> {
+        self.selected_tree_row().and_then(VisibleRunConfigRow::run_on_date)
     }
 
     fn selected_tree_motif(&self) -> Option<&RunMotifEntry> {
@@ -498,6 +524,10 @@ impl App {
         } else {
             SelectedArea::LeftRunConfigs
         }
+    }
+
+    fn run_on_date_expanded(&self, run_on_date: &str) -> bool {
+        !self.collapsed_run_on_dates.contains(run_on_date)
     }
 
     fn active_panel_search_target(&self) -> Option<PanelSearchTarget> {
@@ -1372,6 +1402,11 @@ impl App {
             .iter()
             .map(|(run_id, node)| (*run_id, node.expanded))
             .collect::<HashMap<u32, bool>>();
+        let run_on_by_id = self
+            .all_run_configs
+            .iter()
+            .map(|entry| (entry.id, entry.run_on.as_str()))
+            .collect::<HashMap<u32, &str>>();
         let entries_by_id = self
             .all_run_configs
             .iter()
@@ -1410,8 +1445,8 @@ impl App {
                     || !self.has_more_paged_run_configs
                     || (output_run_ids.is_empty() && !self.known_run_ids_with_outputs.contains(&run_id));
                 let default_expanded = !output_run_ids.is_empty();
-                sort_run_ids(&mut input_run_ids, &self.all_run_configs, self.run_on_sort_order);
-                sort_run_ids(&mut output_run_ids, &self.all_run_configs, self.run_on_sort_order);
+                sort_run_ids(&mut input_run_ids, &run_on_by_id, self.run_on_sort_order);
+                sort_run_ids(&mut output_run_ids, &run_on_by_id, self.run_on_sort_order);
                 (
                     run_id,
                     RunTreeNode {
@@ -1466,9 +1501,14 @@ impl App {
         matching_run_ids: &HashSet<u32>,
         memo: &mut HashMap<u32, bool>,
         path: &mut HashSet<u32>,
+        mut appended_run_ids: Option<&mut HashSet<u32>>,
         rows: &mut Vec<VisibleRunConfigRow>,
     ) {
-        if !path.insert(run_id) {
+        let already_appended = appended_run_ids
+            .as_ref()
+            .map(|appended_run_ids| appended_run_ids.contains(&run_id))
+            .unwrap_or(false);
+        if already_appended || !path.insert(run_id) {
             return;
         }
 
@@ -1496,21 +1536,88 @@ impl App {
             !visible_children.is_empty() || !node.children_loaded || has_inline_motif_rows,
             node.expanded,
         ));
+        if let Some(appended_run_ids) = appended_run_ids.as_mut() {
+            appended_run_ids.insert(run_id);
+        }
 
         if node.expanded {
             for motif in inline_motifs {
                 rows.push(VisibleRunConfigRow::motif(run_id, motif, depth + 1));
             }
             for child_run_id in visible_children {
-                self.append_visible_run_rows(child_run_id, depth + 1, filter_active, matching_run_ids, memo, path, rows);
+                self.append_visible_run_rows(
+                    child_run_id,
+                    depth + 1,
+                    filter_active,
+                    matching_run_ids,
+                    memo,
+                    path,
+                    appended_run_ids.as_deref_mut(),
+                    rows,
+                );
             }
         }
 
         path.remove(&run_id);
     }
 
+    fn group_visible_run_rows_by_date(&self, rows: Vec<VisibleRunConfigRow>) -> Vec<VisibleRunConfigRow> {
+        let mut date_order = vec![];
+        let mut rows_by_date = HashMap::<String, Vec<VisibleRunConfigRow>>::new();
+        let mut current_run_on_date = None::<String>;
+        let mut current_block = vec![];
+
+        for row in rows {
+            if row.depth == 0 {
+                if let Some(run_on_date) = current_run_on_date.take() {
+                    rows_by_date.entry(run_on_date).or_default().append(&mut current_block);
+                }
+
+                let run_on_date = row
+                    .run_id()
+                    .and_then(|run_id| self.run_config_tree.get(&run_id))
+                    .map(|node| run_on_date_label(node.entry.run_on.as_str()))
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                if !rows_by_date.contains_key(&run_on_date) {
+                    date_order.push(run_on_date.clone());
+                }
+                current_run_on_date = Some(run_on_date);
+            }
+            current_block.push(row);
+        }
+
+        if let Some(run_on_date) = current_run_on_date {
+            rows_by_date.entry(run_on_date).or_default().append(&mut current_block);
+        }
+
+        let mut grouped_rows = vec![];
+        for run_on_date in date_order {
+            let expanded = self.run_on_date_expanded(run_on_date.as_str());
+            grouped_rows.push(VisibleRunConfigRow::run_on_date_group(run_on_date.clone(), expanded));
+            if expanded {
+                let mut child_rows = rows_by_date.remove(&run_on_date).unwrap_or_default();
+                for row in &mut child_rows {
+                    row.depth += 1;
+                }
+                grouped_rows.extend(child_rows);
+            }
+        }
+
+        grouped_rows
+    }
+
     fn rebuild_visible_run_configs(&mut self, keep_run_id: Option<u32>) {
+        let keep_run_on_date = if keep_run_id.is_none() {
+            self.selected_run_on_date().map(|run_on_date| run_on_date.to_string())
+        } else {
+            None
+        };
         let filter_active = !self.search_filters.is_empty();
+        let run_on_by_id = self
+            .all_run_configs
+            .iter()
+            .map(|entry| (entry.id, entry.run_on.as_str()))
+            .collect::<HashMap<u32, &str>>();
         let matching_run_ids = if filter_active {
             self.search_filters
                 .normalized()
@@ -1542,40 +1649,68 @@ impl App {
                 }
             })
             .collect::<Vec<u32>>();
-        sort_run_ids(&mut root_run_ids, &self.all_run_configs, self.run_on_sort_order);
+        sort_run_ids(&mut root_run_ids, &run_on_by_id, self.run_on_sort_order);
 
         let mut memo = HashMap::new();
         let mut rows = vec![];
+        let mut dedup_run_ids = filter_active.then(HashSet::new);
         for run_id in root_run_ids {
             if self.run_visible_with_descendants(run_id, filter_active, &matching_run_ids, &mut memo, &mut HashSet::new()) {
-                self.append_visible_run_rows(run_id, 0, filter_active, &matching_run_ids, &mut memo, &mut HashSet::new(), &mut rows);
+                self.append_visible_run_rows(
+                    run_id,
+                    0,
+                    filter_active,
+                    &matching_run_ids,
+                    &mut memo,
+                    &mut HashSet::new(),
+                    dedup_run_ids.as_mut(),
+                    &mut rows,
+                );
             }
         }
 
-        let appended_run_ids = rows
-            .iter()
-            .filter_map(VisibleRunConfigRow::run_id)
-            .collect::<HashSet<u32>>();
+        let appended_run_ids = dedup_run_ids.clone().unwrap_or_else(|| {
+            rows.iter()
+                .filter_map(VisibleRunConfigRow::run_id)
+                .collect::<HashSet<u32>>()
+        });
         let mut remaining_run_ids = self
             .run_config_tree
             .keys()
             .filter(|run_id| !appended_run_ids.contains(run_id))
             .copied()
             .collect::<Vec<u32>>();
-        sort_run_ids(&mut remaining_run_ids, &self.all_run_configs, self.run_on_sort_order);
+        sort_run_ids(&mut remaining_run_ids, &run_on_by_id, self.run_on_sort_order);
         for run_id in remaining_run_ids {
             if self.run_visible_with_descendants(run_id, filter_active, &matching_run_ids, &mut memo, &mut HashSet::new()) {
-                self.append_visible_run_rows(run_id, 0, filter_active, &matching_run_ids, &mut memo, &mut HashSet::new(), &mut rows);
+                self.append_visible_run_rows(
+                    run_id,
+                    0,
+                    filter_active,
+                    &matching_run_ids,
+                    &mut memo,
+                    &mut HashSet::new(),
+                    dedup_run_ids.as_mut(),
+                    &mut rows,
+                );
             }
         }
 
-        self.run_configs = rows;
+        self.run_configs = self.group_visible_run_rows_by_date(rows);
         if self.panel_search.target == Some(PanelSearchTarget::RunConfigs) {
             self.panel_search.current_match_idx = None;
         }
 
         if let Some(run_id) = keep_run_id {
             if let Some(idx) = self.run_configs.iter().position(|entry| entry.run_id() == Some(run_id)) {
+                self.selected_idx = idx;
+                self.ensure_main_selection_visible();
+                return;
+            }
+        }
+
+        if let Some(run_on_date) = keep_run_on_date {
+            if let Some(idx) = self.run_configs.iter().position(|entry| entry.run_on_date() == Some(run_on_date.as_str())) {
                 self.selected_idx = idx;
                 self.ensure_main_selection_visible();
                 return;
@@ -1593,6 +1728,16 @@ impl App {
     }
 
     async fn toggle_selected_run_expanded(&mut self) -> bool {
+        if let Some(run_on_date) = self.selected_run_on_date().map(|run_on_date| run_on_date.to_string()) {
+            if self.run_on_date_expanded(run_on_date.as_str()) {
+                self.collapsed_run_on_dates.insert(run_on_date);
+            } else {
+                self.collapsed_run_on_dates.remove(run_on_date.as_str());
+            }
+            self.rebuild_visible_run_configs(None);
+            return true;
+        }
+
         let Some(run_id) = self.selected_run_id() else {
             return false;
         };
@@ -1628,6 +1773,15 @@ impl App {
     }
 
     async fn expand_selected_run(&mut self) -> bool {
+        if let Some(run_on_date) = self.selected_run_on_date().map(|run_on_date| run_on_date.to_string()) {
+            if self.run_on_date_expanded(run_on_date.as_str()) {
+                return false;
+            }
+            self.collapsed_run_on_dates.remove(run_on_date.as_str());
+            self.rebuild_visible_run_configs(None);
+            return true;
+        }
+
         let Some(run_id) = self.selected_run_id() else {
             return false;
         };
@@ -1704,6 +1858,15 @@ impl App {
     }
 
     fn collapse_selected_run(&mut self) -> bool {
+        if let Some(run_on_date) = self.selected_run_on_date().map(|run_on_date| run_on_date.to_string()) {
+            if !self.run_on_date_expanded(run_on_date.as_str()) {
+                return false;
+            }
+            self.collapsed_run_on_dates.insert(run_on_date);
+            self.rebuild_visible_run_configs(None);
+            return true;
+        }
+
         let Some(run_id) = self.selected_run_id() else {
             return false;
         };
@@ -1895,6 +2058,7 @@ impl App {
         }
 
         let Some(run_id) = self.selected_run_id() else {
+            self.status = None;
             return;
         };
 
@@ -2387,12 +2551,14 @@ fn render_run_configs_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
         (layout[0], None)
     };
 
+    let list_window_start = app.main_list_offset.min(app.run_configs.len().saturating_sub(1));
+    let list_window_end = (list_window_start + app.main_page_size()).min(app.run_configs.len());
     let left_items = if app.run_configs.is_empty() {
         vec![ListItem::new("No entries in run_configs.")]
     } else {
         build_searchable_list_items(
-            app.run_configs.iter().map(|entry| format_run_tree_row(app, entry)).collect::<Vec<String>>(),
-            0,
+            app.run_configs[list_window_start..list_window_end].iter().map(|entry| format_run_tree_row(app, entry)).collect::<Vec<String>>(),
+            list_window_start,
             app,
             PanelSearchTarget::RunConfigs,
         )
@@ -2410,9 +2576,9 @@ fn render_run_configs_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
         .highlight_symbol(">> ");
 
-    let mut left_state = ListState::default().with_offset(app.main_list_offset);
+    let mut left_state = ListState::default();
     if !app.run_configs.is_empty() {
-        left_state.select(Some(app.selected_idx));
+        left_state.select(Some(app.selected_idx.min(app.run_configs.len().saturating_sub(1)).saturating_sub(list_window_start)));
     }
     frame.render_stateful_widget(left_list, left_list_area, &mut left_state);
 
@@ -2462,6 +2628,10 @@ fn format_run_tree_row(app: &App, row: &VisibleRunConfigRow) -> String {
     let indent = "  ".repeat(row.depth);
 
     match &row.kind {
+        VisibleRunConfigRowKind::RunOnDate { run_on_date } => {
+            let tree_marker = if row.expanded { "▼" } else { "▶" };
+            format!("{}{} {}", indent, tree_marker, run_on_date)
+        }
         VisibleRunConfigRowKind::RunConfig { run_id } => {
             let Some(node) = app.run_config_tree.get(run_id) else {
                 return format!("<missing run {}>", run_id);
@@ -2500,6 +2670,8 @@ fn render_run_value_lines(app: &App) -> Vec<String> {
         right_lines.push(format!("type: {}", run_entry.run_config_type));
         right_lines.push(format!("run_on: {}", run_entry.run_on));
         right_lines.push(format!("descr: {}", run_entry.descr));
+    } else if let Some(run_on_date) = app.selected_run_on_date() {
+        right_lines.push(format!("run_on date: {}", run_on_date));
     } else if let Some(motif) = app.selected_tree_motif() {
         right_lines.push(format!("motif_id: {}", motif.motif_id));
         right_lines.push(format!("source_run_id: {}", motif.source_run_id));
@@ -2932,11 +3104,7 @@ fn popup_height(term_rows: u16, items_count: usize) -> u16 {
     desired.clamp(3, max_h)
 }
 
-fn sort_run_ids(run_ids: &mut Vec<u32>, all_run_configs: &[RunConfigEntry], sort_order: SortOrder) {
-    let run_on_by_id = all_run_configs
-        .iter()
-        .map(|entry| (entry.id, entry.run_on.as_str()))
-        .collect::<HashMap<u32, &str>>();
+fn sort_run_ids(run_ids: &mut Vec<u32>, run_on_by_id: &HashMap<u32, &str>, sort_order: SortOrder) {
     match sort_order {
         SortOrder::Asc => run_ids.sort_by(|a, b| {
             run_on_by_id
@@ -3090,6 +3258,10 @@ fn parse_run_id_filter(value: &str) -> Result<Option<u32>, String> {
         .parse::<u32>()
         .map(Some)
         .map_err(|err| format!("invalid id: {err}"))
+}
+
+fn run_on_date_label(run_on: &str) -> String {
+    run_on.split_once(' ').map(|(date, _)| date).unwrap_or(run_on).to_string()
 }
 
 fn normalize_run_on_filter(value: &str, end_of_day: bool) -> Result<Option<String>, String> {
@@ -3580,9 +3752,107 @@ mod tests {
         assert!(app.apply_search_from_popup().await);
         assert_eq!(app.selected_area, SelectedArea::LeftRunConfigs);
         assert_eq!(app.search_filters.id, alpha_run_id.to_string());
-        assert_eq!(app.run_configs.len(), 1);
-        assert_eq!(app.run_configs[0].run_id(), Some(alpha_run_id));
+        assert_eq!(app.run_configs.len(), 2);
+        assert!(app.run_configs[0].run_on_date().is_some());
+        assert_eq!(app.run_configs[1].run_id(), Some(alpha_run_id));
     }
+
+    #[test]
+    fn test_rebuild_visible_run_configs_groups_runs_under_run_on_date() {
+        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        app.has_more_paged_run_configs = false;
+        app.all_run_configs = vec![
+            RunConfigEntry {
+                id: 1,
+                run_config_type: "FindMotifsRunConfig".to_string(),
+                descr: "older root".to_string(),
+                run_on: "2026-03-14 08:00:00".to_string(),
+            },
+            RunConfigEntry {
+                id: 2,
+                run_config_type: "FindMotifsRunConfig".to_string(),
+                descr: "newer root".to_string(),
+                run_on: "2026-03-15 09:00:00".to_string(),
+            },
+            RunConfigEntry {
+                id: 3,
+                run_config_type: "TrainMotifsNetsRunConfig".to_string(),
+                descr: "child".to_string(),
+                run_on: "2026-03-15 10:00:00".to_string(),
+            },
+        ];
+        app.rebuild_run_config_tree(&[(3, 2)], &HashMap::new());
+        app.rebuild_visible_run_configs(None);
+
+        assert_eq!(Some("2026-03-15"), app.run_configs.get(0).and_then(VisibleRunConfigRow::run_on_date));
+        assert_eq!(Some(2), app.run_configs.get(1).and_then(VisibleRunConfigRow::run_id));
+        assert_eq!(1, app.run_configs.get(1).map(|row| row.depth).unwrap_or_default());
+        assert_eq!(Some(3), app.run_configs.get(2).and_then(VisibleRunConfigRow::run_id));
+        assert_eq!(2, app.run_configs.get(2).map(|row| row.depth).unwrap_or_default());
+        assert_eq!(Some("2026-03-14"), app.run_configs.get(3).and_then(VisibleRunConfigRow::run_on_date));
+        assert_eq!(Some(1), app.run_configs.get(4).and_then(VisibleRunConfigRow::run_id));
+        assert_eq!(1, app.run_configs.get(4).map(|row| row.depth).unwrap_or_default());
+    }
+
+    #[test]
+    fn test_collapse_selected_run_collapses_run_on_date_group() {
+        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        app.has_more_paged_run_configs = false;
+        app.all_run_configs = vec![RunConfigEntry {
+            id: 1,
+            run_config_type: "FindMotifsRunConfig".to_string(),
+            descr: "root".to_string(),
+            run_on: "2026-03-14 08:00:00".to_string(),
+        }];
+        app.rebuild_run_config_tree(&[], &HashMap::new());
+        app.rebuild_visible_run_configs(None);
+
+        assert_eq!(Some("2026-03-14"), app.run_configs.get(0).and_then(VisibleRunConfigRow::run_on_date));
+        assert!(app.collapse_selected_run());
+        assert_eq!(1, app.run_configs.len());
+        assert_eq!(Some("2026-03-14"), app.run_configs.get(0).and_then(VisibleRunConfigRow::run_on_date));
+        assert!(!app.run_configs[0].expanded);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_filtered_view_deduplicates_shared_descendants() {
+        let store = MockStore::new();
+        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        app.has_more_paged_run_configs = false;
+        app.all_run_configs = vec![
+            RunConfigEntry {
+                id: 1,
+                run_config_type: "root_a".to_string(),
+                descr: "first root".to_string(),
+                run_on: "2026-03-14 08:00:00".to_string(),
+            },
+            RunConfigEntry {
+                id: 2,
+                run_config_type: "root_b".to_string(),
+                descr: "second root".to_string(),
+                run_on: "2026-03-14 09:00:00".to_string(),
+            },
+            RunConfigEntry {
+                id: 3,
+                run_config_type: "shared".to_string(),
+                descr: "shared child".to_string(),
+                run_on: "2026-03-14 10:00:00".to_string(),
+            },
+        ];
+        app.search_filters = RunConfigSearch {
+            descr: "shared".to_string(),
+            ..RunConfigSearch::default()
+        };
+        app.rebuild_run_config_tree(&[(3, 1), (3, 2)], &HashMap::new());
+        app.rebuild_visible_run_configs(Some(3));
+
+        assert_eq!(1, app.run_configs.iter().filter(|row| row.run_id() == Some(1)).count());
+        assert_eq!(1, app.run_configs.iter().filter(|row| row.run_id() == Some(2)).count());
+        assert_eq!(1, app.run_configs.iter().filter(|row| row.run_id() == Some(3)).count());
+    }
+
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_refresh_run_configs_uses_paged_startup_loading() {
@@ -3618,10 +3888,11 @@ mod tests {
         app.refresh_run_configs().await;
 
         assert_eq!(2, app.all_run_configs.len());
-        assert_eq!(2, app.run_configs.len());
+        assert_eq!(3, app.run_configs.len());
         assert!(!app.has_more_paged_run_configs);
-        assert_eq!(Some(1), app.run_configs.first().and_then(VisibleRunConfigRow::run_id));
-        assert_eq!(Some(2), app.run_configs.get(1).and_then(VisibleRunConfigRow::run_id));
+        assert_eq!(Some("2026-03-14"), app.run_configs.first().and_then(VisibleRunConfigRow::run_on_date));
+        assert_eq!(Some(1), app.run_configs.get(1).and_then(VisibleRunConfigRow::run_id));
+        assert_eq!(Some(2), app.run_configs.get(2).and_then(VisibleRunConfigRow::run_id));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3649,10 +3920,12 @@ mod tests {
 
         app.refresh_run_configs().await;
 
-        let row = app.run_configs.first().expect("row");
+        assert_eq!(2, app.run_configs.len());
+        assert_eq!(Some("2026-03-14"), app.run_configs[0].run_on_date());
+        let row = app.run_configs.get(1).expect("row");
         assert!(!row.has_children);
         assert!(app.run_config_tree.get(&7).map(|node| node.children_loaded).unwrap_or(false));
-        assert!(format_run_tree_row(&app, row).starts_with("•"));
+        assert!(format_run_tree_row(&app, row).trim_start().starts_with("•"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3688,8 +3961,8 @@ mod tests {
         app.rebuild_visible_run_configs(Some(1));
 
         assert!(app.expand_selected_run().await);
-        assert_eq!(2, app.run_configs.len());
-        assert_eq!(Some(2), app.run_configs.get(1).and_then(VisibleRunConfigRow::run_id));
+        assert_eq!(3, app.run_configs.len());
+        assert_eq!(Some(2), app.run_configs.get(2).and_then(VisibleRunConfigRow::run_id));
         assert!(app.run_config_tree.get(&1).map(|node| node.children_loaded).unwrap_or(false));
         assert!(app.run_config_tree.get(&1).map(|node| node.expanded).unwrap_or(false));
     }
@@ -3884,9 +4157,9 @@ mod tests {
 
         assert!(app.open_selected_run_from_left().await);
         assert_eq!(app.selected_area, SelectedArea::LeftRunConfigs);
-        assert_eq!(2, app.run_configs.len());
+        assert_eq!(3, app.run_configs.len());
         assert!(app.run_config_tree.get(&86434).map(|node| node.expanded).unwrap_or(false));
-        assert!(app.run_configs.get(1).and_then(VisibleRunConfigRow::tree_motif).is_some());
+        assert!(app.run_configs.get(2).and_then(VisibleRunConfigRow::tree_motif).is_some());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3916,9 +4189,9 @@ mod tests {
 
         assert!(app.open_selected_run_right().await);
         assert_eq!(app.selected_area, SelectedArea::LeftRunConfigs);
-        assert_eq!(2, app.run_configs.len());
+        assert_eq!(3, app.run_configs.len());
         assert!(app.run_config_tree.get(&86434).map(|node| node.expanded).unwrap_or(false));
-        assert!(app.run_configs.get(1).and_then(VisibleRunConfigRow::tree_motif).is_some());
+        assert!(app.run_configs.get(2).and_then(VisibleRunConfigRow::tree_motif).is_some());
     }
 
     #[test]
