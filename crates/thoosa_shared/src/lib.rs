@@ -508,6 +508,13 @@ where
     }
 }
 
+// impl Display for ThoError {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+//         todo!()
+//     }
+// }
+// impl Error for ThoError {}
+
 
 #[derive(Debug, Eq, Hash, PartialEq, Clone)]
 pub struct MotifSlice {

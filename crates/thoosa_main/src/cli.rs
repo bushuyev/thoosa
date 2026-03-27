@@ -987,9 +987,6 @@ async fn run_all(
     info!("train label nets done: run_ids={train_label_nets_run_ids:?}");
 
     ////////////////////////
-    #[cfg(tho_debug)]
-    debug!("starting train final nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
-
 
     //gpt Pre-create context and shared handles for final-net stage construction.
     let init_ctx_in_train_final = root_ctx.branch(Some("init final nets"), true, false);
