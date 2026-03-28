@@ -321,8 +321,8 @@ where
                                 )
                                 .await
                         }
-                    })
-                    .await?
+                })
+                .await
             },
         )
         .await
